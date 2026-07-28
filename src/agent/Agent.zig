@@ -957,7 +957,13 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     // login (device-code flow) when there's none yet.
     if (auth.descriptorFor(provider)) |desc| {
         var owned = (auth.sessionFor(self.allocator, provider) catch null) orelse
-            (auth.login(self.allocator, desc) catch |err| {
+            (auth.login(self.allocator, desc, &self.cancel_requested) catch |err| {
+                if (err == error.LoginCancelled) {
+                    // Undo `requestCancel`'s side effects before the next turn.
+                    self.resetAfterCancel(self.conversation.messages.items.len);
+                    self.terminal.printInfo("{s} login cancelled", .{desc.label});
+                    return;
+                }
                 self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
                 return;
             });
@@ -1978,11 +1984,29 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
         };
         if (reachable[i]) extra += 1;
     }
-    const names = arena.alloc([]const u8, self.available_providers.len + 1 + extra) catch return &.{};
+    // Subscription providers complete even without a stored token — selecting
+    // one is what starts the login.
+    var subs: [auth.registry.len][]const u8 = undefined;
+    var n_subs: usize = 0;
+    for (auth.registry) |desc| {
+        const name = @tagName(desc.provider);
+        const detected = for (self.available_providers) |p| {
+            if (std.mem.eql(u8, p, name)) break true;
+        } else false;
+        if (!detected) {
+            subs[n_subs] = name;
+            n_subs += 1;
+        }
+    }
+    const names = arena.alloc([]const u8, self.available_providers.len + n_subs + 1 + extra) catch return &.{};
     for (self.available_providers, 0..) |p, i| {
         names[i] = arena.dupe(u8, p) catch return &.{};
     }
     var n = self.available_providers.len;
+    for (subs[0..n_subs]) |name| {
+        names[n] = name;
+        n += 1;
+    }
     for (local_providers, reachable) |tag, r| if (r) {
         names[n] = @tagName(tag);
         n += 1;

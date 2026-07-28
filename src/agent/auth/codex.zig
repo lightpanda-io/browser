@@ -41,6 +41,7 @@ const device_redirect_uri = issuer ++ "/deviceauth/callback";
 const scope = "openid profile email offline_access";
 const user_agent = "lightpanda";
 const poll_margin_ms: u64 = 3000;
+const cancel_slice_ms: u64 = 200;
 
 pub const descriptor: auth.Descriptor = .{
     .provider = .codex,
@@ -156,7 +157,7 @@ const DeviceToken = struct {
     code_verifier: []const u8,
 };
 
-fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor) !auth.TokenSet {
+fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor, cancel: ?*const std.atomic.Value(bool)) !auth.TokenSet {
     _ = desc;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -174,7 +175,15 @@ fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor) !auth
 
     const poll_body = try std.fmt.allocPrint(a, "{{\"device_auth_id\":\"{s}\",\"user_code\":\"{s}\"}}", .{ dc.device_auth_id, dc.user_code });
     const dt: DeviceToken = while (true) {
-        lp.io.sleep(.fromMilliseconds(@intCast(interval_ms + poll_margin_ms)), .awake) catch {};
+        // The REPL's Ctrl-C only sets the cancel flag (it never kills the
+        // process), so the wait must poll it.
+        var remaining_ms: u64 = interval_ms + poll_margin_ms;
+        while (remaining_ms > 0) {
+            if (cancel) |flag| if (flag.load(.acquire)) return error.LoginCancelled;
+            const slice_ms = @min(remaining_ms, cancel_slice_ms);
+            lp.io.sleep(.fromMilliseconds(@intCast(slice_ms)), .awake) catch {};
+            remaining_ms -= slice_ms;
+        }
         const res = try post(a, device_token_url, "application/json", poll_body);
         switch (res.status) {
             .ok => break try std.json.parseFromSliceLeaky(DeviceToken, a, res.body, .{ .ignore_unknown_fields = true }),

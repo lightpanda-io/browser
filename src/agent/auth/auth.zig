@@ -84,7 +84,8 @@ pub const Descriptor = struct {
     device_token_url: []const u8,
     verify_url: []const u8,
     /// Interactive login (device-code flow); returns freshly-minted tokens.
-    loginFn: *const fn (std.mem.Allocator, *const Descriptor) anyerror!TokenSet,
+    /// A set `cancel` flag aborts the flow with `error.LoginCancelled`.
+    loginFn: *const fn (std.mem.Allocator, *const Descriptor, cancel: ?*const std.atomic.Value(bool)) anyerror!TokenSet,
     /// Exchange a refresh token for a new `TokenSet` (with re-derived account id).
     refreshFn: *const fn (std.mem.Allocator, *const Descriptor, []const u8) anyerror!TokenSet,
 };
@@ -233,8 +234,8 @@ pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?S
 }
 
 /// Run the interactive login and persist the result, returning a live session.
-pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor) !Session {
-    const tokens = try desc.loginFn(allocator, desc);
+pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, cancel: ?*const std.atomic.Value(bool)) !Session {
+    const tokens = try desc.loginFn(allocator, desc, cancel);
     storeSave(desc.id, tokens) catch {};
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
