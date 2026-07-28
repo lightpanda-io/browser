@@ -97,6 +97,8 @@ const Filters = union(Mode) {
 // If the DOM version is unchanged and the new index >= the last one, we can do
 // not have to reset our TreeWalker. This optimizes the common case of accessing
 // the collection via incrementing indexes.
+// The element that walk returned is kept alongside its index (see Cursor), so
+// re-reading the same index - `coll[i].a` then `coll[i].b` - is free too.
 
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
@@ -110,15 +112,24 @@ pub fn NodeLive(comptime mode: Mode) type {
     return struct {
         _tw: TW,
         _filter: Filter,
-        _next_index: usize,
+        _cursor: ?Cursor,
         _last_length: ?u32,
         _cached_version: usize,
 
         const Self = @This();
 
+        // The last element we handed out, and the index it was handed out for.
+        // The TreeWalker is parked immediately after it, so the next element it
+        // yields is the one at `index + 1`. A null cursor means the TreeWalker
+        // is back at its start position.
+        const Cursor = struct {
+            index: usize,
+            element: *Element,
+        };
+
         pub fn init(root: *Node, filter: Filter, frame: *Frame) Self {
             return .{
-                ._next_index = 0,
+                ._cursor = null,
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
@@ -136,17 +147,17 @@ pub fn NodeLive(comptime mode: Mode) type {
                 // not ideal, but this can happen if list[x] is called followed
                 // by list.length.
                 self._tw.reset();
-                self._next_index = 0;
+                self._cursor = null;
             }
             // If we're here, it means it's either the first time we're called
             // or the DOM version has changed. Either way, the _tw should be
-            // at the start position. It's important that self._next_index == 0
+            // at the start position. It's important that self._cursor == null
             // (which it always should be in these cases), because we're going to
-            // reset _tw at the end of this, _next_index should always be 0 when
+            // reset _tw at the end of this, the cursor should always be null when
             // _tw is reset. Again, this should always be the case, but we're
             // asserting to make sure, else we'll have weird behavior, namely
             // the wrong item being returned for the wrong index.
-            lp.assert(self._next_index == 0, "NodeLives.length", .{ .next_index = self._next_index });
+            lp.assert(self._cursor == null, "NodeLives.length", .{ .index = if (self._cursor) |c| c.index else 0 });
 
             var tw = &self._tw;
             defer tw.reset();
@@ -175,20 +186,35 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {
             _ = self.versionCheck(frame);
-            var current = self._next_index;
-            if (index < current) {
-                current = 0;
-                self._tw.reset();
+
+            var current: usize = 0;
+            if (self._cursor) |cursor| {
+                if (index == cursor.index) {
+                    // asking for the element we just handed out
+                    return cursor.element;
+                }
+                if (index > cursor.index) {
+                    // the walker is parked after cursor.element
+                    current = cursor.index + 1;
+                } else {
+                    self._tw.reset();
+                    self._cursor = null;
+                }
             }
-            defer self._next_index = current + 1;
 
             const tw = &self._tw;
             while (self.nextTw(tw)) |el| {
                 if (index == current) {
+                    self._cursor = .{ .index = current, .element = el };
                     return el;
                 }
                 current += 1;
             }
+
+            // Out of range, and the walker is now spent. Rewind, so that a
+            // null cursor keeps meaning "the walker is at its start".
+            tw.reset();
+            self._cursor = null;
             return null;
         }
 
@@ -221,8 +247,13 @@ pub fn NodeLive(comptime mode: Mode) type {
             return null;
         }
 
+        // Advances the shared TreeWalker, keeping the cursor in step with it so
+        // that this can be mixed with getAtIndex.
         pub fn next(self: *Self) ?*Element {
-            return self.nextTw(&self._tw);
+            const el = self.nextTw(&self._tw) orelse return null;
+            const index = if (self._cursor) |cursor| cursor.index + 1 else 0;
+            self._cursor = .{ .index = index, .element = el };
+            return el;
         }
 
         pub fn nextTw(self: *Self, tw: *TW) ?*Element {
@@ -390,7 +421,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             }
 
             self._tw.reset();
-            self._next_index = 0;
+            self._cursor = null;
             self._last_length = null;
             self._cached_version = current;
             return false;
@@ -419,4 +450,83 @@ pub fn NodeLive(comptime mode: Mode) type {
             return frame._factory.create(collection);
         }
     };
+}
+
+const testing = @import("../../../testing.zig");
+test "WebApi: NodeLive" {
+    try testing.htmlRunner("collections/live_collections.html", .{});
+}
+
+// Indexed access is linear when the cursor works and quadratic when it doesn't,
+// which no assertion on the returned elements can tell apart. So scan two
+// collections a factor of TIMES apart and compare: linear work grows by TIMES,
+// quadratic by TIMES squared. Comparing two back-to-back measurements on the
+// same machine keeps this out of reach of how fast that machine is.
+test "NodeLive: indexed reads stay linear" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const SMALL = 2000;
+    const TIMES = 10;
+    // well above TIMES, well below TIMES squared
+    const LIMIT = TIMES * 3;
+
+    const small = try buildSpans(frame, SMALL);
+    const large = try buildSpans(frame, SMALL * TIMES);
+
+    {
+        const ratio = growth(frame, small, SMALL, large, SMALL * TIMES, ascendingScan);
+        try testing.expect(ratio < LIMIT);
+    }
+
+    {
+        const ratio = growth(frame, small, SMALL, large, SMALL * TIMES, repeatedScan);
+        try testing.expect(ratio < LIMIT);
+    }
+}
+
+fn buildSpans(frame: *Frame, count: usize) !*Node {
+    const div = try frame.window._document.createElement("div", null, frame);
+    const html = try frame.arena.alloc(u8, count * "<span></span>".len);
+    var i: usize = 0;
+    while (i < html.len) : (i += "<span></span>".len) {
+        @memcpy(html[i..][0.."<span></span>".len], "<span></span>");
+    }
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+    return div.asNode();
+}
+
+fn ascendingScan(root: *Node, count: usize, frame: *Frame) void {
+    var nodes = NodeLive(.tag).init(root, .span, frame);
+    for (0..count) |i| {
+        std.debug.assert(nodes.getAtIndex(i, frame) != null);
+    }
+}
+
+fn repeatedScan(root: *Node, count: usize, frame: *Frame) void {
+    // the shape of `list[i].foo; list[i].bar`
+    var nodes = NodeLive(.tag).init(root, .span, frame);
+    for (0..count) |i| {
+        std.debug.assert(nodes.getAtIndex(i, frame) != null);
+        std.debug.assert(nodes.getAtIndex(i, frame) != null);
+    }
+}
+
+fn growth(
+    frame: *Frame,
+    small: *Node,
+    small_count: usize,
+    large: *Node,
+    large_count: usize,
+    scan: fn (*Node, usize, *Frame) void,
+) f64 {
+    const start_small = lp.datetime.microTimestamp(.awake);
+    scan(small, small_count, frame);
+    const small_us = lp.datetime.microTimestamp(.awake) - start_small;
+
+    const start_large = lp.datetime.microTimestamp(.awake);
+    scan(large, large_count, frame);
+    const large_us = lp.datetime.microTimestamp(.awake) - start_large;
+
+    return @as(f64, @floatFromInt(large_us)) / @as(f64, @floatFromInt(@max(small_us, 1)));
 }

@@ -17,101 +17,46 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
+const NodeLive = @import("node_live.zig").NodeLive;
 const Execution = js.Execution;
 
 const HTMLAllCollection = @This();
 
-_tw: TreeWalker.FullExcludeSelf,
-_last_index: usize,
-_last_length: ?u32,
-_cached_version: usize,
+// Same as getElementsByTagName('*') with the only difference being the name
+// lookup which exposes the name only for a fixed list of tags.
+_nodes: NodeLive(.all_elements),
 
 pub fn init(root: *Node, frame: *Frame) HTMLAllCollection {
-    return .{
-        ._last_index = 0,
-        ._last_length = null,
-        ._tw = TreeWalker.FullExcludeSelf.init(root, .{}),
-        ._cached_version = frame._page.dom_version,
-    };
-}
-
-fn versionCheck(self: *HTMLAllCollection, frame: *const Frame) bool {
-    const current = frame._page.dom_version;
-    if (self._cached_version != current) {
-        self._cached_version = current;
-        self._last_index = 0;
-        self._last_length = null;
-        self._tw.reset();
-        return false;
-    }
-    return true;
+    return .{ ._nodes = .init(root, {}, frame) };
 }
 
 pub fn length(self: *HTMLAllCollection, frame: *const Frame) u32 {
-    if (self.versionCheck(frame)) {
-        if (self._last_length) |cached_length| {
-            return cached_length;
-        }
-    }
-
-    lp.assert(self._last_index == 0, "HTMLAllCollection.length", .{ .last_index = self._last_index });
-
-    var tw = &self._tw;
-    defer tw.reset();
-
-    var l: u32 = 0;
-    while (tw.next()) |node| {
-        if (node.is(Element) != null) {
-            l += 1;
-        }
-    }
-
-    self._last_length = l;
-    return l;
+    return self._nodes.length(frame);
 }
 
 pub fn getAtIndex(self: *HTMLAllCollection, index: usize, frame: *const Frame) ?*Element {
-    _ = self.versionCheck(frame);
-    var current = self._last_index;
-    if (index <= current) {
-        current = 0;
-        self._tw.reset();
-    }
-    defer self._last_index = current + 1;
-
-    const tw = &self._tw;
-    while (tw.next()) |node| {
-        if (node.is(Element)) |el| {
-            if (index == current) {
-                return el;
-            }
-            current += 1;
-        }
-    }
-
-    return null;
+    return self._nodes.getAtIndex(index, frame);
 }
 
 pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*Element {
-    if (frame.getElementByIdFromNode(self._tw._root, name)) |el| {
+    if (frame.getElementByIdFromNode(self._nodes._tw._root, name)) |el| {
         return el;
     }
 
-    // Fall back to searching by name attribute
-    // Clone the tree walker to preserve _last_index optimization
-    _ = self.versionCheck(frame);
-    var tw = self._tw.clone();
-    tw.reset();
-
+    // Fall back to searching by name attribute. Walking a clone leaves the
+    // indexed-access cursor alone.
+    var tw = self._nodes._tw.clone();
     while (tw.next()) |node| {
         if (node.is(Element)) |el| {
+            if (!isAllNamed(el)) {
+                continue;
+            }
             if (el.getAttributeSafe(comptime .wrap("name"))) |attr_name| {
                 if (std.mem.eql(u8, attr_name, name)) {
                     return el;
@@ -121,6 +66,19 @@ pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*El
     }
 
     return null;
+}
+
+// Every element in the collection is exposed by its id, but only these are
+// exposed by their name.
+// https://html.spec.whatwg.org/multipage/dom.html#dom-document-all
+fn isAllNamed(el: *Element) bool {
+    if (el._namespace != .html) {
+        return false;
+    }
+    return switch (el.getTag()) {
+        .anchor, .button, .embed, .form, .frameset, .iframe, .img, .input, .map, .meta, .object, .select, .textarea => true,
+        else => false,
+    };
 }
 
 const CAllAsFunctionArg = union(enum) {
@@ -137,7 +95,7 @@ pub fn callable(self: *HTMLAllCollection, arg: CAllAsFunctionArg, frame: *Frame)
 pub fn iterator(self: *HTMLAllCollection, exec: *const Execution) !*Iterator {
     return Iterator.init(.{
         .list = self,
-        .tw = self._tw.clone(),
+        .tw = self._nodes._tw.clone(),
     }, exec);
 }
 
@@ -147,12 +105,7 @@ pub const Iterator = GenericIterator(struct {
     tw: TreeWalker.FullExcludeSelf,
 
     pub fn next(self: *@This(), _: *const Execution) ?*Element {
-        while (self.tw.next()) |node| {
-            if (node.is(Element)) |el| {
-                return el;
-            }
-        }
-        return null;
+        return self.list._nodes.nextTw(&self.tw);
     }
 }, null);
 
@@ -187,3 +140,8 @@ pub const JsApi = struct {
 
     pub const callable = bridge.callable(HTMLAllCollection.callable, .{ .null_as_undefined = true });
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: HTMLAllCollection" {
+    try testing.htmlRunner("collections/html_all_collection.html", .{});
+}

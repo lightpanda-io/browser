@@ -44,10 +44,12 @@ pub fn getLength(self: *RadioNodeList) !u32 {
     return i;
 }
 
-pub fn getAtIndex(self: *RadioNodeList, index: usize, frame: *Frame) !?*Node {
-    var i: usize = 0;
+// Walks a cloned iterator, like getLength and getValue do: indexing the form
+// collection directly would rewind its cursor on every call.
+pub fn getAtIndex(self: *RadioNodeList, index: usize) !?*Node {
     var current: usize = 0;
-    while (self._form_collection.getAtIndex(i, frame)) |element| : (i += 1) {
+    var it = try self._form_collection.iterator();
+    while (it.next()) |element| {
         if (!self.matches(element)) {
             continue;
         }

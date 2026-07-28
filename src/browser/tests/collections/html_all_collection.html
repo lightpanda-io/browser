@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=a name=alpha></div>
+<div id=b></div>
+<input name=field>
+<a name=anchor></a>
+<svg><rect name=svg_named /></svg>
+
+<script id=index_then_length>
+  {
+    // Used to trip the HTMLAllCollection.length assert: indexing moves the
+    // cursor, and length has to rewind it before counting. Note document.all
+    // hands back a fresh collection each time, and the index has to come
+    // first - a cached length is returned before the assert is reached.
+    const all = document.all;
+    testing.expectEqual('HTML', all[0].tagName);
+    const len = all.length;
+    testing.expectEqual(true, len > 3);
+
+    testing.expectEqual('HEAD', all[1].tagName);
+    testing.expectEqual(len, all.length);
+    testing.expectEqual(len, all.length);
+
+    const other = document.all;
+    testing.expectEqual('HEAD', other[1].tagName);
+    testing.expectEqual(len, other.length);
+  }
+</script>
+
+<script id=ascending_and_repeated>
+  {
+    const all = document.all;
+    const len = all.length;
+    const acc = [];
+    for (let i = 0; i < len; i++) {
+      acc.push(all[i].tagName);
+      // reading the same index twice must return the same element
+      testing.expectEqual(acc[acc.length - 1], all[i].tagName);
+    }
+    testing.expectEqual(len, acc.length);
+
+    const iterated = [];
+    for (const el of document.all) iterated.push(el.tagName);
+    testing.expectEqual(acc, iterated);
+  }
+</script>
+
+<script id=out_of_range>
+  {
+    const all = document.all;
+    const len = all.length;
+    testing.expectEqual(undefined, all[len]);
+    testing.expectEqual(undefined, all[len + 100]);
+    testing.expectEqual('HTML', all[0].tagName);
+    testing.expectEqual(len, all.length);
+  }
+</script>
+
+<script id=named_and_callable>
+  {
+    const all = document.all;
+    testing.expectEqual('a', all.namedItem('a').id);
+    testing.expectEqual('b', all['b'].id);
+    testing.expectEqual('a', all('a').id);
+    testing.expectEqual('HTML', all(0).tagName);
+
+    // every element is exposed by id, but only a fixed list of tags is
+    // exposed by name: a div and an svg rect are not, an input and an a are
+    testing.expectEqual(null, all.namedItem('alpha'));
+    testing.expectEqual(null, all.namedItem('svg_named'));
+    testing.expectEqual('INPUT', all.namedItem('field').tagName);
+    testing.expectEqual('A', all.namedItem('anchor').tagName);
+
+    // a named lookup walks a clone, so the indexed cursor survives it
+    testing.expectEqual('HTML', all[0].tagName);
+    testing.expectEqual('a', all.namedItem('a').id);
+    testing.expectEqual('HEAD', all[1].tagName);
+  }
+</script>
+
+<script id=invalidation>
+  {
+    const all = document.all;
+    const len = all.length;
+    testing.expectEqual('HTML', all[0].tagName);
+
+    const extra = document.createElement('p');
+    document.body.appendChild(extra);
+    testing.expectEqual(len + 1, all.length);
+    testing.expectEqual('HTML', all[0].tagName);
+    testing.expectEqual(extra, all[len]);
+
+    extra.remove();
+    testing.expectEqual(len, all.length);
+  }
+</script>
+
+<script id=is_htmldda>
+  {
+    // the [[IsHTMLDDA]] weirdness has to survive the refactor
+    testing.expectEqual(true, document.all == undefined);
+    testing.expectEqual('undefined', typeof document.all);
+    testing.expectEqual(false, !!document.all);
+  }
+</script>
