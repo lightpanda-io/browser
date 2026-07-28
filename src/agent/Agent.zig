@@ -29,7 +29,7 @@ const Command = lp.Command;
 const Schema = lp.Schema;
 const Recorder = lp.Recorder;
 const ScriptRuntime = lp.Runtime;
-const Credentials = zenai.provider.Credentials;
+const Candidate = zenai.provider.Candidate;
 
 const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
@@ -134,10 +134,9 @@ const synthesis_prompt =
 
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
-model_credentials: ?Credentials,
-/// Ownership of `model_credentials.key`. The AI client borrows the key, so
-/// deinit only after the client is gone.
-key_ownership: settings.KeyOwnership,
+/// The active LLM credential (null = LLM disabled). The AI client borrows
+/// its key, so deinit only after the client is gone.
+credential: ?settings.Credential,
 /// App data dir (owned by `App`, which outlives the agent), used to cache the
 /// models.dev catalog. Null when no data dir is available.
 app_dir: ?[]const u8,
@@ -197,7 +196,7 @@ api_error_buf: [512]u8 = undefined,
 api_error_detail: ?[]const u8 = null,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent {
-    var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Credentials = undefined;
+    var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Candidate = undefined;
     const found_providers = settings.availableProviders(&providers_buf);
     const available_providers = try allocator.alloc([]const u8, found_providers.len);
     var provider_count: usize = 0;
@@ -269,12 +268,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     var resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
     // Before the ai_client errdefer, so on unwind the client goes first.
-    errdefer if (resolved) |*r| r.ownership.deinit(allocator);
+    errdefer if (resolved) |*r| r.credential.deinit(allocator);
 
     if (will_repl and !banner_before and resolved != null) welcome.print(resolve);
-    const llm: ?Credentials = if (resolved) |r| r.credentials else null;
 
-    if (llm == null and requires_llm) {
+    if (resolved == null and requires_llm) {
         if (opts.no_llm) {
             std.debug.print("--no-llm forbids LLM use; drop it to run this mode.\n", .{});
         }
@@ -286,10 +284,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     // The REPL skips this network round trip for snappy startup; an invalid
     // model surfaces on the first turn instead.
-    if (llm) |l| if (!will_repl) {
-        const remembered_matches = remembered != null and remembered.?.provider == l.provider;
+    if (resolved) |*r| if (!will_repl) {
+        const remembered_matches = remembered != null and remembered.?.provider == r.credential.provider;
         const explicit = opts.model != null or remembered_matches;
-        switch (try settings.reconcileModel(allocator, l, model, opts.base_url, explicit)) {
+        switch (try settings.reconcileModel(allocator, &r.credential, model, opts.base_url, explicit)) {
             .use => |m| {
                 allocator.free(model);
                 model = m;
@@ -298,14 +296,14 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         }
     };
 
-    const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
+    const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
     browser_tools.search_engine = settings.resolveSearchEngine(remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
+            settings.saveRemembered(.{ .provider = r.credential.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -325,8 +323,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     self.* = .{
         .allocator = allocator,
         .ai_client = null,
-        .model_credentials = llm,
-        .key_ownership = if (resolved) |r| r.ownership else .env,
+        .credential = if (resolved) |r| r.credential else null,
         .app_dir = app.app_dir_path,
         .no_llm_persisted = remembered_no_llm,
         .model_base_url = opts.base_url,
@@ -360,7 +357,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ(), .account_id = self.key_ownership.accountId() }) else null;
+    self.ai_client = if (self.credential) |*c| try zenai.provider.Client.init(lp.io, allocator, c.provider, c.keySlice(), .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(c.provider), .environ = lp.environ(), .account_id = c.accountId() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -389,7 +386,7 @@ pub fn deinit(self: *Agent) void {
     self.browser.deinit();
     self.notification.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
-    self.key_ownership.deinit(self.allocator);
+    if (self.credential) |*c| c.deinit(self.allocator);
     self.allocator.free(self.model);
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
@@ -855,7 +852,7 @@ const provider_off_keyword = "null";
 const local_providers = [_]Config.AiProvider{ .ollama, .llama_cpp };
 
 fn requireLlm(self: *Agent, name: []const u8) bool {
-    if (self.model_credentials == null) {
+    if (self.credential == null) {
         self.terminal.printError("{s} requires an LLM — " ++ llm_setup_hint ++ ".", .{name});
         return false;
     }
@@ -886,7 +883,7 @@ fn handleModel(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 /// credentials it persists `provider = null` only when that's an intentional
 /// preference (`no_llm_persisted`); a transient --no-llm run reports without saving.
 fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
-    const provider: ?Config.AiProvider = if (self.model_credentials) |c| c.provider else null;
+    const provider: ?Config.AiProvider = if (self.credential) |c| c.provider else null;
     // A transient --no-llm run has no provider and no intent to persist one;
     // report without saving so we don't clobber the remembered selection.
     if (provider == null and !self.no_llm_persisted) {
@@ -911,7 +908,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     const trimmed = std.mem.trim(u8, rest, &std.ascii.whitespace);
 
     if (trimmed.len == 0) {
-        if (self.model_credentials) |c| {
+        if (self.credential) |c| {
             self.terminal.printInfo("Current provider: {s}", .{@tagName(c.provider)});
         } else {
             self.terminal.printInfo("Current provider: null — LLM disabled", .{});
@@ -932,7 +929,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     // after logging into its CLI) falls through instead of no-op'ing.
     const vertex_project = provider == .vertex and settings.vertexProjectMode();
     const sub_desc = auth.descriptorFor(provider);
-    if (self.model_credentials) |current| if (provider == current.provider and !vertex_project and sub_desc == null) {
+    if (self.credential) |current| if (provider == current.provider and !vertex_project and sub_desc == null) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
     };
@@ -941,7 +938,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
             self.terminal.printError("could not obtain a Vertex access token: {s} (details above)", .{@errorName(err)});
             return;
         };
-        self.setProvider(.{ .provider = .vertex, .key = token }, .{ .owned = token }) catch |err| {
+        self.setProvider(.{ .provider = .vertex, .key = .{ .owned = token } }) catch |err| {
             self.allocator.free(token);
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
         };
@@ -961,7 +958,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
                 self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
                 return;
             });
-        self.setProvider(.{ .provider = provider, .key = owned.tokens.access_token }, .{ .session = owned }) catch |err| {
+        self.setProvider(.{ .provider = provider, .key = .{ .session = owned } }) catch |err| {
             owned.deinit();
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
         };
@@ -984,7 +981,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
-    self.setProvider(.{ .provider = provider, .key = key }, .env) catch |err| {
+    self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
 }
@@ -994,8 +991,8 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 fn disableProvider(self: *Agent) void {
     if (self.ai_client) |client| client.deinit(self.allocator);
     self.ai_client = null;
-    self.key_ownership.deinit(self.allocator);
-    self.model_credentials = null;
+    if (self.credential) |*c| c.deinit(self.allocator);
+    self.credential = null;
     self.model_completions = null;
     self.no_llm_persisted = true;
     self.reportSaved("provider", provider_off_keyword);
@@ -1009,34 +1006,33 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     return std.mem.span(v);
 }
 
-/// `ownership` transfers whatever owns `credentials.key` on success; on error
-/// the caller still owns it. The previous credential is released only after
+/// `credential` transfers ownership of its key resources on success; on error
+/// the caller still owns them. The previous credential is released only after
 /// the old client is gone.
-fn setProvider(self: *Agent, credentials: Credentials, ownership: settings.KeyOwnership) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ(), .account_id = ownership.accountId() });
+fn setProvider(self: *Agent, credential: settings.Credential) !void {
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credential.provider, credential.keySlice(), .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credential.provider), .environ = lp.environ(), .account_id = credential.accountId() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
-    const same_provider = if (self.model_credentials) |c| c.provider == credentials.provider else false;
-    const new_model = try self.allocator.dupe(u8, if (same_provider) self.model else zenai.provider.defaultModel(credentials.provider));
+    const same_provider = if (self.credential) |c| c.provider == credential.provider else false;
+    const new_model = try self.allocator.dupe(u8, if (same_provider) self.model else zenai.provider.defaultModel(credential.provider));
     if (self.ai_client) |client| client.deinit(self.allocator);
-    self.key_ownership.deinit(self.allocator);
-    self.key_ownership = ownership;
+    if (self.credential) |*c| c.deinit(self.allocator);
+    self.credential = credential;
     new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
-    self.model_credentials = credentials;
     self.no_llm_persisted = false;
     self.model_completions = null;
     self.allocator.free(self.model);
     self.model = new_model;
-    if (auth.descriptorFor(credentials.provider)) |d| {
-        self.terminal.printInfo("provider: {s} ({s})", .{ @tagName(credentials.provider), d.label });
+    if (auth.descriptorFor(credential.provider)) |d| {
+        self.terminal.printInfo("provider: {s} ({s})", .{ @tagName(credential.provider), d.label });
     } else {
-        self.terminal.printInfo("provider: {s}", .{@tagName(credentials.provider)});
+        self.terminal.printInfo("provider: {s}", .{@tagName(credential.provider)});
     }
-    if (zenai.provider.defaultEffort(credentials.provider)) |e| if (e != self.effort) {
+    if (zenai.provider.defaultEffort(credential.provider)) |e| if (e != self.effort) {
         self.effort = e;
-        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credentials.provider) });
+        self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credential.provider) });
     };
     self.reportSaved("model", self.model);
     // Prime the completion cache on the command, not on a `/model` keystroke.
@@ -1045,19 +1041,20 @@ fn setProvider(self: *Agent, credentials: Credentials, ownership: settings.KeyOw
 
 /// Keep a subscription (bearer) token current before a model request: when the
 /// active session's token is near expiry, re-import from the source and repoint
-/// the client and credentials at the fresh token. A no-op for API-key auth.
-/// Runs between turns on the single agent thread, never during a request, so
-/// the displaced token is never dereferenced after it's freed here.
+/// the client at the fresh token (`keySlice` readers see it automatically).
+/// A no-op for API-key auth. Runs between turns on the single agent thread,
+/// never during a request, so the displaced token is never dereferenced after
+/// it's freed here.
 fn refreshAuthIfNeeded(self: *Agent) void {
-    if (self.key_ownership != .session) return;
-    const session = &self.key_ownership.session;
+    const cred = if (self.credential) |*c| c else return;
+    if (cred.key != .session) return;
+    const session = &cred.key.session;
     const displaced = session.ensureFresh() catch |err| {
         self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
         return;
     };
     if (displaced) |old| {
         if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
-        if (self.model_credentials) |*c| c.key = session.tokens.access_token;
         old.deinit(session.allocator);
     }
 }
@@ -1623,7 +1620,7 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
     const hint = if (status == 401 and client == .vertex)
-        if (self.key_ownership == .owned)
+        if (self.credential != null and self.credential.?.key == .owned)
             " (Vertex token may have expired; run /provider vertex to refresh)"
         else
             " (Vertex express mode needs an express API key — a Gemini Developer key won't work)"
@@ -1923,18 +1920,17 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
         return error.ConflictingFlags;
     }
     var resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
-    const llm = resolved.credentials;
-    defer resolved.ownership.deinit(allocator);
+    defer resolved.credential.deinit(allocator);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     // A subscription provider can't list models via the provider API; use the
     // free models.dev catalog.
-    const ids: []const []const u8 = if (auth.descriptorFor(llm.provider)) |desc|
+    const ids: []const []const u8 = if (auth.descriptorFor(resolved.credential.provider)) |desc|
         models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
     else
-        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
-            if (llm.provider == .vertex and !settings.vertexProjectMode()) {
+        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), resolved.credential.provider, resolved.credential.keySlice(), .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
+            if (resolved.credential.provider == .vertex and !settings.vertexProjectMode()) {
                 std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
             }
             return err;
@@ -1997,25 +1993,25 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
 /// success or empty so the per-keystroke hinter pays the round-trip once.
 fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u8 {
     const self: *Agent = @ptrCast(@alignCast(context));
-    const llm = self.model_credentials orelse return &.{};
-    if (self.model_completions) |c| if (c.provider == llm.provider) return c.ids;
+    const cred = if (self.credential) |*c| c else return &.{};
+    if (self.model_completions) |c| if (c.provider == cred.provider) return c.ids;
 
     _ = self.model_completion_arena.reset(.retain_capacity);
     const arena = self.model_completion_arena.allocator();
     // A subscription provider can't hit the provider's `/models` endpoint, so
     // list from the free, unauthenticated models.dev catalog instead.
-    const ids = if (auth.descriptorFor(llm.provider)) |desc|
+    const ids = if (auth.descriptorFor(cred.provider)) |desc|
         models_dev.modelIds(arena, desc.models_dev_id, self.app_dir)
     else
         zenai.provider.listChatModelIds(
             lp.io,
             self.allocator,
             arena,
-            llm.provider,
-            llm.key,
+            cred.provider,
+            cred.keySlice(),
             .{ .base_url = self.model_base_url, .environ = lp.environ() },
         ) catch &.{};
-    self.model_completions = .{ .provider = llm.provider, .ids = ids };
+    self.model_completions = .{ .provider = cred.provider, .ids = ids };
     return ids;
 }
 
