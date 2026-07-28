@@ -25,6 +25,8 @@ const App = @import("../App.zig");
 const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
 const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
+const Factory = @import("Factory.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 
 const Page = @import("Page.zig");
@@ -50,7 +52,7 @@ const Session = @This();
 browser: *Browser,
 arena: Allocator,
 history: History,
-navigation: Navigation,
+navigation: *Navigation,
 storage_shed: storage.Shed,
 // Per-origin IndexedDB engines
 idb: IdbManager,
@@ -161,12 +163,17 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const arena = try arena_pool.acquire(.small, "Session");
     errdefer arena_pool.release(arena);
 
+    const navigation = try Factory.chainedWithAllocator(arena, .{
+        EventTarget{ ._type = undefined },
+        Navigation{ ._proto = undefined },
+    });
+    navigation._proto._type = .{ .navigation = navigation };
+
     self.* = .{
         .arena = arena,
         .arena_pool = arena_pool,
         .history = .{},
-        // The prototype (EventTarget) for Navigation is created when a Frame is created.
-        .navigation = .{ ._proto = undefined },
+        .navigation = navigation,
         .storage_shed = .{},
         .idb = IdbManager.init(allocator),
         .browser = browser,
@@ -345,7 +352,6 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     errdefer _ = self.pages.pop();
 
     const frame = &page.frame;
-    try self.navigation.onNewFrame(frame);
     // Inform CDP the main frame has been created such that additional
     // context for other Worlds can be created as well.
     self.notification.dispatch(.frame_created, frame);
@@ -896,9 +902,6 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // set, so the session still reports an in-flight nav and CDP's frameCreated
     // skips the captured_responses / frame_arena reset that would wipe the
     // response we just received.
-    self.navigation.onNewFrame(&replacement.frame) catch |err| {
-        log.err(.browser, "commitPendingPage onNewFrame", .{ .err = err });
-    };
     self.notification.dispatch(.frame_created, &replacement.frame);
 
     // Step 3: promote — clear `replaces` and unlink OLD so  `livePage()`

@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Factory = @import("../../Factory.zig");
 const Frame = @import("../../Frame.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
@@ -46,6 +47,8 @@ const Mode = enum {
 
 const HTMLCollection = @This();
 
+pub const _prototype_root = true;
+
 _data: union(Mode) {
     tag: NodeLive(.tag),
     tag_name: NodeLive(.tag_name),
@@ -63,9 +66,22 @@ _data: union(Mode) {
     empty: void,
 },
 _rc: lp.RC = .{},
+// The refcount is shared with the chain leaf (when there is one), so the
+// last release can dispatch deinit through either pointer. The root must
+// know its allocation shape to destroy the right thing.
+_chained: enum(u8) { standalone, form_controls, options } = .standalone,
 
 pub fn deinit(self: *HTMLCollection, page: *Page) void {
-    page.factory.destroy(self);
+    switch (self._chained) {
+        .standalone => page.factory.destroyStandalone(self),
+        .form_controls => page.factory.destroy(self.chainLeaf(@import("HTMLFormControlsCollection.zig"))),
+        .options => page.factory.destroy(self.chainLeaf(@import("HTMLOptionsCollection.zig"))),
+    }
+}
+
+fn chainLeaf(self: *HTMLCollection, comptime Leaf: type) *Leaf {
+    const offset = comptime Factory.chainOffsetOf(Leaf, Leaf) - Factory.chainOffsetOf(Leaf, HTMLCollection);
+    return @ptrFromInt(@intFromPtr(self) + offset);
 }
 
 pub fn releaseRef(self: *HTMLCollection, page: *Page) void {

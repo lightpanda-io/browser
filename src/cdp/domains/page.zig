@@ -363,7 +363,7 @@ fn getNavigationHistory(cmd: *CDP.Command) !void {
         return error.SessionIdNotLoaded;
     }
 
-    const nav = &bc.session.navigation;
+    const nav = bc.session.navigation;
     const entries_in = nav._entries.items;
 
     const entries_out = try cmd.arena.alloc(NavigationEntry, entries_in.len);
@@ -398,7 +398,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     }
 
     const session = bc.session;
-    const nav = &session.navigation;
+    const nav = session.navigation;
 
     var target_index: ?usize = null;
     var target_url: ?[:0]const u8 = null;

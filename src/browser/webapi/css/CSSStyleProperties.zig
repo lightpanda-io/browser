@@ -30,9 +30,15 @@ pub const Proto = CSSStyleDeclaration;
 _proto: *CSSStyleDeclaration,
 
 pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleProperties {
-    return frame._factory.create(CSSStyleProperties{
-        ._proto = try CSSStyleDeclaration.init(element, is_computed, frame),
+    const self = try frame._factory.chained(.{
+        CSSStyleDeclaration{
+            ._element = element,
+            ._is_computed = is_computed,
+        },
+        CSSStyleProperties{ ._proto = undefined },
     });
+    try self._proto.parseInlineStyle(frame);
+    return self;
 }
 
 pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {

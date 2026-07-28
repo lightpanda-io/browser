@@ -73,7 +73,9 @@ subtype: ?bridge.SubType,
 
 pub const PrototypeChainEntry = struct {
     index: bridge.JsApiLookup.BackingInt,
-    offset: u16, // offset to the _proto field
+    // byte delta from the previous chain member down to this one; every
+    // member of a prototype chain lives in one contiguous factory allocation
+    offset: u16,
 };
 
 // Reverses the mapZigInstanceToJs, making sure that our TaggedOpaque
@@ -125,12 +127,10 @@ pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
     // Ok, let's walk up the chain
     var ptr = @intFromPtr(tao.value);
     for (prototype_chain[1..]) |proto| {
-        ptr += proto.offset; // the offset to the _proto field
-        const proto_ptr: **anyopaque = @ptrFromInt(ptr);
+        ptr -= proto.offset;
         if (proto.index == expected_type_index) {
-            return @ptrCast(@alignCast(proto_ptr.*));
+            return @ptrFromInt(ptr);
         }
-        ptr = @intFromPtr(proto_ptr.*);
     }
     return error.InvalidArgument;
 }
