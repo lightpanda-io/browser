@@ -80,12 +80,15 @@ fn htmlAsChildrenInner(frame: *Frame, node: *Node, html: []const u8, opts: Fragm
     // Because of custom element callbacks, the structure might not be what
     // we expect, and nodes might be altogether removed. We deal with this in a
     // few different places, but always the same way: leave it as-is.
-    const children = node._children orelse return;
-    const first = Node.linkToNode(children.first.?);
+    const first = node.firstChild() orelse return;
     if (first.is(Element.Html.Html) == null) {
         return;
     }
-    node._children = first._children;
+    node._first_child = first._first_child;
+    first._first_child = null;
+    first._parent = null;
+    first._prev = null;
+    first._next = null;
 
     // No mutation records for the unwrapped children either; see the comment
     // about fragment parses in _insertNodeRelative.
