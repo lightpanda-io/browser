@@ -220,7 +220,7 @@ pub fn asElement(self: *HtmlElement) *Element {
 }
 
 pub fn asNode(self: *HtmlElement) *Node {
-    return self._proto._proto;
+    return self._proto.asNode();
 }
 
 pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
