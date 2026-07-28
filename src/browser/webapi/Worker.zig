@@ -241,6 +241,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
                 return;
             }
 
+            js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "worker script error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);
@@ -251,6 +252,7 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
                 return;
             }
 
+            js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_arena.?, err);
             log.err(.browser, "worker module error", .{ .url = self._url, .caught = caught });
             self.fireErrorEvent(caught.exception orelse @errorName(err), null);

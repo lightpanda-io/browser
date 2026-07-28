@@ -290,6 +290,7 @@ pub fn dispatchDirect(
         event._current_target = target;
         var caught: js.TryCatch.Caught = undefined;
         _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
+            page.recordJsError(err);
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
             } else {
@@ -453,6 +454,7 @@ pub const Listener = struct {
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
+                    local.ctx.page.recordJsError(err);
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
                     } else {
@@ -517,7 +519,8 @@ pub const Listener = struct {
             .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
                 log.warn(.event, "listener report error", .{ .err = err });
             },
-            .worker => {},
+            // No worker error-event plumbing here (yet); still count it.
+            .worker => local.ctx.page.recordJsError(error.JsException),
         }
     }
 };

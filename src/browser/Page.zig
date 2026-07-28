@@ -64,6 +64,10 @@ dom_version: usize = 0,
 // when it was called
 broadcast_sequence: u64 = 0,
 
+// Uncaught JS errors attributed to this Page (all of its frames and workers):
+// Not exhaustive: some swallowed-callback paths aren't routed here.
+js_error_count: usize = 0,
+
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
 
@@ -226,6 +230,11 @@ pub fn deinit(self: *Page) void {
     }
 
     session.arena_pool.release(self.frame_arena);
+}
+
+pub fn recordJsError(self: *Page, err: anyerror) void {
+    self.js_error_count += 1;
+    lp.metrics.js_errors.incr(if (err == error.JsException) .js_exception else .other);
 }
 
 pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
@@ -392,4 +401,16 @@ fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, li
     for (frame.child_frames.items) |child| {
         try appendFrameExecutions(child, origin, arena, list);
     }
+}
+
+const testing = @import("../testing.zig");
+
+test "Page: js_error_count" {
+    defer testing.reset();
+    // One uncaught top-level script exception, one uncaught timer-callback
+    // exception.
+    const page = try testing.pageTest("page_js_error.html", .{});
+    defer page.close();
+
+    try testing.expectEqual(2, page.frame().?._page.js_error_count);
 }
