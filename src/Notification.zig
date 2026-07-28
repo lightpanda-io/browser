@@ -68,7 +68,7 @@ event_listeners: EventListeners,
 listeners: std.AutoHashMapUnmanaged(usize, std.ArrayList(*Listener)),
 
 allocator: Allocator,
-mem_pool: std.heap.memory_pool.ExtraManaged(Listener, .{}),
+mem_pool: std.heap.MemoryPool(Listener),
 
 const EventListeners = struct {
     frame_remove: List = .{},
@@ -371,9 +371,9 @@ pub fn init(allocator: Allocator) !*Notification {
 
     notification.* = .{
         .listeners = .{},
+        .mem_pool = .empty,
         .event_listeners = .{},
         .allocator = allocator,
-        .mem_pool = .init(allocator),
     };
 
     return notification;
@@ -387,14 +387,26 @@ pub fn deinit(self: *Notification) void {
         listener.deinit(allocator);
     }
     self.listeners.deinit(allocator);
-    self.mem_pool.deinit();
+    self.mem_pool.deinit(allocator);
     allocator.destroy(self);
 }
 
 pub fn register(self: *Notification, comptime event: EventType, receiver: anytype, func: EventFunc(event)) !void {
-    var list = &@field(self.event_listeners, @tagName(event));
+    const allocator = self.allocator;
+    const gop = try self.listeners.getOrPut(allocator, @intFromPtr(receiver));
+    if (gop.found_existing) {
+        for (gop.value_ptr.items) |existing| {
+            if (existing.event == event) {
+                lp.assert(@as(*const anyopaque, @ptrCast(func)) == existing.func, "different notification callbacks per receiver", .{ .event = event });
+                return;
+            }
+        }
+    } else {
+        gop.value_ptr.* = .empty;
+    }
 
-    var listener = try self.mem_pool.create();
+    var list = &@field(self.event_listeners, @tagName(event));
+    var listener = try self.mem_pool.create(self.allocator);
     errdefer self.mem_pool.destroy(listener);
 
     listener.* = .{
@@ -405,12 +417,6 @@ pub fn register(self: *Notification, comptime event: EventType, receiver: anytyp
         .func = @ptrCast(func),
         .struct_name = @typeName(@typeInfo(@TypeOf(receiver)).pointer.child),
     };
-
-    const allocator = self.allocator;
-    const gop = try self.listeners.getOrPut(allocator, @intFromPtr(receiver));
-    if (gop.found_existing == false) {
-        gop.value_ptr.* = .empty;
-    }
     try gop.value_ptr.append(allocator, listener);
 
     // we don't add this until we've successfully added the entry to

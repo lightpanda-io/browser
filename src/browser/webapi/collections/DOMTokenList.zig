@@ -247,7 +247,8 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, fram
             continue;
         }
         var caught: js.TryCatch.Caught = undefined;
-        cb.tryCall(void, .{ token, i, self }, &caught) catch {
+        cb.tryCall(void, .{ token, i, self }, &caught) catch |err| {
+            frame._page.recordJsError(err);
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "DOMTokenList" });
             return;
         };

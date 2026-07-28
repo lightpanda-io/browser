@@ -38,6 +38,23 @@ _x: f64,
 _y: f64,
 _z: f64,
 _w: f64,
+_attachment: ?Attachment = null,
+
+// Sticky. An animVal item that a later external attribute change detaches from
+// its list must not turn into a writable orphan.
+_read_only: bool = false,
+
+// SVGPoint's coordinates are a restricted float: NaN and infinity are a
+// TypeError rather than a stored value. Only points that reach an SVG list are
+// restricted; a plain DOMPoint takes an unrestricted double.
+_restricted: bool = false,
+
+pub const Coordinate = enum { x, y, z, w };
+
+pub const Attachment = struct {
+    owner: *anyopaque,
+    mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64) anyerror!void,
+};
 
 pub const Type = union(enum) {
     generic,
@@ -130,6 +147,47 @@ pub fn getZ(self: *const DOMPointReadOnly) f64 {
 }
 pub fn getW(self: *const DOMPointReadOnly) f64 {
     return self._w;
+}
+
+pub fn setCoordinate(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) !void {
+    if (self._read_only) return error.NoModificationAllowed;
+    if (self._restricted and !std.math.isFinite(value)) return error.TypeError;
+    if (self._attachment) |attachment| {
+        return attachment.mutate(attachment.owner, self, coordinate, value);
+    }
+    self.setCoordinateRaw(coordinate, value);
+}
+
+pub fn setCoordinateRaw(self: *DOMPointReadOnly, coordinate: Coordinate, value: f64) void {
+    switch (coordinate) {
+        .x => self._x = value,
+        .y => self._y = value,
+        .z => self._z = value,
+        .w => self._w = value,
+    }
+}
+
+pub fn restrict(self: *DOMPointReadOnly) void {
+    self._restricted = true;
+}
+
+pub fn attach(self: *DOMPointReadOnly, attachment: Attachment, read_only: bool) void {
+    self._attachment = attachment;
+    if (read_only) self._read_only = true;
+}
+
+pub fn detach(self: *DOMPointReadOnly, owner: *anyopaque) void {
+    const attachment = self._attachment orelse return;
+    if (attachment.owner == owner) self._attachment = null;
+}
+
+pub fn isAttached(self: *const DOMPointReadOnly) bool {
+    return self._attachment != null;
+}
+
+pub fn isAttachedTo(self: *const DOMPointReadOnly, owner: *anyopaque) bool {
+    const attachment = self._attachment orelse return false;
+    return attachment.owner == owner;
 }
 
 pub fn toJSON(self: *const DOMPointReadOnly) struct {

@@ -366,8 +366,8 @@ fn sendMessageToTarget(cmd: *CDP.Command) !void {
         return error.TargetNotLoaded;
     }
 
-    lp.assert(bc.session_id != null, "CDP.target.sendMessageToTarget null session_id", .{});
-    if (std.mem.eql(u8, bc.session_id.?, params.sessionId) == false) {
+    const session_id = bc.session_id orelse return error.UnknownSessionId;
+    if (std.mem.eql(u8, session_id, params.sessionId) == false) {
         // Is this right? Is the params.sessionId meant to be the active
         // sessionId? What else could it be? We have no other session_id.
         return error.UnknownSessionId;

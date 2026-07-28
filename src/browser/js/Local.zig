@@ -343,7 +343,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 }
                 const fc = finalizer_gop.value_ptr;
                 const browser = session.browser;
-                const identity_finalizer = try browser.fc_identity_pool.create();
+                const identity_finalizer = try browser.fc_identity_pool.create(browser.allocator);
                 identity_finalizer.* = .{
                     .browser = browser,
                     .page = page,
@@ -931,6 +931,12 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
                 return ptr[0..num_elements];
             }
         },
+        f16 => {
+            if (js_val.isFloat16Array()) {
+                const ptr = @as([*]f16, @ptrCast(@alignCast(base)));
+                return ptr[0..num_elements];
+            }
+        },
         f32 => {
             if (js_val.isFloat32Array()) {
                 const ptr = @as([*]f32, @ptrCast(@alignCast(base)));
@@ -1069,6 +1075,9 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                             return .{ .ok = {} };
                         },
                         i64 => if (js_val.isBigInt64Array()) {
+                            return .{ .ok = {} };
+                        },
+                        f16 => if (js_val.isFloat16Array()) {
                             return .{ .ok = {} };
                         },
                         f32 => if (js_val.isFloat32Array()) {

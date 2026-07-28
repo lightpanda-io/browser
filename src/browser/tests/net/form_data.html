@@ -898,3 +898,33 @@
   testing.expectEqual('by-listener', fd.get('added'));
 }
 </script>
+
+<script id=appendBlobAndFileValues>
+{
+  // https://xhr.spec.whatwg.org/#create-an-entry
+  // A Blob value becomes a File named "blob"; a File keeps its own name; an
+  // explicit filename overrides both. Before this was implemented the value
+  // was coerced with toString() and every entry read back "[object Blob]".
+  const fd = new FormData();
+
+  fd.append('plain', 'still-a-string');
+  fd.append('fromBlob', new Blob(['blob-bytes'], { type: 'text/plain' }));
+  fd.append('fromFile', new File(['file-bytes'], 'notes.txt', { type: 'text/plain' }));
+  fd.append('renamed', new Blob(['renamed-bytes'], { type: 'text/plain' }), 'given.txt');
+
+  testing.expectEqual('still-a-string', fd.get('plain'));
+
+  // A file entry read through get() collapses to its name, per WHATWG.
+  testing.expectEqual('blob', fd.get('fromBlob'));
+  testing.expectEqual('notes.txt', fd.get('fromFile'));
+  testing.expectEqual('given.txt', fd.get('renamed'));
+
+  // set() goes through the same path.
+  fd.set('fromFile', new File(['replaced'], 'replaced.txt', { type: 'text/plain' }));
+  testing.expectEqual('replaced.txt', fd.get('fromFile'));
+
+  // Overwriting a file entry with a string still yields a string.
+  fd.set('fromBlob', 'back-to-string');
+  testing.expectEqual('back-to-string', fd.get('fromBlob'));
+}
+</script>

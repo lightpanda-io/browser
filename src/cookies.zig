@@ -51,7 +51,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
     };
 
     const jar = &session.cookie_jar;
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
 
     var loaded: usize = 0;
     for (json_cookies) |jc| {

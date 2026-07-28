@@ -262,7 +262,9 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    var r = req;
+    r.document_frame_id = self._frame._frame_id;
+    return self._session.browser.http_client.newRequest(r, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -330,11 +332,11 @@ pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter
 
 const base64 = @import("encoding/base64.zig");
 pub fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
-    return base64.encode(exec.call_arena, input);
+    return base64.encode(exec.local_arena, input);
 }
 
 pub fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) !JS.String.OneByte {
-    const bytes = try base64.decode(exec.call_arena, input);
+    const bytes = try base64.decode(exec.local_arena, input);
     return .{ .bytes = bytes };
 }
 
@@ -357,6 +359,10 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         }
         break :blk .{ "rejectionhandled", self._on_rejection_handled };
     };
+
+    if (no_handler) {
+        self._page.recordJsError(error.JsException);
+    }
 
     const target = self.asEventTarget();
     if (self._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {
@@ -399,6 +405,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .url = resolved_url,
         .method = .GET,
         .frame_id = self._frame_id,
+        .document_frame_id = self._frame._frame_id,
         .loader_id = self._loader_id,
         .headers = headers,
         .cookie_jar = &session.cookie_jar,
@@ -425,6 +432,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     defer try_catch.deinit();
 
     _ = ls.local.eval(response.body.items, url) catch |err| {
+        self._page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
         log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
@@ -434,6 +442,8 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
+    self._page.recordJsError(error.JsException);
+
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",

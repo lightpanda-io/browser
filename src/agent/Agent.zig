@@ -305,10 +305,11 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credentials.provider else null);
     const verbosity = settings.resolveVerbosity(opts, remembered);
     const stream_enabled = settings.resolveStream(remembered);
+    browser_tools.search_engine = settings.resolveSearchEngine(remembered);
 
     if (resolved) |r| {
         if (r.source == .picked) {
-            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled }) catch {};
+            settings.saveRemembered(.{ .provider = r.credentials.provider, .model = model, .effort = effort, .verbosity = verbosity, .stream = stream_enabled, .search_engine = browser_tools.search_engine }) catch {};
         }
         // provider/model now live in the status bar; just space before the help
         std.debug.print("\n", .{});
@@ -733,6 +734,7 @@ fn handleMeta(self: *Agent, arena: std.mem.Allocator, meta: *const SlashCommand.
         .load => self.handleLoad(rest),
         .model => self.handleModel(arena, rest),
         .provider => self.handleProvider(arena, rest),
+        .searchEngine => self.handleSearchEngine(rest),
     }
     return false;
 }
@@ -770,6 +772,21 @@ fn handleStream(self: *Agent, rest: []const u8) void {
     };
     self.stream_enabled = on;
     self.reportSaved("stream", if (on) "on" else "off");
+}
+
+/// `/searchEngine`: bare prints the current engine; an argument sets and
+/// persists it, warning when the chosen engine's API key is unset.
+fn handleSearchEngine(self: *Agent, rest: []const u8) void {
+    self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
+    const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
+    const env_var: [:0]const u8 = switch (selected) {
+        .tavily => "TAVILY_API_KEY",
+        .brave => "BRAVE_API_KEY",
+        .auto, .duckduckgo => return,
+    };
+    if (std.c.getenv(env_var) == null) {
+        self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{env_var});
+    }
 }
 
 /// Print cumulative session token usage, broken down so the cache's effect is
@@ -882,7 +899,7 @@ fn reportSaved(self: *Agent, label: []const u8, value: []const u8) void {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
         return;
     }
-    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled })) {
+    if (settings.saveRemembered(.{ .provider = provider, .model = self.model, .effort = self.effort, .verbosity = self.terminal.verbosity, .stream = self.stream_enabled, .search_engine = browser_tools.search_engine })) {
         self.terminal.printInfo("{s}: {s} (saved to {s})", .{ label, value, settings.remembered_path });
     } else |_| {
         self.terminal.printInfo("{s}: {s}", .{ label, value });
@@ -1418,6 +1435,10 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 "/provider [name|null] — change the provider, or 'null' to disable the LLM (persisted, so the next launch starts in basic mode); Tab completes detected providers, bare /provider shows the current one",
                 .{},
             ),
+            .searchEngine => self.terminal.printInfo(
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave then Tavily (when their API keys are set) and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                .{ @tagName(browser_tools.search_engine), settings.remembered_path },
+            ),
         }
         return;
     }
@@ -1571,7 +1592,7 @@ fn recordSlashToolCall(
 
     // capToolOutput returns its input unchanged under the cap; dupe so content
     // doesn't alias the caller's per-iteration arena.
-    const capped = capToolOutput(ma, result.text);
+    const capped = capToolOutput(ma, tool_name, result.text);
     const content = if (capped.ptr == result.text.ptr) try ma.dupe(u8, capped) else capped;
 
     const tool_results = try ma.alloc(zenai.provider.ToolResult, 1);
@@ -1844,15 +1865,23 @@ fn buildUserMessageParts(
     return parts.toOwnedSlice(ma);
 }
 
-// Cap per-call tool output so heavy pages don't balloon the message arena (and
-// the next request body) without bound.
-const tool_output_max_bytes: usize = 1 * 1024 * 1024;
+// Tool results are re-sent with every subsequent turn, so an unscoped read of
+// a huge page is paid once per remaining turn — the cap bounds that growth.
+// `extract` is exempt up to the loose backstop: its output is schema-shaped
+// JSON the model explicitly asked for, and truncation would corrupt it.
+const tool_output_max_bytes: usize = 64 * 1024;
+const extract_output_max_bytes: usize = 1024 * 1024;
 
-fn capToolOutput(allocator: std.mem.Allocator, output: []const u8) []const u8 {
-    if (output.len <= tool_output_max_bytes) return output;
-    const prefix = string.truncateUtf8(output, tool_output_max_bytes);
-    var suffix_buf: [64]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes]", .{output.len}) catch return prefix;
+fn toolOutputCap(tool_name: []const u8) usize {
+    return if (std.mem.eql(u8, tool_name, "extract")) extract_output_max_bytes else tool_output_max_bytes;
+}
+
+fn capToolOutput(allocator: std.mem.Allocator, tool_name: []const u8, output: []const u8) []const u8 {
+    const cap = toolOutputCap(tool_name);
+    if (output.len <= cap) return output;
+    const prefix = string.truncateUtf8(output, cap);
+    var suffix_buf: [128]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, "\n...[truncated, original {d} bytes — re-read scoped (selector/backendNodeId)]", .{output.len}) catch return prefix;
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
@@ -1873,7 +1902,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     defer self.terminal.spinner.setThinking();
 
     const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
-        .{ .content = capToolOutput(allocator, result.text), .is_error = result.is_error }
+        .{ .content = capToolOutput(allocator, tool_name, result.text), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
 
@@ -2006,7 +2035,7 @@ test "savePrompt: save instructions followed by the rendered script skill" {
 
 test "capToolOutput: passes through when under cap" {
     const ta = std.testing.allocator;
-    const out = capToolOutput(ta, "short");
+    const out = capToolOutput(ta, "markdown", "short");
     try std.testing.expectEqualStrings("short", out);
 }
 
@@ -2026,9 +2055,23 @@ test "capToolOutput: appends a marker when truncating" {
     buf[cap + 1] = 0x9C;
     @memset(buf[cap + 2 ..], 'b');
 
-    const out = capToolOutput(ta, buf);
+    const out = capToolOutput(ta, "markdown", buf);
     defer if (out.ptr != buf.ptr) ta.free(out);
 
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
     try std.testing.expect(std.mem.indexOf(u8, out, "truncated") != null);
+}
+
+test "capToolOutput: extract is exempt from the default cap" {
+    const ta = std.testing.allocator;
+
+    const buf = try ta.alloc(u8, tool_output_max_bytes + 8);
+    defer ta.free(buf);
+    @memset(buf, 'a');
+
+    const out = capToolOutput(ta, "extract", buf);
+    try std.testing.expect(out.ptr == buf.ptr);
+
+    try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
+    try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
 }

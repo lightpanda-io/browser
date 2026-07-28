@@ -55,7 +55,7 @@ pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) void {
 
 pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]const u8 {
     const normalized_name = normalizeHeaderName(name, exec.buf);
-    const all_values = try self._list.getAll(exec.call_arena, normalized_name);
+    const all_values = try self._list.getAll(exec.local_arena, normalized_name);
 
     if (all_values.len == 0) {
         return null;
@@ -63,7 +63,7 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
     if (all_values.len == 1) {
         return all_values[0];
     }
-    return try std.mem.join(exec.call_arena, ", ", all_values);
+    return try std.mem.join(exec.local_arena, ", ", all_values);
 }
 
 pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool {

@@ -42,7 +42,6 @@ const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
-const AnimatedString = @import("webapi/svg/AnimatedString.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
@@ -63,14 +62,21 @@ const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
-const HttpClient = @import("../network/HttpClient.zig");
-const sys_url = @import("../sys/url.zig");
+const PointList = @import("webapi/svg/PointList.zig");
+const StringList = @import("webapi/svg/StringList.zig");
+const AnimatedEnumeration = @import("webapi/svg/AnimatedEnumeration.zig");
+const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
+const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
+const AnimatedString = @import("webapi/svg/AnimatedString.zig");
+const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
+const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 
-const timestamp = @import("../datetime.zig").timestamp;
-const milliTimestamp = @import("../datetime.zig").milliTimestamp;
+const sys_url = @import("../sys/url.zig");
+const HttpClient = @import("../network/HttpClient.zig");
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
+pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
@@ -142,7 +148,14 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
+_svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
+_svg_animated_lengths: AnimatedLength.Lookup = .empty,
+_svg_animated_numbers: AnimatedNumber.Lookup = .empty,
+_svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
 _svg_animated_strings: AnimatedString.Lookup = .empty,
+_svg_animated_transform_lists: AnimatedTransformList.Lookup = .empty,
+_svg_point_lists: PointList.Lookup = .empty,
+_svg_string_lists: StringList.Lookup = .empty,
 
 // Same as above, but for Nodes (slot assigments apply to both Element AND
 // Text nodes)
@@ -498,6 +511,16 @@ pub fn deinit(self: *Frame) void {
 
         observers.deinit(self, page);
 
+        var svg_point_lists = self._svg_point_lists.valueIterator();
+        while (svg_point_lists.next()) |list| {
+            list.*.deinit(page);
+        }
+
+        var svg_transform_lists = self._svg_animated_transform_lists.valueIterator();
+        while (svg_transform_lists.next()) |list| {
+            list.*.deinit(page);
+        }
+
         var document = self.window._document;
         document._selection.releaseRef(page);
 
@@ -705,7 +728,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
             .url = request_url,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
 
         self.recordNavigateTelemetry(false);
@@ -720,7 +743,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 .method = opts.method,
             },
             .url = request_url,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
 
         if (self.parent == null) {
@@ -803,7 +826,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .req_id = transfer.id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
         .is_pending_root = is_pending_root,
     });
 
@@ -1020,7 +1043,9 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *Frame, req: HttpClient.Request) !*HttpClient.Transfer {
-    return self._session.browser.http_client.newRequest(req, &self._http_owner);
+    var r = req;
+    r.document_frame_id = self._frame_id;
+    return self._session.browser.http_client.newRequest(r, &self._http_owner);
 }
 
 // Synchronously abort every transfer and WebSocket owned by this frame
@@ -1063,7 +1088,7 @@ pub fn _documentIsLoaded(self: *Frame) !void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -1173,7 +1198,7 @@ fn _documentIsComplete(self: *Frame) !void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 
     if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
@@ -1270,7 +1295,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .req_id = self._req_id,
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
         });
     }
 
@@ -1287,6 +1312,9 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
 // (allow/allowAndName) and the response carries Content-Disposition: attachment.
 // See issue #2701.
 fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
+    const uuidv4 = @import("../id.zig").uuidv4;
+    const latin1ToUtf8 = @import("../string.zig").latin1ToUtf8;
+
     const session = self._session;
     switch (session.download_behavior) {
         .allow, .allow_and_name => {},
@@ -1314,11 +1342,16 @@ fn maybeStartDownload(self: *Frame, transfer: *HttpClient.Transfer) !bool {
     // `guid` is the CDP "Global Unique Identifier" that ties the
     // downloadWillBegin / downloadProgress events to one download.
     var guid_buf: [36]u8 = undefined;
-    @import("../id.zig").uuidv4(&guid_buf);
+    uuidv4(&guid_buf);
     const guid = try self.arena.dupe(u8, &guid_buf);
 
+    // Content-Disposition filenames can be in a legacy encoding (e.g.
+    // Shift_JIS) but must yield valid UTF-8
     const suggested = dispositionFilename(disposition) orelse (try urlBasename(self.arena, self.url)) orelse guid;
-    const suggested_filename = try self.arena.dupe(u8, suggested);
+    const suggested_filename = if (std.unicode.utf8ValidateSlice(suggested))
+        try self.arena.dupe(u8, suggested)
+    else
+        try latin1ToUtf8(self.arena, suggested);
 
     // allowAndName stores the file under its guid; allow uses the suggested name.
     const on_disk_name = switch (session.download_behavior) {
@@ -1677,7 +1710,7 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
         self._session.notification.dispatch(.frame_navigate_failed, &.{
             .frame_id = self._frame_id,
             .loader_id = self._loader_id,
-            .timestamp = timestamp(.monotonic),
+            .timestamp = lp.datetime.timestamp(.boot),
             .url = self.url,
             .err = err,
             .opts = self._navigated_options orelse .{},
@@ -1794,7 +1827,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .parent_id = self._frame_id,
         .frame_id = new_frame._frame_id,
         .loader_id = new_frame._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 
     const url = blk: {
@@ -1948,7 +1981,7 @@ pub fn domChanged(self: *Frame) void {
     // A DOM change is our "rendering opportunity": re-evaluate the layout
     // observers. Both are no-ops unless something they track actually changed.
     observers.scheduleIntersectionChecks(self);
-    observers.scheduleResizeDelivery(self);
+    observers.scheduleResizeChecks(self);
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -2310,7 +2343,7 @@ pub fn notifyNetworkIdle(self: *Frame) void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -2320,7 +2353,7 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
         .req_id = self._req_id,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .timestamp = timestamp(.monotonic),
+        .timestamp = lp.datetime.timestamp(.boot),
     });
 }
 
@@ -2855,74 +2888,6 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
     }
 }
 
-// TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
-pub fn parseHtmlAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{});
-}
-
-// setHTMLUnsafe variant: parse a fragment that may contain declarative shadow node
-pub fn parseHtmlUnsafeAsChildren(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{ .allow_declarative_shadow = true });
-}
-
-// Range.createContextualFragment variant: unlike innerHTML et al., its scripts
-// are run when the fragment is inserted into a document.
-pub fn parseContextualFragment(self: *Frame, node: *Node, html: []const u8) !void {
-    return self.parseHtmlAsChildrenInner(node, html, .{ .scripts_runnable = true });
-}
-
-const FragmentParseOpts = struct {
-    scripts_runnable: bool = false,
-    allow_declarative_shadow: bool = false,
-};
-
-fn parseHtmlAsChildrenInner(self: *Frame, node: *Node, html: []const u8, opts: FragmentParseOpts) !void {
-    const previous_parse_mode = self._parse_mode;
-    self._parse_mode = .fragment;
-    defer self._parse_mode = previous_parse_mode;
-
-    // The html5ever wrapper-unwrap below rebinds children without going
-    // through the insertion path, so recompute slot assignments for any
-    // shadow tree this fragment landed in (idempotent; signals only on diff).
-    defer if (self._element_shadow_roots.count() != 0) {
-        const root = node.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            slotting.assignSlottablesForTree(root, self);
-        }
-        if (node.is(Element)) |el| {
-            if (self._element_shadow_roots.get(el)) |shadow_root| {
-                slotting.assignSlottablesForTree(shadow_root.asNode(), self);
-            }
-        }
-    };
-
-    const previous_scripts_runnable = self._fragment_scripts_runnable;
-    self._fragment_scripts_runnable = opts.scripts_runnable;
-    defer self._fragment_scripts_runnable = previous_scripts_runnable;
-
-    var parser = Parser.init(self.call_arena, node, self, .{ .allow_declarative_shadow = opts.allow_declarative_shadow });
-    parser.parseFragment(html);
-
-    // html5ever wraps fragment output in an <html> element; unwrap so its
-    // children land directly on `node`. See https://github.com/servo/html5ever/issues/583.
-    // Because of custom element callbacks, the structure might not be what
-    // we expect, and nodes might be altogether removed. We deal with this in a
-    // few different places, but always the same way: leave it as-is.
-    const children = node._children orelse return;
-    const first = Node.linkToNode(children.first.?);
-    if (first.is(Element.Html.Html) == null) {
-        return;
-    }
-    node._children = first._children;
-
-    // No mutation records for the unwrapped children either; see the comment
-    // about fragment parses in _insertNodeRelative.
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        child._parent = node;
-    }
-}
-
 // Runs the "ready" work for an inserted node and, when it's an element with
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
@@ -3094,13 +3059,13 @@ const IdleNotification = union(enum) {
                     // the first time after being un-triggered). Record the time
                     // so that if the condition holds for long enough, we can
                     // send a notification.
-                    self.* = .{ .triggered = milliTimestamp(.monotonic) };
+                    self.* = .{ .triggered = lp.datetime.milliTimestamp(.boot) };
                 },
                 .triggered => |ms| {
                     // The condition was already triggered and was triggered
                     // again. When this condition holds for 500+ms, we'll send
                     // a notification.
-                    if (milliTimestamp(.monotonic) - ms >= 500) {
+                    if (lp.datetime.milliTimestamp(.boot) - ms >= 500) {
                         // This is the only place in this function where we can
                         // return true. The only place where we can tell our caller
                         // "send the notification!".
@@ -3367,9 +3332,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     form_data.acquireRef();
     defer form_data.releaseRef(self._page);
 
-    const arena = try self._session.getArena(.medium, "submitForm");
-    errdefer self._session.releaseArena(arena);
-
     // Per HTML spec form-submission algorithm, when the submitter is a submit
     // button, its formaction/formmethod/formenctype attributes override the
     // form's corresponding attributes (matching how formtarget is honored above).
@@ -3387,7 +3349,36 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk form_element.getAttributeSafe(comptime .wrap("method"));
     };
     const method = Element.Html.Form.normalizeMethod(method_attr, "get");
+
+    // Per the HTML form-submission algorithm, the dialog method closes the
+    // form's nearest ancestor dialog with the submitter's value and performs no
+    // navigation. Falling through here would submit the form as a GET, which
+    // both reloads the page and leaves the dialog open forever.
+    // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-algorithm
+    if (std.mem.eql(u8, method, "dialog")) {
+        // A submit button always has a value (empty when unset); with no
+        // submitter at all the dialog's existing returnValue is left untouched.
+        const result: ?[]const u8 = if (submit_button) |s| blk: {
+            if (s.is(Element.Html.Form.Input)) |input| {
+                break :blk input.getValue();
+            }
+            // if not an Input, it has to be a Button (checked above by isSubmitButton)
+            break :blk s.as(Element.Html.Form.Button).getValue();
+        } else null;
+
+        var ancestor: ?*Element = form_element;
+        while (ancestor) |el| : (ancestor = el.parentElement()) {
+            const dialog = el.is(Element.Html.Dialog) orelse continue;
+            try dialog.close(result, self);
+            break;
+        }
+        return;
+    }
+
     const is_post = std.mem.eql(u8, method, "post");
+
+    const arena = try self._session.getArena(.medium, "submitForm");
+    errdefer self._session.releaseArena(arena);
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {

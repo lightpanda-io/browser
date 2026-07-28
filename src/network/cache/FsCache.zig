@@ -372,7 +372,7 @@ test "FsCache: basic put and get" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -595,7 +595,7 @@ test "FsCache: vary hit and miss" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -656,7 +656,7 @@ test "FsCache: vary multiple headers" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -705,7 +705,7 @@ test "FsCache: clear removes all entries" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const base_meta_a = CachedMetadata{
         .url = "https://example.com/a",
         .status = 200,
@@ -786,7 +786,7 @@ test "FsCache: put after clear works" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -847,7 +847,7 @@ test "FsCache: evict removes entry" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",
@@ -895,7 +895,7 @@ test "FsCache: renew refreshes expiry" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now: i64 = 5000;
+    const now: u64 = 5000;
     const max_age: u64 = 1000;
 
     const meta = CachedMetadata{
@@ -958,7 +958,7 @@ test "FsCache: renew preserves body" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const meta = CachedMetadata{
         .url = "https://example.com",
         .content_type = "text/html",

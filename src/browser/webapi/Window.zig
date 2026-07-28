@@ -579,6 +579,8 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         return;
     }
 
+    frame._page.recordJsError(error.JsException);
+
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
         if (comptime builtin.is_test == false) {
@@ -624,6 +626,9 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     }
 
     const event = error_event.asEvent();
+    event.acquireRef();
+    defer event.releaseRef(frame._page);
+
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.
@@ -1027,6 +1032,10 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
         }
         break :blk .{ "rejectionhandled", self._on_rejection_handled };
     };
+
+    if (no_handler) {
+        frame._page.recordJsError(error.JsException);
+    }
 
     const target = self.asEventTarget();
     if (frame._event_manager.hasDirectListeners(target, event_name, attribute_callback)) {

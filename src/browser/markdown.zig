@@ -599,7 +599,7 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     const doc = frame.window._document;
 
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), html);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -800,7 +800,7 @@ test "browser.markdown: resolve links" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(),
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
         \\<a href="b">Link</a>
         \\<img src="../c.png" alt="Img">
         \\<a href="/my page">Space</a>
@@ -839,7 +839,7 @@ test "browser.markdown: max_bytes leaves output untouched when under cap" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), "<p>Short</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Short</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -855,7 +855,7 @@ test "browser.markdown: max_bytes truncates with marker" {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>" ++ ("AAAA " ** 100) ++ "</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
@@ -878,11 +878,11 @@ fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u
 
     const host = try doc.createElement("div", null, frame);
     if (light.len > 0) {
-        try frame.parseHtmlAsChildren(host.asNode(), light);
+        try Frame.parse.htmlAsChildren(frame, host.asNode(), light);
     }
 
     const sr = try host.attachShadow(.{ .mode = .open }, frame);
-    try frame.parseHtmlAsChildren(sr.asNode(), shadow);
+    try Frame.parse.htmlAsChildren(frame, sr.asNode(), shadow);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();

@@ -119,7 +119,7 @@ pub fn get(self: *const URLSearchParams, name: []const u8) ?[]const u8 {
 }
 
 pub fn getAll(self: *const URLSearchParams, name: []const u8, exec: *const Execution) ![]const []const u8 {
-    return self._params.getAll(exec.call_arena, name);
+    return self._params.getAll(exec.local_arena, name);
 }
 
 pub fn has(self: *const URLSearchParams, name: []const u8) bool {
@@ -378,7 +378,7 @@ pub const JsApi = struct {
 
     pub const toString = bridge.function(_toString, .{});
     fn _toString(self: *const URLSearchParams, exec: *const Execution) ![]const u8 {
-        var buf = std.Io.Writer.Allocating.init(exec.call_arena);
+        var buf = std.Io.Writer.Allocating.init(exec.local_arena);
         try self.toString(&buf.writer);
         return buf.written();
     }

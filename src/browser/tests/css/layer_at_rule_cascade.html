@@ -4,12 +4,12 @@
 </head>
 
 <!--
-  `@layer` block rules (CSS Cascade 5) are flattened into the cascade: the
-  inner rules participate exactly as if they were written at the top level,
-  recursing into nested `@media` / `@layer`. Layer-priority ordering
-  (css-cascade-5 §6.4) is deliberately not implemented — ties keep breaking
-  on specificity + document order. The statement form (`@layer a, b;`)
-  declares ordering only and carries no block, so it is inert.
+  `@layer` parsing surface: block/statement forms, named/anonymous/dotted
+  names, nesting with `@media`, the dynamic CSSOM paths, and the depth cap.
+  Every hidden-element assertion here is uncontested (no competing rule), so
+  it holds under any layer order. The ordering matrix — unlayered vs layered,
+  inter-layer rank, sub-layers, statement-declared order — lives in
+  layer_order_cascade.html.
 -->
 
 <style>

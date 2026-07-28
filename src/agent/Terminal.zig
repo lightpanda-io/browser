@@ -25,9 +25,7 @@ const Spinner = @import("Spinner.zig");
 const md_term = @import("md_term.zig");
 const prompt_assist = @import("prompt_assist.zig");
 const ansi = @import("ansi.zig");
-const c = @cImport({
-    @cInclude("isocline.h");
-});
+const c = @import("isocline");
 
 const Terminal = @This();
 

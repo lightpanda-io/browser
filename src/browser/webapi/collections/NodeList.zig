@@ -98,7 +98,8 @@ pub fn forEach(self: *NodeList, cb: js.Function, frame: *Frame) !void {
         const node = try self.getAtIndex(@intCast(i), frame) orelse return;
 
         var caught: js.TryCatch.Caught = undefined;
-        cb.tryCall(void, .{ node, i, self }, &caught) catch {
+        cb.tryCall(void, .{ node, i, self }, &caught) catch |err| {
+            frame._page.recordJsError(err);
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "nodelist" });
             return;
         };

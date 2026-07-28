@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Notification = @import("../../Notification.zig");
-const datetime = @import("../../datetime.zig");
 
 const logger = lp.log;
 
@@ -34,7 +33,7 @@ pub const init: Console = .{};
 
 fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.ConsoleMessageType, exec: *js.Execution) void {
     const notification = exec.session.notification;
-    const ts = datetime.timestamp(.monotonic);
+    const ts = lp.datetime.timestamp(.boot);
 
     notification.dispatch(.console_message, &.{
         .source = .javascript,
@@ -133,11 +132,11 @@ pub fn time(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
         return;
     }
     gop.key_ptr.* = try exec.arena.dupe(u8, label);
-    gop.value_ptr.* = timestamp();
+    gop.value_ptr.* = lp.datetime.timestamp(.boot);
 }
 
 pub fn timeLog(self: *Console, label_: ?[]const u8) void {
-    const elapsed = timestamp();
+    const elapsed = lp.datetime.timestamp(.boot);
     const label = label_ orelse "default";
     const start = self._timers.get(label) orelse {
         logger.info(.js, "console.timeLog", .{ .label = label, .err = "invalid timer" });
@@ -147,7 +146,7 @@ pub fn timeLog(self: *Console, label_: ?[]const u8) void {
 }
 
 pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
-    const elapsed = timestamp();
+    const elapsed = lp.datetime.timestamp(.boot);
     const label = label_ orelse "default";
     const kv = self._timers.fetchRemove(label) orelse {
         logger.info(.js, "console.timeEnd", .{ .label = label, .err = "invalid timer" });
@@ -166,11 +165,6 @@ pub fn groupCollapsed(_: *const Console, values: []js.Value) void {
 }
 
 pub fn groupEnd(_: *const Console) void {}
-
-fn timestamp() u64 {
-    return @import("../../datetime.zig").timestamp(.monotonic);
-}
-
 const ValueWriter = struct {
     values: []js.Value,
     stack: ?[]const u8 = null,

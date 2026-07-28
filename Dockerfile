@@ -4,7 +4,7 @@ FROM debian:stable-slim
 ARG MINISIG=0.12
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=14.9.207.35
-ARG ZIG_V8=v0.5.1
+ARG ZIG_V8=v0.5.2
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \

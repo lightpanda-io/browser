@@ -315,9 +315,17 @@ pub const List = struct {
     pub fn delete(self: *List, name: String, element: *Element, frame: *Frame) !void {
         const result = try self.getEntryAndNormalizedName(name, frame);
         const entry = result.entry orelse return;
+        return self._delete(entry, result.normalized, element, frame);
+    }
 
+    pub fn deleteSafe(self: *List, name: String, element: *Element, frame: *Frame) void {
+        const entry = self.getEntryWithNormalizedName(name) orelse return;
+        self._delete(entry, name, element, frame);
+    }
+
+    fn _delete(self: *List, entry: *Entry, normalized: String, element: *Element, frame: *Frame) void {
         const owner = element.ownerFrame(frame);
-        const is_id = shouldAddToIdMap(result.normalized, element);
+        const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
 
         if (is_id) {
@@ -333,7 +341,7 @@ pub const List = struct {
         self._len -= 1;
 
         owner.domChanged();
-        owner.attributeRemove(element, result.normalized, .wrap(old_value));
+        owner.attributeRemove(element, normalized, .wrap(old_value));
     }
 
     pub fn getNames(self: *const List, allocator: Allocator) ![][]const u8 {

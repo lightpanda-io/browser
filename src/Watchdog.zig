@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const Env = @import("browser/js/Env.zig");
 
 const log = lp.log;
-const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
 // How often the checker thread scans the entries.
 const CHECK_INTERVAL_NS = 1 * std.time.ns_per_s;
@@ -107,7 +106,7 @@ fn run(self: *Watchdog) void {
             return;
         }
 
-        const now = milliTimestamp(.monotonic);
+        const now = lp.datetime.milliTimestamp(.boot);
         var node = self.entries.first;
         while (node) |n| : (node = n.next) {
             const entry: *Entry = @fieldParentPtr("node", n);
@@ -157,7 +156,7 @@ pub const Heartbeat = struct {
     last_activity: std.atomic.Value(u64) = .init(0),
 
     pub fn touch(self: *Heartbeat) void {
-        self.last_activity.store(milliTimestamp(.monotonic), .release);
+        self.last_activity.store(lp.datetime.milliTimestamp(.boot), .release);
     }
 
     pub fn disarm(self: *Heartbeat) void {

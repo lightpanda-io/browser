@@ -196,7 +196,8 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
                 }
             }
         }
-        break :blk std.Io.Clock.now(.real, lp.io).toSeconds();
+        // localTime is signed: a parsed Last-Modified can predate the epoch
+        break :blk @as(i64, @intCast(lp.datetime.timestamp(.real)));
     };
 
     const tm = try dt.localTime(timestamp);
@@ -307,7 +308,7 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
     }
-    try frame._session.cookie_jar.add(c, std.Io.Clock.now(.real, lp.io).toSeconds(), false);
+    try frame._session.cookie_jar.add(c, lp.datetime.timestamp(.real), false);
     return cookie_str;
 }
 

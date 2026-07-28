@@ -55,8 +55,8 @@ const EventKeyContext = struct {
 pub const EventManagerBase = @This();
 
 arena: Allocator,
-listener_pool: std.heap.memory_pool.ExtraManaged(Listener, .{}),
-list_pool: std.heap.memory_pool.ExtraManaged(std.DoublyLinkedList, .{}),
+listener_pool: std.heap.MemoryPool(Listener),
+list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
 lookup: std.HashMapUnmanaged(
     EventKey,
     *std.DoublyLinkedList,
@@ -70,8 +70,8 @@ pub fn init(arena: Allocator) EventManagerBase {
     return .{
         .arena = arena,
         .lookup = .{},
-        .list_pool = .init(arena),
-        .listener_pool = .init(arena),
+        .list_pool = .empty,
+        .listener_pool = .empty,
         .dispatch_depth = 0,
         .deferred_removals = .empty,
     };
@@ -104,6 +104,7 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
             .target = target.toString(),
         });
     }
+    const arena = self.arena;
 
     // If a signal is provided and already aborted, don't register the listener
     if (opts.signal) |signal| {
@@ -113,9 +114,9 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
     }
 
     // Allocate the type string we'll use in both listener and key
-    const type_string = try String.init(self.arena, typ, .{});
+    const type_string = try String.init(arena, typ, .{});
 
-    const gop = try self.lookup.getOrPut(self.arena, .{
+    const gop = try self.lookup.getOrPut(arena, .{
         .type_string = type_string,
         .event_target = @intFromPtr(target),
     });
@@ -138,7 +139,7 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
             }
         }
     } else {
-        gop.value_ptr.* = try self.list_pool.create();
+        gop.value_ptr.* = try self.list_pool.create(arena);
         gop.value_ptr.*.* = .{};
     }
 
@@ -147,7 +148,7 @@ pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, 
         .object => |o| Function{ .object = try o.persist() },
     };
 
-    const listener = try self.listener_pool.create();
+    const listener = try self.listener_pool.create(arena);
     listener.* = .{
         .node = .{},
         .once = opts.once,
@@ -289,6 +290,7 @@ pub fn dispatchDirect(
         event._current_target = target;
         var caught: js.TryCatch.Caught = undefined;
         _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
+            page.recordJsError(err);
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
             } else {
@@ -452,6 +454,7 @@ pub const Listener = struct {
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
+                    local.ctx.page.recordJsError(err);
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
                     } else {
@@ -516,7 +519,8 @@ pub const Listener = struct {
             .frame => |frame| frame.window.reportError(exc, frame) catch |err| {
                 log.warn(.event, "listener report error", .{ .err = err });
             },
-            .worker => {},
+            // No worker error-event plumbing here (yet); still count it.
+            .worker => local.ctx.page.recordJsError(error.JsException),
         }
     }
 };

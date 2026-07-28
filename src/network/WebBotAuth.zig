@@ -94,7 +94,7 @@ pub fn signRequest(
     headers: *Http.Headers,
     authority: []const u8,
 ) !void {
-    const now = std.Io.Clock.now(.real, lp.io).toSeconds();
+    const now = lp.datetime.timestamp(.real);
     const expires = now + 60;
 
     // build the signature-input value (without the sig1= label)

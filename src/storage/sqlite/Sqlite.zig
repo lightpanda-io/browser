@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Pool = @import("Pool.zig");
-pub const c = @cImport(@cInclude("sqlite3.h"));
+pub const c = @import("sqlite3");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;

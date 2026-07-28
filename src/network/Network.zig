@@ -96,7 +96,7 @@ connections: []http.Connection,
 available: DoublyLinkedList = .{},
 conn_mutex: std.Io.Mutex = .init,
 
-ws_pool: std.heap.memory_pool.ExtraManaged(http.Connection, .{}),
+ws_pool: std.heap.MemoryPool(http.Connection),
 ws_count: usize = 0,
 ws_max: u8,
 ws_mutex: std.Io.Mutex = .init,
@@ -266,7 +266,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
 
-        .ws_pool = .init(allocator),
+        .ws_pool = .empty,
         .ws_max = config.wsMaxConcurrent(),
 
         .ip_filter = ip_filter,
@@ -291,7 +291,7 @@ pub fn deinit(self: *Network) void {
     }
     self.allocator.free(self.connections);
 
-    self.ws_pool.deinit();
+    self.ws_pool.deinit(self.allocator);
 
     self.robot_store.deinit();
     if (self.web_bot_auth) |wba| {
@@ -719,7 +719,7 @@ pub fn newConnection(self: *Network) ?*http.Connection {
             return null;
         }
 
-        const c = self.ws_pool.create() catch return null;
+        const c = self.ws_pool.create(self.allocator) catch return null;
         self.ws_count += 1;
         break :blk c;
     };

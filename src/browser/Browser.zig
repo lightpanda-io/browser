@@ -65,7 +65,7 @@ permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 viewport_override: ?Viewport = null,
 
 // used by sessions to allocate pages.
-page_pool: std.heap.memory_pool.ExtraManaged(Page, .{}),
+page_pool: std.heap.MemoryPool(Page),
 
 // Registered with App.watchdog for the lifetime of the env. The watchdog
 // checker thread reads it until Browser.deinit unregisters.
@@ -77,7 +77,7 @@ watchdog_entry: Watchdog.Entry,
 // time up until the Isolate is torn down, so these must outlive every Session.
 // Freed in deinit *after* env.deinit() tears down the Isolate — the point past
 // which no finalizer can fire.
-fc_identity_pool: std.heap.memory_pool.ExtraManaged(js.FinalizerCallback.Identity, .{}),
+fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
 
 // Monotonic frame-ID generator scoped to this Browser (one per CDP
 // connection). Lives here, not on Session, because CDP target IDs
@@ -113,11 +113,11 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .app = app,
         .env = env,
         .session = null,
+        .page_pool = .empty,
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = undefined,
-        .page_pool = .init(allocator),
-        .fc_identity_pool = .init(allocator),
+        .fc_identity_pool = .empty,
         .selector_cache = .init(allocator),
         .watchdog_entry = undefined,
     };
@@ -132,6 +132,8 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
 }
 
 pub fn deinit(self: *Browser) void {
+    const allocator = self.allocator;
+
     self.closeSession();
     // After this returns, the watchdog thread holds no reference to our env
     // or http_client — required before either is torn down.
@@ -139,11 +141,11 @@ pub fn deinit(self: *Browser) void {
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
-    self.fc_identity_pool.deinit();
-    self.page_pool.deinit();
+    self.fc_identity_pool.deinit(allocator);
+    self.page_pool.deinit(allocator);
     self.http_client.deinit();
     self.clearPermissions();
-    self.permissions.deinit(self.allocator);
+    self.permissions.deinit(allocator);
     self.selector_cache.deinit();
 }
 

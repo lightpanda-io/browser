@@ -501,7 +501,7 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try frame.parseHtmlAsChildren(div.asNode(), html);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
 }
