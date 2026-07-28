@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Provider-agnostic subscription (OAuth) auth for the agent. A `Descriptor`
-//! carries the endpoints plus `loginFn`/`refreshFn` hooks (implemented per
+//! names a provider plus its `loginFn`/`refreshFn` hooks (implemented per
 //! provider, e.g. `codex.zig`); this module owns the on-disk token store (in the
 //! app data dir) and the `Session` lifecycle (refresh-on-expiry with silent
 //! persistence). The AI client borrows `Session.tokens.access_token`, so a
@@ -25,23 +25,19 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const Config = lp.Config;
 const codex = @import("codex.zig");
 
 /// Wall-clock ms since the Unix epoch.
 pub fn nowMs() i64 {
-    return std.Io.Clock.now(.real, lp.io).toMilliseconds();
+    return @intCast(lp.datetime.milliTimestamp(.real));
 }
 
-/// Resolve the app data dir (mirrors `App.getAppDataDir("lightpanda")`) into
-/// `arena`. Null when neither XDG_DATA_HOME nor HOME is set.
-fn dataDir(arena: std.mem.Allocator) ?[]const u8 {
-    if (std.c.getenv("XDG_DATA_HOME")) |xdg| {
-        const x = std.mem.span(xdg);
-        if (x.len > 0) return std.fs.path.join(arena, &.{ x, "lightpanda" }) catch null;
-    }
-    const home = std.c.getenv("HOME") orelse return null;
-    return std.fs.path.join(arena, &.{ std.mem.span(home), ".local", "share", "lightpanda" }) catch null;
+/// Resolve the app data dir into `arena`, for callers without an `App` (the
+/// store wrappers, `--list-models`). Null when no home is resolvable.
+pub fn dataDir(arena: std.mem.Allocator) ?[]const u8 {
+    return lp.App.getAppDataDir(arena, "lightpanda") catch null;
 }
 
 /// An OAuth credential set. `account_id` is a provider-specific extra (Codex's
@@ -68,29 +64,25 @@ pub const TokenSet = struct {
     }
 };
 
-/// Static per-provider OAuth configuration plus the login/refresh implementations.
+/// Per-provider login/refresh implementations; OAuth endpoints and client ids
+/// live in the implementing file.
 pub const Descriptor = struct {
     provider: Config.AiProvider,
-    /// Key in the on-disk store (`auth.json`).
-    id: []const u8,
     /// Provider key in the models.dev catalog (subscription backends have no
     /// entry of their own; codex's models are listed under "openai").
     models_dev_id: []const u8,
     /// Human label for the credential, e.g. "ChatGPT subscription".
     label: []const u8,
-    client_id: []const u8,
-    scope: []const u8,
-    /// OAuth token endpoint (code exchange + refresh grant).
-    token_url: []const u8,
-    /// Device-authorization endpoints and the URL the user visits to enter the code.
-    device_code_url: []const u8,
-    device_token_url: []const u8,
-    verify_url: []const u8,
     /// Interactive login (device-code flow); returns freshly-minted tokens.
-    /// A set `cancel` flag aborts the flow with `error.LoginCancelled`.
-    loginFn: *const fn (std.mem.Allocator, *const Descriptor, cancel: ?*const std.atomic.Value(bool)) anyerror!TokenSet,
+    /// Firing `interrupt` aborts the flow with `error.LoginCancelled`.
+    loginFn: *const fn (std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) anyerror!TokenSet,
     /// Exchange a refresh token for a new `TokenSet` (with re-derived account id).
-    refreshFn: *const fn (std.mem.Allocator, *const Descriptor, []const u8) anyerror!TokenSet,
+    refreshFn: *const fn (std.mem.Allocator, refresh_token: []const u8) anyerror!TokenSet,
+
+    /// Key in the on-disk store (`auth.json`).
+    pub fn storeKey(self: *const Descriptor) []const u8 {
+        return @tagName(self.provider);
+    }
 };
 
 pub const registry = [_]*const Descriptor{&codex.descriptor};
@@ -100,7 +92,7 @@ pub fn descriptorFor(provider: Config.AiProvider) ?*const Descriptor {
     return null;
 }
 
-// --- On-disk token store: <data_dir>/auth.json, a JSON map keyed by descriptor id ---
+// --- On-disk token store: <data_dir>/auth.json, a JSON map keyed by storeKey ---
 // The `*At` variants take an explicit dir (unit-testable); the public wrappers
 // resolve the app data dir themselves so callers need not thread it.
 
@@ -196,50 +188,43 @@ pub const Session = struct {
     allocator: std.mem.Allocator,
     descriptor: *const Descriptor,
     tokens: TokenSet,
-    /// The immediately-prior token, kept alive one refresh cycle so a client
-    /// still pointing at it (until `setApiKey`) never dereferences freed memory.
-    previous: ?TokenSet = null,
 
     /// When the access token is within `refresh_skew_ms` of expiry, exchange the
-    /// refresh token for a new one, persist it, and return the new access token
-    /// (owned by the session). Null when still fresh. The caller must repoint its
-    /// client before its next request; the old buffer stays valid until the
-    /// following `ensureFresh`/`deinit`.
-    pub fn ensureFresh(self: *Session) !?[:0]const u8 {
+    /// refresh token for a new one, persist it, and return the displaced set.
+    /// Null when still fresh. The caller must repoint anything borrowing from
+    /// the displaced set (`tokens` holds the fresh one) before freeing it.
+    pub fn ensureFresh(self: *Session) !?TokenSet {
         const now = nowMs();
         if (self.tokens.expires_at_ms - now > refresh_skew_ms) return null;
 
-        const fresh = self.descriptor.refreshFn(self.allocator, self.descriptor, self.tokens.refresh_token) catch |err| {
+        const fresh = self.descriptor.refreshFn(self.allocator, self.tokens.refresh_token) catch |err| {
             // A transient refresh failure while the token is still valid is not fatal.
             if (self.tokens.expires_at_ms > now) return null;
             return err;
         };
-        storeSave(self.descriptor.id, fresh) catch {};
+        storeSave(self.descriptor.storeKey(), fresh) catch {};
 
-        if (self.previous) |p| p.deinit(self.allocator);
-        self.previous = self.tokens;
+        const displaced = self.tokens;
         self.tokens = fresh;
-        return self.tokens.access_token;
+        return displaced;
     }
 
     pub fn deinit(self: *Session) void {
         self.tokens.deinit(self.allocator);
-        if (self.previous) |p| p.deinit(self.allocator);
-        self.previous = null;
     }
 };
 
 /// Load a stored session for `provider`, or null when the user hasn't logged in.
 pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?Session {
     const desc = descriptorFor(provider) orelse return null;
-    const tokens = (try storeLoad(allocator, desc.id)) orelse return null;
+    const tokens = (try storeLoad(allocator, desc.storeKey())) orelse return null;
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
 /// Run the interactive login and persist the result, returning a live session.
-pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, cancel: ?*const std.atomic.Value(bool)) !Session {
-    const tokens = try desc.loginFn(allocator, desc, cancel);
-    storeSave(desc.id, tokens) catch {};
+pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?*zenai.http.Interrupt) !Session {
+    const tokens = try desc.loginFn(allocator, interrupt);
+    storeSave(desc.storeKey(), tokens) catch {};
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
@@ -247,9 +232,9 @@ pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, cancel: ?*co
 /// Lets the picker offer the subscription without an API-key env var.
 pub fn subscriptionAvailable(provider: Config.AiProvider) bool {
     const desc = descriptorFor(provider) orelse return false;
-    const tokens = (storeLoad(std.heap.page_allocator, desc.id) catch return false) orelse return false;
+    const tokens = (storeLoad(std.heap.page_allocator, desc.storeKey()) catch return false) orelse return false;
     defer tokens.deinit(std.heap.page_allocator);
-    return tokens.expires_at_ms == 0 or tokens.expires_at_ms > nowMs();
+    return tokens.expires_at_ms > nowMs();
 }
 
 test "TokenSet dup/deinit round-trips and is leak-free" {

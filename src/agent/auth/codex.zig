@@ -21,13 +21,10 @@
 //! URL, we poll for the authorization code, then exchange it for tokens. The
 //! `ChatGPT-Account-Id` sent on every API request is derived from the OAuth JWT.
 //! Constants mirror the official Codex CLI / opencode.
-//!
-//! NETWORK-UNVERIFIED: the HTTP flows (`deviceLogin`/`refreshGrant`) cannot be
-//! tested without a live subscription; the pure builders + JWT parsing below are
-//! unit-tested. Verify the live handshake once a subscription is available.
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const zenai = @import("zenai");
 const auth = @import("auth.zig");
 
 const client_id = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -38,22 +35,14 @@ const device_token_url = issuer ++ "/api/accounts/deviceauth/token";
 const verify_url = issuer ++ "/codex/device";
 /// Redirect URI used only in the device-flow token exchange body (never hit).
 const device_redirect_uri = issuer ++ "/deviceauth/callback";
-const scope = "openid profile email offline_access";
 const user_agent = "lightpanda";
 const poll_margin_ms: u64 = 3000;
 const cancel_slice_ms: u64 = 200;
 
 pub const descriptor: auth.Descriptor = .{
     .provider = .codex,
-    .id = "codex",
     .models_dev_id = "openai",
     .label = "ChatGPT subscription",
-    .client_id = client_id,
-    .scope = scope,
-    .token_url = token_url,
-    .device_code_url = device_code_url,
-    .device_token_url = device_token_url,
-    .verify_url = verify_url,
     .loginFn = deviceLogin,
     .refreshFn = refreshGrant,
 };
@@ -111,41 +100,27 @@ fn parseTokenResponse(allocator: std.mem.Allocator, body: []const u8) !auth.Toke
     defer arena.deinit();
     const a = arena.allocator();
     const tr = try std.json.parseFromSliceLeaky(TokenResponse, a, body, .{ .ignore_unknown_fields = true });
-    const account_id = if (tr.id_token) |t| accountIdFromJwt(a, t) else null orelse
+    const account_id = (if (tr.id_token) |t| accountIdFromJwt(a, t) else null) orelse
         accountIdFromJwt(a, tr.access_token);
     const expires_at = auth.nowMs() + (tr.expires_in orelse 3600) * std.time.ms_per_s;
     return auth.TokenSet.dup(allocator, tr.access_token, tr.refresh_token, expires_at, account_id);
 }
 
 fn refreshBody(arena: std.mem.Allocator, refresh_token: []const u8) ![]u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try buf.writer.writeAll("grant_type=refresh_token&client_id=" ++ client_id ++ "&refresh_token=");
-    try percentEncode(&buf.writer, refresh_token);
-    return buf.written();
+    return std.fmt.allocPrint(arena, "grant_type=refresh_token&client_id=" ++ client_id ++ "&refresh_token={s}", .{
+        try lp.URL.percentEncodeSegment(arena, refresh_token, .component),
+    });
 }
 
 fn exchangeBody(arena: std.mem.Allocator, code: []const u8, code_verifier: []const u8) ![]u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try buf.writer.writeAll("grant_type=authorization_code&client_id=" ++ client_id ++
-        "&redirect_uri=" ++ device_redirect_uri ++ "&code=");
-    try percentEncode(&buf.writer, code);
-    try buf.writer.writeAll("&code_verifier=");
-    try percentEncode(&buf.writer, code_verifier);
-    return buf.written();
+    return std.fmt.allocPrint(arena, "grant_type=authorization_code&client_id=" ++ client_id ++
+        "&redirect_uri=" ++ device_redirect_uri ++ "&code={s}&code_verifier={s}", .{
+        try lp.URL.percentEncodeSegment(arena, code, .component),
+        try lp.URL.percentEncodeSegment(arena, code_verifier, .component),
+    });
 }
 
-/// Percent-encode a form value (RFC 3986 unreserved chars pass through).
-fn percentEncode(w: *std.Io.Writer, value: []const u8) !void {
-    for (value) |c| {
-        if (std.ascii.isAlphanumeric(c) or c == '-' or c == '.' or c == '_' or c == '~') {
-            try w.writeByte(c);
-        } else {
-            try w.print("%{X:0>2}", .{c});
-        }
-    }
-}
-
-// --- Device-code flow (network-unverified) ---
+// --- Device-code flow ---
 
 const DeviceCode = struct {
     device_auth_id: []const u8,
@@ -158,13 +133,12 @@ const DeviceToken = struct {
     code_verifier: []const u8,
 };
 
-fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor, cancel: ?*const std.atomic.Value(bool)) !auth.TokenSet {
-    _ = desc;
+fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) !auth.TokenSet {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
 
-    const code_res = try post(a, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
+    const code_res = try post(a, interrupt, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
     if (code_res.status != .ok) return error.DeviceCodeRequestFailed;
     const dc = try std.json.parseFromSliceLeaky(DeviceCode, a, code_res.body, .{ .ignore_unknown_fields = true });
     const interval_ms: u64 = @as(u64, @intCast(std.fmt.parseInt(u32, dc.interval, 10) catch 5)) * std.time.ms_per_s;
@@ -176,16 +150,16 @@ fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor, cance
 
     const poll_body = try std.fmt.allocPrint(a, "{{\"device_auth_id\":\"{s}\",\"user_code\":\"{s}\"}}", .{ dc.device_auth_id, dc.user_code });
     const dt: DeviceToken = while (true) {
-        // The REPL's Ctrl-C only sets the cancel flag (it never kills the
+        // The REPL's Ctrl-C only fires the interrupt (it never kills the
         // process), so the wait must poll it.
         var remaining_ms: u64 = interval_ms + poll_margin_ms;
         while (remaining_ms > 0) {
-            if (cancel) |flag| if (flag.load(.acquire)) return error.LoginCancelled;
+            if (interrupt) |it| if (it.isFired()) return error.LoginCancelled;
             const slice_ms = @min(remaining_ms, cancel_slice_ms);
             lp.io.sleep(.fromMilliseconds(@intCast(slice_ms)), .awake) catch {};
             remaining_ms -= slice_ms;
         }
-        const res = try post(a, device_token_url, "application/json", poll_body);
+        const res = try post(a, interrupt, device_token_url, "application/json", poll_body);
         switch (res.status) {
             .ok => break try std.json.parseFromSliceLeaky(DeviceToken, a, res.body, .{ .ignore_unknown_fields = true }),
             // Still pending — the user hasn't finished authorizing.
@@ -195,59 +169,40 @@ fn deviceLogin(allocator: std.mem.Allocator, desc: *const auth.Descriptor, cance
     };
 
     const exchange = try exchangeBody(a, dt.authorization_code, dt.code_verifier);
-    const tok_res = try post(a, token_url, "application/x-www-form-urlencoded", exchange);
+    const tok_res = try post(a, interrupt, token_url, "application/x-www-form-urlencoded", exchange);
     if (tok_res.status != .ok) return error.TokenExchangeFailed;
     return parseTokenResponse(allocator, tok_res.body);
 }
 
-fn refreshGrant(allocator: std.mem.Allocator, desc: *const auth.Descriptor, refresh_token: []const u8) !auth.TokenSet {
-    _ = desc;
+fn refreshGrant(allocator: std.mem.Allocator, refresh_token: []const u8) !auth.TokenSet {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const body = try refreshBody(a, refresh_token);
-    const res = try post(a, token_url, "application/x-www-form-urlencoded", body);
+    const res = try post(a, null, token_url, "application/x-www-form-urlencoded", body);
     if (res.status != .ok) return error.RefreshFailed;
     return parseTokenResponse(allocator, res.body);
 }
 
 const PostResult = struct { status: std.http.Status, body: []u8 };
 
-fn post(arena: std.mem.Allocator, url: []const u8, content_type: []const u8, body: []const u8) !PostResult {
+/// One-shot POST. Firing `interrupt` aborts an in-flight exchange and surfaces
+/// `error.LoginCancelled` instead of the read error it caused.
+fn post(arena: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt, url: []const u8, content_type: []const u8, body: []const u8) !PostResult {
     var client: std.http.Client = .{ .allocator = arena, .io = lp.io };
     defer client.deinit();
 
-    const uri = try std.Uri.parse(url);
-    var req = try client.request(.POST, uri, .{
-        .redirect_behavior = .unhandled,
-        .headers = .{ .content_type = .{ .override = content_type }, .user_agent = .{ .override = user_agent } },
-    });
-    defer req.deinit();
-    req.transfer_encoding = .{ .content_length = body.len };
-    var sink = try req.sendBodyUnflushed(&.{});
-    try sink.writer.writeAll(body);
-    try sink.end();
-    try req.connection.?.flush();
-
-    var redirect_buffer: [4096]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buffer);
-
-    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
-        .identity => &.{},
-        .zstd => try arena.alloc(u8, std.compress.zstd.default_window_len),
-        .deflate, .gzip => try arena.alloc(u8, std.compress.flate.max_window_len),
-        .compress => return error.UnsupportedCompression,
-    };
-    var transfer_buffer: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
-
     var out: std.Io.Writer.Allocating = .init(arena);
-    _ = reader.streamRemaining(&out.writer) catch |err| switch (err) {
-        error.ReadFailed => return response.bodyErr().?,
-        else => |e| return e,
+    const status = zenai.http.fetchInterruptible(arena, &client, .{
+        .location = .{ .url = url },
+        .method = .POST,
+        .payload = body,
+        .headers = .{ .content_type = .{ .override = content_type }, .user_agent = .{ .override = user_agent } },
+    }, &out.writer, interrupt) catch |err| {
+        if (interrupt) |it| if (it.isFired()) return error.LoginCancelled;
+        return err;
     };
-    return .{ .status = response.head.status, .body = out.written() };
+    return .{ .status = status, .body = out.written() };
 }
 
 // --- Tests (pure paths) ---

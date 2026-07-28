@@ -102,14 +102,16 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
 pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
-    if (opts.provider) |p| return zenai.provider.envApiKey(lp.environ(), p) != null or (p == .vertex and vertexProjectMode()) or auth.subscriptionAvailable(p);
-    if (remembered) |r| if (r.provider) |p| {
-        if (zenai.provider.envApiKey(lp.environ(), p) != null) return true;
-        if (p == .vertex and vertexProjectMode()) return true;
-        if (auth.subscriptionAvailable(p)) return true;
-    };
+    if (opts.provider) |p| return detectableKey(p);
+    if (remembered) |r| if (r.provider) |p| if (detectableKey(p)) return true;
     var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
     return availableProviders(&buf).len > 0;
+}
+
+fn detectableKey(p: Config.AiProvider) bool {
+    return zenai.provider.envApiKey(lp.environ(), p) != null or
+        (p == .vertex and vertexProjectMode()) or
+        auth.subscriptionAvailable(p);
 }
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first

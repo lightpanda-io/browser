@@ -129,7 +129,7 @@ fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
     return app_dir_path;
 }
 
-fn getAppDataDir(allocator: Allocator, appname: []const u8) ![]const u8 {
+pub fn getAppDataDir(allocator: Allocator, appname: []const u8) ![]const u8 {
     switch (@import("builtin").os.tag) {
         .macos, .ios => {
             const home = std.c.getenv("HOME") orelse return error.AppDataDirUnavailable;

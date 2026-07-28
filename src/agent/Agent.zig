@@ -937,8 +937,8 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     // Re-selecting vertex (token refresh) or a subscription provider (re-import
     // after logging into its CLI) falls through instead of no-op'ing.
     const vertex_project = provider == .vertex and settings.vertexProjectMode();
-    const subscription = auth.descriptorFor(provider) != null;
-    if (self.model_credentials) |current| if (provider == current.provider and !vertex_project and !subscription) {
+    const sub_desc = auth.descriptorFor(provider);
+    if (self.model_credentials) |current| if (provider == current.provider and !vertex_project and sub_desc == null) {
         self.terminal.printInfo("provider: {s}", .{@tagName(provider)});
         return;
     };
@@ -955,9 +955,9 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     }
     // Subscription provider: use the stored session, or run the interactive
     // login (device-code flow) when there's none yet.
-    if (auth.descriptorFor(provider)) |desc| {
+    if (sub_desc) |desc| {
         var owned = (auth.sessionFor(self.allocator, provider) catch null) orelse
-            (auth.login(self.allocator, desc, &self.cancel_requested) catch |err| {
+            (auth.login(self.allocator, desc, &self.http_interrupt) catch |err| {
                 if (err == error.LoginCancelled) {
                     // Undo `requestCancel`'s side effects before the next turn.
                     self.resetAfterCancel(self.conversation.messages.items.len);
@@ -1049,25 +1049,25 @@ fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8,
         self.terminal.printInfo("effort: {s} ({s} default)", .{ @tagName(e), @tagName(credentials.provider) });
     };
     self.reportSaved("model", self.model);
-    // Priming warms the completion cache; skip it for a subscription provider,
-    // whose catalog is a multi-MB models.dev download best deferred to first use.
-    if (auth.descriptorFor(credentials.provider) == null) _ = completionModels(self, self.allocator);
+    // Prime the completion cache on the command, not on a `/model` keystroke.
+    _ = completionModels(self, self.allocator);
 }
 
 /// Keep a subscription (bearer) token current before a model request: when the
 /// active session's token is near expiry, re-import from the source and repoint
 /// the client and credentials at the fresh token. A no-op for API-key auth.
-/// Runs between turns on the single agent thread, never during a request, so the
-/// old buffer (held one cycle by `auth.Session`) is never dereferenced freed.
+/// Runs between turns on the single agent thread, never during a request, so
+/// the displaced token is never dereferenced after it's freed here.
 fn refreshAuthIfNeeded(self: *Agent) void {
     if (self.auth_session) |*session| {
-        const new_token = session.ensureFresh() catch |err| {
+        const displaced = session.ensureFresh() catch |err| {
             self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
             return;
         };
-        if (new_token) |tok| {
-            if (self.ai_client) |client| client.setApiKey(tok);
-            if (self.model_credentials) |*c| c.key = tok;
+        if (displaced) |old| {
+            if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
+            if (self.model_credentials) |*c| c.key = session.tokens.access_token;
+            old.deinit(session.allocator);
         }
     }
 }
@@ -1940,21 +1940,16 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     // A subscription provider can't list models via the provider API; use the
-    // free models.dev catalog (uncached here — this is a one-shot CLI command).
-    if (auth.descriptorFor(llm.provider)) |desc| {
-        const sub_ids = models_dev.modelIds(arena.allocator(), desc.models_dev_id, null);
-        var stdout_sub = std.Io.File.stdout().writerStreaming(lp.io, &.{});
-        const ws = &stdout_sub.interface;
-        for (sub_ids) |id| try ws.print("{s}\n", .{id});
-        try ws.flush();
-        return;
-    }
-    const ids = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
-        if (llm.provider == .vertex and !settings.vertexProjectMode()) {
-            std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
-        }
-        return err;
-    };
+    // free models.dev catalog.
+    const ids: []const []const u8 = if (auth.descriptorFor(llm.provider)) |desc|
+        models_dev.modelIds(arena.allocator(), desc.models_dev_id, auth.dataDir(arena.allocator()))
+    else
+        zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = opts.base_url, .environ = lp.environ() }) catch |err| {
+            if (llm.provider == .vertex and !settings.vertexProjectMode()) {
+                std.debug.print("Vertex express mode cannot list models (the endpoint requires OAuth); set GOOGLE_CLOUD_PROJECT for project mode.\n", .{});
+            }
+            return err;
+        };
 
     var stdout_file = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     const w = &stdout_file.interface;
@@ -1984,35 +1979,29 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
         };
         if (reachable[i]) extra += 1;
     }
+    const names = arena.alloc([]const u8, self.available_providers.len + auth.registry.len + 1 + extra) catch return &.{};
+    for (self.available_providers, 0..) |p, i| {
+        names[i] = arena.dupe(u8, p) catch return &.{};
+    }
+    var n = self.available_providers.len;
     // Subscription providers complete even without a stored token — selecting
     // one is what starts the login.
-    var subs: [auth.registry.len][]const u8 = undefined;
-    var n_subs: usize = 0;
     for (auth.registry) |desc| {
         const name = @tagName(desc.provider);
         const detected = for (self.available_providers) |p| {
             if (std.mem.eql(u8, p, name)) break true;
         } else false;
         if (!detected) {
-            subs[n_subs] = name;
-            n_subs += 1;
+            names[n] = name;
+            n += 1;
         }
-    }
-    const names = arena.alloc([]const u8, self.available_providers.len + n_subs + 1 + extra) catch return &.{};
-    for (self.available_providers, 0..) |p, i| {
-        names[i] = arena.dupe(u8, p) catch return &.{};
-    }
-    var n = self.available_providers.len;
-    for (subs[0..n_subs]) |name| {
-        names[n] = name;
-        n += 1;
     }
     for (local_providers, reachable) |tag, r| if (r) {
         names[n] = @tagName(tag);
         n += 1;
     };
     names[n] = provider_off_keyword;
-    return names;
+    return names[0 .. n + 1];
 }
 
 /// `CompletionSource.models`. Blocks on a one-time fetch per provider, caching

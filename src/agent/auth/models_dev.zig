@@ -117,29 +117,8 @@ fn fetch(arena: std.mem.Allocator) ![]u8 {
     var client: std.http.Client = .{ .allocator = arena, .io = lp.io };
     defer client.deinit();
 
-    const uri = try std.Uri.parse(api_url);
-    var req = try client.request(.GET, uri, .{ .redirect_behavior = @enumFromInt(3) });
-    defer req.deinit();
-    try req.sendBodiless();
-
-    var redirect_buffer: [8 * 1024]u8 = undefined;
-    var response = try req.receiveHead(&redirect_buffer);
-    if (response.head.status != .ok) return error.HttpStatus;
-
-    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
-        .identity => &.{},
-        .zstd => try arena.alloc(u8, std.compress.zstd.default_window_len),
-        .deflate, .gzip => try arena.alloc(u8, std.compress.flate.max_window_len),
-        .compress => return error.UnsupportedCompression,
-    };
-    var transfer_buffer: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
-
     var out: std.Io.Writer.Allocating = .init(arena);
-    _ = reader.streamRemaining(&out.writer) catch |err| switch (err) {
-        error.ReadFailed => return response.bodyErr().?,
-        else => |e| return e,
-    };
+    const res = try client.fetch(.{ .location = .{ .url = api_url }, .response_writer = &out.writer });
+    if (res.status != .ok) return error.HttpStatus;
     return out.written();
 }
