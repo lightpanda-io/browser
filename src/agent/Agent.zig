@@ -135,12 +135,9 @@ const synthesis_prompt =
 allocator: std.mem.Allocator,
 ai_client: ?zenai.provider.Client,
 model_credentials: ?Credentials,
-/// Allocated credentials key (Vertex gcloud token) — other keys are unowned
-/// env pointers. The AI client references it: free only after client deinit.
-owned_key: ?[:0]const u8,
-/// Active subscription (bearer) auth. Owns `model_credentials.key`, so it must
-/// outlive the AI client; refreshed between turns by `refreshAuthIfNeeded`.
-auth_session: ?auth.Session,
+/// Ownership of `model_credentials.key`. The AI client borrows the key, so
+/// deinit only after the client is gone.
+key_ownership: settings.KeyOwnership,
 /// App data dir (owned by `App`, which outlives the agent), used to cache the
 /// models.dev catalog. Null when no data dir is available.
 app_dir: ?[]const u8,
@@ -272,8 +269,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     var resolved: ?settings.ResolvedProvider = if (resolve) try settings.resolveCredentials(allocator, opts, remembered, will_repl) else null;
     // Before the ai_client errdefer, so on unwind the client goes first.
-    errdefer if (resolved) |r| if (r.key_owned) allocator.free(r.credentials.key);
-    errdefer if (resolved) |*r| if (r.session) |*s| s.deinit();
+    errdefer if (resolved) |*r| r.ownership.deinit(allocator);
 
     if (will_repl and !banner_before and resolved != null) welcome.print(resolve);
     const llm: ?Credentials = if (resolved) |r| r.credentials else null;
@@ -330,8 +326,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
         .allocator = allocator,
         .ai_client = null,
         .model_credentials = llm,
-        .owned_key = if (resolved) |r| (if (r.key_owned) r.credentials.key else null) else null,
-        .auth_session = if (resolved) |r| r.session else null,
+        .key_ownership = if (resolved) |r| r.ownership else .env,
         .app_dir = app.app_dir_path,
         .no_llm_persisted = remembered_no_llm,
         .model_base_url = opts.base_url,
@@ -365,7 +360,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
 
     try self.startSession();
 
-    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ(), .account_id = if (self.auth_session) |s| s.tokens.account_id else null }) else null;
+    self.ai_client = if (llm) |l| try zenai.provider.Client.init(lp.io, allocator, l, .{ .base_url = opts.base_url, .retry_policy = .long_running, .bill_to = hfBillTo(l.provider), .environ = lp.environ(), .account_id = self.key_ownership.accountId() }) else null;
     errdefer if (self.ai_client) |c| c.deinit(allocator);
     if (self.ai_client) |c| c.setInterrupt(&self.http_interrupt);
 
@@ -394,8 +389,7 @@ pub fn deinit(self: *Agent) void {
     self.browser.deinit();
     self.notification.deinit();
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
-    if (self.auth_session) |*s| s.deinit();
-    if (self.owned_key) |k| self.allocator.free(k);
+    self.key_ownership.deinit(self.allocator);
     self.allocator.free(self.model);
     for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
@@ -947,7 +941,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
             self.terminal.printError("could not obtain a Vertex access token: {s} (details above)", .{@errorName(err)});
             return;
         };
-        self.setProvider(.{ .provider = .vertex, .key = token }, token, null) catch |err| {
+        self.setProvider(.{ .provider = .vertex, .key = token }, .{ .owned = token }) catch |err| {
             self.allocator.free(token);
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
         };
@@ -967,7 +961,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
                 self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
                 return;
             });
-        self.setProvider(.{ .provider = provider, .key = owned.tokens.access_token }, null, owned) catch |err| {
+        self.setProvider(.{ .provider = provider, .key = owned.tokens.access_token }, .{ .session = owned }) catch |err| {
             owned.deinit();
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
         };
@@ -990,7 +984,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("no llama.cpp server with a loaded model at {s}", .{self.model_base_url orelse zenai.provider.llama_cpp_default_base_url});
         return;
     }
-    self.setProvider(.{ .provider = provider, .key = key }, null, null) catch |err| {
+    self.setProvider(.{ .provider = provider, .key = key }, .env) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
 }
@@ -1000,8 +994,7 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
 fn disableProvider(self: *Agent) void {
     if (self.ai_client) |client| client.deinit(self.allocator);
     self.ai_client = null;
-    if (self.owned_key) |k| self.allocator.free(k);
-    self.owned_key = null;
+    self.key_ownership.deinit(self.allocator);
     self.model_credentials = null;
     self.model_completions = null;
     self.no_llm_persisted = true;
@@ -1016,22 +1009,19 @@ fn hfBillTo(provider: Config.AiProvider) ?[]const u8 {
     return std.mem.span(v);
 }
 
-/// `owned_key` transfers ownership of an allocated `credentials.key` (Vertex
-/// gcloud token) on success; on error the caller still owns it. `session`
-/// likewise transfers a subscription session that owns `credentials.key`; the
-/// previous session is freed only after the old client is gone.
-fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8, session: ?auth.Session) !void {
-    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ(), .account_id = if (session) |s| s.tokens.account_id else null });
+/// `ownership` transfers whatever owns `credentials.key` on success; on error
+/// the caller still owns it. The previous credential is released only after
+/// the old client is gone.
+fn setProvider(self: *Agent, credentials: Credentials, ownership: settings.KeyOwnership) !void {
+    const new_client = try zenai.provider.Client.init(lp.io, self.allocator, credentials, .{ .base_url = self.model_base_url, .retry_policy = .long_running, .bill_to = hfBillTo(credentials.provider), .environ = lp.environ(), .account_id = ownership.accountId() });
     errdefer new_client.deinit(self.allocator);
 
     // A same-provider re-select (vertex token refresh) must not reset the model.
     const same_provider = if (self.model_credentials) |c| c.provider == credentials.provider else false;
     const new_model = try self.allocator.dupe(u8, if (same_provider) self.model else zenai.provider.defaultModel(credentials.provider));
     if (self.ai_client) |client| client.deinit(self.allocator);
-    if (self.owned_key) |k| self.allocator.free(k);
-    if (self.auth_session) |*s| s.deinit();
-    self.owned_key = owned_key;
-    self.auth_session = session;
+    self.key_ownership.deinit(self.allocator);
+    self.key_ownership = ownership;
     new_client.setInterrupt(&self.http_interrupt);
     self.ai_client = new_client;
     self.model_credentials = credentials;
@@ -1059,16 +1049,16 @@ fn setProvider(self: *Agent, credentials: Credentials, owned_key: ?[:0]const u8,
 /// Runs between turns on the single agent thread, never during a request, so
 /// the displaced token is never dereferenced after it's freed here.
 fn refreshAuthIfNeeded(self: *Agent) void {
-    if (self.auth_session) |*session| {
-        const displaced = session.ensureFresh() catch |err| {
-            self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
-            return;
-        };
-        if (displaced) |old| {
-            if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
-            if (self.model_credentials) |*c| c.key = session.tokens.access_token;
-            old.deinit(session.allocator);
-        }
+    if (self.key_ownership != .session) return;
+    const session = &self.key_ownership.session;
+    const displaced = session.ensureFresh() catch |err| {
+        self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
+        return;
+    };
+    if (displaced) |old| {
+        if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
+        if (self.model_credentials) |*c| c.key = session.tokens.access_token;
+        old.deinit(session.allocator);
     }
 }
 
@@ -1633,7 +1623,7 @@ fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
     const hint = if (status == 401 and client == .vertex)
-        if (self.owned_key != null)
+        if (self.key_ownership == .owned)
             " (Vertex token may have expired; run /provider vertex to refresh)"
         else
             " (Vertex express mode needs an express API key — a Gemini Developer key won't work)"
@@ -1934,8 +1924,7 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     }
     var resolved = (try settings.resolveCredentials(allocator, opts, null, false)) orelse return error.MissingProvider;
     const llm = resolved.credentials;
-    defer if (resolved.key_owned) allocator.free(llm.key);
-    defer if (resolved.session) |*s| s.deinit();
+    defer resolved.ownership.deinit(allocator);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();

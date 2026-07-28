@@ -39,13 +39,35 @@ pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF
 pub const ResolvedProvider = struct {
     credentials: Credentials,
     source: enum { flag, remembered, detected, picked },
-    /// Key allocated (Vertex gcloud token) rather than an env pointer; the
-    /// caller frees it, only after the client that references it is gone.
-    key_owned: bool = false,
-    /// Set for subscription (bearer) auth. Owns `credentials.key`, so it must
-    /// outlive the AI client; the caller takes ownership. When set, `key_owned`
-    /// stays false — the session frees the key, not the caller directly.
-    session: ?auth.Session = null,
+    ownership: KeyOwnership = .env,
+};
+
+/// How the active `Credentials.key` is owned. `deinit` releases whatever the
+/// active variant holds — call it only after the AI client that borrows the
+/// key is gone.
+pub const KeyOwnership = union(enum) {
+    /// Unowned env-var pointer.
+    env,
+    /// Allocated key (Vertex gcloud token); aliases the active `Credentials.key`.
+    owned: [:0]const u8,
+    /// Subscription (bearer) auth owning the key; refreshed between turns.
+    session: auth.Session,
+
+    pub fn deinit(self: *KeyOwnership, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .env => {},
+            .owned => |k| allocator.free(k),
+            .session => |*s| s.deinit(),
+        }
+        self.* = .env;
+    }
+
+    pub fn accountId(self: *const KeyOwnership) ?[]const u8 {
+        return switch (self.*) {
+            .session => |*s| s.tokens.account_id,
+            else => null,
+        };
+    }
 };
 
 /// Probe a keyless local provider (Ollama, llama.cpp): its env key is a
@@ -120,7 +142,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     if (opts.provider) |p| {
         if (p == .vertex and vertexProjectMode()) {
             const token = try gcloudAccessToken(allocator);
-            return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .key_owned = true };
+            return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .ownership = .{ .owned = token } };
         }
         // A subscription takes priority over an API key; null = not a
         // subscription provider (or none available), so fall through.
@@ -146,7 +168,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
         if (p == .vertex and vertexProjectMode()) {
             // On failure the reason is already printed; fall through to detection.
             if (gcloudAccessToken(allocator)) |token| {
-                return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .key_owned = true };
+                return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .ownership = .{ .owned = token } };
             } else |_| {}
         } else {
             // Subscription takes priority over an API key; both fall through to
@@ -195,7 +217,7 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
 fn finishResolved(allocator: std.mem.Allocator, credentials: Credentials, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
     if (credentials.provider == .vertex and vertexProjectMode()) {
         const token = try gcloudAccessToken(allocator);
-        return .{ .credentials = .{ .provider = .vertex, .key = token }, .source = source, .key_owned = true };
+        return .{ .credentials = .{ .provider = .vertex, .key = token }, .source = source, .ownership = .{ .owned = token } };
     }
     if (auth.descriptorFor(credentials.provider) != null and credentials.key.len == 0) {
         if (try subscriptionResolved(allocator, credentials.provider, source)) |resolved| return resolved;
@@ -204,10 +226,9 @@ fn finishResolved(allocator: std.mem.Allocator, credentials: Credentials, source
     return .{ .credentials = credentials, .source = source };
 }
 
-/// Load a stored subscription session and wrap it as a resolved credential. The
-/// returned `session` owns `credentials.key`; the caller must keep it alive as
-/// long as the AI client and free it with `session.deinit`. Null when the user
-/// hasn't logged in.
+/// Load a stored subscription session and wrap it as a resolved credential.
+/// The session owns `credentials.key`; the caller takes ownership via
+/// `ownership.deinit`. Null when the user hasn't logged in.
 fn subscriptionResolved(allocator: std.mem.Allocator, provider: Config.AiProvider, source: @FieldType(ResolvedProvider, "source")) !?ResolvedProvider {
     const session = (try auth.sessionFor(allocator, provider)) orelse return null;
     // Name the credential in effect — a set-but-ignored API key would otherwise
@@ -220,7 +241,7 @@ fn subscriptionResolved(allocator: std.mem.Allocator, provider: Config.AiProvide
     return .{
         .credentials = .{ .provider = provider, .key = session.tokens.access_token },
         .source = source,
-        .session = session,
+        .ownership = .{ .session = session },
     };
 }
 
