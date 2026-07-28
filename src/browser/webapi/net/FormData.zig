@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Factory = @import("../../Factory.zig");
 const Frame = @import("../../Frame.zig");
 const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
@@ -208,17 +209,19 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
 // but over bytes we already hold rather than JS parts. Returned at refcount 1:
 // the entry owns that reference and deleteByName releases it.
 fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
-    const blob = try Blob.initFromBytes(source._slice, source._mime, page);
-    errdefer blob.deinit(page);
+    const arena = try page.getArena(source._slice.len + source._mime.len + 256, "Blob");
+    errdefer page.releaseArena(arena);
 
-    const file = try blob._arena.create(File);
-    file.* = .{
-        ._proto = blob,
-        ._name = try blob._arena.dupe(u8, name),
-        ._last_modified = @intCast(lp.datetime.milliTimestamp(.real)),
-    };
-    blob._type = .{ .file = file };
-    blob.acquireRef();
+    const file = try Factory.chainedWithAllocator(arena, .{
+        try Blob.buildValueFromBytes(arena, source._slice, source._mime),
+        File{
+            ._proto = undefined,
+            ._name = try arena.dupe(u8, name),
+            ._last_modified = @intCast(lp.datetime.milliTimestamp(.real)),
+        },
+    });
+    file._proto._type = .{ .file = file };
+    file._proto.acquireRef();
     return file;
 }
 
@@ -652,14 +655,17 @@ test "FormData: multipart empty body" {
 }
 
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
-    const blob = try Blob.initFromBytes(body, mime, page);
-    blob.acquireRef();
-    const file = try arena.create(File);
-    file.* = .{
-        ._proto = blob,
-        ._name = try arena.dupe(u8, name),
-        ._last_modified = 0,
-    };
+    const blob_arena = try page.getArena(body.len + mime.len + 256, "Blob");
+    const file = try Factory.chainedWithAllocator(blob_arena, .{
+        try Blob.buildValueFromBytes(blob_arena, body, mime),
+        File{
+            ._proto = undefined,
+            ._name = try arena.dupe(u8, name),
+            ._last_modified = 0,
+        },
+    });
+    file._proto._type = .{ .file = file };
+    file._proto.acquireRef();
     return file;
 }
 

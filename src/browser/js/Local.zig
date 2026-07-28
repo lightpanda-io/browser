@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
+const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
@@ -1295,6 +1296,9 @@ pub fn resolveValue(value: anytype) Resolved {
 }
 
 fn resolveT(comptime T: type, value: *T) Resolved {
+    if (comptime IS_DEBUG) {
+        assertChainContiguity(T, value);
+    }
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
@@ -1384,6 +1388,16 @@ fn resolveT(comptime T: type, value: *T) Resolved {
             };
         },
     };
+}
+
+// Every wrapped chain must be contiguous — the TaggedOpaque walk upcasts by
+// pointer arithmetic. The stored _proto fields double as the canary.
+fn assertChainContiguity(comptime T: type, value: *T) void {
+    if (comptime reflect.Proto(T) != null) {
+        const P = comptime reflect.Proto(T).?;
+        std.debug.assert(@intFromPtr(value._proto) == @intFromPtr(value) - comptime Factory.protoOffset(T));
+        assertChainContiguity(P, value._proto);
+    }
 }
 
 // Start at the "resolved" type (the most specific) and work our way up the

@@ -31,6 +31,7 @@ const xpath = @import("../../browser/xpath/Evaluator.zig");
 const Input = @import("../../browser/webapi/element/html/Input.zig");
 const File = @import("../../browser/webapi/File.zig");
 const Blob = @import("../../browser/webapi/Blob.zig");
+const Factory = @import("../../browser/Factory.zig");
 const Page = @import("../../browser/Page.zig");
 
 const log = lp.log;
@@ -660,20 +661,21 @@ fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
     const stat = try std.Io.Dir.cwd().statFile(lp.io, path, .{});
     const basename = std.fs.path.basename(path);
 
-    const blob = try arena.create(Blob);
-    const file = try arena.create(File);
-    blob.* = .{
-        ._rc = .{},
-        ._arena = arena,
-        ._type = .{ .file = file },
-        ._slice = data,
-        ._mime = mimeFromExtension(basename),
-    };
-    file.* = .{
-        ._proto = blob,
-        ._name = try arena.dupe(u8, basename),
-        ._last_modified = stat.mtime.toMilliseconds(),
-    };
+    const file = try Factory.chainedWithAllocator(arena, .{
+        Blob{
+            ._rc = .{},
+            ._arena = arena,
+            ._type = undefined,
+            ._slice = data,
+            ._mime = mimeFromExtension(basename),
+        },
+        File{
+            ._proto = undefined,
+            ._name = try arena.dupe(u8, basename),
+            ._last_modified = stat.mtime.toMilliseconds(),
+        },
+    });
+    file._proto._type = .{ .file = file };
     return file;
 }
 

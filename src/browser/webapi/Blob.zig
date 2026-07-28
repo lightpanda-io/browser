@@ -84,7 +84,15 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
     const arena = try session.getArena(.large, "Blob");
     errdefer session.releaseArena(arena);
 
-    const opts: InitOptions = opts_ orelse .{};
+    const self = try arena.create(Blob);
+    self.* = try buildValue(arena, parts_, opts_ orelse .{});
+    return self;
+}
+
+// The Blob value for `parts`, with everything it references copied to
+// `arena`. Callers either arena.create it (init) or embed it as the root of
+// a {Blob, File} chain.
+pub fn buildValue(arena: Allocator, parts_: ?[]const js.Value, opts: InitOptions) !Blob {
     const mime = try Mime.serialize(arena, opts.type);
 
     const data = blk: {
@@ -101,33 +109,32 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
         break :blk "";
     };
 
-    const self = try arena.create(Blob);
-    self.* = .{
+    return .{
         ._rc = .{},
         ._arena = arena,
         ._type = .generic,
         ._slice = data,
         ._mime = mime,
     };
-    return self;
 }
 
-/// Creates a new Blob from raw byte slices (for internal Zig use).
-pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
-    // + 256 because the arena might also be used by File
-    const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
-    errdefer page.releaseArena(arena);
-
-    const mime = try Mime.serialize(arena, content_type);
-
-    const self = try arena.create(Blob);
-    self.* = .{
+pub fn buildValueFromBytes(arena: Allocator, data: []const u8, content_type: []const u8) !Blob {
+    return .{
         ._rc = .{},
         ._arena = arena,
         ._type = .generic,
         ._slice = try arena.dupe(u8, data),
-        ._mime = mime,
+        ._mime = try Mime.serialize(arena, content_type),
     };
+}
+
+/// Creates a new Blob from raw byte slices (for internal Zig use).
+pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
+    const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(Blob);
+    self.* = try buildValueFromBytes(arena, data, content_type);
     return self;
 }
 

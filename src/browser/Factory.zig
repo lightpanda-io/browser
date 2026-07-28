@@ -76,13 +76,6 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
     return chain.get(1);
 }
 
-pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
-    const allocator = self._slab.allocator();
-    const et = try allocator.create(EventTarget);
-    et.* = .{ ._type = unionInit(EventTarget.Type, child) };
-    return et;
-}
-
 // this is a root object
 pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
@@ -368,6 +361,53 @@ pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
         }
         @compileError(@typeName(T) ++ " is not in the prototype chain of " ++ @typeName(Leaf));
     }
+}
+
+// Byte delta from T down to its Proto within any chain allocation containing
+// them (the prefix layout is the same for every leaf).
+pub fn protoOffset(comptime T: type) usize {
+    const P = reflect.Proto(T).?;
+    return chainOffsetOf(T, T) - chainOffsetOf(T, P);
+}
+
+// Generic contiguous chain from explicit values, for chains whose middles
+// can't be default-initialized by AutoPrototypeChain. Callers pass every
+// level's value in root-to-leaf order, with `undefined` for `_proto` and for
+// any field that must point at another chain member, patching the latter on
+// the result.
+pub fn chained(self: *Factory, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
+    return chainedWithAllocator(self._slab.allocator(), values);
+}
+
+pub fn chainedWithAllocator(allocator: Allocator, values: anytype) !*ChainedLeaf(@TypeOf(values)) {
+    const fields = @typeInfo(@TypeOf(values)).@"struct".fields;
+    const types = comptime blk: {
+        var types: [fields.len]type = undefined;
+        for (fields, 0..) |f, i| {
+            types[i] = f.type;
+        }
+        break :blk types;
+    };
+    comptime {
+        for (types[1..], 0..) |T, i| {
+            assert(reflect.Proto(T).? == types[i]);
+        }
+    }
+
+    const chain = try PrototypeChain(&types).allocate(allocator);
+    inline for (0..types.len) |i| {
+        const ptr = chain.get(i);
+        ptr.* = values[i];
+        if (i > 0) {
+            ptr._proto = chain.get(i - 1);
+        }
+    }
+    return chain.get(types.len - 1);
+}
+
+fn ChainedLeaf(comptime Values: type) type {
+    const fields = @typeInfo(Values).@"struct".fields;
+    return fields[fields.len - 1].type;
 }
 
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {

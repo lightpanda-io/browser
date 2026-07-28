@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
@@ -122,8 +123,7 @@ fn _init(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: S
     try txn.assertActive();
 
     const request = try txn.newRequest();
-    const self = try txn._arena.create(IDBCursor);
-    self.* = .{
+    const cursor_value = IDBCursor{
         ._engine = store._engine,
         ._store = store,
         ._txn = txn,
@@ -135,13 +135,23 @@ fn _init(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: S
         ._js = undefined,
         ._source = source,
     };
-    request._cursor = self;
 
     const local = exec.js.local.?;
-    const public: js.Value = if (key_only)
-        try local.zigValueToJs(self, .{})
-    else
-        try local.zigValueToJs(try IDBCursorWithValue.init(self), .{});
+    var self: *IDBCursor = undefined;
+    var public: js.Value = undefined;
+    if (key_only) {
+        self = try txn._arena.create(IDBCursor);
+        self.* = cursor_value;
+        public = try local.zigValueToJs(self, .{});
+    } else {
+        const with_value = try Factory.chainedWithAllocator(txn._arena, .{
+            cursor_value,
+            IDBCursorWithValue{ ._proto = undefined },
+        });
+        self = with_value._proto;
+        public = try local.zigValueToJs(with_value, .{});
+    }
+    request._cursor = self;
 
     // Pre-converted and cached because it's the request value on every iteration,
     // avoiding the bridge's pointer -> js.Value lookup each time.

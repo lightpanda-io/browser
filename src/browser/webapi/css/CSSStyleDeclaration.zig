@@ -35,27 +35,20 @@ _element: ?*Element = null,
 _properties: std.DoublyLinkedList = .{},
 _is_computed: bool = false,
 
-pub fn init(element: ?*Element, is_computed: bool, frame: *Frame) !*CSSStyleDeclaration {
-    const self = try frame._factory.create(CSSStyleDeclaration{
-        ._element = element,
-        ._is_computed = is_computed,
-    });
-
-    // Parse the element's existing style attribute into _properties so that
-    // subsequent JS reads and writes see all CSS properties, not just newly
-    // added ones.  Computed styles have no inline attribute to parse.
-    if (!is_computed) {
-        if (element) |el| {
-            if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
-                var it = CssParser.parseDeclarationsList(attr_value);
-                while (it.next()) |declaration| {
-                    try self.applyParsedDeclaration(declaration, frame);
-                }
-            }
+// Parse the element's existing style attribute into _properties so that
+// subsequent JS reads and writes see all CSS properties, not just newly
+// added ones.  Computed styles have no inline attribute to parse.
+pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
+    if (self._is_computed) {
+        return;
+    }
+    const el = self._element orelse return;
+    if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
+        var it = CssParser.parseDeclarationsList(attr_value);
+        while (it.next()) |declaration| {
+            try self.applyParsedDeclaration(declaration, frame);
         }
     }
-
-    return self;
 }
 
 pub fn length(self: *const CSSStyleDeclaration) u32 {

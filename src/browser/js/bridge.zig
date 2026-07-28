@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
 const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
@@ -109,7 +110,7 @@ pub fn Builder(comptime T: type) type {
                 const Next = PrototypeType(Prototype).?;
                 entry.* = .{
                     .index = JsApiLookup.getId(Next.JsApi),
-                    .offset = @offsetOf(Prototype, "_proto"),
+                    .offset = Factory.protoOffset(Prototype),
                 };
                 Prototype = Next;
             }
