@@ -46,6 +46,7 @@ const cancel_slice_ms: u64 = 200;
 pub const descriptor: auth.Descriptor = .{
     .provider = .codex,
     .id = "codex",
+    .models_dev_id = "openai",
     .label = "ChatGPT subscription",
     .client_id = client_id,
     .scope = scope,

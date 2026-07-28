@@ -73,6 +73,9 @@ pub const Descriptor = struct {
     provider: Config.AiProvider,
     /// Key in the on-disk store (`auth.json`).
     id: []const u8,
+    /// Provider key in the models.dev catalog (subscription backends have no
+    /// entry of their own; codex's models are listed under "openai").
+    models_dev_id: []const u8,
     /// Human label for the credential, e.g. "ChatGPT subscription".
     label: []const u8,
     client_id: []const u8,

@@ -1941,8 +1941,8 @@ pub fn listModels(allocator: std.mem.Allocator, opts: Config.Agent) !void {
     defer arena.deinit();
     // A subscription provider can't list models via the provider API; use the
     // free models.dev catalog (uncached here — this is a one-shot CLI command).
-    if (auth.descriptorFor(llm.provider) != null) {
-        const sub_ids = models_dev.modelIds(arena.allocator(), @tagName(llm.provider), null);
+    if (auth.descriptorFor(llm.provider)) |desc| {
+        const sub_ids = models_dev.modelIds(arena.allocator(), desc.models_dev_id, null);
         var stdout_sub = std.Io.File.stdout().writerStreaming(lp.io, &.{});
         const ws = &stdout_sub.interface;
         for (sub_ids) |id| try ws.print("{s}\n", .{id});
@@ -2026,8 +2026,8 @@ fn completionModels(context: *anyopaque, _: std.mem.Allocator) []const []const u
     const arena = self.model_completion_arena.allocator();
     // A subscription provider can't hit the provider's `/models` endpoint, so
     // list from the free, unauthenticated models.dev catalog instead.
-    const ids = if (auth.descriptorFor(llm.provider) != null)
-        models_dev.modelIds(arena, @tagName(llm.provider), self.app_dir)
+    const ids = if (auth.descriptorFor(llm.provider)) |desc|
+        models_dev.modelIds(arena, desc.models_dev_id, self.app_dir)
     else
         zenai.provider.listChatModelIds(
             lp.io,
