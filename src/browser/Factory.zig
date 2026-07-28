@@ -318,6 +318,58 @@ pub fn node(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
+// CData nodes: {EventTarget, Node, CData, [Text,] Leaf}.
+// CData is special, it's _type is a bare tag, not a tagged union. A website can
+// have tens of thousands of Text nodes, and this allows a few optimization to
+// both reduce the # of allocations and the size
+pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
+    const types = comptime prototypeTypes(@TypeOf(leaf));
+    comptime assert(types[0] == EventTarget and types[1] == Node and types[2] == Node.CData);
+
+    const chain = try PrototypeChain(types).allocate(self._slab.allocator());
+    chain.setRoot(EventTarget.Type);
+    chain.setMiddle(1, Node.Type);
+
+    const cd_ptr = chain.get(2);
+    cd_ptr.* = cd;
+    cd_ptr._proto = chain.get(1);
+
+    // only the CDATASection chain has a middle here (its Text)
+    inline for (3..types.len - 1) |i| {
+        chain.set(i, .{ ._proto = chain.get(i - 1) });
+    }
+    chain.setLeaf(types.len - 1, leaf);
+    return cd_ptr;
+}
+
+// The full type list for a leaf. Walks the Proto chain.
+// For example CData.Text -> [_]type{EventTarget, Node, CData, Text}).
+pub fn prototypeTypes(comptime Leaf: type) []const type {
+    comptime {
+        var types: []const type = &.{Leaf};
+        var T = Leaf;
+        while (reflect.Proto(T)) |P| {
+            T = P;
+            types = &[_]type{P} ++ types;
+        }
+        return types;
+    }
+}
+
+// Byte offset of T within the chain allocation for `Leaf`. This is what lets
+// a child reach its parent without a stored pointer.
+pub fn chainOffsetOf(comptime Leaf: type, comptime T: type) usize {
+    comptime {
+        var offset: usize = 0;
+        for (prototypeTypes(Leaf)) |C| {
+            offset = std.mem.alignForward(usize, offset, @alignOf(C));
+            if (C == T) return offset;
+            offset += @sizeOf(C);
+        }
+        @compileError(@typeName(T) ++ " is not in the prototype chain of " ++ @typeName(Leaf));
+    }
+}
+
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
@@ -375,20 +427,11 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
 }
 
 fn svgPrototypeTypes(comptime Child: type) []const type {
-    comptime {
-        var types: []const type = &[_]type{Child};
-        var T = Child;
-
-        while (T != EventTarget) {
-            T = reflect.Proto(T) orelse @compileError(@typeName(T) ++ " does not lead to EventTarget through Proto");
-            types = &[_]type{T} ++ types;
-        }
-
-        if (types.len < 5 or types[3] != Element.Svg) {
-            @compileError(@typeName(Child) ++ " is not an SVG prototype chain");
-        }
-        return types;
+    const types = prototypeTypes(Child);
+    if (types.len < 5 or types[0] != EventTarget or types[3] != Element.Svg) {
+        @compileError(@typeName(Child) ++ " is not an SVG prototype chain");
     }
+    return types;
 }
 
 pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {
