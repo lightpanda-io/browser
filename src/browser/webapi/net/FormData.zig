@@ -26,7 +26,7 @@ const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
 const Blob = @import("../Blob.zig");
 const File = @import("../File.zig");
-const Blob = @import("../Blob.zig");
+
 const KeyValueList = @import("../KeyValueList.zig");
 const header_parser = @import("../../../network/header_parser.zig");
 
@@ -440,14 +440,14 @@ pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
             continue;
         }
         if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
-            try self.append(
+            try self.appendText(
                 try urlDecode(self._arena, pair[0..idx]),
                 try urlDecode(self._arena, pair[idx + 1 ..]),
             );
         } else {
             const key = try urlDecode(self._arena, pair);
             // Insert with empty value.
-            try self.append(key, "");
+            try self.appendText(key, "");
         }
     }
 }
@@ -627,7 +627,7 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
                 .value = .{ .file = file },
             });
         } else {
-            try self.append(name, content);
+            try self.appendText(name, content);
         }
     }
 }
@@ -1311,9 +1311,9 @@ test "FormData: multipart round-trip" {
         ._arena = allocator,
         ._entries = .empty,
     };
-    try src.append("username", "alice");
-    try src.append("username", "bob");
-    try src.append("a\"b\r\nc", "quoted \"value\"");
+    try src.appendText("username", "alice");
+    try src.appendText("username", "bob");
+    try src.appendText("a\"b\r\nc", "quoted \"value\"");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try src.write(.{
