@@ -110,7 +110,7 @@ pub fn NodeLive(comptime mode: Mode) type {
     return struct {
         _tw: TW,
         _filter: Filter,
-        _last_index: usize,
+        _next_index: usize,
         _last_length: ?u32,
         _cached_version: usize,
 
@@ -118,7 +118,7 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         pub fn init(root: *Node, filter: Filter, frame: *Frame) Self {
             return .{
-                ._last_index = 0,
+                ._next_index = 0,
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
@@ -136,17 +136,17 @@ pub fn NodeLive(comptime mode: Mode) type {
                 // not ideal, but this can happen if list[x] is called followed
                 // by list.length.
                 self._tw.reset();
-                self._last_index = 0;
+                self._next_index = 0;
             }
             // If we're here, it means it's either the first time we're called
             // or the DOM version has changed. Either way, the _tw should be
-            // at the start position. It's important that self._last_index == 0
+            // at the start position. It's important that self._next_index == 0
             // (which it always should be in these cases), because we're going to
-            // reset _tw at the end of this, _last_index should always be 0 when
+            // reset _tw at the end of this, _next_index should always be 0 when
             // _tw is reset. Again, this should always be the case, but we're
             // asserting to make sure, else we'll have weird behavior, namely
             // the wrong item being returned for the wrong index.
-            lp.assert(self._last_index == 0, "NodeLives.length", .{ .last_index = self._last_index });
+            lp.assert(self._next_index == 0, "NodeLives.length", .{ .next_index = self._next_index });
 
             var tw = &self._tw;
             defer tw.reset();
@@ -175,12 +175,12 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {
             _ = self.versionCheck(frame);
-            var current = self._last_index;
-            if (index <= current) {
+            var current = self._next_index;
+            if (index < current) {
                 current = 0;
                 self._tw.reset();
             }
-            defer self._last_index = current + 1;
+            defer self._next_index = current + 1;
 
             const tw = &self._tw;
             while (self.nextTw(tw)) |el| {
@@ -390,7 +390,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             }
 
             self._tw.reset();
-            self._last_index = 0;
+            self._next_index = 0;
             self._last_length = null;
             self._cached_version = current;
             return false;
