@@ -294,6 +294,39 @@
   let rejected5 = false;
   try { await req1.formData(); } catch (e) { rejected5 = e instanceof TypeError; }
 
+  // A missing Content-Type rejects (never throws synchronously) with a
+  // TypeError.
+  let rejected6 = false;
+  const p6 = new Request('https://example.com', { method: 'POST' }).formData();
+  const promised6 = p6 instanceof Promise;
+  try { await p6; } catch (e) { rejected6 = e instanceof TypeError; }
+
+  // A null body with a form Content-Type acts as an empty byte sequence and
+  // resolves with an empty FormData.
+  const req7 = new Request('https://example.com', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const fd7 = await req7.formData();
+
+  // A multipart Content-Type without a boundary rejects with a TypeError.
+  let rejected8 = false;
+  const req8 = new Request('https://example.com', {
+    method: 'POST',
+    body: 'x',
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  try { await req8.formData(); } catch (e) { rejected8 = e instanceof TypeError; }
+
+  // A part with an unquoted RFC 5987 filename* parameter parses; the
+  // parameter itself is skipped.
+  const req9 = new Request('https://example.com', {
+    method: 'POST',
+    body: '--B\r\nContent-Disposition: form-data; filename*=UTF-8\'\'a.jpg; name="n"\r\n\r\nv\r\n--B--\r\n',
+    headers: { 'Content-Type': 'multipart/form-data; boundary=B' },
+  });
+  const fd9 = await req9.formData();
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, fd1 instanceof FormData);
@@ -312,6 +345,13 @@
 
     testing.expectEqual(true, rejected4);
     testing.expectEqual(true, rejected5);
+
+    testing.expectEqual(true, promised6);
+    testing.expectEqual(true, rejected6);
+    testing.expectEqual(true, fd7 instanceof FormData);
+    testing.expectEqual(0, [...fd7].length);
+    testing.expectEqual(true, rejected8);
+    testing.expectEqual('v', fd9.get('n'));
   });
 </script>
 

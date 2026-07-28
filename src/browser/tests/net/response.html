@@ -116,6 +116,13 @@
   let rejected5 = false;
   try { await res1.formData(); } catch (e) { rejected5 = e instanceof TypeError; }
 
+  // A bodyless Response has no Content-Type: formData() rejects (never
+  // throws synchronously) with a TypeError.
+  let rejected6 = false;
+  const p6 = new Response().formData();
+  const promised6 = p6 instanceof Promise;
+  try { await p6; } catch (e) { rejected6 = e instanceof TypeError; }
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, fd1 instanceof FormData);
@@ -134,6 +141,9 @@
 
     testing.expectEqual(true, rejected4);
     testing.expectEqual(true, rejected5);
+
+    testing.expectEqual(true, promised6);
+    testing.expectEqual(true, rejected6);
   });
 </script>
 
