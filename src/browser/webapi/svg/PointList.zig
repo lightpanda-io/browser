@@ -6,7 +6,6 @@
 // (at your option) any later version.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");

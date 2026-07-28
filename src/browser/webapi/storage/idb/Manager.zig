@@ -17,11 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const Engine = @import("Engine.zig");
 
-const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 const Manager = @This();
