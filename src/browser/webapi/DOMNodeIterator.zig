@@ -215,8 +215,8 @@ fn filterNode(self: *const DOMNodeIterator, node: *Node, frame: *Frame) !i32 {
 
 fn getNextInTree(self: *const DOMNodeIterator, node: *Node) ?*Node {
     // Depth-first traversal within the root subtree
-    if (node._children) |children| {
-        return Node.linkToNode(children.first.?);
+    if (node.firstChild()) |first| {
+        return first;
     }
 
     var current = node;

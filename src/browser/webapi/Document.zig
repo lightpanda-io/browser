@@ -1061,8 +1061,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
 
     // Extract children from wrapper HTML element (html5ever wraps fragments)
     // https://github.com/servo/html5ever/issues/583
-    const children = fragment_node._children orelse return;
-    const first = Node.linkToNode(children.first.?);
+    const first = fragment_node.firstChild() orelse return;
 
     // Collect all children to insert (to avoid iterator invalidation)
     var children_to_insert: std.ArrayList(*Node) = .empty;
@@ -1472,7 +1471,7 @@ pub fn injectBlank(self: *Document, frame: *Frame) error{InjectBlankError}!void 
 fn _injectBlank(self: *Document, frame: *Frame) !void {
     if (comptime IS_DEBUG) {
         // should only be called on an empty document
-        std.debug.assert(self.asNode()._children == null);
+        std.debug.assert(self.asNode()._first_child == null);
     }
 
     const html = try Frame.node_factory.createElementNS(frame, .html, "html", null);

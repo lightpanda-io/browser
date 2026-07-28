@@ -37,7 +37,6 @@ pub const ShadowRoot = @import("ShadowRoot.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const LinkedList = std.DoublyLinkedList;
 
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Node, *Element.Html.Slot);
 
@@ -46,10 +45,11 @@ const Node = @This();
 _type: Type,
 _proto: *EventTarget,
 _parent: ?*Node = null,
-// A node with no children leaves this null (no allocation). Otherwise it
-// points to a heap-allocated intrusive list of the node's `_child_link`s.
-_children: ?*LinkedList = null,
-_child_link: LinkedList.Node = .{},
+// The first child's `_prev` points at the LAST child (keeping lastChild
+// O(1)); the last child's `_next` is null. A detached node has null links.
+_first_child: ?*Node = null,
+_next: ?*Node = null,
+_prev: ?*Node = null,
 
 // Lookup for nodes that have a different owner document than frame.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
@@ -178,21 +178,25 @@ fn adjacentParent(self: *Node, variant: AdjacentVariant) !*Node {
 }
 
 pub fn firstChild(self: *const Node) ?*Node {
-    const children = self._children orelse return null;
-    return linkToNodeOrNull(children.first);
+    return self._first_child;
 }
 
 pub fn lastChild(self: *const Node) ?*Node {
-    const children = self._children orelse return null;
-    return linkToNodeOrNull(children.last);
+    const first = self._first_child orelse return null;
+    return first._prev;
 }
 
 pub fn nextSibling(self: *const Node) ?*Node {
-    return linkToNodeOrNull(self._child_link.next);
+    return self._next;
 }
 
 pub fn previousSibling(self: *const Node) ?*Node {
-    return linkToNodeOrNull(self._child_link.prev);
+    const parent = self._parent orelse return null;
+    if (parent._first_child == self) {
+        // our _prev points at the parent's last child
+        return null;
+    }
+    return self._prev;
 }
 
 pub fn parentNode(self: *const Node) ?*Node {
@@ -1074,13 +1078,7 @@ pub fn format(self: *Node, writer: *std.Io.Writer) !void {
 // Returns an iterator the can be used to iterate through the node's children
 // For internal use.
 pub fn childrenIterator(self: *Node) NodeIterator {
-    const children = self._children orelse {
-        return .{ .node = null };
-    };
-
-    return .{
-        .node = linkToNodeOrNull(children.first),
-    };
+    return .{ .node = self._first_child };
 }
 
 pub fn getChildrenCount(self: *Node) usize {
@@ -1322,13 +1320,11 @@ pub fn compareDocumentPosition(self: *Node, other: *Node) u16 {
     return DISCONNECTED;
 }
 
-// faster to compare the linked list node links directly
 fn isNodeBefore(node1: *const Node, node2: *const Node) bool {
-    var current = node1._child_link.next;
-    const target = &node2._child_link;
-    while (current) |link| {
-        if (link == target) return true;
-        current = link.next;
+    var current = node1._next;
+    while (current) |n| {
+        if (n == node2) return true;
+        current = n._next;
     }
     return false;
 }
@@ -1587,18 +1583,70 @@ const NodeIterator = struct {
     node: ?*Node,
     pub fn next(self: *NodeIterator) ?*Node {
         const node = self.node orelse return null;
-        self.node = linkToNodeOrNull(node._child_link.next);
+        self.node = node._next;
         return node;
     }
 };
 
-// Turns a linked list node into a Node
-pub fn linkToNode(n: *LinkedList.Node) *Node {
-    return @fieldParentPtr("_child_link", n);
+// Low-level sibling-list splicing, used by Frame's insert/remove. These only
+// maintain the link invariants (first child's `_prev` is the last child, last
+// child's `_next` is null); the caller handles `_parent` and all DOM
+// bookkeeping.
+pub fn linkLast(self: *Node, child: *Node) void {
+    child._next = null;
+    if (self._first_child) |first| {
+        const last = first._prev.?;
+        last._next = child;
+        child._prev = last;
+        first._prev = child;
+    } else {
+        self._first_child = child;
+        child._prev = child;
+    }
 }
 
-pub fn linkToNodeOrNull(n_: ?*LinkedList.Node) ?*Node {
-    return if (n_) |n| linkToNode(n) else null;
+pub fn linkBefore(self: *Node, ref: *Node, child: *Node) void {
+    child._next = ref;
+    child._prev = ref._prev;
+    if (self._first_child == ref) {
+        self._first_child = child;
+    } else {
+        ref._prev.?._next = child;
+    }
+    ref._prev = child;
+}
+
+pub fn linkAfter(self: *Node, ref: *Node, child: *Node) void {
+    child._prev = ref;
+    child._next = ref._next;
+    if (ref._next) |next| {
+        next._prev = child;
+    } else {
+        // ref was the last child
+        self._first_child.?._prev = child;
+    }
+    ref._next = child;
+}
+
+pub fn unlink(self: *Node, child: *Node) void {
+    const first = self._first_child.?;
+    if (child == first) {
+        if (child._next) |next| {
+            next._prev = child._prev;
+            self._first_child = next;
+        } else {
+            self._first_child = null;
+        }
+    } else {
+        child._prev.?._next = child._next;
+        if (child._next) |next| {
+            next._prev = child._prev;
+        } else {
+            first._prev = child._prev;
+        }
+    }
+    child._next = null;
+    child._prev = null;
 }
 
 pub const JsApi = struct {

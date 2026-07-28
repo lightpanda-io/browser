@@ -2458,20 +2458,13 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     else
         null;
 
-    const children = parent._children.?;
-    children.remove(&child._child_link);
-    if (children.first == null) {
-        // last child removed; drop the list so a childless node holds no allocation
-        parent._children = null;
-        self._factory.destroy(children);
-    }
+    parent.unlink(child);
     // grab this before we null the parent
     const was_connected = child.isConnected();
     // Capture the ID map before disconnecting, so we can remove IDs from the correct document
     const id_maps = if (was_connected) self.getElementIdMap(child) else null;
 
     child._parent = null;
-    child._child_link = .{};
 
     // Update live ranges for removal (DOM spec remove steps 4-7)
     if (child_index_for_ranges) |idx| {
@@ -2631,23 +2624,17 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
 
-    const children = parent._children orelse blk: {
-        const list = try self._factory.create(std.DoublyLinkedList{});
-        parent._children = list;
-        break :blk list;
-    };
-
     switch (relative) {
-        .append => children.append(&child._child_link),
+        .append => parent.linkLast(child),
         .after => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative after", .{ .url = self.url });
-            children.insertAfter(&ref_node._child_link, &child._child_link);
+            parent.linkAfter(ref_node, child);
         },
         .before => |ref_node| {
             // caller should have made sure this was the case
             lp.assert(ref_node._parent.? == parent, "Frame.insertNodeRelative before", .{ .url = self.url });
-            children.insertBefore(&ref_node._child_link, &child._child_link);
+            parent.linkBefore(ref_node, child);
         },
     }
     child._parent = parent;
