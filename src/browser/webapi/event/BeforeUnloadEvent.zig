@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#the-beforeunloadevent-interface
 const BeforeUnloadEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _return_value: []const u8 = "",
 

@@ -24,6 +24,8 @@ const Element = @import("../../Element.zig");
 const TextPositioning = @import("TextPositioning.zig");
 
 const TSpan = @This();
+
+pub const Proto = TextPositioning;
 _proto: *TextPositioning,
 
 pub fn asElement(self: *TSpan) *Element {

@@ -23,6 +23,8 @@ const TextTrackCue = @import("TextTrackCue.zig");
 
 const VTTCue = @This();
 
+pub const Proto = TextTrackCue;
+
 _proto: *TextTrackCue,
 _text: []const u8 = "",
 _region: ?js.Object.Global = null,

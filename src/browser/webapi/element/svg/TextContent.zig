@@ -33,6 +33,8 @@ pub const TextPositioning = @import("TextPositioning.zig");
 pub const TextPath = @import("TextPath.zig");
 
 const TextContent = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 _type: Type,
 

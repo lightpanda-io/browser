@@ -6,6 +6,8 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
 const Image = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {

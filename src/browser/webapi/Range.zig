@@ -31,6 +31,8 @@ const String = lp.String;
 
 const Range = @This();
 
+pub const Proto = AbstractRange;
+
 _proto: *AbstractRange,
 
 pub fn init(frame: *Frame) !*Range {

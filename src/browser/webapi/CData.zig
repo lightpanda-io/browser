@@ -32,9 +32,20 @@ const String = lp.String;
 
 const CData = @This();
 
+pub const Proto = Node;
+
 _type: Type,
 _proto: *Node,
 _data: String = .empty,
+
+pub const Type = union(enum) {
+    text: Text,
+    comment: Comment,
+    // This should be under Text, but that would require storing a _type union
+    // in text, which would add 8 bytes to every text node.
+    cdata_section: CDATASection,
+    processing_instruction: *ProcessingInstruction,
+};
 
 /// Count UTF-16 code units in a UTF-8 string.
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
@@ -179,15 +190,6 @@ fn utf16RangeToUtf8(data: []const u8, utf16_start: usize, utf16_end: usize) !str
     // End is either exactly at utf16_end or clamped to string end
     return .{ .start = start, .end = i };
 }
-
-pub const Type = union(enum) {
-    text: Text,
-    comment: Comment,
-    // This should be under Text, but that would require storing a _type union
-    // in text, which would add 8 bytes to every text node.
-    cdata_section: CDATASection,
-    processing_instruction: *ProcessingInstruction,
-};
 
 pub fn asNode(self: *CData) *Node {
     return self._proto;

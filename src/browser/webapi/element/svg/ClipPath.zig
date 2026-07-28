@@ -28,6 +28,8 @@ const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
 const Svg = @import("../Svg.zig");
 
 const ClipPath = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 
 pub fn asElement(self: *ClipPath) *Element {

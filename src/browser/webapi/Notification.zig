@@ -29,6 +29,8 @@ const Allocator = std.mem.Allocator;
 
 const Notification = @This();
 
+pub const Proto = EventTarget;
+
 _rc: lp.RC = .{},
 _arena: Allocator,
 _proto: *EventTarget,

@@ -22,6 +22,8 @@ const Text = @import("Text.zig");
 
 const CDATASection = @This();
 
+pub const Proto = Text;
+
 _proto: *Text,
 
 pub const JsApi = struct {

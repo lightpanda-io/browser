@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 
 const KeyboardEvent = @This();
 
+pub const Proto = UIEvent;
+
 _proto: *UIEvent,
 _key: Key,
 _code: []const u8,

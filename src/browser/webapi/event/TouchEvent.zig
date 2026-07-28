@@ -32,6 +32,8 @@ const Allocator = std.mem.Allocator;
 // There is no touch input source: the touch lists are always empty.
 const TouchEvent = @This();
 
+pub const Proto = UIEvent;
+
 _proto: *UIEvent,
 _alt_key: bool = false,
 _meta_key: bool = false,

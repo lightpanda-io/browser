@@ -6,6 +6,8 @@ const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
 const CSSStyleRule = @This();
 
+pub const Proto = CSSRule;
+
 _proto: *CSSRule,
 _selector_text: []const u8 = "",
 _style: ?*CSSStyleProperties = null,

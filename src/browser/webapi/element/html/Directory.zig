@@ -6,6 +6,8 @@ const HtmlElement = @import("../Html.zig");
 
 const Directory = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Directory) *Element {

@@ -29,6 +29,8 @@ const String = lp.String;
 
 const PointerEvent = @This();
 
+pub const Proto = MouseEvent;
+
 const PointerType = enum {
     empty,
     mouse,

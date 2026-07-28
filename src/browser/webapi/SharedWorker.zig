@@ -45,6 +45,8 @@ const log = lp.log;
 
 const SharedWorker = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _port: *MessagePort,
 _on_error: ?js.Function.Global = null,

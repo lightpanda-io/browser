@@ -31,6 +31,8 @@ const log = lp.log;
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
 
+pub const Proto = EventTarget;
+
 const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationActivation = @import("NavigationActivation.zig");
 const NavigationTransition = @import("root.zig").NavigationTransition;

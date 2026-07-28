@@ -24,6 +24,8 @@ const RO = @import("DOMMatrixReadOnly.zig");
 
 const DOMMatrix = @This();
 
+pub const Proto = RO;
+
 _proto: *RO,
 
 pub fn init(init_: ?js.Value, exec: *const js.Execution) !*DOMMatrix {

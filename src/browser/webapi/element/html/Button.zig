@@ -32,6 +32,8 @@ const popover = @import("../popover.zig");
 
 const Button = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,

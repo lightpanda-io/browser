@@ -27,6 +27,8 @@ const slotting = @import("../element/slotting.zig");
 
 const Text = @This();
 
+pub const Proto = CData;
+
 _proto: *CData,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {

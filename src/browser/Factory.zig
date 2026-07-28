@@ -380,10 +380,7 @@ fn svgPrototypeTypes(comptime Child: type) []const type {
         var T = Child;
 
         while (T != EventTarget) {
-            if (!@hasField(T, "_proto")) {
-                @compileError(@typeName(T) ++ " does not lead to EventTarget through _proto");
-            }
-            T = reflect.Struct(@FieldType(T, "_proto"));
+            T = reflect.Proto(T) orelse @compileError(@typeName(T) ++ " does not lead to EventTarget through Proto");
             types = &[_]type{T} ++ types;
         }
 
@@ -425,7 +422,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    if (comptime @hasField(S, "_proto")) {
+    if (comptime reflect.Proto(S) != null) {
         self.destroyChain(value, 0, std.mem.Alignment.@"1");
     } else {
         self.destroyStandalone(value);
@@ -451,7 +448,7 @@ fn destroyChain(
     const new_size = current_size + @sizeOf(S);
     const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
 
-    if (@hasField(S, "_proto")) {
+    if (comptime reflect.Proto(S) != null) {
         self.destroyChain(value._proto, new_size, new_align);
     } else {
         // no proto so this is the head of the chain.

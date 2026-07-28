@@ -33,6 +33,8 @@ const Allocator = std.mem.Allocator;
 
 const MouseEvent = @This();
 
+pub const Proto = UIEvent;
+
 pub const MouseButton = enum(u8) {
     main = 0,
     auxiliary = 1,

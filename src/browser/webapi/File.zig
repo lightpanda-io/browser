@@ -26,6 +26,8 @@ const Blob = @import("Blob.zig");
 
 const File = @This();
 
+pub const Proto = Blob;
+
 _proto: *Blob,
 _name: []const u8,
 _last_modified: i64,

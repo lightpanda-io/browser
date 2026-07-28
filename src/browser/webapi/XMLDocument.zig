@@ -23,6 +23,8 @@ const Node = @import("Node.zig");
 
 const XMLDocument = @This();
 
+pub const Proto = Document;
+
 _proto: *Document,
 
 pub fn asDocument(self: *XMLDocument) *Document {

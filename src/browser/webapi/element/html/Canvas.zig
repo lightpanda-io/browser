@@ -30,6 +30,8 @@ const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 const Execution = js.Execution;
 
 const Canvas = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 _cached: ?DrawingContext = null,
 

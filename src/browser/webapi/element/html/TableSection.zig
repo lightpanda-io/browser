@@ -11,6 +11,8 @@ const String = lp.String;
 
 const TableSection = @This();
 
+pub const Proto = HtmlElement;
+
 _tag_name: String,
 _tag: Element.Tag,
 _proto: *HtmlElement,

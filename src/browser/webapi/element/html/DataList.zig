@@ -5,6 +5,8 @@ const HtmlElement = @import("../Html.zig");
 
 const DataList = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *DataList) *Element {

@@ -26,6 +26,8 @@ const Execution = js.Execution;
 
 const XMLHttpRequestEventTarget = @This();
 
+pub const Proto = EventTarget;
+
 _type: Type,
 _proto: *EventTarget,
 _on_abort: ?js.Function.Global = null,

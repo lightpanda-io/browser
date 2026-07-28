@@ -7,6 +7,8 @@ const collections = @import("../../collections.zig");
 
 const TableRow = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *TableRow) *Element {

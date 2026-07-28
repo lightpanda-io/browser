@@ -16,6 +16,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// The prototype ("parent") type of T, as declared by its `pub const Proto`.
+// This decl is the single source of truth for prototype-chain discovery;
+// a `_proto` field, where one exists, is only storage and must agree.
+pub fn Proto(comptime T: type) ?type {
+    if (!@hasDecl(T, "Proto")) {
+        return null;
+    }
+    if (@hasField(T, "_proto") and @FieldType(T, "_proto") != *T.Proto) {
+        @compileError(@typeName(T) ++ ": _proto field and Proto decl disagree");
+    }
+    return T.Proto;
+}
+
 // Gets the Parent of child.
 // HtmlElement.of(script) -> *HTMLElement
 pub fn Struct(comptime T: type) type {

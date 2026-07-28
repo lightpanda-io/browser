@@ -26,6 +26,8 @@ const String = lp.String;
 
 const PromiseRejectionEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _reason: ?js.Value.Global = null,
 _promise: ?js.Promise.Global = null,

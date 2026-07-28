@@ -25,6 +25,8 @@ const Media = @import("Media.zig");
 
 const Video = @This();
 
+pub const Proto = Media;
+
 _proto: *Media,
 
 pub fn asMedia(self: *Video) *Media {

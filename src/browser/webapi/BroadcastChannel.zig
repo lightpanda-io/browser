@@ -29,6 +29,8 @@ const Execution = js.Execution;
 
 const BroadcastChannel = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _exec: *Execution,
 _name: lp.String,

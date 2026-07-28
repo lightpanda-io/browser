@@ -24,6 +24,8 @@ const Element = @import("../../Element.zig");
 const Geometry = @import("Geometry.zig");
 
 const Path = @This();
+
+pub const Proto = Geometry;
 _proto: *Geometry,
 
 pub fn asElement(self: *Path) *Element {

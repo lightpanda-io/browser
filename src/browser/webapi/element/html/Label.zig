@@ -8,6 +8,8 @@ const TreeWalker = @import("../../TreeWalker.zig");
 
 const Label = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Label) *Element {

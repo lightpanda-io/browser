@@ -26,6 +26,8 @@ const Element = @import("Element.zig");
 
 const ShadowRoot = @This();
 
+pub const Proto = DocumentFragment;
+
 pub const Mode = enum {
     open,
     closed,

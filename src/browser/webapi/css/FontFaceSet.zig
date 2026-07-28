@@ -32,6 +32,8 @@ const Allocator = std.mem.Allocator;
 
 const FontFaceSet = @This();
 
+pub const Proto = EventTarget;
+
 _rc: lp.RC = .{},
 _proto: *EventTarget,
 _arena: Allocator,

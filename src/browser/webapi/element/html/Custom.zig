@@ -33,6 +33,8 @@ const log = lp.log;
 const String = lp.String;
 
 const Custom = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 _tag_name: String,
 _definition: ?*CustomElementDefinition,

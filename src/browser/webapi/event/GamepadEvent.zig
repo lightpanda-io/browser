@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://w3c.github.io/gamepad/#gamepadevent-interface
 const GamepadEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 
 const GamepadEventOptions = struct {};

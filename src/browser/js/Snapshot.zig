@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
+const reflect = @import("../reflect.zig");
 
 // Not ideal, but its children have special constructor rules (can be extended
 // can't be instantiated). And rather than coming up with a generic definition
@@ -693,11 +694,7 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
     @setEvalBranchQuota(100_000);
     comptime {
         const T = JsApi.bridge.type;
-        if (!@hasField(T, "_proto")) {
-            return null;
-        }
-        const Ptr = std.meta.fieldInfo(T, ._proto).type;
-        const F = @typeInfo(Ptr).pointer.child;
+        const F = reflect.Proto(T) orelse return null;
         // Look up in the provided API list
         for (JsApis, 0..) |Api, i| {
             if (Api == F.JsApi) {

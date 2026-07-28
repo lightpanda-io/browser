@@ -31,6 +31,8 @@ const Allocator = std.mem.Allocator;
 
 const NavigationCurrentEntryChangeEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _from: *NavigationHistoryEntry,
 _navigation_type: ?NavigationType,

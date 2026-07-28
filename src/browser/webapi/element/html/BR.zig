@@ -5,6 +5,8 @@ const HtmlElement = @import("../Html.zig");
 
 const BR = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *BR) *Element {

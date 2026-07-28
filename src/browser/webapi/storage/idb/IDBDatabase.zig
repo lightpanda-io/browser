@@ -37,6 +37,8 @@ const Allocator = std.mem.Allocator;
 
 const IDBDatabase = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _exec: *Execution,
 _engine: *Engine,
