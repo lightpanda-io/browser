@@ -24,6 +24,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const log = lp.log;
 const zenai = @import("zenai");
 const auth = @import("auth.zig");
 
@@ -141,7 +142,10 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
     const a = arena.allocator();
 
     const code_res = try post(a, interrupt, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
-    if (code_res.status != .ok) return error.DeviceCodeRequestFailed;
+    if (code_res.status != .ok) {
+        log.warn(.app, "codex device-code request failed", .{ .status = @intFromEnum(code_res.status), .body = code_res.body });
+        return error.DeviceCodeRequestFailed;
+    }
     const dc = try std.json.parseFromSliceLeaky(DeviceCode, a, code_res.body, .{ .ignore_unknown_fields = true });
     const interval_ms: u64 = @as(u64, dc.interval) * std.time.ms_per_s;
 
@@ -169,13 +173,19 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
             .ok => break try std.json.parseFromSliceLeaky(DeviceToken, a, res.body, .{ .ignore_unknown_fields = true }),
             // Still pending — the user hasn't finished authorizing.
             .forbidden, .not_found => continue,
-            else => return error.DeviceAuthFailed,
+            else => {
+                log.warn(.app, "codex device-auth poll failed", .{ .status = @intFromEnum(res.status), .body = res.body });
+                return error.DeviceAuthFailed;
+            },
         }
     };
 
     const exchange = try exchangeBody(a, dt.authorization_code, dt.code_verifier);
     const tok_res = try post(a, interrupt, token_url, "application/x-www-form-urlencoded", exchange);
-    if (tok_res.status != .ok) return error.TokenExchangeFailed;
+    if (tok_res.status != .ok) {
+        log.warn(.app, "codex token exchange failed", .{ .status = @intFromEnum(tok_res.status), .body = tok_res.body });
+        return error.TokenExchangeFailed;
+    }
     return parseTokenResponse(allocator, tok_res.body);
 }
 
@@ -185,7 +195,10 @@ fn refreshGrant(allocator: std.mem.Allocator, refresh_token: []const u8) !auth.T
     const a = arena.allocator();
     const body = try refreshBody(a, refresh_token);
     const res = try post(a, null, token_url, "application/x-www-form-urlencoded", body);
-    if (res.status != .ok) return error.RefreshFailed;
+    if (res.status != .ok) {
+        log.warn(.app, "codex token refresh failed", .{ .status = @intFromEnum(res.status), .body = res.body });
+        return error.RefreshFailed;
+    }
     return parseTokenResponse(allocator, res.body);
 }
 
