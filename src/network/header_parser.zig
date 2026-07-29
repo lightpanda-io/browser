@@ -344,8 +344,8 @@ pub const Cursor = struct {
     }
 
     /// Moves the cursor until no leading spaces there are.
-    pub inline fn skipSpaces(cursor: *Cursor) void {
-        while (cursor.end - cursor.current() > 0 and cursor.char() == ' ') : (cursor.advance(1)) {}
+    pub fn skipSpaces(cursor: *Cursor) void {
+        while (cursor.end - cursor.current() > 0 and (cursor.char() == ' ' or cursor.char() == '\t')) : (cursor.advance(1)) {}
     }
 
     /// Returns true if `Cursor` reached end.
