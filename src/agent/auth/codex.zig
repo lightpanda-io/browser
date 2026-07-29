@@ -125,7 +125,9 @@ fn exchangeBody(arena: std.mem.Allocator, code: []const u8, code_verifier: []con
 const DeviceCode = struct {
     device_auth_id: []const u8,
     user_code: []const u8,
-    interval: []const u8 = "5",
+    /// Seconds between polls. The spec says number; OpenAI returns a string;
+    /// std.json int parsing accepts both.
+    interval: u32 = 5,
 };
 
 const DeviceToken = struct {
@@ -141,7 +143,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
     const code_res = try post(a, interrupt, device_code_url, "application/json", "{\"client_id\":\"" ++ client_id ++ "\"}");
     if (code_res.status != .ok) return error.DeviceCodeRequestFailed;
     const dc = try std.json.parseFromSliceLeaky(DeviceCode, a, code_res.body, .{ .ignore_unknown_fields = true });
-    const interval_ms: u64 = @as(u64, @intCast(std.fmt.parseInt(u32, dc.interval, 10) catch 5)) * std.time.ms_per_s;
+    const interval_ms: u64 = @as(u64, dc.interval) * std.time.ms_per_s;
 
     std.debug.print(
         "\nTo authorize Lightpanda with your ChatGPT subscription:\n  1. Open {s}\n  2. Enter the code: {s}\n\nWaiting for authorization...\n",
