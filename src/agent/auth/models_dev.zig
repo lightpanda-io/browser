@@ -30,16 +30,17 @@ const auth = @import("auth.zig");
 const api_url = "https://models.dev/api.json";
 const cache_ttl_ms: i64 = 24 * std.time.ms_per_hour;
 
-/// Chat-model ids for `provider_id` from models.dev, allocated in `arena`. Reads
-/// a fresh on-disk cache when present, else fetches and refreshes it. Returns an
-/// empty slice on any failure (offline, parse error, no cache) so callers
-/// degrade to accepting a typed-in model name.
+/// Chat-model ids for `provider_id` from models.dev, allocated in `arena`.
+/// Serves a fresh on-disk cache, else fetches and refreshes it, falling back
+/// to an expired cache when the fetch fails. Empty only when nothing is
+/// available, so callers degrade to accepting a typed-in model name.
 pub fn modelIds(arena: std.mem.Allocator, provider_id: []const u8, app_dir: ?[]const u8) []const []const u8 {
-    if (app_dir) |dir| {
-        if (readCache(arena, dir, provider_id)) |ids| return ids;
-    }
-    const catalog = fetch(arena) catch return &.{};
-    const ids = parseProviderModels(arena, catalog, provider_id) catch return &.{};
+    const cached: ?Cache = if (app_dir) |dir| readCache(arena, dir, provider_id) else null;
+    if (cached) |c| if (auth.nowMs() - c.fetched_ms <= cache_ttl_ms) return c.ids;
+    const stale: []const []const u8 = if (cached) |c| c.ids else &.{};
+
+    const catalog = fetch(arena) catch return stale;
+    const ids = parseProviderModels(arena, catalog, provider_id) catch return stale;
     if (app_dir) |dir| writeCache(arena, dir, provider_id, ids) catch {};
     return ids;
 }
@@ -54,13 +55,12 @@ fn cachePath(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const
     return std.fs.path.join(arena, &.{ app_dir, name });
 }
 
-fn readCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8) ?[]const []const u8 {
+fn readCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8) ?Cache {
     const path = cachePath(arena, app_dir, provider_id) catch return null;
     const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch return null;
     const parsed = std.json.parseFromSliceLeaky(Cache, arena, data, .{ .ignore_unknown_fields = true }) catch return null;
-    if (auth.nowMs() - parsed.fetched_ms > cache_ttl_ms) return null;
     if (parsed.ids.len == 0) return null;
-    return parsed.ids;
+    return parsed;
 }
 
 fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8, ids: []const []const u8) !void {
