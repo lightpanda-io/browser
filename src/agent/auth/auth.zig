@@ -103,8 +103,8 @@ const StoredToken = struct {
     account_id: ?[]const u8 = null,
 };
 
-fn storePath(arena: std.mem.Allocator, dir: []const u8) ![:0]const u8 {
-    return std.fs.path.joinZ(arena, &.{ dir, "auth.json" });
+fn storePath(arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
+    return std.fs.path.join(arena, &.{ dir, "auth.json" });
 }
 
 fn storeLoadAt(allocator: std.mem.Allocator, dir: []const u8, id: []const u8) !?TokenSet {
@@ -132,11 +132,13 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
         .account_id = tokens.account_id,
     });
 
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try std.json.Stringify.value(map, .{}, &buf.writer);
-    try std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = path, .data = buf.written() });
-    // Secrets file: owner read/write only.
-    _ = std.c.chmod(path.ptr, 0o600);
+    // Secrets file: owner read/write only, from the moment it exists.
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .permissions = .fromMode(0o600) });
+    defer file.close(lp.io);
+    var buf: [1024]u8 = undefined;
+    var w = file.writer(lp.io, &buf);
+    try std.json.Stringify.value(map, .{}, &w.interface);
+    try w.end();
 }
 
 fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void {
@@ -144,10 +146,12 @@ fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void
     const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return;
     var parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch return;
     _ = parsed.map.swapRemove(id);
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    std.json.Stringify.value(parsed, .{}, &buf.writer) catch return;
-    std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = path, .data = buf.written() }) catch return;
-    _ = std.c.chmod(path.ptr, 0o600);
+    const file = std.Io.Dir.cwd().createFile(lp.io, path, .{ .permissions = .fromMode(0o600) }) catch return;
+    defer file.close(lp.io);
+    var buf: [1024]u8 = undefined;
+    var w = file.writer(lp.io, &buf);
+    std.json.Stringify.value(parsed, .{}, &w.interface) catch return;
+    w.end() catch return;
 }
 
 /// Load the stored token for `id`, or null when absent/unreadable/no data dir.
@@ -260,6 +264,9 @@ test "token store save/load/delete round-trips" {
     const t = try TokenSet.dup(a, "acc-1", "ref-1", 999, "acct-9");
     defer t.deinit(a);
     try storeSaveAt(scratch, dir, "codex", t);
+
+    const st = try tmp.dir.statFile(lp.io, "auth.json", .{});
+    try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), st.permissions.toMode() & 0o777);
 
     const loaded = (try storeLoadAt(a, dir, "codex")).?;
     defer loaded.deinit(a);
