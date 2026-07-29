@@ -31,13 +31,21 @@ inline fn isHeaderKeyByte(byte: u8) bool {
     };
 }
 
-/// Whether a byte is allowed in a header value; controls (excluding space)
-/// and DEL are excluded.
-inline fn isHeaderValueByte(byte: u8) bool {
+/// Whether a byte is allowed in a header value; controls other than HTAB,
+/// and DEL, are excluded. HTAB is legal field content per RFC 9110.
+fn isHeaderValueByte(byte: u8) bool {
     return switch (byte) {
-        0...0x1f, 0x7f => false,
+        0...0x08, 0x0a...0x1f, 0x7f => false,
         else => true,
     };
+}
+
+/// Returns a mask with the high bit of each byte set where the corresponding
+/// byte of `v` is zero. Exact per byte: carries never cross byte lanes
+/// (Hacker's Delight zero-byte detection).
+fn zeroBytes(v: usize) usize {
+    const low7 = comptime broadcast(0x7f);
+    return ~(((v & low7) + low7) | v | low7);
 }
 
 /// Returns an integer filled with a given byte.
@@ -106,15 +114,17 @@ inline fn matchHeaderValue(cursor: *Cursor) void {
             const deletes: Vec = @splat(0x7f);
             // Fill a vector with US (31).
             const full_31: Vec = @splat(0x1f);
+            // Fill a vector with HTAB (9).
+            const tabs: Vec = @splat('\t');
             // Load the next chunk from the buffer.
             const chunk = cursor.asVector(vec_size);
 
             // Per-lane `isHeaderValueByte`: a lane is 1 when its byte is
             // valid, above US (which rules out the controls but keeps space)
-            // and not DEL. Inverting the mask makes invalid lanes 1s, so
-            // `@ctz` yields the index of the first invalid byte, or
+            // or an HTAB, and not DEL. Inverting the mask makes invalid lanes
+            // 1s, so `@ctz` yields the index of the first invalid byte, or
             // `vec_size` when the whole chunk is valid.
-            const mask = @intFromBool(chunk > full_31) & ~@intFromBool(chunk == deletes);
+            const mask = (@intFromBool(chunk > full_31) | @intFromBool(chunk == tabs)) & ~@intFromBool(chunk == deletes);
             const advance_by = @ctz(~@as(Int, @bitCast(mask)));
             cursor.advance(advance_by);
             if (advance_by != vec_size) {
@@ -125,19 +135,17 @@ inline fn matchHeaderValue(cursor: *Cursor) void {
 
     // SWAR path.
     while (cursor.hasLength(block_size)) {
-        const spaces = comptime broadcast(usize, ' ');
-        const ones = comptime broadcast(usize, 0x01);
-        const dels = comptime broadcast(usize, 0x7f);
-        const full_128 = comptime broadcast(usize, 128);
+        const tabs = comptime broadcast('\t');
+        const dels = comptime broadcast(0x7f);
+        // A byte is below space (32) exactly when its top three bits are
+        // all zero.
+        const high3 = comptime broadcast(0xe0);
         const chunk = cursor.asInteger(usize);
 
-        // When a byte is less than a space (32), subtraction will wrap around
-        // and set the high bit; the AND NOT makes sure only bytes below 128
-        // can report so.
-        const lt = (chunk -% spaces) & ~chunk;
-        const xor_dels = chunk ^ dels;
-        const eq_del = (xor_dels -% ones) & ~xor_dels;
-        const advance_by = @ctz((lt | eq_del) & full_128) >> 3;
+        const is_ctl = zeroBytes(chunk & high3);
+        const is_tab = zeroBytes(chunk ^ tabs);
+        const is_del = zeroBytes(chunk ^ dels);
+        const advance_by = @ctz((is_ctl & ~is_tab) | is_del) >> 3;
 
         cursor.advance(advance_by);
         if (advance_by != block_size) {
