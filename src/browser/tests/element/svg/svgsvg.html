@@ -44,10 +44,13 @@
   testing.expectEqual(96, Math.round(length.value));
   testing.expectEqual('2.54cm', length.valueAsString);
 
-  // `value` is an absolute user-unit setter and resets the unit to NUMBER.
+  // `value` is an absolute user-unit setter; the unit is preserved and
+  // valueInSpecifiedUnits converts (12 user units = 0.3175cm).
   length.value = 12;
-  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, length.unitType);
-  testing.expectEqual('12', length.valueAsString);
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_CM, length.unitType);
+  testing.expectEqual(0.3175, length.valueInSpecifiedUnits);
+  testing.expectEqual(12, length.value);
+  testing.expectEqual('0.3175cm', length.valueAsString);
   length.newValueSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_PX, 4.5);
   testing.expectEqual('4.5px', length.valueAsString);
   testing.expectError('NotSupportedError', () => length.newValueSpecifiedUnits(0, 1));
@@ -66,8 +69,9 @@
   testing.expectEqual(180, Math.round(angle.valueInSpecifiedUnits));
   testing.expectEqual('180deg', angle.valueAsString);
   angle.value = 45;
-  testing.expectEqual(SVGAngle.SVG_ANGLETYPE_UNSPECIFIED, angle.unitType);
-  testing.expectEqual('45', angle.valueAsString);
+  testing.expectEqual(SVGAngle.SVG_ANGLETYPE_DEG, angle.unitType);
+  testing.expectEqual(45, angle.valueInSpecifiedUnits);
+  testing.expectEqual('45deg', angle.valueAsString);
   testing.expectError('NotSupportedError', () => angle.convertToSpecifiedUnits(0));
   testing.expectError('TypeError', () => { angle.value = NaN; });
 
@@ -155,8 +159,8 @@
   svg.x.baseVal.valueInSpecifiedUnits = 4.5;
   testing.expectEqual('4.5px', svg.getAttribute('x'));
   svg.x.baseVal.value = 7;
-  testing.expectEqual('7', svg.getAttribute('x'));
-  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_NUMBER, svg.x.animVal.unitType);
+  testing.expectEqual('7px', svg.getAttribute('x'));
+  testing.expectEqual(SVGLength.SVG_LENGTHTYPE_PX, svg.x.animVal.unitType);
   testing.expectError('NoModificationAllowedError', () => { svg.x.animVal.value = 3; });
   testing.expectError('NoModificationAllowedError', () => { svg.x.animVal.valueAsString = '3px'; });
 

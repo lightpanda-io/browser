@@ -120,11 +120,17 @@ pub fn getValue(self: *Length, frame: *Frame) f64 {
     return self._value * self.unitToUserUnits(self._unit, frame);
 }
 
+// Sets the value in user units; the stored unit is preserved and
+// valueInSpecifiedUnits converts, matching Blink and Gecko.
 pub fn setValue(self: *Length, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
-    self._value = value;
-    self._unit = .number;
+    self.syncFromAttribute();
+    if (self._unit == .unknown) {
+        self._unit = .number;
+    }
+    const factor = self.unitToUserUnits(self._unit, frame);
+    self._value = if (factor == 0) 0 else value / factor;
     try self.writeBack(frame);
 }
 

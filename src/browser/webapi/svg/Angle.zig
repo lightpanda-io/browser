@@ -78,11 +78,16 @@ pub fn getValue(self: *Angle) f64 {
     return toDegrees(self._value, self._unit);
 }
 
+// Sets the value in degrees; the stored unit is preserved and
+// valueInSpecifiedUnits converts, matching Blink and Gecko.
 pub fn setValue(self: *Angle, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
-    self._value = value;
-    self._unit = .unspecified;
+    self.syncFromAttribute();
+    if (self._unit == .unknown) {
+        self._unit = .unspecified;
+    }
+    self._value = fromDegrees(value, self._unit);
     try self.writeBack(frame);
 }
 
