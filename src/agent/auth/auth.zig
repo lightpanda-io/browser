@@ -93,8 +93,8 @@ pub fn descriptorFor(provider: Config.AiProvider) ?*const Descriptor {
 }
 
 // --- On-disk token store: <data_dir>/auth.json, a JSON map keyed by storeKey ---
-// The `*At` variants take an explicit dir (unit-testable); the public wrappers
-// resolve the app data dir themselves so callers need not thread it.
+// The `*At` variants take a scratch arena and an explicit dir (unit-testable);
+// the public wrappers build the arena and resolve the app data dir themselves.
 
 const StoredToken = struct {
     access: []const u8,
@@ -118,39 +118,33 @@ fn storeLoadAt(allocator: std.mem.Allocator, dir: []const u8, id: []const u8) !?
     return try TokenSet.dup(allocator, t.access, t.refresh, t.expires_at_ms, t.account_id);
 }
 
-fn storeSaveAt(dir: []const u8, id: []const u8, tokens: TokenSet) !void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const path = try storePath(a, dir);
+fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens: TokenSet) !void {
+    const path = try storePath(arena, dir);
 
     var map: std.json.ArrayHashMap(StoredToken) = .{};
-    if (std.Io.Dir.cwd().readFileAlloc(lp.io, path, a, .limited(64 * 1024))) |data| {
-        map = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), a, data, .{ .ignore_unknown_fields = true }) catch .{};
+    if (std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024))) |data| {
+        map = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch .{};
     } else |_| {}
-    try map.map.put(a, id, .{
+    try map.map.put(arena, id, .{
         .access = tokens.access_token,
         .refresh = tokens.refresh_token,
         .expires_at_ms = tokens.expires_at_ms,
         .account_id = tokens.account_id,
     });
 
-    var buf: std.Io.Writer.Allocating = .init(a);
+    var buf: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(map, .{}, &buf.writer);
     try std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = path, .data = buf.written() });
     // Secrets file: owner read/write only.
     _ = std.c.chmod(path.ptr, 0o600);
 }
 
-fn storeDeleteAt(dir: []const u8, id: []const u8) void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const path = storePath(a, dir) catch return;
-    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, a, .limited(64 * 1024)) catch return;
-    var parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), a, data, .{ .ignore_unknown_fields = true }) catch return;
+fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void {
+    const path = storePath(arena, dir) catch return;
+    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return;
+    var parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch return;
     _ = parsed.map.swapRemove(id);
-    var buf: std.Io.Writer.Allocating = .init(a);
+    var buf: std.Io.Writer.Allocating = .init(arena);
     std.json.Stringify.value(parsed, .{}, &buf.writer) catch return;
     std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = path, .data = buf.written() }) catch return;
     _ = std.c.chmod(path.ptr, 0o600);
@@ -164,18 +158,20 @@ pub fn storeLoad(allocator: std.mem.Allocator, id: []const u8) !?TokenSet {
     return storeLoadAt(allocator, dir, id);
 }
 
-pub fn storeSave(id: []const u8, tokens: TokenSet) !void {
-    var da: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer da.deinit();
-    const dir = dataDir(da.allocator()) orelse return error.NoDataDir;
-    return storeSaveAt(dir, id, tokens);
+pub fn storeSave(allocator: std.mem.Allocator, id: []const u8, tokens: TokenSet) !void {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = dataDir(a) orelse return error.NoDataDir;
+    return storeSaveAt(a, dir, id, tokens);
 }
 
-pub fn storeDelete(id: []const u8) void {
-    var da: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer da.deinit();
-    const dir = dataDir(da.allocator()) orelse return;
-    storeDeleteAt(dir, id);
+pub fn storeDelete(allocator: std.mem.Allocator, id: []const u8) void {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = dataDir(a) orelse return;
+    storeDeleteAt(a, dir, id);
 }
 
 /// Proactive-refresh margin: refresh once the token is within this window of
@@ -202,7 +198,7 @@ pub const Session = struct {
             if (self.tokens.expires_at_ms > now) return null;
             return err;
         };
-        storeSave(self.descriptor.storeKey(), fresh) catch {};
+        storeSave(self.allocator, self.descriptor.storeKey(), fresh) catch {};
 
         const displaced = self.tokens;
         self.tokens = fresh;
@@ -224,7 +220,7 @@ pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?S
 /// Run the interactive login and persist the result, returning a live session.
 pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?*zenai.http.Interrupt) !Session {
     const tokens = try desc.loginFn(allocator, interrupt);
-    storeSave(desc.storeKey(), tokens) catch {};
+    storeSave(allocator, desc.storeKey(), tokens) catch {};
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
@@ -254,14 +250,16 @@ test "descriptorFor resolves codex, null for a non-OAuth provider" {
 
 test "token store save/load/delete round-trips" {
     const a = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const scratch = arena.allocator();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(lp.io, ".", a);
-    defer a.free(dir);
+    const dir = try tmp.dir.realPathFileAlloc(lp.io, ".", scratch);
 
     const t = try TokenSet.dup(a, "acc-1", "ref-1", 999, "acct-9");
     defer t.deinit(a);
-    try storeSaveAt(dir, "codex", t);
+    try storeSaveAt(scratch, dir, "codex", t);
 
     const loaded = (try storeLoadAt(a, dir, "codex")).?;
     defer loaded.deinit(a);
@@ -270,6 +268,6 @@ test "token store save/load/delete round-trips" {
     try std.testing.expectEqualStrings("acct-9", loaded.account_id.?);
     try std.testing.expectEqual(@as(i64, 999), loaded.expires_at_ms);
 
-    storeDeleteAt(dir, "codex");
+    storeDeleteAt(scratch, dir, "codex");
     try std.testing.expectEqual(@as(?TokenSet, null), try storeLoadAt(a, dir, "codex"));
 }
