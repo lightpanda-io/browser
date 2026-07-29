@@ -25,6 +25,7 @@ const Page = @import("../../Page.zig");
 const DOMMatrixReadOnly = @import("../DOMMatrixReadOnly.zig");
 const Element = @import("../Element.zig");
 const Transform = @import("Transform.zig");
+const reflected_list = @import("reflected_list.zig");
 
 const TransformList = @This();
 
@@ -37,6 +38,16 @@ _snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList(*Transform) = .empty,
 _retired: std.ArrayList(*Transform) = .empty,
 
+const M = reflected_list.Mixin(TransformList, Transform, .{
+    .attrName = attrName,
+    .parse = parse,
+    .writeItem = writeItem,
+    .prepareItem = prepareItem,
+    .attach = attach,
+    .detachItem = detachItem,
+    .releaseItem = releaseItem,
+});
+
 pub fn createForAttribute(element: *Element, attr_name: lp.String, read_only: bool, frame: *Frame) !*TransformList {
     return frame._factory.create(TransformList{
         ._frame = frame,
@@ -46,111 +57,20 @@ pub fn createForAttribute(element: *Element, attr_name: lp.String, read_only: bo
     });
 }
 
-pub fn deinit(self: *TransformList, page: *Page) void {
-    for (self._items.items) |transform| {
-        transform.detach(self);
-        transform.releaseRef(page);
-    }
-    self._items.clearRetainingCapacity();
-    self.releaseRetired(page);
-}
-
-pub fn getLength(self: *TransformList, frame: *Frame) !u32 {
-    try self.sync(frame);
-    return @intCast(self._items.items.len);
-}
-
-pub fn getNumberOfItems(self: *TransformList, frame: *Frame) !u32 {
-    return self.getLength(frame);
-}
-
-pub fn clear(self: *TransformList, frame: *Frame) !void {
-    try self.requireMutable();
-    try self.sync(frame);
-    try self.retireAll(frame);
-    try self.setAttribute(&.{}, frame);
-}
-
-pub fn initialize(self: *TransformList, item: *Transform, frame: *Frame) !*Transform {
-    try self.requireMutable();
-    try self.sync(frame);
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared.releaseRef(frame._page);
-
-    try self.retireAll(frame);
-    try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self.setAttribute(&.{prepared}, frame);
-    self._items.appendAssumeCapacity(prepared);
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn getItem(self: *TransformList, index: u32, frame: *Frame) !*Transform {
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-    return self._items.items[index];
-}
-
-pub fn insertItemBefore(self: *TransformList, item: *Transform, index: u32, frame: *Frame) !*Transform {
-    try self.requireMutable();
-    try self.sync(frame);
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared.releaseRef(frame._page);
-    const at = @min(@as(usize, index), self._items.items.len);
-    const next = try frame.local_arena.alloc(*Transform, self._items.items.len + 1);
-    @memcpy(next[0..at], self._items.items[0..at]);
-    next[at] = prepared;
-    @memcpy(next[at + 1 ..], self._items.items[at..]);
-
-    try self._items.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    self._items.insertAssumeCapacity(at, prepared);
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn replaceItem(self: *TransformList, item: *Transform, index: u32, frame: *Frame) !*Transform {
-    try self.requireMutable();
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared.releaseRef(frame._page);
-    const next = try frame.local_arena.dupe(*Transform, self._items.items);
-    next[index] = prepared;
-
-    try self._retired.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    const replaced = self._items.items[index];
-    replaced.detach(self);
-    self._retired.appendAssumeCapacity(replaced);
-    self._items.items[index] = prepared;
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn removeItem(self: *TransformList, index: u32, frame: *Frame) !*Transform {
-    try self.requireMutable();
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-    const next = try frame.local_arena.alloc(*Transform, self._items.items.len - 1);
-    @memcpy(next[0..index], self._items.items[0..index]);
-    @memcpy(next[index..], self._items.items[index + 1 ..]);
-
-    try self._retired.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    const removed = self._items.orderedRemove(index);
-    removed.detach(self);
-    self._retired.appendAssumeCapacity(removed);
-    return removed;
-}
-
-pub fn appendItem(self: *TransformList, item: *Transform, frame: *Frame) !*Transform {
-    return self.insertItemBefore(item, std.math.maxInt(u32), frame);
-}
+pub const deinit = M.deinit;
+pub const getLength = M.getLength;
+pub const getNumberOfItems = M.getNumberOfItems;
+pub const clear = M.clear;
+pub const initialize = M.initialize;
+pub const getItem = M.getItem;
+pub const insertItemBefore = M.insertItemBefore;
+pub const replaceItem = M.replaceItem;
+pub const removeItem = M.removeItem;
+pub const appendItem = M.appendItem;
 
 pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
-    try self.requireMutable();
-    try self.sync(frame);
+    try M.requireMutable(self);
+    try M.sync(self, frame);
     if (self._items.items.len == 0) return null;
 
     var matrix = DOMMatrixReadOnly.identity();
@@ -173,16 +93,16 @@ pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
     consolidated.acquireRef();
     errdefer consolidated.releaseRef(frame._page);
 
-    try self.retireAll(frame);
+    try M.retireAll(self, frame);
     try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self.setAttribute(&.{consolidated}, frame);
+    try M.setAttribute(self, &.{consolidated}, frame);
     self._items.appendAssumeCapacity(consolidated);
-    self.attach(consolidated);
+    attach(self, consolidated);
     return consolidated;
 }
 
-fn requireMutable(self: *const TransformList) !void {
-    if (self._read_only) return error.NoModificationAllowed;
+fn attrName(self: *const TransformList) lp.String {
+    return self._attr_name;
 }
 
 fn prepareItem(_: *TransformList, item: *Transform, frame: *Frame) !*Transform {
@@ -198,10 +118,18 @@ fn attach(self: *TransformList, transform: *Transform) void {
     }, self._read_only);
 }
 
+fn detachItem(transform: *Transform, owner: *TransformList) void {
+    transform.detach(owner);
+}
+
+fn releaseItem(transform: *Transform, page: *Page) void {
+    transform.releaseRef(page);
+}
+
 fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.State) anyerror!void {
     const self: *TransformList = @ptrCast(@alignCast(context));
     const frame = self._frame;
-    try self.sync(frame);
+    try M.sync(self, frame);
     if (!transform.isAttachedTo(self)) {
         transform.applyStateRaw(state);
         return;
@@ -211,41 +139,6 @@ fn mutateTransform(context: *anyopaque, transform: *Transform, state: Transform.
     } else unreachable;
     try self.setAttributeWithOverride(index, state, frame);
     transform.applyStateRaw(state);
-}
-
-fn sync(self: *TransformList, frame: *Frame) !void {
-    self.releaseRetired(frame._page);
-
-    const raw = self._element.getAttributeSafe(self._attr_name) orelse "";
-    if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) return;
-
-    self._synced = false;
-    var parsed = parse(raw, frame) catch |err| switch (err) {
-        error.SyntaxError => std.ArrayList(*Transform).empty,
-        else => return err,
-    };
-    errdefer for (parsed.items) |transform| transform.releaseRef(frame._page);
-
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, raw);
-    try self.retireAll(frame);
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
-    for (parsed.items) |transform| {
-        self._items.appendAssumeCapacity(transform);
-        self.attach(transform);
-    }
-    parsed.clearRetainingCapacity();
-    self._synced = true;
-}
-
-// A retired item must outlive the operation that retired it: removeItem's
-// return value has no JS wrapper until the bridge wraps it after we return.
-// By the next operation, anything still reachable holds its own ref.
-fn releaseRetired(self: *TransformList, page: *Page) void {
-    for (self._retired.items) |transform| {
-        transform.releaseRef(page);
-    }
-    self._retired.clearRetainingCapacity();
 }
 
 fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*Transform) {
@@ -267,24 +160,8 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*Transform) {
     return parsed;
 }
 
-fn retireAll(self: *TransformList, frame: *Frame) !void {
-    self._synced = false;
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
-    for (self._items.items) |transform| {
-        transform.detach(self);
-        self._retired.appendAssumeCapacity(transform);
-    }
-    self._items.clearRetainingCapacity();
-}
-
-fn setAttribute(self: *TransformList, items: []const *Transform, frame: *Frame) !void {
-    var serialized: std.Io.Writer.Allocating = .init(frame.local_arena);
-    const writer = &serialized.writer;
-    for (items, 0..) |transform, i| {
-        if (i != 0) try writer.writeByte(' ');
-        try Transform.writeState(transform.getState(), writer);
-    }
-    try self.commitAttribute(serialized.written(), frame);
+fn writeItem(transform: *Transform, writer: *std.Io.Writer) !void {
+    try Transform.writeState(transform.getState(), writer);
 }
 
 fn setAttributeWithOverride(self: *TransformList, index: usize, state: Transform.State, frame: *Frame) !void {
@@ -294,15 +171,7 @@ fn setAttributeWithOverride(self: *TransformList, index: usize, state: Transform
         if (i != 0) try writer.writeByte(' ');
         try Transform.writeState(if (i == index) state else transform.getState(), writer);
     }
-    try self.commitAttribute(serialized.written(), frame);
-}
-
-fn commitAttribute(self: *TransformList, serialized: []const u8, frame: *Frame) !void {
-    self._synced = false;
-    try self._element.setAttributeSafe(self._attr_name, .wrap(serialized), frame);
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, serialized);
-    self._synced = true;
+    try M.commitAttribute(self, serialized.written(), frame);
 }
 
 pub const JsApi = struct {
