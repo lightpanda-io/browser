@@ -42,3 +42,19 @@
     testing.expectEqual(2, loaded2);
   });
 </script>
+
+<script id=set_attribute_src>
+  loadedByAttribute = 0;
+
+  const attributeBeforeAppend = document.createElement('script');
+  attributeBeforeAppend.setAttribute('src', 'dynamic_attribute.js');
+  document.getElementsByTagName('head')[0].appendChild(attributeBeforeAppend);
+
+  const attributeAfterAppend = document.createElement('script');
+  document.getElementsByTagName('head')[0].appendChild(attributeAfterAppend);
+  attributeAfterAppend.setAttribute('src', 'dynamic_attribute.js');
+
+  testing.onload(() => {
+    testing.expectEqual(2, loadedByAttribute);
+  });
+</script>
