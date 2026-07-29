@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -26,9 +26,12 @@ const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
+const FormData = @import("FormData.zig");
 
 const Headers = @import("Headers.zig");
 const body_init = @import("body_init.zig");
+
+const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -456,6 +459,48 @@ pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
+pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    if (self.consume(local)) |rejected| return rejected;
+    const body = switch (self._body) {
+        .bytes => |b| b,
+        .empty => "",
+        .stream => return local.rejectPromise(.{ .type_error = "Cannot read FormData from stream body" }),
+    };
+
+    const content_type = try self._headers.get("content-type", exec) orelse {
+        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    };
+    var it = ContentTypeIterator.init(content_type);
+    const essence = it.essence;
+
+    // [RFC7578]
+    // Parse bytes, using the value of the `boundary` parameter from mimeType,
+    // per the rules set forth in Returning Values from Forms: multipart/form-data.
+    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
+        const boundary = it.findBoundary();
+        if (boundary.len == 0) {
+            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+        }
+
+        const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+        };
+        return local.resolvePromise(form_data);
+    }
+
+    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
+        const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+        };
+        return local.resolvePromise(form_data);
+    }
+
+    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+}
+
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {
     const session = exec.session;
     const body_len = switch (self._body) {
@@ -519,6 +564,7 @@ pub const JsApi = struct {
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
     pub const blob = bridge.function(Response.blob, .{});
     pub const bytes = bridge.function(Response.bytes, .{});
+    pub const formData = bridge.function(Response.formData, .{});
     pub const clone = bridge.function(Response.clone, .{});
 };
 
