@@ -31,6 +31,8 @@ const Allocator = std.mem.Allocator;
 /// https://developer.mozilla.org/en-US/docs/Web/API/SubmitEvent
 const SubmitEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _submitter: ?*HtmlElement,
 

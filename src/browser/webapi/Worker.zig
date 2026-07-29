@@ -36,6 +36,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Worker = @This();
 
+pub const Proto = EventTarget;
+
 pub const WorkerType = enum {
     classic,
     module,

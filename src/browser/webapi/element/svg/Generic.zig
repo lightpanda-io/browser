@@ -24,6 +24,8 @@ const Element = @import("../../Element.zig");
 const Svg = @import("../Svg.zig");
 
 const Generic = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 _tag: Element.Tag,
 

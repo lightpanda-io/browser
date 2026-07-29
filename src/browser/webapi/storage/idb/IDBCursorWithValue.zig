@@ -24,13 +24,9 @@ const Execution = js.Execution;
 
 const IDBCursorWithValue = @This();
 
-_proto: *IDBCursor,
+pub const Proto = IDBCursor;
 
-pub fn init(cursor: *IDBCursor) !*IDBCursorWithValue {
-    const self = try cursor._txn._arena.create(IDBCursorWithValue);
-    self.* = .{ ._proto = cursor };
-    return self;
-}
+_proto: *IDBCursor,
 
 pub fn getValue(self: *const IDBCursorWithValue, exec: *Execution) !?js.Value {
     return self._proto.getValueJs(exec);

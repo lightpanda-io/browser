@@ -25,6 +25,8 @@ const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
+const Factory = @import("../Factory.zig");
+const reflect = @import("../reflect.zig");
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
@@ -1258,7 +1260,19 @@ const Resolved = struct {
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
-    if (!@hasField(T, "_type") or @typeInfo(@TypeOf(value._type)) != .@"union") {
+    if (!@hasField(T, "_type")) {
+        return resolveT(T, value);
+    }
+
+    // A bare-tag _type means the subtypes are chain members, not payloads
+    // (e.g. CData); the type maps the tag to the member's type.
+    if (comptime @typeInfo(@TypeOf(value._type)) == .@"enum" and @hasDecl(T, "Subtype")) {
+        switch (value._type) {
+            inline else => |tag| return resolveValue(value.subtype(T.Subtype(tag))),
+        }
+    }
+
+    if (comptime @typeInfo(@TypeOf(value._type)) != .@"union") {
         return resolveT(T, value);
     }
 
@@ -1282,6 +1296,9 @@ pub fn resolveValue(value: anytype) Resolved {
 }
 
 fn resolveT(comptime T: type, value: *T) Resolved {
+    if (comptime IS_DEBUG) {
+        assertChainContiguity(T, value);
+    }
     const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
@@ -1373,6 +1390,15 @@ fn resolveT(comptime T: type, value: *T) Resolved {
     };
 }
 
+// Debug-only check!
+// Walk the full chain at wrap time; protoOf's Debug assert verifies each
+// hop's _proto (or _proto_canary) against the layout arithmetic.
+fn assertChainContiguity(comptime T: type, value: *T) void {
+    if (comptime reflect.Proto(T) != null) {
+        assertChainContiguity(reflect.Proto(T).?, Factory.protoOf(value));
+    }
+}
+
 // Start at the "resolved" type (the most specific) and work our way up the
 // prototype chain looking for the type that defines acquireRef
 fn findFinalizerType(comptime T: type) ?type {
@@ -1380,12 +1406,7 @@ fn findFinalizerType(comptime T: type) ?type {
     if (@hasDecl(S, "acquireRef")) {
         return S;
     }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        return findFinalizerType(ProtoChild);
-    }
-    return null;
+    return findFinalizerType(reflect.Proto(S) orelse return null);
 }
 
 // Generate a function that follows the _proto pointer chain to get to the finalizer type
@@ -1398,13 +1419,11 @@ fn finalizerPtrGetter(comptime T: type, comptime FT: type) *const fn (*T) *FT {
             }
         }.get;
     }
-    if (@hasField(S, "_proto")) {
-        const ProtoPtr = std.meta.fieldInfo(S, ._proto).type;
-        const ProtoChild = @typeInfo(ProtoPtr).pointer.child;
-        const childGetter = comptime finalizerPtrGetter(ProtoChild, FT);
+    if (reflect.Proto(S)) |P| {
+        const childGetter = comptime finalizerPtrGetter(P, FT);
         return struct {
             fn get(v: *T) *FT {
-                return childGetter(v._proto);
+                return childGetter(Factory.protoOf(v));
             }
         }.get;
     }

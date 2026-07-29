@@ -20,9 +20,12 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Factory = @import("../Factory.zig");
 const RO = @import("DOMMatrixReadOnly.zig");
 
 const DOMMatrix = @This();
+
+pub const Proto = RO;
 
 _proto: *RO,
 
@@ -31,15 +34,15 @@ pub fn init(init_: ?js.Value, exec: *const js.Execution) !*DOMMatrix {
     return create(parsed.m, parsed.is_2d, exec.page);
 }
 
-// Builds the [DOMMatrixReadOnly, DOMMatrix] prototype chain on a single arena
-// (owned by the base) and cross-links them, the same way File wraps Blob.
 pub fn create(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrix {
-    const proto = try RO.createBare(m, is_2d, page);
-    errdefer proto.deinit(page);
+    const arena = try page.getArena(.tiny, "DOMMatrix");
+    errdefer page.releaseArena(arena);
 
-    const self = try proto._arena.create(DOMMatrix);
-    self.* = .{ ._proto = proto };
-    proto._type = .{ .mutable = self };
+    const self = try Factory.chainedWithAllocator(arena, .{
+        RO.buildValue(arena, m, is_2d),
+        DOMMatrix{ ._proto = undefined },
+    });
+    self._proto._type = .{ .mutable = self };
     return self;
 }
 

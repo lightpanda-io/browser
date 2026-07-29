@@ -31,6 +31,8 @@ const Allocator = std.mem.Allocator;
 
 const FocusEvent = @This();
 
+pub const Proto = UIEvent;
+
 _proto: *UIEvent,
 _related_target: ?*EventTarget = null,
 

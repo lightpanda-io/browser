@@ -30,6 +30,8 @@ pub const Option = @import("Option.zig");
 
 const Select = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _selected_index_set: bool = false,
 _custom_validity: ?[]const u8 = null,
@@ -245,13 +247,15 @@ pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollect
     // select_options mode is the select's list of options: option children
     // plus the option children of optgroup children.
     const node_live = collections.NodeLive(.select_options).init(self.asNode(), {}, frame);
-    const html_collection = try node_live.runtimeGenericWrap(frame);
-
-    // Create and return HTMLOptionsCollection
-    return frame._factory.create(collections.HTMLOptionsCollection{
-        ._proto = html_collection,
-        ._select = self,
+    const options = try frame._factory.chained(.{
+        node_live.htmlCollectionValue(),
+        collections.HTMLOptionsCollection{
+            ._proto = undefined,
+            ._select = self,
+        },
     });
+    options._proto._chained = .options;
+    return options;
 }
 
 pub fn getLength(self: *Select) u32 {

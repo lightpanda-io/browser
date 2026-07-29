@@ -25,16 +25,15 @@ const HTMLCollection = @import("HTMLCollection.zig");
 
 const HTMLOptionsCollection = @This();
 
+pub const Proto = HTMLCollection;
+
 _proto: *HTMLCollection,
 _select: *@import("../element/html/Select.zig"),
 
-// The refcount lives on the proto, but anchoring the finalizer here lets
-// deinit reclaim this struct's slot along with the proto's.
+// The refcount lives on the proto, but the finalizer anchors here so deinit
+// destroys the whole {HTMLCollection, self} chain from its leaf.
 pub fn deinit(self: *HTMLOptionsCollection, page: *Page) void {
-    self._proto.deinit(page);
-    // Not destroy(): the proto is a separate slab allocation, not a
-    // contiguous factory chain.
-    page.factory.destroyStandalone(self);
+    page.factory.destroy(self);
 }
 
 pub fn acquireRef(self: *HTMLOptionsCollection) void {

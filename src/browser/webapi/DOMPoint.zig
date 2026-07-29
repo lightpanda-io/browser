@@ -18,9 +18,12 @@
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Factory = @import("../Factory.zig");
 const RO = @import("DOMPointReadOnly.zig");
 
 const DOMPoint = @This();
+
+pub const Proto = RO;
 
 _proto: *RO,
 
@@ -29,12 +32,14 @@ pub fn init(x_: ?f64, y_: ?f64, z_: ?f64, w_: ?f64, exec: *const js.Execution) !
 }
 
 pub fn create(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPoint {
-    const proto = try RO.createBare(x, y, z, w, page);
-    errdefer proto.deinit(page);
+    const arena = try page.getArena(.tiny, "DOMPoint");
+    errdefer page.releaseArena(arena);
 
-    const self = try proto._arena.create(DOMPoint);
-    self.* = .{ ._proto = proto };
-    proto._type = .{ .mutable = self };
+    const self = try Factory.chainedWithAllocator(arena, .{
+        RO.buildValue(arena, x, y, z, w),
+        DOMPoint{ ._proto = undefined },
+    });
+    self._proto._type = .{ .mutable = self };
     return self;
 }
 
@@ -48,13 +53,11 @@ pub fn structuredSerialize(self: *const DOMPoint, writer: *js.StructuredWriter) 
 }
 
 pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*DOMPoint {
-    const proto = try RO.structuredDeserialize(reader, page);
-    errdefer proto.deinit(page);
-
-    const self = try proto._arena.create(DOMPoint);
-    self.* = .{ ._proto = proto };
-    proto._type = .{ .mutable = self };
-    return self;
+    const x: f64 = @bitCast(try reader.readUint64());
+    const y: f64 = @bitCast(try reader.readUint64());
+    const z: f64 = @bitCast(try reader.readUint64());
+    const w: f64 = @bitCast(try reader.readUint64());
+    return create(x, y, z, w, page);
 }
 
 // DOMPoint redeclares x/y/z/w as writable (`inherit attribute` in the IDL), so

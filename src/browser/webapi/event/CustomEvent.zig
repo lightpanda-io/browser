@@ -29,6 +29,8 @@ const Allocator = std.mem.Allocator;
 
 const CustomEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _detail: ?js.Value.Global = null,
 _arena: Allocator,

@@ -28,6 +28,8 @@ const collections = @import("collections.zig");
 
 const HTMLDocument = @This();
 
+pub const Proto = Document;
+
 _proto: *Document,
 _document_type: ?*DocumentType = null,
 

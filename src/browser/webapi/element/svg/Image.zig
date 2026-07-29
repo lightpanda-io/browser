@@ -26,6 +26,8 @@ const AnimatedString = @import("../../svg/AnimatedString.zig");
 const Graphics = @import("Graphics.zig");
 
 const Image = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 
 pub fn asElement(self: *Image) *Element {

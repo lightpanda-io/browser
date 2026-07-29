@@ -32,6 +32,8 @@ const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 // htmx) can call addEventListener on it without throwing.
 const XMLHttpRequestUpload = @This();
 
+pub const Proto = XMLHttpRequestEventTarget;
+
 _proto: *XMLHttpRequestEventTarget,
 _xhr: *XMLHttpRequest,
 

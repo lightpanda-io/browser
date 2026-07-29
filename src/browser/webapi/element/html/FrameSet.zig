@@ -11,6 +11,8 @@ const String = lp.String;
 
 const FrameSet = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *FrameSet) *Element {

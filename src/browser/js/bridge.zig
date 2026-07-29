@@ -20,6 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
+const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
 const Caller = @import("Caller.zig");
@@ -108,7 +110,7 @@ pub fn Builder(comptime T: type) type {
                 const Next = PrototypeType(Prototype).?;
                 entry.* = .{
                     .index = JsApiLookup.getId(Next.JsApi),
-                    .offset = @offsetOf(Prototype, "_proto"),
+                    .offset = Factory.protoOffset(Prototype),
                 };
                 Prototype = Next;
             }
@@ -805,10 +807,7 @@ fn prototypeChainLength(comptime T: type) usize {
 
 // Given a Type, gets its prototype Type (if any)
 fn PrototypeType(comptime T: type) ?type {
-    if (!@hasField(T, "_proto")) {
-        return null;
-    }
-    return Struct(std.meta.fieldInfo(T, ._proto).type);
+    return reflect.Proto(T);
 }
 
 fn flattenTypes(comptime Types: []const type) [countFlattenedTypes(Types)]type {
@@ -1305,7 +1304,7 @@ pub const JsApis = blk: {
     break :blk base ++ [_]type{@import("../webapi/WebDriver.zig").JsApi};
 };
 
-// Whether Child is Ancestor or inherits from it, following the _proto chain.
+// Whether Child is Ancestor or inherits from it, following the Proto chain.
 pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
     comptime {
         const target = Ancestor.bridge.type;
@@ -1314,10 +1313,7 @@ pub fn inheritsOrIs(comptime Child: type, comptime Ancestor: type) bool {
             if (T == target) {
                 return true;
             }
-            if (!@hasField(T, "_proto")) {
-                return false;
-            }
-            T = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
+            T = reflect.Proto(T) orelse return false;
         }
     }
 }

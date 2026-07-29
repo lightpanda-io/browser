@@ -25,6 +25,8 @@ const Node = @import("Node.zig");
 
 const DocumentType = @This();
 
+pub const Proto = Node;
+
 _proto: *Node,
 _name: []const u8,
 _public_id: []const u8,

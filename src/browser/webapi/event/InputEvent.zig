@@ -32,6 +32,8 @@ const Allocator = std.mem.Allocator;
 
 const InputEvent = @This();
 
+pub const Proto = UIEvent;
+
 _proto: *UIEvent,
 _data: ?[]const u8,
 _data_transfer: ?*DataTransfer = null,

@@ -85,14 +85,18 @@ pub fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(DOMMatrixReadOnly);
-    self.* = .{
+    self.* = buildValue(arena, m, is_2d);
+    return self;
+}
+
+pub fn buildValue(arena: std.mem.Allocator, m: [16]f64, is_2d: bool) DOMMatrixReadOnly {
+    return .{
         ._rc = .{},
         ._arena = arena,
         ._type = .generic,
         ._m = m,
         ._is_2d = is_2d,
     };
-    return self;
 }
 
 pub fn getState(self: *const DOMMatrixReadOnly) State {

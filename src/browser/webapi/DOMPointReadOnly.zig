@@ -89,7 +89,12 @@ pub fn createBare(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPointReadOnl
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(DOMPointReadOnly);
-    self.* = .{
+    self.* = buildValue(arena, x, y, z, w);
+    return self;
+}
+
+pub fn buildValue(arena: Allocator, x: f64, y: f64, z: f64, w: f64) DOMPointReadOnly {
+    return .{
         ._rc = .{},
         ._arena = arena,
         ._type = .generic,
@@ -98,7 +103,6 @@ pub fn createBare(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPointReadOnl
         ._z = z,
         ._w = w,
     };
-    return self;
 }
 
 pub fn fromPoint(other_: ?DOMPointInit, page: *Page) !*DOMPointReadOnly {

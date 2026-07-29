@@ -1051,26 +1051,18 @@ pub fn constructCustomElement(frame: *Frame, new_target: JS.Function) !*Element 
 }
 
 pub fn createTextNode(frame: *Frame, text: []const u8) !*Node {
-    const cd = try frame._factory.node(CData{
-        ._proto = undefined,
-        ._type = .{ .text = .{
-            ._proto = undefined,
-        } },
+    const cd = try frame._factory.cdataNode(.{
+        ._type = .text,
         ._data = try frame.dupeSSO(text),
-    });
-    cd._type.text._proto = cd;
+    }, CData.Text{ ._proto = undefined });
     return cd.asNode();
 }
 
 pub fn createComment(frame: *Frame, text: []const u8) !*Node {
-    const cd = try frame._factory.node(CData{
-        ._proto = undefined,
-        ._type = .{ .comment = .{
-            ._proto = undefined,
-        } },
+    const cd = try frame._factory.cdataNode(.{
+        ._type = .comment,
         ._data = try frame.dupeSSO(text),
-    });
-    cd._type.comment._proto = cd;
+    }, CData.Comment{ ._proto = undefined });
     return cd.asNode();
 }
 
@@ -1080,23 +1072,10 @@ pub fn createCDATASection(frame: *Frame, data: []const u8) !*Node {
         return error.InvalidCharacterError;
     }
 
-    // First allocate the Text node separately
-    const text_node = try frame._factory.create(CData.Text{
-        ._proto = undefined,
-    });
-
-    // Then create the CData with cdata_section variant
-    const cd = try frame._factory.node(CData{
-        ._proto = undefined,
-        ._type = .{ .cdata_section = .{
-            ._proto = text_node,
-        } },
+    const cd = try frame._factory.cdataNode(.{
+        ._type = .cdata_section,
         ._data = try frame.dupeSSO(data),
-    });
-
-    // Set up the back pointer from Text to CData
-    text_node._proto = cd;
-
+    }, CData.CDATASection{ ._proto = undefined });
     return cd.asNode();
 }
 
@@ -1114,20 +1093,13 @@ pub fn createProcessingInstruction(frame: *Frame, target: []const u8, data: []co
 
     const owned_target = try frame.dupeString(target);
 
-    const pi = try frame._factory.create(CData.ProcessingInstruction{
+    const cd = try frame._factory.cdataNode(.{
+        ._type = .processing_instruction,
+        ._data = try frame.dupeSSO(data),
+    }, CData.ProcessingInstruction{
         ._proto = undefined,
         ._target = owned_target,
     });
-
-    const cd = try frame._factory.node(CData{
-        ._proto = undefined,
-        ._type = .{ .processing_instruction = pi },
-        ._data = try frame.dupeSSO(data),
-    });
-
-    // Set up the back pointer from ProcessingInstruction to CData
-    pi._proto = cd;
-
     return cd.asNode();
 }
 

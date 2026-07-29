@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
 const reflect = @import("../reflect.zig");
 
@@ -42,9 +43,12 @@ pub const Attribute = @import("element/Attribute.zig");
 const DOMStringMap = @import("element/DOMStringMap.zig");
 
 const log = lp.log;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 const String = lp.String;
 
 const Element = @This();
+
+pub const Proto = Node;
 
 pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
@@ -105,9 +109,12 @@ pub const Namespace = enum(u8) {
 };
 
 _type: Type,
-_proto: *Node,
 _namespace: Namespace = .html,
 _attributes: Attribute.List = .{},
+// In debug, set so that we can check that we have a proper contiguous block
+// of memory for the entire chain (and thus, simple pointer arithmetics will
+// work to resolve the proto).
+_proto_canary: if (IS_DEBUG) *Node else void = undefined,
 
 pub const Type = union(enum) {
     html: *Html,
@@ -142,15 +149,15 @@ pub fn as(self: *Element, comptime T: type) *T {
 }
 
 pub fn asNode(self: *Element) *Node {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn asEventTarget(self: *Element) *EventTarget {
-    return self._proto.asEventTarget();
+    return self.asNode().asEventTarget();
 }
 
 pub fn asConstNode(self: *const Element) *const Node {
-    return self._proto;
+    return Factory.protoOf(@constCast(self));
 }
 
 /// TODO: localName and prefix comparison.
@@ -1206,7 +1213,7 @@ pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {
             return el;
         }
 
-        const parent = el._proto._parent orelse break;
+        const parent = el.asNode()._parent orelse break;
 
         if (parent.is(ShadowRoot) != null) {
             break;
@@ -1218,7 +1225,7 @@ pub fn closest(self: *Element, input: []const u8, frame: *Frame) !?*Element {
 }
 
 pub fn parentElement(self: *Element) ?*Element {
-    return self._proto.parentElement();
+    return self.asNode().parentElement();
 }
 
 /// Cache for visibility checks - re-exported from StyleManager for convenience.
@@ -1989,7 +1996,7 @@ pub fn getTag(self: *const Element) Tag {
 }
 
 pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
-    return self._proto.ownerFrame(default);
+    return self.asConstNode().ownerFrame(default);
 }
 
 pub const Tag = enum {

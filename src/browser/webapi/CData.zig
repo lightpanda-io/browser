@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
 
 const Node = @import("Node.zig");
 pub const Text = @import("cdata/Text.zig");
@@ -29,12 +30,60 @@ pub const CDATASection = @import("cdata/CDATASection.zig");
 pub const ProcessingInstruction = @import("cdata/ProcessingInstruction.zig");
 
 const String = lp.String;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const CData = @This();
 
+pub const Proto = Node;
+
 _type: Type,
-_proto: *Node,
 _data: String = .empty,
+// In debug, set so that we can check that we have a proper contiguous block
+// of memory for the entire chain (and thus, simple pointer arithmetics will
+// work to resolve the proto).
+_proto_canary: if (IS_DEBUG) *Node else void = undefined,
+
+// The subtype's struct is not a payload here: it's the member laid out after
+// the CData in the factory chain (see Factory.cdataNode), reachable via
+// `subtype`.
+pub const Type = enum(u8) {
+    text,
+    comment,
+    cdata_section,
+    processing_instruction,
+};
+
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .text => Text,
+        .comment => Comment,
+        .cdata_section => CDATASection,
+        .processing_instruction => ProcessingInstruction,
+    };
+}
+
+fn tagOf(comptime T: type) Type {
+    if (T == Text) return .text;
+    if (T == Comment) return .comment;
+    if (T == CDATASection) return .cdata_section;
+    if (T == ProcessingInstruction) return .processing_instruction;
+    @compileError(@typeName(T) ++ " is not a CData subtype");
+}
+
+pub fn subtype(self: *CData, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, CData);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime IS_DEBUG) {
+        // the arithmetic rides on factory-chain contiguity; the stored
+        // back-pointer doubles as its canary
+        if (comptime T == CDATASection) {
+            std.debug.assert(sub._proto._proto == self);
+        } else {
+            std.debug.assert(sub._proto == self);
+        }
+    }
+    return sub;
+}
 
 /// Count UTF-16 code units in a UTF-8 string.
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
@@ -180,31 +229,15 @@ fn utf16RangeToUtf8(data: []const u8, utf16_start: usize, utf16_end: usize) !str
     return .{ .start = start, .end = i };
 }
 
-pub const Type = union(enum) {
-    text: Text,
-    comment: Comment,
-    // This should be under Text, but that would require storing a _type union
-    // in text, which would add 8 bytes to every text node.
-    cdata_section: CDATASection,
-    processing_instruction: *ProcessingInstruction,
-};
-
 pub fn asNode(self: *CData) *Node {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn is(self: *CData, comptime T: type) ?*T {
-    inline for (@typeInfo(Type).@"union".fields) |f| {
-        if (@field(Type, f.name) == self._type) {
-            if (f.type == T) {
-                return &@field(self._type, f.name);
-            }
-            if (f.type == *T) {
-                return @field(self._type, f.name);
-            }
-        }
+    if (self._type != comptime tagOf(T)) {
+        return null;
     }
-    return null;
+    return self.subtype(T);
 }
 
 pub fn getData(self: *const CData) String {
@@ -295,7 +328,7 @@ pub fn format(self: *const CData, writer: *std.Io.Writer) !void {
         .text => writer.print("<text>{f}</text>", .{self._data}),
         .comment => writer.print("<!-- {f} -->", .{self._data}),
         .cdata_section => writer.print("<![CDATA[{f}]]>", .{self._data}),
-        .processing_instruction => |pi| writer.print("<?{s} {f}?>", .{ pi._target, self._data }),
+        .processing_instruction => writer.print("<?{s} {f}?>", .{ @constCast(self).subtype(ProcessingInstruction)._target, self._data }),
     };
 }
 
@@ -304,13 +337,15 @@ pub fn getLength(self: *const CData) usize {
 }
 
 pub fn isEqualNode(self: *const CData, other: *const CData) bool {
-    if (std.meta.activeTag(self._type) != std.meta.activeTag(other._type)) {
+    if (self._type != other._type) {
         return false;
     }
 
     if (self._type == .processing_instruction) {
         @branchHint(.unlikely);
-        if (std.mem.eql(u8, self._type.processing_instruction._target, other._type.processing_instruction._target) == false) {
+        const self_target = @constCast(self).subtype(ProcessingInstruction)._target;
+        const other_target = @constCast(other).subtype(ProcessingInstruction)._target;
+        if (std.mem.eql(u8, self_target, other_target) == false) {
             return false;
         }
         // if the _targets are equal, we still want to compare the data
@@ -518,8 +553,7 @@ test "WebApi: CData.render" {
         buffer.clearRetainingCapacity();
 
         const cdata = CData{
-            ._type = .{ .text = undefined },
-            ._proto = undefined,
+            ._type = .text,
             ._data = .wrap(test_case.value),
         };
 

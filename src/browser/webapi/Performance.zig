@@ -444,6 +444,8 @@ pub const Entry = struct {
 };
 
 pub const Mark = struct {
+    pub const Proto = Entry;
+
     _proto: *Entry,
     _detail: ?js.Value.Global,
 
@@ -458,17 +460,18 @@ pub const Mark = struct {
         }
 
         const detail = if (maybe_detail) |d| try d.persist() else null;
-        const m = try exec._factory.create(Mark{
-            ._proto = undefined,
-            ._detail = detail,
+        const m = try exec._factory.chained(.{
+            Entry{
+                ._start_time = start_time,
+                ._name = try exec.dupeString(name),
+                ._type = undefined,
+            },
+            Mark{
+                ._proto = undefined,
+                ._detail = detail,
+            },
         });
-
-        const entry = try exec._factory.create(Entry{
-            ._start_time = start_time,
-            ._name = try exec.dupeString(name),
-            ._type = .{ .mark = m },
-        });
-        m._proto = entry;
+        m._proto._type = .{ .mark = m };
         return m;
     }
 
@@ -489,6 +492,8 @@ pub const Mark = struct {
 };
 
 pub const Measure = struct {
+    pub const Proto = Entry;
+
     _proto: *Entry,
     _detail: ?js.Value.Global,
 
@@ -518,18 +523,19 @@ pub const Measure = struct {
         }
 
         const detail = if (maybe_detail) |d| try d.persist() else null;
-        const m = try exec._factory.create(Measure{
-            ._proto = undefined,
-            ._detail = detail,
+        const m = try exec._factory.chained(.{
+            Entry{
+                ._start_time = start_timestamp,
+                ._duration = duration,
+                ._name = try exec.dupeString(name),
+                ._type = undefined,
+            },
+            Measure{
+                ._proto = undefined,
+                ._detail = detail,
+            },
         });
-
-        const entry = try exec._factory.create(Entry{
-            ._start_time = start_timestamp,
-            ._duration = duration,
-            ._name = try exec.dupeString(name),
-            ._type = .{ .measure = m },
-        });
-        m._proto = entry;
+        m._proto._type = .{ .measure = m };
         return m;
     }
 

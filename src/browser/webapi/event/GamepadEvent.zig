@@ -28,6 +28,8 @@ const String = lp.String;
 // https://w3c.github.io/gamepad/#gamepadevent-interface
 const GamepadEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 
 const GamepadEventOptions = struct {};

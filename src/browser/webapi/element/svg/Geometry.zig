@@ -38,6 +38,8 @@ pub const Polygon = @import("Polygon.zig");
 pub const Polyline = @import("Polyline.zig");
 
 const Geometry = @This();
+
+pub const Proto = Graphics;
 _proto: *Graphics,
 _type: Type,
 

@@ -9,6 +9,8 @@ const slotting = @import("../slotting.zig");
 
 const Slot = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 // DOM spec "assigned nodes". Maintained by slotting.assignSlottables; always
 // empty while the slot isn't in a shadow tree.

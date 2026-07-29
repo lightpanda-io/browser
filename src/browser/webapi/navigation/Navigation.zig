@@ -22,6 +22,7 @@ const URL = @import("../URL.zig");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Factory = @import("../../Factory.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -30,6 +31,8 @@ const log = lp.log;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
+
+pub const Proto = EventTarget;
 
 const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationActivation = @import("NavigationActivation.zig");
@@ -55,21 +58,12 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 }
 
 pub fn onRemoveFrame(self: *Navigation) void {
-    self._proto = undefined;
     if (self._on_currententrychange) |cb| cb.release();
     self._on_currententrychange = null;
 
     for (self._entries.items) |entry| {
         if (entry._on_dispose) |cb| cb.release();
         entry._on_dispose = null;
-        entry._proto = undefined;
-    }
-}
-
-pub fn onNewFrame(self: *Navigation, frame: *Frame) !void {
-    self._proto = try frame._factory.standaloneEventTarget(self);
-    for (self._entries.items) |entry| {
-        entry._proto = try frame._factory.standaloneEventTarget(entry);
     }
 }
 
@@ -221,14 +215,17 @@ pub fn pushEntry(
 
     const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
 
-    const entry = try arena.create(NavigationHistoryEntry);
-    entry.* = NavigationHistoryEntry{
-        ._proto = try frame._factory.standaloneEventTarget(entry),
-        ._id = id_str,
-        ._key = id_str,
-        ._url = url,
-        ._state = state,
-    };
+    const entry = try Factory.chainedWithAllocator(arena, .{
+        EventTarget{ ._type = undefined },
+        NavigationHistoryEntry{
+            ._proto = undefined,
+            ._id = id_str,
+            ._key = id_str,
+            ._url = url,
+            ._state = state,
+        },
+    });
+    entry._proto._type = .{ .navigation_history_entry = entry };
 
     // we don't always have a current entry...
     const previous = if (self._entries.items.len > 0) self.getCurrentEntry() else null;
@@ -265,14 +262,17 @@ pub fn replaceEntry(
     self._next_entry_id += 1;
     const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
 
-    const entry = try arena.create(NavigationHistoryEntry);
-    entry.* = NavigationHistoryEntry{
-        ._proto = try frame._factory.standaloneEventTarget(entry),
-        ._id = id_str,
-        ._key = previous._key,
-        ._url = url,
-        ._state = state,
-    };
+    const entry = try Factory.chainedWithAllocator(arena, .{
+        EventTarget{ ._type = undefined },
+        NavigationHistoryEntry{
+            ._proto = undefined,
+            ._id = id_str,
+            ._key = previous._key,
+            ._url = url,
+            ._state = state,
+        },
+    });
+    entry._proto._type = .{ .navigation_history_entry = entry };
 
     const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;

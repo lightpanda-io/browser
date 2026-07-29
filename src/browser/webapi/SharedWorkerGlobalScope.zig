@@ -35,6 +35,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SharedWorkerGlobalScope = @This();
 
+pub const Proto = WorkerGlobalScope;
+
 _proto: *WorkerGlobalScope,
 _arena: Allocator,
 
@@ -69,25 +71,27 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     errdefer session.releaseArena(arena);
 
     const owned_url = try arena.dupeZ(u8, url);
-    const self = try arena.create(SharedWorkerGlobalScope);
-    const proto = try WorkerGlobalScope.init(
+    const frame_id = session.nextFrameId();
+    const loader_id = session.nextLoaderId();
+    const self = try WorkerGlobalScope.init(
         arena,
         owned_url,
-        .{ .shared = self },
+        .shared,
+        SharedWorkerGlobalScope{
+            ._proto = undefined,
+            ._arena = arena,
+            ._url = owned_url,
+            ._name = try arena.dupe(u8, name),
+            ._type = worker_type,
+            ._frame_id = frame_id,
+            ._loader_id = loader_id,
+        },
         worker_type == .module,
-        session.nextFrameId(),
-        session.nextLoaderId(),
+        frame_id,
+        loader_id,
         frame,
     );
-    self.* = .{
-        ._proto = proto,
-        ._arena = arena,
-        ._url = owned_url,
-        ._name = try arena.dupe(u8, name),
-        ._type = worker_type,
-        ._frame_id = proto._frame_id,
-        ._loader_id = proto._loader_id,
-    };
+    const proto = self._proto;
     errdefer proto.deinit();
 
     if (!session.worker_loading_enabled) {

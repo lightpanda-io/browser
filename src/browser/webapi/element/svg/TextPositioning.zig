@@ -27,6 +27,8 @@ pub const Text = @import("Text.zig");
 pub const TSpan = @import("TSpan.zig");
 
 const TextPositioning = @This();
+
+pub const Proto = TextContent;
 _proto: *TextContent,
 _type: Type,
 

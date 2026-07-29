@@ -64,6 +64,8 @@ pub fn registerTypes() []const type {
 
 const Window = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _frame: *Frame,
 _document: *Document,
@@ -342,7 +344,7 @@ pub fn getHistory(_: *Window, frame: *Frame) *History {
 }
 
 pub fn getNavigation(_: *Window, frame: *Frame) *Navigation {
-    return &frame._session.navigation;
+    return frame._session.navigation;
 }
 
 pub fn setNavigation(self: *Window, value: js.Value) void {

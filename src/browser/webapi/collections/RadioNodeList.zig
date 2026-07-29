@@ -29,6 +29,8 @@ const HTMLFormControlsCollection = @import("HTMLFormControlsCollection.zig");
 
 const RadioNodeList = @This();
 
+pub const Proto = NodeList;
+
 _proto: *NodeList,
 _name: []const u8,
 _form_collection: *HTMLFormControlsCollection,

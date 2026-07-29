@@ -25,6 +25,8 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
 const Style = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 _sheet: ?*CSSStyleSheet = null,
 

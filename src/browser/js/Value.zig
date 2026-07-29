@@ -531,12 +531,10 @@ const CloneDelegate = struct {
             // closest cloneable supertype (mirrors TaggedOpaque.fromJS).
             var ptr = @intFromPtr(tao.value);
             for (prototype_chain[1..]) |proto| {
-                ptr += proto.offset;
-                const proto_ptr: **anyopaque = @ptrFromInt(ptr);
-                if (writeCloneable(ctx, proto.index, proto_ptr.*)) |result| {
+                ptr -= proto.offset;
+                if (writeCloneable(ctx, proto.index, @ptrFromInt(ptr))) |result| {
                     return result;
                 }
-                ptr = @intFromPtr(proto_ptr.*);
             }
         }
 

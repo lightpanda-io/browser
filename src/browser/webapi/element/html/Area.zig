@@ -26,6 +26,8 @@ const HtmlElement = @import("../Html.zig");
 
 const Area = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Area) *Element {

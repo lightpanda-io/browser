@@ -40,6 +40,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const WebSocket = @This();
 
+pub const Proto = EventTarget;
+
 _rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *EventTarget,

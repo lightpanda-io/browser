@@ -29,6 +29,8 @@ const String = lp.String;
 
 const Track = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _kind: String,
 _ready_state: ReadyState,

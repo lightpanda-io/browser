@@ -26,6 +26,8 @@ const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 const ProgressEvent = @This();
+
+pub const Proto = Event;
 _proto: *Event,
 _total: usize = 0,
 _loaded: usize = 0,

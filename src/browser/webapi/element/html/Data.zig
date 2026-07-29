@@ -25,6 +25,8 @@ const HtmlElement = @import("../Html.zig");
 
 const Data = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Data) *Element {

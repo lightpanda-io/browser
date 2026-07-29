@@ -30,15 +30,14 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const HTMLFormControlsCollection = @This();
 
+pub const Proto = HTMLCollection;
+
 _proto: *HTMLCollection,
 
-// The refcount lives on the proto, but anchoring the finalizer here lets
-// deinit reclaim this struct's slot along with the proto's.
+// The refcount lives on the proto, but the finalizer anchors here so deinit
+// destroys the whole {HTMLCollection, self} chain from its leaf.
 pub fn deinit(self: *HTMLFormControlsCollection, page: *Page) void {
-    self._proto.deinit(page);
-    // Not destroy(): the proto is a separate slab allocation, not a
-    // contiguous factory chain.
-    page.factory.destroyStandalone(self);
+    page.factory.destroy(self);
 }
 
 pub fn acquireRef(self: *HTMLFormControlsCollection) void {
@@ -97,13 +96,15 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Fr
             count += 1;
 
             if (count == 2) {
-                const radio_node_list = try frame._factory.create(RadioNodeList{
-                    ._proto = undefined,
-                    ._form_collection = self,
-                    ._name = try frame.dupeString(name),
+                const radio_node_list = try frame._factory.chained(.{
+                    NodeList{ ._data = undefined },
+                    RadioNodeList{
+                        ._proto = undefined,
+                        ._form_collection = self,
+                        ._name = try frame.dupeString(name),
+                    },
                 });
-
-                radio_node_list._proto = try frame._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
+                radio_node_list._proto._data = .{ .radio_node_list = radio_node_list };
 
                 // The RadioNodeList outlives this call; its NodeList releases
                 // the ref in deinit.

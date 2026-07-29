@@ -57,6 +57,8 @@ const Allocator = std.mem.Allocator;
 
 const WorkerGlobalScope = @This();
 
+pub const Proto = EventTarget;
+
 _type: Type,
 _frame: *Frame,
 _is_module: bool,
@@ -123,12 +125,13 @@ pub const Type = union(enum) {
 pub fn init(
     arena: Allocator,
     url: [:0]const u8,
-    child: Type,
+    comptime tag: std.meta.Tag(Type),
+    leaf_value: anytype,
     is_module: bool,
     frame_id: u32,
     loader_id: u32,
     frame: *Frame,
-) !*WorkerGlobalScope {
+) !*@TypeOf(leaf_value) {
     const session = frame._session;
 
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
@@ -138,29 +141,36 @@ pub fn init(
     errdefer session.releaseArena(local_arena);
 
     const factory = frame._factory;
-    const self = try factory.eventTargetWithAllocator(arena, WorkerGlobalScope{
-        .url = url,
-        .arena = arena,
-        .origin = frame.origin,
-        .js = undefined,
-        .call_arena = call_arena,
-        .local_arena = local_arena,
-        ._frame = frame,
-        ._page = frame._page,
-        ._session = session,
-        ._identity = .{},
-        ._type = child,
-        ._proto = undefined,
-        ._factory = factory,
-        ._is_module = is_module,
-        ._frame_id = frame_id,
-        ._loader_id = loader_id,
-        ._event_manager = .init(arena),
-        ._script_manager = undefined,
-        ._location = .{ ._url = url },
-        ._performance = .init(),
-        ._http_owner = undefined,
+    const leaf = try Factory.chainedWithAllocator(arena, .{
+        EventTarget{ ._type = undefined },
+        WorkerGlobalScope{
+            .url = url,
+            .arena = arena,
+            .origin = frame.origin,
+            .js = undefined,
+            .call_arena = call_arena,
+            .local_arena = local_arena,
+            ._frame = frame,
+            ._page = frame._page,
+            ._session = session,
+            ._identity = .{},
+            ._type = undefined,
+            ._proto = undefined,
+            ._factory = factory,
+            ._is_module = is_module,
+            ._frame_id = frame_id,
+            ._loader_id = loader_id,
+            ._event_manager = .init(arena),
+            ._script_manager = undefined,
+            ._location = .{ ._url = url },
+            ._performance = .init(),
+            ._http_owner = undefined,
+        },
+        leaf_value,
     });
+    const self = leaf._proto;
+    self._type = @unionInit(Type, @tagName(tag), leaf);
+    self._proto._type = .{ .worker_global_scope = self };
 
     self._http_owner = .init(&frame._page.blob_urls, &self.origin);
 
@@ -183,7 +193,7 @@ pub fn init(
     // features like BroadcastChannel can reach across the page/worker boundary.
     try self.js.setOrigin(self.origin);
 
-    return self;
+    return leaf;
 }
 
 pub fn deinit(self: *WorkerGlobalScope) void {

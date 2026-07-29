@@ -22,6 +22,8 @@ const string = @import("../../string.zig");
 
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const Factory = @import("../Factory.zig");
+const reflect = @import("../reflect.zig");
 
 const js = @import("js.zig");
 const Local = @import("Local.zig");
@@ -547,15 +549,14 @@ fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
     };
 }
 
-// Upcast a Node-descendant instance to *Node by walking the _proto chain.
+// Upcast a Node-descendant instance to *Node by walking the Proto chain.
 // Not every node type defines an asNode() helper (e.g. Comment, Text), but
 // inheritsOrIs guarantees Node is in the chain
 fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
     if (T == @import("../webapi/Node.zig")) {
         return instance;
     }
-    const Proto = @typeInfo(std.meta.fieldInfo(T, ._proto).type).pointer.child;
-    return protoNode(Proto, instance._proto);
+    return protoNode(reflect.Proto(T).?, Factory.protoOf(instance));
 }
 
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {

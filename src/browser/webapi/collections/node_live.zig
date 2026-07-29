@@ -400,23 +400,29 @@ pub fn NodeLive(comptime mode: Mode) type {
         const NodeList = @import("NodeList.zig");
 
         pub fn runtimeGenericWrap(self: Self, frame: *Frame) !if (mode == .name) *NodeList else *HTMLCollection {
-            const collection = switch (mode) {
-                .name => return frame._factory.create(NodeList{ ._data = .{ .name = self } }),
-                .tag => HTMLCollection{ ._data = .{ .tag = self } },
-                .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
-                .tag_name_ns => HTMLCollection{ ._data = .{ .tag_name_ns = self } },
-                .class_name => HTMLCollection{ ._data = .{ .class_name = self } },
-                .all_elements => HTMLCollection{ ._data = .{ .all_elements = self } },
-                .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
-                .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
-                .cells => HTMLCollection{ ._data = .{ .cells = self } },
-                .select_options => HTMLCollection{ ._data = .{ .select_options = self } },
-                .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
-                .links => HTMLCollection{ ._data = .{ .links = self } },
-                .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
-                .form => HTMLCollection{ ._data = .{ .form = self } },
+            if (comptime mode == .name) {
+                return frame._factory.create(NodeList{ ._data = .{ .name = self } });
+            }
+            return frame._factory.create(self.htmlCollectionValue());
+        }
+
+        pub fn htmlCollectionValue(self: Self) HTMLCollection {
+            return switch (mode) {
+                .name => @compileError("name mode wraps as a NodeList"),
+                .tag => .{ ._data = .{ .tag = self } },
+                .tag_name => .{ ._data = .{ .tag_name = self } },
+                .tag_name_ns => .{ ._data = .{ .tag_name_ns = self } },
+                .class_name => .{ ._data = .{ .class_name = self } },
+                .all_elements => .{ ._data = .{ .all_elements = self } },
+                .child_elements => .{ ._data = .{ .child_elements = self } },
+                .child_tag => .{ ._data = .{ .child_tag = self } },
+                .cells => .{ ._data = .{ .cells = self } },
+                .select_options => .{ ._data = .{ .select_options = self } },
+                .selected_options => .{ ._data = .{ .selected_options = self } },
+                .links => .{ ._data = .{ .links = self } },
+                .anchors => .{ ._data = .{ .anchors = self } },
+                .form => .{ ._data = .{ .form = self } },
             };
-            return frame._factory.create(collection);
         }
     };
 }

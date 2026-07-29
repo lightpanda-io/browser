@@ -41,6 +41,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const IDBTransaction = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _exec: *Execution,
 _db: *IDBDatabase,

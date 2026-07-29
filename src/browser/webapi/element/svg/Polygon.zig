@@ -26,6 +26,8 @@ const Geometry = @import("Geometry.zig");
 const PointList = @import("../../svg/PointList.zig");
 
 const Polygon = @This();
+
+pub const Proto = Geometry;
 _proto: *Geometry,
 
 pub fn asElement(self: *Polygon) *Element {

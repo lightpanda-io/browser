@@ -34,6 +34,8 @@ const String = lp.String;
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore
 const CookieStore = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _on_change: ?js.Function.Global = null,
 _exec: ?*Execution = null,

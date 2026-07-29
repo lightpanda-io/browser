@@ -6,15 +6,18 @@ const CSSStyleProperties = @import("CSSStyleProperties.zig");
 
 const CSSStyleRule = @This();
 
+pub const Proto = CSSRule;
+
 _proto: *CSSRule,
 _selector_text: []const u8 = "",
 _style: ?*CSSStyleProperties = null,
 
 pub fn init(frame: *Frame) !*CSSStyleRule {
-    const style_rule = try frame._factory.create(CSSStyleRule{
-        ._proto = undefined,
+    const style_rule = try frame._factory.chained(.{
+        CSSRule{ ._type = undefined },
+        CSSStyleRule{ ._proto = undefined },
     });
-    style_rule._proto = try CSSRule.init(.{ .style = style_rule }, frame);
+    style_rule._proto._type = .{ .style = style_rule };
     return style_rule;
 }
 

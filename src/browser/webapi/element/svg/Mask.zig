@@ -28,6 +28,8 @@ const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 const Svg = @import("../Svg.zig");
 
 const Mask = @This();
+
+pub const Proto = Svg;
 _proto: *Svg,
 
 pub fn asElement(self: *Mask) *Element {

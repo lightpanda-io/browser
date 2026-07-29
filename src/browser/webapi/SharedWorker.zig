@@ -42,6 +42,8 @@ const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
 
 const SharedWorker = @This();
 
+pub const Proto = EventTarget;
+
 _proto: *EventTarget,
 _port: *MessagePort,
 _on_error: ?js.Function.Global = null,

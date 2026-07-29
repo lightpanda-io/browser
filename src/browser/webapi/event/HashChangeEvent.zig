@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://developer.mozilla.org/en-US/docs/Web/API/HashChangeEvent
 const HashChangeEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _old_url: []const u8,
 _new_url: []const u8,

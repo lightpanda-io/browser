@@ -26,6 +26,8 @@ const HtmlElement = @import("../Html.zig");
 
 const Script = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _src: []const u8 = "",
 _executed: bool = false,

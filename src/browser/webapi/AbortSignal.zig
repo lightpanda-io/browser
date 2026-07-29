@@ -31,6 +31,8 @@ const Execution = js.Execution;
 
 const AbortSignal = @This();
 
+pub const Proto = EventTarget;
+
 const Dependend = union(enum) {
     signal: *AbortSignal,
     model_context_tool: *ModelContextTool,

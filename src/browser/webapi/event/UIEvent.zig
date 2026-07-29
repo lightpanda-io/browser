@@ -28,6 +28,8 @@ const String = lp.String;
 
 const UIEvent = @This();
 
+pub const Proto = Event;
+
 _type: Type,
 _proto: *Event,
 _detail: u32 = 0,

@@ -31,6 +31,8 @@ const ValidityState = @import("ValidityState.zig");
 
 const TextArea = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _value: ?[]const u8 = null,
 

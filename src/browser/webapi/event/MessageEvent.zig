@@ -32,6 +32,8 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const MessageEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _data: ?Data = null,
 _origin: []const u8 = "",

@@ -5,6 +5,8 @@ const HtmlElement = @import("../Html.zig");
 
 const Map = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Map) *Element {

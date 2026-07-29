@@ -30,6 +30,8 @@ const Allocator = std.mem.Allocator;
 // https://developer.mozilla.org/en-US/docs/Web/API/PopStateEvent
 const PopStateEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _state: ?[]const u8,
 

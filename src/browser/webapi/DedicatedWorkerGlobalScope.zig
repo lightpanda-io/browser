@@ -37,6 +37,8 @@ const Allocator = std.mem.Allocator;
 
 const DedicatedWorkerGlobalScope = @This();
 
+pub const Proto = WorkerGlobalScope;
+
 _proto: *WorkerGlobalScope,
 _worker: *Worker,
 _closed: bool = false,
@@ -51,21 +53,19 @@ _on_messageerror: ?js.Function.Global = null,
 _pending_messages: std.ArrayList(?js.Value.Global) = .empty,
 
 pub fn init(worker: *Worker, url: [:0]const u8) !*DedicatedWorkerGlobalScope {
-    const self = try worker._arena.create(DedicatedWorkerGlobalScope);
-    const proto = try WorkerGlobalScope.init(
+    return WorkerGlobalScope.init(
         worker._arena,
         url,
-        .{ .dedicated = self },
+        .dedicated,
+        DedicatedWorkerGlobalScope{
+            ._worker = worker,
+            ._proto = undefined,
+        },
         worker._type == .module,
         worker._frame_id,
         worker._loader_id,
         worker._frame,
     );
-    self.* = .{
-        ._worker = worker,
-        ._proto = proto,
-    };
-    return self;
 }
 
 pub fn deinit(self: *DedicatedWorkerGlobalScope) void {

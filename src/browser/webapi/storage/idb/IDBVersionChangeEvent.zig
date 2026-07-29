@@ -29,6 +29,8 @@ const Execution = js.Execution;
 
 const IDBVersionChangeEvent = @This();
 
+pub const Proto = Event;
+
 _proto: *Event,
 _old_version: u64,
 _new_version: ?u64,

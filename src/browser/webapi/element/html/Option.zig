@@ -30,6 +30,8 @@ const String = lp.String;
 
 const Option = @This();
 
+pub const Proto = HtmlElement;
+
 _proto: *HtmlElement,
 _value: ?[]const u8 = null,
 _selected: bool = false,

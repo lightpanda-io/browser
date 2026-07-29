@@ -27,6 +27,8 @@ const AnimatedLength = @import("../../svg/AnimatedLength.zig");
 const GradientElement = @import("GradientElement.zig");
 
 const RadialGradient = @This();
+
+pub const Proto = GradientElement;
 _proto: *GradientElement,
 
 pub fn asElement(self: *RadialGradient) *Element {

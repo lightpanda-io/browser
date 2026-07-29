@@ -40,6 +40,8 @@ pub const Stop = @import("svg/Stop.zig");
 const String = lp.String;
 
 const Svg = @This();
+
+pub const Proto = Element;
 _type: Type,
 _proto: *Element,
 _tag_name: String, // Svg elements are case-preserving

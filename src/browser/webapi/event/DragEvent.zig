@@ -30,6 +30,8 @@ const String = lp.String;
 
 const DragEvent = @This();
 
+pub const Proto = MouseEvent;
+
 _proto: *MouseEvent,
 _data_transfer: ?*DataTransfer,
 

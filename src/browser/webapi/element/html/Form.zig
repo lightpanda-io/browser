@@ -31,6 +31,8 @@ pub const Select = @import("Select.zig");
 pub const TextArea = @import("TextArea.zig");
 
 const Form = @This();
+
+pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 // Prevents submission of the form while we're in the process of submitting
@@ -96,11 +98,12 @@ pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
 
 pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCollection {
     const node_live = self.iterator(frame);
-    const html_collection = try node_live.runtimeGenericWrap(frame);
-
-    return frame._factory.create(collections.HTMLFormControlsCollection{
-        ._proto = html_collection,
+    const elements = try frame._factory.chained(.{
+        node_live.htmlCollectionValue(),
+        collections.HTMLFormControlsCollection{ ._proto = undefined },
     });
+    elements._proto._chained = .form_controls;
+    return elements;
 }
 
 pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
