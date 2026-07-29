@@ -148,7 +148,10 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
         .{ verify_url, dc.user_code },
     );
 
-    const poll_body = try std.fmt.allocPrint(a, "{{\"device_auth_id\":\"{s}\",\"user_code\":\"{s}\"}}", .{ dc.device_auth_id, dc.user_code });
+    const poll_body = try std.fmt.allocPrint(a, "{f}", .{std.json.fmt(
+        .{ .device_auth_id = dc.device_auth_id, .user_code = dc.user_code },
+        .{},
+    )});
     const dt: DeviceToken = while (true) {
         // The REPL's Ctrl-C only fires the interrupt (it never kills the
         // process), so the wait must poll it.
