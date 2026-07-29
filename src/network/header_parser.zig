@@ -24,7 +24,7 @@ const block_size = @sizeOf(usize);
 
 /// Whether a byte is allowed in a header key; controls (including space),
 /// the `:` delimiter and DEL are excluded.
-inline fn isHeaderKeyByte(byte: u8) bool {
+fn isHeaderKeyByte(byte: u8) bool {
     return switch (byte) {
         0...' ', ':', 0x7f => false,
         else => true,
@@ -53,7 +53,7 @@ fn broadcast(byte: u8) usize {
     return @as(usize, @intCast(byte)) * 0x01_01_01_01_01_01_01_01;
 }
 
-inline fn matchHeaderKey(cursor: *Cursor) void {
+fn matchHeaderKey(cursor: *Cursor) void {
     // Pick a good default for relatively small strings.
     const vec_size = 16;
     const use_vectors = comptime if (std.simd.suggestVectorLength(u8)) |recommended|
@@ -97,7 +97,7 @@ inline fn matchHeaderKey(cursor: *Cursor) void {
     }
 }
 
-inline fn matchHeaderValue(cursor: *Cursor) void {
+fn matchHeaderValue(cursor: *Cursor) void {
     const maybe_vec_size: ?usize = comptime blk: {
         if (std.simd.suggestVectorLength(u8)) |recommended| {
             break :blk if (recommended >= 64) 32 else recommended;
@@ -303,43 +303,43 @@ pub const Cursor = struct {
     start: [*]const u8,
 
     /// Returns the current position.
-    pub inline fn current(cursor: *const Cursor) [*]const u8 {
+    pub fn current(cursor: *const Cursor) [*]const u8 {
         return cursor.idx;
     }
 
     /// Returns the current character.
-    pub inline fn char(cursor: *const Cursor) u8 {
+    pub fn char(cursor: *const Cursor) u8 {
         return cursor.idx[0];
     }
 
     /// Advances the position of the cursor by given value.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub inline fn advance(cursor: *Cursor, by: usize) void {
+    pub fn advance(cursor: *Cursor, by: usize) void {
         cursor.idx += by;
     }
 
     /// Checks if buffer has `len` length of characters.
     /// `(cursor.end - cursor.idx >= len)`
-    pub inline fn hasLength(cursor: *const Cursor, len: usize) bool {
+    pub fn hasLength(cursor: *const Cursor, len: usize) bool {
         return cursor.end - cursor.idx >= len;
     }
 
     /// Loads a `@Vector(len, u8)` from the current position of cursor without advancing.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub inline fn asVector(cursor: *const Cursor, len: comptime_int) @Vector(len, u8) {
+    pub fn asVector(cursor: *const Cursor, len: comptime_int) @Vector(len, u8) {
         return cursor.idx[0..len].*;
     }
 
     /// Creates an integer from the current position of the cursor without advancing.
     /// SAFETY: This function doesn't check if out of bounds reachable.
     /// SAFETY: T must be an integer with bit size >= @bitSizeOf(u8).
-    pub inline fn asInteger(cursor: *const Cursor, comptime T: type) T {
+    pub fn asInteger(cursor: *const Cursor, comptime T: type) T {
         return @bitCast(cursor.idx[0 .. @bitSizeOf(T) / @bitSizeOf(u8)].*);
     }
 
     /// Peek the current and the next but don't advance.
     /// SAFETY: This function doesn't check if out of bounds reachable.
-    pub inline fn peek2(cursor: *const Cursor, c0: u8, c1: u8) bool {
+    pub fn peek2(cursor: *const Cursor, c0: u8, c1: u8) bool {
         return cursor.asInteger(u16) == @as(u16, @bitCast([2]u8{ c0, c1 }));
     }
 
@@ -349,12 +349,12 @@ pub const Cursor = struct {
     }
 
     /// Returns true if `Cursor` reached end.
-    pub inline fn reachedEnd(cursor: *const Cursor) bool {
+    pub fn reachedEnd(cursor: *const Cursor) bool {
         return cursor.idx == cursor.end;
     }
 
     /// Returns the unread portion of the buffer.
-    pub inline fn remaining(cursor: *const Cursor) []const u8 {
+    pub fn remaining(cursor: *const Cursor) []const u8 {
         return cursor.idx[0 .. cursor.end - cursor.idx];
     }
 };
