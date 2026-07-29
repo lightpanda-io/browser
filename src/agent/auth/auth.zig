@@ -133,8 +133,8 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
         .account_id = tokens.account_id,
     });
 
-    // Secrets file: owner read/write only, from the moment it exists. Written
-    // to a temp file and renamed so a failed write can't corrupt the store.
+    // Secrets file: owner-only perms; temp+rename so a failed write can't
+    // corrupt the store.
     var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = .fromMode(0o600), .replace = true });
     defer af.deinit(lp.io);
     var buf: [1024]u8 = undefined;
@@ -228,13 +228,14 @@ pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
-/// Is a usable (present, not hard-expired) stored token available for `provider`?
-/// Lets the picker offer the subscription without an API-key env var.
+/// Is a stored credential available for `provider` — unexpired, or refreshable
+/// (`ensureFresh` runs before the first request)? Lets the picker offer the
+/// subscription without an API-key env var.
 pub fn subscriptionAvailable(provider: Config.AiProvider) bool {
     const desc = descriptorFor(provider) orelse return false;
     const tokens = (storeLoad(std.heap.page_allocator, desc.storeKey()) catch return false) orelse return false;
     defer tokens.deinit(std.heap.page_allocator);
-    return tokens.expires_at_ms > nowMs();
+    return tokens.refresh_token.len > 0 or tokens.expires_at_ms > nowMs();
 }
 
 test "TokenSet dup/deinit round-trips and is leak-free" {

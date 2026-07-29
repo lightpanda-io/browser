@@ -77,8 +77,8 @@ fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []cons
 /// Model-id keys of `catalog[provider_id].models`, filtered to tool-call-capable
 /// models (the agent needs tools; this also drops embedding/image entries).
 /// `ignore_unknown_fields` skips the rest of the metadata, so no Value tree is
-/// built for the multi-MB payload, but the parsed id map accumulates in `arena`
-/// until the caller deinits it. The ids may alias `catalog`.
+/// built for the multi-MB payload, but the parsed id map accumulates in
+/// `arena`. The ids may alias `catalog`.
 fn parseProviderModels(arena: std.mem.Allocator, catalog: []const u8, provider_id: []const u8) ![]const []const u8 {
     const Model = struct { tool_call: bool = false };
     const Provider = struct { models: std.json.ArrayHashMap(Model) = .{} };
