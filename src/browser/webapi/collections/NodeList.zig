@@ -75,7 +75,7 @@ pub fn getAtIndex(self: *NodeList, index: usize, frame: *Frame) !?*Node {
     return switch (self._data) {
         .child_nodes => |impl| impl.getAtIndex(index, frame),
         .selector_list => |impl| impl.getAtIndex(index),
-        .radio_node_list => |impl| impl.getAtIndex(index, frame),
+        .radio_node_list => |impl| impl.getAtIndex(index),
         .name => |*impl| if (impl.getAtIndex(index, frame)) |el| el.asNode() else null,
     };
 }

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=box>
+  <span class=x>0</span>
+  <script>
+    // a collection built mid-parse, whose subtree keeps growing afterwards
+    window.parsed_early = document.getElementById('box').getElementsByClassName('x');
+    window.parsed_early_first = parsed_early[0].textContent;
+    window.parsed_early_oob = parsed_early[9];
+  </script>
+  <span class=x>1</span>
+  <span class=x>2</span>
+</div>
+
+<script id=ascending>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('2', list[2].textContent);
+    testing.expectEqual(undefined, list[3]);
+  }
+</script>
+
+<script id=repeated_index>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('2', list[2].textContent);
+    testing.expectEqual('2', list[2].textContent);
+  }
+</script>
+
+<script id=descending>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('2', list[2].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('0', list[0].textContent);
+  }
+</script>
+
+<script id=out_of_range_then_in_range>
+  {
+    // an out of range read walks the collection dry; the cursor has to recover
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual(undefined, list[99]);
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual(undefined, list[99]);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('2', list[2].textContent);
+
+    const skipping = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('2', skipping[2].textContent);
+    testing.expectEqual(undefined, skipping[3]);
+    testing.expectEqual('0', skipping[0].textContent);
+  }
+</script>
+
+<script id=interleaved_length_and_index>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual(3, list.length);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual(3, list.length);
+    testing.expectEqual('2', list[2].textContent);
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual(3, list.length);
+  }
+</script>
+
+<script id=grown_during_parse>
+  {
+    testing.expectEqual('0', parsed_early_first);
+    testing.expectEqual(undefined, parsed_early_oob);
+    testing.expectEqual(3, parsed_early.length);
+    testing.expectEqual('0', parsed_early[0].textContent);
+    testing.expectEqual('1', parsed_early[1].textContent);
+    testing.expectEqual('2', parsed_early[2].textContent);
+  }
+</script>
+
+<script id=invalidated_by_removal>
+  {
+    const box = document.getElementById('box');
+    const list = box.getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('1', list[1].textContent);
+
+    // drop an element the cursor has already walked past
+    const first = list[0];
+    first.remove();
+    testing.expectEqual(2, list.length);
+    testing.expectEqual('1', list[0].textContent);
+    testing.expectEqual('2', list[1].textContent);
+    testing.expectEqual(undefined, list[2]);
+
+    box.insertBefore(first, list[0]);
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('2', list[2].textContent);
+  }
+</script>
+
+<script id=invalidated_by_insert_before_cursor>
+  {
+    const box = document.getElementById('box');
+    const list = box.getElementsByClassName('x');
+    testing.expectEqual('1', list[1].textContent);
+
+    const extra = document.createElement('span');
+    extra.className = 'x';
+    extra.textContent = 'new';
+    box.insertBefore(extra, box.firstElementChild);
+
+    testing.expectEqual('new', list[0].textContent);
+    testing.expectEqual('0', list[1].textContent);
+    testing.expectEqual('1', list[2].textContent);
+    testing.expectEqual('2', list[3].textContent);
+    extra.remove();
+  }
+</script>
+
+<script id=invalidated_by_attribute>
+  {
+    const box = document.getElementById('box');
+    const list = box.getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+
+    // the class attribute decides membership, so this shrinks the collection
+    const second = list[1];
+    second.className = 'y';
+    testing.expectEqual(2, list.length);
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('2', list[1].textContent);
+
+    second.className = 'x';
+    testing.expectEqual(3, list.length);
+  }
+</script>
+
+<script id=iterator_then_index>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    const acc = [];
+    for (const el of list) acc.push(el.textContent);
+    testing.expectEqual(['0', '1', '2'], acc);
+
+    // the for..of walks a clone, so the indexed cursor is untouched
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual('1', list[1].textContent);
+  }
+</script>
+
+<script id=named_lookup_then_index>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual(null, list.namedItem('nope'));
+    testing.expectEqual('1', list[1].textContent);
+    testing.expectEqual('1', list[1].textContent);
+  }
+</script>
+
+<script id=array_materialization>
+  {
+    const list = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual(['0', '1', '2'], Array.from(list).map(e => e.textContent));
+    testing.expectEqual(['0', '1', '2'], Array.prototype.slice.call(list).map(e => e.textContent));
+    testing.expectEqual(['0', '1', '2'], Array.prototype.map.call(list, e => e.textContent));
+  }
+</script>
+
+<script id=independent_cursors>
+  {
+    // two collections over the same root keep separate cursors
+    const a = document.getElementById('box').getElementsByClassName('x');
+    const b = document.getElementById('box').getElementsByClassName('x');
+    testing.expectEqual('0', a[0].textContent);
+    testing.expectEqual('2', b[2].textContent);
+    testing.expectEqual('1', a[1].textContent);
+    testing.expectEqual('0', b[0].textContent);
+  }
+</script>
+
+<select id=sel>
+  <option value=a>A</option>
+  <optgroup><option value=b>B</option></optgroup>
+  <option value=c selected>C</option>
+</select>
+<script id=options_collection>
+  {
+    const opts = document.getElementById('sel').options;
+    testing.expectEqual(3, opts.length);
+    testing.expectEqual('a', opts[0].value);
+    testing.expectEqual('b', opts[1].value);
+    testing.expectEqual('c', opts[2].value);
+    testing.expectEqual('c', opts[2].value);
+    testing.expectEqual('a', opts[0].value);
+
+    const selected = document.getElementById('sel').selectedOptions;
+    testing.expectEqual(1, selected.length);
+    testing.expectEqual('c', selected[0].value);
+    testing.expectEqual('c', selected[0].value);
+  }
+</script>
+
+<form id=f>
+  <input name=one>
+  <input name=two>
+  <input name=three>
+</form>
+<script id=form_controls>
+  {
+    const els = document.getElementById('f').elements;
+    testing.expectEqual(3, els.length);
+    testing.expectEqual('one', els[0].name);
+    testing.expectEqual('two', els[1].name);
+    testing.expectEqual('two', els[1].name);
+    testing.expectEqual('three', els[2].name);
+
+    // namedItem walks a clone, so it must not disturb the indexed cursor
+    testing.expectEqual('two', els.namedItem('two').name);
+    testing.expectEqual('three', els[2].name);
+    testing.expectEqual('one', els[0].name);
+  }
+</script>
+
+<form id=radios>
+  <input type=radio name=r value=1>
+  <input type=radio name=r value=2 checked>
+  <input type=radio name=r value=3>
+  <input name=other>
+</form>
+<script id=radio_node_list>
+  {
+    const form = document.getElementById('radios');
+    const r = form.elements.namedItem('r');
+    testing.expectEqual(3, r.length);
+    testing.expectEqual('1', r[0].value);
+    testing.expectEqual('2', r[1].value);
+    testing.expectEqual('2', r[1].value);
+    testing.expectEqual('3', r[2].value);
+    testing.expectEqual(undefined, r[3]);
+    testing.expectEqual('2', r.value);
+
+    // indexing the radio list must not disturb the form collection's cursor
+    testing.expectEqual('other', form.elements[3].name);
+    testing.expectEqual('1', r[0].value);
+    testing.expectEqual('other', form.elements[3].name);
+  }
+</script>
+
+<script id=get_elements_by_name>
+  {
+    const nl = document.getElementsByName('one');
+    testing.expectEqual(1, nl.length);
+    testing.expectEqual('one', nl[0].name);
+    testing.expectEqual('one', nl[0].name);
+    testing.expectEqual(undefined, nl[1]);
+  }
+</script>
+
+<script id=child_nodes>
+  {
+    const kids = document.getElementById('box').childNodes;
+    const len = kids.length;
+    testing.expectEqual(true, len > 3);
+    testing.expectEqual(kids[1], kids[1]);
+    testing.expectEqual(kids[0], kids[0]);
+    const acc = [];
+    for (let i = 0; i < len; i++) acc.push(kids[i]);
+    testing.expectEqual(len, acc.length);
+    testing.expectEqual(undefined, kids[len]);
+  }
+</script>

@@ -31,16 +31,18 @@
     testing.expectEqual('P', document.all.third.tagName);
     testing.expectEqual('Third', document.all.third.textContent);
 
-    testing.expectEqual('SPAN', document.all.second.tagName);
-    testing.expectEqual('Second', document.all.second.textContent);
+    // only "all"-named elements are exposed by their name attribute, so the
+    // anchor is and the span isn't
     testing.expectEqual('A', document.all.link.tagName);
+    testing.expectEqual(undefined, document.all.second);
 
     testing.expectEqual('SPAN', document.all.item(5).tagName);
     testing.expectEqual(null, document.all.item(999));
     testing.expectEqual(null, document.all.item(-1));
 
     testing.expectEqual('DIV', document.all.namedItem('first').tagName);
-    testing.expectEqual('SPAN', document.all.namedItem('second').tagName);
+    testing.expectEqual('A', document.all.namedItem('link').tagName);
+    testing.expectEqual(null, document.all.namedItem('second'));
     testing.expectEqual(null, document.all.namedItem('nonexistent'));
 
     // Test callable functionality: document.all(index) and document.all(name)
@@ -49,8 +51,7 @@
     testing.expectEqual('DIV', document.all(4).tagName);
     testing.expectEqual('DIV', document.all('first').tagName);
     testing.expectEqual('First', document.all('first').textContent);
-    testing.expectEqual('SPAN', document.all('second').tagName);
-    testing.expectEqual('Second', document.all('second').textContent);
+    testing.expectEqual(undefined, document.all('second'));
     testing.expectEqual('P', document.all('third').tagName);
     testing.expectEqual(undefined, document.all(999));
     testing.expectEqual(undefined, document.all('nonexistent'));
