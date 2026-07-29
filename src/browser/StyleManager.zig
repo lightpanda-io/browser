@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 
+const units = @import("css/units.zig");
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
 const Element = @import("webapi/Element.zig");
@@ -1212,6 +1213,56 @@ fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
     const property = getInlineStyleProperty(el, property_name, self.frame) orelse return null;
     return property._value.str();
+}
+
+/// Bounds computedFontSize's ancestor recursion (the parent walk and
+/// `inherit`/relative-unit chains share it).
+const MAX_FONT_ANCESTOR_DEPTH = 32;
+
+/// Computed font-size in CSS pixels. We do what we can, namely inline styles
+/// font-related attributes, up the parent chain.
+pub fn computedFontSize(self: *StyleManager, element: ?*Element) f64 {
+    return self.computedFontSizeAt(element, 0);
+}
+
+fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
+    if (depth >= MAX_FONT_ANCESTOR_DEPTH) {
+        return 16;
+    }
+    const current = element orelse return 16;
+    const parent = current.parentElement();
+
+    if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
+        if (self.parseFontSize(raw, parent, depth + 1)) |size| {
+            return size;
+        }
+    }
+    if (current.getAttributeSafe(comptime .wrap("font-size"))) |raw| {
+        if (self.parseFontSize(raw, parent, depth + 1)) |size| {
+            return size;
+        }
+    }
+    return self.computedFontSizeAt(parent, depth + 1);
+}
+
+fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth: u8) ?f64 {
+    const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) {
+        return self.computedFontSizeAt(parent, depth);
+    }
+    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "medium")) {
+        return 16;
+    }
+
+    const parsed = units.parse(value) catch return null;
+    const factor = units.absoluteLengthFactor(parsed.unit) orelse switch (parsed.unit) {
+        .percentage => self.computedFontSizeAt(parent, depth) / 100.0,
+        .em => self.computedFontSizeAt(parent, depth),
+        .ex => self.computedFontSizeAt(parent, depth) / 2.0,
+        else => return null,
+    };
+    const size = parsed.value * factor;
+    return if (size >= 0 and std.math.isFinite(size)) size else null;
 }
 
 const testing = @import("../testing.zig");
