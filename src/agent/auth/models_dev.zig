@@ -40,7 +40,7 @@ pub fn modelIds(arena: std.mem.Allocator, provider_id: []const u8, app_dir: ?[]c
     }
     const catalog = fetch(arena) catch return &.{};
     const ids = parseProviderModels(arena, catalog, provider_id) catch return &.{};
-    if (app_dir) |dir| writeCache(dir, provider_id, ids) catch {};
+    if (app_dir) |dir| writeCache(arena, dir, provider_id, ids) catch {};
     return ids;
 }
 
@@ -63,15 +63,15 @@ fn readCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const
     return parsed.ids;
 }
 
-fn writeCache(app_dir: []const u8, provider_id: []const u8, ids: []const []const u8) !void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const path = try cachePath(a, app_dir, provider_id);
-
-    var buf: std.Io.Writer.Allocating = .init(a);
-    try std.json.Stringify.value(Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .{}, &buf.writer);
-    try std.Io.Dir.cwd().writeFile(lp.io, .{ .sub_path = path, .data = buf.written() });
+fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8, ids: []const []const u8) !void {
+    const path = try cachePath(arena, app_dir, provider_id);
+    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .replace = true });
+    defer af.deinit(lp.io);
+    var buf: [1024]u8 = undefined;
+    var w = af.file.writer(lp.io, &buf);
+    try std.json.Stringify.value(Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .{}, &w.interface);
+    try w.end();
+    try af.replace(lp.io);
 }
 
 /// Model-id keys of `catalog[provider_id].models`, filtered to tool-call-capable

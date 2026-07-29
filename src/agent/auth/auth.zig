@@ -133,13 +133,15 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
         .account_id = tokens.account_id,
     });
 
-    // Secrets file: owner read/write only, from the moment it exists.
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .permissions = .fromMode(0o600) });
-    defer file.close(lp.io);
+    // Secrets file: owner read/write only, from the moment it exists. Written
+    // to a temp file and renamed so a failed write can't corrupt the store.
+    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = .fromMode(0o600), .replace = true });
+    defer af.deinit(lp.io);
     var buf: [1024]u8 = undefined;
-    var w = file.writer(lp.io, &buf);
+    var w = af.file.writer(lp.io, &buf);
     try std.json.Stringify.value(map, .{}, &w.interface);
     try w.end();
+    try af.replace(lp.io);
 }
 
 fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void {
@@ -147,12 +149,13 @@ fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void
     const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return;
     var parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch return;
     _ = parsed.map.swapRemove(id);
-    const file = std.Io.Dir.cwd().createFile(lp.io, path, .{ .permissions = .fromMode(0o600) }) catch return;
-    defer file.close(lp.io);
+    var af = std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = .fromMode(0o600), .replace = true }) catch return;
+    defer af.deinit(lp.io);
     var buf: [1024]u8 = undefined;
-    var w = file.writer(lp.io, &buf);
+    var w = af.file.writer(lp.io, &buf);
     std.json.Stringify.value(parsed, .{}, &w.interface) catch return;
     w.end() catch return;
+    af.replace(lp.io) catch return;
 }
 
 /// Load the stored token for `id`, or null when absent/unreadable/no data dir.
