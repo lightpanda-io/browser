@@ -924,8 +924,8 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printError("unknown provider: {s} (or 'null' to disable the LLM)", .{trimmed});
         return;
     };
-    // Re-selecting vertex (token refresh) or a subscription provider (re-import
-    // after logging into its CLI) falls through instead of no-op'ing.
+    // Re-selecting vertex (token refresh) or a subscription provider (the
+    // keep/login/logout menu) falls through instead of no-op'ing.
     const vertex_project = provider == .vertex and settings.vertexProjectMode();
     const sub_desc = auth.descriptorFor(provider);
     if (self.credential) |current| if (provider == current.provider and !vertex_project and sub_desc == null) {
@@ -943,20 +943,12 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
         };
         return;
     }
-    // Subscription provider: use the stored session, or run the interactive
-    // login (device-code flow) when there's none yet.
+    // Subscription provider: menu over the stored session, or first-time login.
     if (sub_desc) |desc| {
-        var owned = (auth.sessionFor(self.allocator, provider) catch null) orelse
-            (auth.login(self.allocator, desc, &self.http_interrupt) catch |err| {
-                if (err == error.LoginCancelled) {
-                    // Undo `requestCancel`'s side effects before the next turn.
-                    self.resetAfterCancel(self.conversation.messages.items.len);
-                    self.terminal.printInfo("{s} login cancelled", .{desc.label});
-                    return;
-                }
-                self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
-                return;
-            });
+        var owned = if (auth.sessionFor(self.allocator, provider) catch null) |stored|
+            self.promptStoredSubscription(desc, stored) orelse return
+        else
+            self.subscriptionLogin(desc) orelse return;
         self.setProvider(.{ .provider = provider, .key = .{ .session = owned } }) catch |err| {
             owned.deinit();
             self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
@@ -983,6 +975,48 @@ fn handleProvider(self: *Agent, _: std.mem.Allocator, rest: []const u8) void {
     self.setProvider(.{ .provider = provider, .key = .{ .env = key } }) catch |err| {
         self.terminal.printError("failed to set provider: {s}", .{@errorName(err)});
     };
+}
+
+/// Interactive device-code login; cancellation/failure is reported here.
+fn subscriptionLogin(self: *Agent, desc: *const auth.Descriptor) ?auth.Session {
+    return auth.login(self.allocator, desc, &self.http_interrupt) catch |err| {
+        if (err == error.LoginCancelled) {
+            // Undo `requestCancel`'s side effects before the next turn.
+            self.resetAfterCancel(self.conversation.messages.items.len);
+            self.terminal.printInfo("{s} login cancelled", .{desc.label});
+            return null;
+        }
+        self.terminal.printError("{s} login failed: {s}", .{ desc.label, @errorName(err) });
+        return null;
+    };
+}
+
+/// Menu for re-selecting an already-logged-in subscription provider: keep the
+/// stored login, re-run it (switch accounts), or log out. Null when there is
+/// nothing to activate.
+fn promptStoredSubscription(self: *Agent, desc: *const auth.Descriptor, stored: auth.Session) ?auth.Session {
+    var session = stored;
+    var header_buf: [128]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, "Already logged in with your {s}. Pick:", .{desc.label}) catch
+        "Already logged in. Pick:";
+    const idx = picker.promptNumberedChoice(header, &.{
+        "keep — use the stored login",
+        "login — run the login again (e.g. to switch accounts)",
+        "logout — forget the stored login",
+    }, 0) catch {
+        session.deinit();
+        return null;
+    };
+    if (idx == 0) return session;
+    session.deinit();
+    if (idx == 1) return self.subscriptionLogin(desc);
+    auth.logout(self.allocator, desc) catch |err| {
+        self.terminal.printError("could not remove the stored login: {s}", .{@errorName(err)});
+        return null;
+    };
+    self.terminal.printInfo("{s} logged out.", .{desc.label});
+    if (self.credential) |c| if (c.provider == desc.provider) self.disableProvider();
+    return null;
 }
 
 /// Tear down the LLM client and persist a null provider so the next REPL launch

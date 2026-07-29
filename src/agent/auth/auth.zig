@@ -143,6 +143,22 @@ fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens
     try writeJsonAtomic(path, map, .fromMode(0o600));
 }
 
+fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) !void {
+    const path = try storePath(arena, dir);
+    var map = readStoreFile(arena, path);
+    if (!map.map.swapRemove(id)) return;
+    try writeJsonAtomic(path, map, .fromMode(0o600));
+}
+
+/// Remove the stored token for `id`. No-op when absent.
+fn storeDelete(allocator: std.mem.Allocator, id: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = dataDir(a) orelse return error.NoDataDir;
+    return storeDeleteAt(a, dir, id);
+}
+
 /// Load the stored token for `id`, or null when absent/unreadable/no data dir.
 pub fn storeLoad(allocator: std.mem.Allocator, id: []const u8) !?TokenSet {
     var da: std.heap.ArenaAllocator = .init(allocator);
@@ -218,6 +234,11 @@ pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
+/// Forget the stored credential for `desc`'s provider.
+pub fn logout(allocator: std.mem.Allocator, desc: *const Descriptor) !void {
+    return storeDelete(allocator, @tagName(desc.provider));
+}
+
 /// Is a stored credential available for `provider` — unexpired, or refreshable
 /// (`ensureFresh` runs before the first request)? Lets the picker offer the
 /// subscription without an API-key env var.
@@ -247,7 +268,7 @@ test "descriptorFor resolves codex, null for a non-OAuth provider" {
     try std.testing.expectEqual(@as(?*const Descriptor, null), descriptorFor(.openai));
 }
 
-test "token store save/load round-trips" {
+test "token store save/load/delete round-trips" {
     const a = std.testing.allocator;
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
@@ -269,4 +290,7 @@ test "token store save/load round-trips" {
     try std.testing.expectEqualStrings("ref-1", loaded.refresh_token);
     try std.testing.expectEqualStrings("acct-9", loaded.account_id.?);
     try std.testing.expectEqual(@as(i64, 999), loaded.expires_at_ms);
+
+    try storeDeleteAt(scratch, dir, "codex");
+    try std.testing.expectEqual(@as(?TokenSet, null), try storeLoadAt(a, dir, "codex"));
 }
