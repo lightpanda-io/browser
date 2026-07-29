@@ -352,6 +352,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             // don't propagate" rule as addEventListener listeners — see Listener.run.
             var caught: js.TryCatch.Caught = undefined;
             const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, target_et, .{event}, &caught) catch |err| ret: {
+                if (err == error.ExecutionTerminated) {
+                    return error.ExecutionTerminated;
+                }
                 frame._page.recordJsError(err);
                 log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                 break :ret null;
@@ -409,6 +412,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
 
                 var caught: js.TryCatch.Caught = undefined;
                 const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
+                    if (err == error.ExecutionTerminated) {
+                        return error.ExecutionTerminated;
+                    }
                     frame._page.recordJsError(err);
                     log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                     break :ret null;

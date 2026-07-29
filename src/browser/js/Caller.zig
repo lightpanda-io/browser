@@ -578,6 +578,9 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         // toString threw during argument conversion); throwing anything here
         // would replace the original exception the script expects to see.
         error.JsException => return,
+        // The termination exception is pending; throwing here would replace
+        // it with a catchable Error, letting the killed script keep running.
+        error.ExecutionTerminated => return,
         else => {},
     }
 

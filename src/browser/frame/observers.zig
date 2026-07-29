@@ -276,6 +276,9 @@ pub fn deliverResizes(frame: *Frame) void {
         const observer = frame._resize.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
             log.err(.frame, "frame.deliverResizes", .{ .err = err, .type = frame._type, .url = frame.url });
+            if (err == error.ExecutionTerminated) {
+                return;
+            }
         };
     }
 }
@@ -303,6 +306,9 @@ pub fn deliverIntersections(frame: *Frame) void {
         const observer = frame._intersection.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
             log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });
+            if (err == error.ExecutionTerminated) {
+                return;
+            }
         };
     }
 }
@@ -353,6 +359,9 @@ pub fn deliverMutations(frame: *Frame) void {
     for (notify.items) |observer| {
         observer.deliverRecords(frame) catch |err| {
             log.err(.frame, "frame.deliverMutations", .{ .err = err, .type = frame._type, .url = frame.url });
+            if (err == error.ExecutionTerminated) {
+                return;
+            }
         };
     }
 
@@ -365,6 +374,9 @@ pub fn deliverMutations(frame: *Frame) void {
         const target = slot.asNode().asEventTarget();
         frame._event_manager.dispatch(target, event) catch |err| {
             log.err(.frame, "deliverSlotchange.dispatch", .{ .err = err, .type = frame._type, .url = frame.url });
+            if (err == error.ExecutionTerminated) {
+                return;
+            }
         };
     }
 }

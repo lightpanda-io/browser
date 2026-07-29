@@ -30,7 +30,18 @@ local: *const js.Local,
 handle: *const v8.Script,
 
 pub fn run(self: Script) !js.Value {
-    const result = v8.v8__Script__Run(self.handle, self.local.handle) orelse return error.JsException;
+    // See Function._tryCallWithThis for why a pending termination blocks V8
+    // entry and is distinct from a JS throw.
+    const isolate_handle = self.local.isolate.handle;
+    if (v8.v8__Isolate__IsExecutionTerminating(isolate_handle)) {
+        return error.ExecutionTerminated;
+    }
+    const result = v8.v8__Script__Run(self.handle, self.local.handle) orelse {
+        if (v8.v8__Isolate__IsExecutionTerminating(isolate_handle)) {
+            return error.ExecutionTerminated;
+        }
+        return error.JsException;
+    };
     return .{ .local = self.local, .handle = result };
 }
 

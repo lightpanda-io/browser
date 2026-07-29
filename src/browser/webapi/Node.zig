@@ -1164,6 +1164,7 @@ const CloneError = error{
     TypeError,
     CompilationError,
     JsException,
+    ExecutionTerminated,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     const deep = deep_ orelse false;
