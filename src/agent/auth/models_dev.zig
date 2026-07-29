@@ -77,22 +77,18 @@ fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []cons
 /// Model-id keys of `catalog[provider_id].models`, filtered to tool-call-capable
 /// models (the agent needs tools; this also drops embedding/image entries).
 /// `ignore_unknown_fields` skips the rest of the metadata, so no Value tree is
-/// built for the multi-MB payload. The parse runs in a scoped arena; the ids
-/// are duped into `arena`.
+/// built for the multi-MB payload, but the parsed id map accumulates in `arena`
+/// until the caller deinits it. The ids may alias `catalog`.
 fn parseProviderModels(arena: std.mem.Allocator, catalog: []const u8, provider_id: []const u8) ![]const []const u8 {
-    var parse_arena: std.heap.ArenaAllocator = .init(arena);
-    defer parse_arena.deinit();
-
     const Model = struct { tool_call: bool = false };
     const Provider = struct { models: std.json.ArrayHashMap(Model) = .{} };
-    const parsed = try std.json.parseFromSliceLeaky(std.json.ArrayHashMap(Provider), parse_arena.allocator(), catalog, .{ .ignore_unknown_fields = true });
+    const parsed = try std.json.parseFromSliceLeaky(std.json.ArrayHashMap(Provider), arena, catalog, .{ .ignore_unknown_fields = true });
 
     const provider = parsed.map.get(provider_id) orelse return error.ProviderMissing;
     var ids: std.ArrayList([]const u8) = .empty;
     var it = provider.models.map.iterator();
     while (it.next()) |entry| {
-        if (!entry.value_ptr.tool_call) continue;
-        try ids.append(arena, try arena.dupe(u8, entry.key_ptr.*));
+        if (entry.value_ptr.tool_call) try ids.append(arena, entry.key_ptr.*);
     }
     return ids.toOwnedSlice(arena);
 }
