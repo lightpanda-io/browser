@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const log = lp.log;
 const zenai = @import("zenai");
 const Config = lp.Config;
 const codex = @import("codex.zig");
@@ -170,14 +171,6 @@ pub fn storeSave(allocator: std.mem.Allocator, id: []const u8, tokens: TokenSet)
     return storeSaveAt(a, dir, id, tokens);
 }
 
-pub fn storeDelete(allocator: std.mem.Allocator, id: []const u8) void {
-    var arena: std.heap.ArenaAllocator = .init(allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const dir = dataDir(a) orelse return;
-    storeDeleteAt(a, dir, id);
-}
-
 /// Proactive-refresh margin: refresh once the token is within this window of
 /// expiry, so a turn never starts on a token about to lapse.
 const refresh_skew_ms: i64 = 5 * std.time.ms_per_min;
@@ -202,7 +195,9 @@ pub const Session = struct {
             if (self.tokens.expires_at_ms > now) return null;
             return err;
         };
-        storeSave(self.allocator, self.descriptor.storeKey(), fresh) catch {};
+        storeSave(self.allocator, self.descriptor.storeKey(), fresh) catch |err| {
+            log.warn(.app, "auth token persist failed", .{ .provider = self.descriptor.storeKey(), .err = err });
+        };
 
         const displaced = self.tokens;
         self.tokens = fresh;
@@ -224,7 +219,9 @@ pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?S
 /// Run the interactive login and persist the result, returning a live session.
 pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?*zenai.http.Interrupt) !Session {
     const tokens = try desc.loginFn(allocator, interrupt);
-    storeSave(allocator, desc.storeKey(), tokens) catch {};
+    storeSave(allocator, desc.storeKey(), tokens) catch |err| {
+        log.warn(.app, "auth token persist failed", .{ .provider = desc.storeKey(), .err = err });
+    };
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
