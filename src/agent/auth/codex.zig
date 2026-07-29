@@ -136,6 +136,18 @@ const DeviceToken = struct {
     code_verifier: []const u8,
 };
 
+/// Sleep in short slices, polling `interrupt` between them: the REPL's Ctrl-C
+/// only fires the interrupt (it never kills the process).
+fn waitCancellable(ms: u64, interrupt: ?*zenai.http.Interrupt) error{LoginCancelled}!void {
+    var remaining_ms = ms;
+    while (remaining_ms > 0) {
+        if (interrupt) |it| if (it.isFired()) return error.LoginCancelled;
+        const slice_ms = @min(remaining_ms, cancel_slice_ms);
+        lp.io.sleep(.fromMilliseconds(@intCast(slice_ms)), .awake) catch {};
+        remaining_ms -= slice_ms;
+    }
+}
+
 fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) !auth.TokenSet {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -159,15 +171,7 @@ fn deviceLogin(allocator: std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) 
         .{},
     )});
     const dt: DeviceToken = while (true) {
-        // The REPL's Ctrl-C only fires the interrupt (it never kills the
-        // process), so the wait must poll it.
-        var remaining_ms: u64 = interval_ms + poll_margin_ms;
-        while (remaining_ms > 0) {
-            if (interrupt) |it| if (it.isFired()) return error.LoginCancelled;
-            const slice_ms = @min(remaining_ms, cancel_slice_ms);
-            lp.io.sleep(.fromMilliseconds(@intCast(slice_ms)), .awake) catch {};
-            remaining_ms -= slice_ms;
-        }
+        try waitCancellable(interval_ms + poll_margin_ms, interrupt);
         const res = try post(a, interrupt, device_token_url, "application/json", poll_body);
         switch (res.status) {
             .ok => break try std.json.parseFromSliceLeaky(DeviceToken, a, res.body, .{ .ignore_unknown_fields = true }),

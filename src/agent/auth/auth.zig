@@ -79,11 +79,6 @@ pub const Descriptor = struct {
     loginFn: *const fn (std.mem.Allocator, interrupt: ?*zenai.http.Interrupt) anyerror!TokenSet,
     /// Exchange a refresh token for a new `TokenSet` (with re-derived account id).
     refreshFn: *const fn (std.mem.Allocator, refresh_token: []const u8) anyerror!TokenSet,
-
-    /// Key in the on-disk store (`auth.json`).
-    pub fn storeKey(self: *const Descriptor) []const u8 {
-        return @tagName(self.provider);
-    }
 };
 
 pub const registry = [_]*const Descriptor{&codex.descriptor};
@@ -93,7 +88,7 @@ pub fn descriptorFor(provider: Config.AiProvider) ?*const Descriptor {
     return null;
 }
 
-// --- On-disk token store: <data_dir>/auth.json, a JSON map keyed by storeKey ---
+// --- On-disk token store: <data_dir>/auth.json, a JSON map keyed by provider tag ---
 // The `*At` variants take a scratch arena and an explicit dir (unit-testable);
 // the public wrappers build the arena and resolve the app data dir themselves.
 
@@ -108,54 +103,44 @@ fn storePath(arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
     return std.fs.path.join(arena, &.{ dir, "auth.json" });
 }
 
+/// The parsed store; empty on any failure (absent, unreadable, malformed).
+fn readStoreFile(arena: std.mem.Allocator, path: []const u8) std.json.ArrayHashMap(StoredToken) {
+    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return .{};
+    return std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch .{};
+}
+
+/// Serialize `value` as JSON to `path` via temp+rename, so a failed write
+/// can't corrupt an existing file.
+pub fn writeJsonAtomic(path: []const u8, value: anytype, permissions: std.Io.File.Permissions) !void {
+    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = permissions, .replace = true });
+    defer af.deinit(lp.io);
+    var buf: [1024]u8 = undefined;
+    var w = af.file.writer(lp.io, &buf);
+    try std.json.Stringify.value(value, .{}, &w.interface);
+    try w.end();
+    try af.replace(lp.io);
+}
+
 fn storeLoadAt(allocator: std.mem.Allocator, dir: []const u8, id: []const u8) !?TokenSet {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const path = try storePath(a, dir);
-    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, a, .limited(64 * 1024)) catch return null;
-    const parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), a, data, .{ .ignore_unknown_fields = true }) catch return null;
-    const t = parsed.map.get(id) orelse return null;
+    const t = readStoreFile(a, path).map.get(id) orelse return null;
     return try TokenSet.dup(allocator, t.access, t.refresh, t.expires_at_ms, t.account_id);
 }
 
 fn storeSaveAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8, tokens: TokenSet) !void {
     const path = try storePath(arena, dir);
-
-    var map: std.json.ArrayHashMap(StoredToken) = .{};
-    if (std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024))) |data| {
-        map = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch .{};
-    } else |_| {}
+    var map = readStoreFile(arena, path);
     try map.map.put(arena, id, .{
         .access = tokens.access_token,
         .refresh = tokens.refresh_token,
         .expires_at_ms = tokens.expires_at_ms,
         .account_id = tokens.account_id,
     });
-
-    // Secrets file: owner-only perms; temp+rename so a failed write can't
-    // corrupt the store.
-    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = .fromMode(0o600), .replace = true });
-    defer af.deinit(lp.io);
-    var buf: [1024]u8 = undefined;
-    var w = af.file.writer(lp.io, &buf);
-    try std.json.Stringify.value(map, .{}, &w.interface);
-    try w.end();
-    try af.replace(lp.io);
-}
-
-fn storeDeleteAt(arena: std.mem.Allocator, dir: []const u8, id: []const u8) void {
-    const path = storePath(arena, dir) catch return;
-    const data = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(64 * 1024)) catch return;
-    var parsed = std.json.parseFromSliceLeaky(std.json.ArrayHashMap(StoredToken), arena, data, .{ .ignore_unknown_fields = true }) catch return;
-    _ = parsed.map.swapRemove(id);
-    var af = std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .permissions = .fromMode(0o600), .replace = true }) catch return;
-    defer af.deinit(lp.io);
-    var buf: [1024]u8 = undefined;
-    var w = af.file.writer(lp.io, &buf);
-    std.json.Stringify.value(parsed, .{}, &w.interface) catch return;
-    w.end() catch return;
-    af.replace(lp.io) catch return;
+    // Secrets file: owner-only perms.
+    try writeJsonAtomic(path, map, .fromMode(0o600));
 }
 
 /// Load the stored token for `id`, or null when absent/unreadable/no data dir.
@@ -184,30 +169,35 @@ pub const Session = struct {
     allocator: std.mem.Allocator,
     descriptor: *const Descriptor,
     tokens: TokenSet,
+    /// The set displaced by the last refresh, kept until the next one (or
+    /// deinit) because the AI client borrows the access token until the
+    /// caller repoints it.
+    displaced: ?TokenSet = null,
 
-    /// When the access token is within `refresh_skew_ms` of expiry, exchange the
-    /// refresh token for a new one, persist it, and return the displaced set.
-    /// Null when still fresh. The caller must repoint anything borrowing from
-    /// the displaced set (`tokens` holds the fresh one) before freeing it.
-    pub fn ensureFresh(self: *Session) !?TokenSet {
+    /// When the access token is within `refresh_skew_ms` of expiry, exchange
+    /// the refresh token for a new one and persist it. True when `tokens` was
+    /// replaced — repoint anything borrowing the old access token.
+    pub fn ensureFresh(self: *Session) !bool {
         const now = nowMs();
-        if (self.tokens.expires_at_ms - now > refresh_skew_ms) return null;
+        if (self.tokens.expires_at_ms - now > refresh_skew_ms) return false;
 
         const fresh = self.descriptor.refreshFn(self.allocator, self.tokens.refresh_token) catch |err| {
             // A transient refresh failure while the token is still valid is not fatal.
-            if (self.tokens.expires_at_ms > now) return null;
+            if (self.tokens.expires_at_ms > now) return false;
             return err;
         };
-        storeSave(self.allocator, self.descriptor.storeKey(), fresh) catch |err| {
-            log.warn(.app, "auth token persist failed", .{ .provider = self.descriptor.storeKey(), .err = err });
+        storeSave(self.allocator, @tagName(self.descriptor.provider), fresh) catch |err| {
+            log.warn(.app, "auth token persist failed", .{ .provider = @tagName(self.descriptor.provider), .err = err });
         };
 
-        const displaced = self.tokens;
+        if (self.displaced) |old| old.deinit(self.allocator);
+        self.displaced = self.tokens;
         self.tokens = fresh;
-        return displaced;
+        return true;
     }
 
     pub fn deinit(self: *Session) void {
+        if (self.displaced) |old| old.deinit(self.allocator);
         self.tokens.deinit(self.allocator);
     }
 };
@@ -215,15 +205,15 @@ pub const Session = struct {
 /// Load a stored session for `provider`, or null when the user hasn't logged in.
 pub fn sessionFor(allocator: std.mem.Allocator, provider: Config.AiProvider) !?Session {
     const desc = descriptorFor(provider) orelse return null;
-    const tokens = (try storeLoad(allocator, desc.storeKey())) orelse return null;
+    const tokens = (try storeLoad(allocator, @tagName(provider))) orelse return null;
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
 
 /// Run the interactive login and persist the result, returning a live session.
 pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?*zenai.http.Interrupt) !Session {
     const tokens = try desc.loginFn(allocator, interrupt);
-    storeSave(allocator, desc.storeKey(), tokens) catch |err| {
-        log.warn(.app, "auth token persist failed", .{ .provider = desc.storeKey(), .err = err });
+    storeSave(allocator, @tagName(desc.provider), tokens) catch |err| {
+        log.warn(.app, "auth token persist failed", .{ .provider = @tagName(desc.provider), .err = err });
     };
     return .{ .allocator = allocator, .descriptor = desc, .tokens = tokens };
 }
@@ -232,10 +222,14 @@ pub fn login(allocator: std.mem.Allocator, desc: *const Descriptor, interrupt: ?
 /// (`ensureFresh` runs before the first request)? Lets the picker offer the
 /// subscription without an API-key env var.
 pub fn subscriptionAvailable(provider: Config.AiProvider) bool {
-    const desc = descriptorFor(provider) orelse return false;
-    const tokens = (storeLoad(std.heap.page_allocator, desc.storeKey()) catch return false) orelse return false;
-    defer tokens.deinit(std.heap.page_allocator);
-    return tokens.refresh_token.len > 0 or tokens.expires_at_ms > nowMs();
+    if (descriptorFor(provider) == null) return false;
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = dataDir(a) orelse return false;
+    const path = storePath(a, dir) catch return false;
+    const t = readStoreFile(a, path).map.get(@tagName(provider)) orelse return false;
+    return t.refresh.len > 0 or t.expires_at_ms > nowMs();
 }
 
 test "TokenSet dup/deinit round-trips and is leak-free" {
@@ -253,7 +247,7 @@ test "descriptorFor resolves codex, null for a non-OAuth provider" {
     try std.testing.expectEqual(@as(?*const Descriptor, null), descriptorFor(.openai));
 }
 
-test "token store save/load/delete round-trips" {
+test "token store save/load round-trips" {
     const a = std.testing.allocator;
     var arena: std.heap.ArenaAllocator = .init(a);
     defer arena.deinit();
@@ -275,7 +269,4 @@ test "token store save/load/delete round-trips" {
     try std.testing.expectEqualStrings("ref-1", loaded.refresh_token);
     try std.testing.expectEqualStrings("acct-9", loaded.account_id.?);
     try std.testing.expectEqual(@as(i64, 999), loaded.expires_at_ms);
-
-    storeDeleteAt(scratch, dir, "codex");
-    try std.testing.expectEqual(@as(?TokenSet, null), try storeLoadAt(a, dir, "codex"));
 }

@@ -65,13 +65,7 @@ fn readCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const
 
 fn writeCache(arena: std.mem.Allocator, app_dir: []const u8, provider_id: []const u8, ids: []const []const u8) !void {
     const path = try cachePath(arena, app_dir, provider_id);
-    var af = try std.Io.Dir.cwd().createFileAtomic(lp.io, path, .{ .replace = true });
-    defer af.deinit(lp.io);
-    var buf: [1024]u8 = undefined;
-    var w = af.file.writer(lp.io, &buf);
-    try std.json.Stringify.value(Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .{}, &w.interface);
-    try w.end();
-    try af.replace(lp.io);
+    try auth.writeJsonAtomic(path, Cache{ .fetched_ms = auth.nowMs(), .ids = ids }, .default_file);
 }
 
 /// Model-id keys of `catalog[provider_id].models`, filtered to tool-call-capable

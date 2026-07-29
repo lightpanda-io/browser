@@ -1041,21 +1041,17 @@ fn setProvider(self: *Agent, credential: settings.Credential) !void {
 /// Keep a subscription (bearer) token current before a model request: when the
 /// active session's token is near expiry, re-import from the source and repoint
 /// the client at the fresh token (`keySlice` readers see it automatically).
-/// A no-op for API-key auth. Runs between turns on the single agent thread,
-/// never during a request, so the displaced token is never dereferenced after
-/// it's freed here.
+/// A no-op for API-key auth. Runs between turns on the single agent thread, so
+/// the client is repointed before the next request borrows the token.
 fn refreshAuthIfNeeded(self: *Agent) void {
     const cred = if (self.credential) |*c| c else return;
     if (cred.key != .session) return;
     const session = &cred.key.session;
-    const displaced = session.ensureFresh() catch |err| {
+    const refreshed = session.ensureFresh() catch |err| {
         self.terminal.printError("could not refresh the subscription token: {s}", .{@errorName(err)});
         return;
     };
-    if (displaced) |old| {
-        if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
-        old.deinit(session.allocator);
-    }
+    if (refreshed) if (self.ai_client) |client| client.setApiKey(session.tokens.access_token);
 }
 
 const PathAndMode = struct { path: []const u8, mode: save.Mode };
@@ -1618,8 +1614,9 @@ fn recordSlashToolCall(
 fn formatApiError(self: *Agent, client: zenai.provider.Client, err: anyerror) []const u8 {
     const e = client.lastError();
     const status = e.status orelse return @errorName(err);
+    const owned_key = if (self.credential) |c| c.key == .owned else false;
     const hint = if (status == 401 and client == .vertex)
-        if (self.credential != null and self.credential.?.key == .owned)
+        if (owned_key)
             " (Vertex token may have expired; run /provider vertex to refresh)"
         else
             " (Vertex express mode needs an express API key — a Gemini Developer key won't work)"
@@ -1972,10 +1969,7 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
     // one is what starts the login.
     for (auth.registry) |desc| {
         const name = @tagName(desc.provider);
-        const detected = for (self.available_providers) |p| {
-            if (std.mem.eql(u8, p, name)) break true;
-        } else false;
-        if (!detected) {
+        if (!string.isOneOf(name, self.available_providers)) {
             names[n] = name;
             n += 1;
         }
