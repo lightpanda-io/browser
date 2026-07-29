@@ -32,9 +32,17 @@ const Allocator = std.mem.Allocator;
 const CLAMP_MS = 4;
 const CLAMP_NESTING = 5;
 
+// airbnb has 600+ timers
+const MAX_CALLBACKS = 2048;
+
+// lower limit for repeating timers since they never clean up
+// (unless clearInterval is called)
+const MAX_REPEATING = 512;
+
 const Timers = @This();
 
 _timer_id: u30 = 0,
+_repeating: u32 = 0, // # of repeating timers we have
 _callbacks: CallbackHashMap = .{},
 
 // We keep the depth of the timers (a setTimeout calling a setTimeout). When
@@ -81,8 +89,10 @@ pub fn schedule(
     delay_ms: u32,
     opts: ScheduleOpts,
 ) !u32 {
-    if (self._callbacks.count() > 512) {
-        // these are active
+    if (self._callbacks.count() >= MAX_CALLBACKS) {
+        return error.TooManyTimeout;
+    }
+    if (opts.repeat and self._repeating >= MAX_REPEATING) {
         return error.TooManyTimeout;
     }
 
@@ -128,11 +138,17 @@ pub fn schedule(
         .finalizer = ScheduleCallback.cancelled,
     });
 
+    if (opts.repeat) {
+        self._repeating += 1;
+    }
     return timer_id;
 }
 
 pub fn clear(self: *Timers, id: u32) void {
     var sc = self._callbacks.fetchRemove(id) orelse return;
+    if (sc.value.repeat_ms != null) {
+        self._repeating -= 1;
+    }
     sc.value.removed = true;
 }
 
