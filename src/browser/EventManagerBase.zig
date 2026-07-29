@@ -215,6 +215,7 @@ pub const DispatchError = error{
     StringTooLarge,
     CompilationError,
     JsException,
+    ExecutionTerminated,
 };
 
 pub const DispatchDirectOptions = struct {
@@ -290,6 +291,9 @@ pub fn dispatchDirect(
         event._current_target = target;
         var caught: js.TryCatch.Caught = undefined;
         _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
+            if (err == error.ExecutionTerminated) {
+                return error.ExecutionTerminated;
+            }
             page.recordJsError(err);
             if (err == error.JsException) {
                 event._listeners_did_throw = true;
@@ -435,7 +439,7 @@ pub const Listener = struct {
         local: *const js.Local,
         event: *Event,
         comptime context: []const u8,
-    ) error{OutOfMemory}!void {
+    ) error{ OutOfMemory, ExecutionTerminated }!void {
         switch (self.function) {
             .value => |value| {
                 var try_catch: js.TryCatch = undefined;
@@ -448,12 +452,16 @@ pub const Listener = struct {
                         event._listeners_did_throw = true;
                         reportException(&try_catch, local);
                     },
+                    error.ExecutionTerminated => return error.ExecutionTerminated,
                     else => log.warn(.event, context, .{ .err = err }),
                 };
             },
             .string => |string| {
                 const str = try arena.dupeZ(u8, string.str());
                 local.eval(str, null) catch |err| {
+                    if (err == error.ExecutionTerminated) {
+                        return error.ExecutionTerminated;
+                    }
                     local.ctx.page.recordJsError(err);
                     if (err == error.JsException) {
                         event._listeners_did_throw = true;
@@ -501,6 +509,7 @@ pub const Listener = struct {
                         event._listeners_did_throw = true;
                         reportException(&try_catch, local);
                     },
+                    error.ExecutionTerminated => return error.ExecutionTerminated,
                     else => log.warn(.event, context, .{ .err = err }),
                 };
             },
