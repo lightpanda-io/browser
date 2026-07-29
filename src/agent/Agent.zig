@@ -35,7 +35,6 @@ const App = @import("../App.zig");
 const CDPNode = @import("../cdp/Node.zig");
 const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
-const ansi = @import("ansi.zig");
 const SlashCommand = @import("SlashCommand.zig");
 const settings = @import("settings.zig");
 const auth = @import("auth/auth.zig");
@@ -602,7 +601,7 @@ fn runRepl(self: *Agent) void {
     log.debug(.app, "tools loaded", .{ .count = globalTools().len });
 
     if (self.ai_client != null) {
-        std.debug.print("  model: {s}{s}  {s}effort: {s}{s}  {s}stream: {s}{s}{s}\n", .{ ansi.dim, self.model, ansi.reset, ansi.dim, @tagName(self.effort), ansi.reset, ansi.dim, if (self.stream_enabled) "on" else "off", ansi.reset });
+        self.terminal.printSessionBanner(self.model, @tagName(self.effort), self.stream_enabled);
     }
 
     repl: while (true) {
