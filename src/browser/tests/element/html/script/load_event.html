@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<head></head>
+<script src="../../../testing.js"></script>
+
+<!--
+  A <script> fires load/error at its own element only when it is "from an
+  external file": the last step of the spec's "execute the script element" is
+  conditional on that flag, and it is not conditional on the script having run
+  cleanly. So an inline script fires nothing, and an external script fires load
+  even when it throws (the exception goes to window, not to an error event on
+  the element).
+-->
+
+<script id=recorder>
+  window.loads = [];
+  window.errors = [];
+  const record = (into) => (e) => {
+    const el = e.target;
+    into.push(el.src ? el.src.split('/').pop() : 'inline');
+  };
+  document.addEventListener('load', record(loads), true);
+  document.addEventListener('error', record(errors), true);
+  testing.expectEqual([], loads);
+</script>
+
+<script>window.parser_inline_ran = true;</script>
+
+<!-- an inline script that throws reports to window.onerror, it does not fire
+     an error event at its element -->
+<script>throw new Error('deliberate');</script>
+
+<script id=inline_fires_nothing>
+  testing.expectTrue(window.parser_inline_ran);
+
+  // an appended inline script executes synchronously, still fires nothing
+  const s = document.createElement('script');
+  s.textContent = 'window.appended_inline_ran = true;';
+  document.head.appendChild(s);
+  testing.expectTrue(window.appended_inline_ran);
+
+  testing.expectEqual([], loads);
+  testing.expectEqual([], errors);
+</script>
+
+<script id=external_self_listener>
+  testing.async().then((state) => {
+    window.self_load = 0;
+    const s = document.createElement('script');
+    s.src = 'load_self.js';
+    // resolve on the next task: onload is registered before the listener that
+    // load_self.js adds to itself, and there's a microtask checkpoint between
+    // two listeners of the same dispatch
+    s.onload = () => setTimeout(() => state.resolve(), 0);
+    document.head.appendChild(s);
+    setTimeout(() => state.resolve(), 500);
+
+    state.done(() => {
+      // load_self.js registers a load listener on itself while it runs
+      testing.expectEqual(1, window.self_load);
+      testing.expectEqual(true, loads.includes('load_self.js'));
+    });
+  });
+</script>
+
+<script id=external_throws>
+  testing.async().then((state) => {
+    window.throws_ran = false;
+    const s = document.createElement('script');
+    s.src = 'throws.js';
+    s.onload = () => setTimeout(() => state.resolve(), 0);
+    s.onerror = () => setTimeout(() => state.resolve(), 0);
+    document.head.appendChild(s);
+    setTimeout(() => state.resolve(), 500);
+
+    state.done(() => {
+      testing.expectTrue(window.throws_ran);
+      testing.expectEqual(true, loads.includes('throws.js'));
+      testing.expectEqual(false, errors.includes('throws.js'));
+    });
+  });
+</script>
