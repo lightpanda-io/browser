@@ -617,7 +617,7 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
             file.* = .{
                 ._proto = blob,
                 ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena, filename)),
-                ._last_modified = std.Io.Clock.now(.real, lp.io).toMilliseconds(),
+                ._last_modified = @intCast(lp.datetime.milliTimestamp(.real)),
             };
             blob._type = .{ .file = file };
 
