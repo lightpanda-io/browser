@@ -41,18 +41,8 @@ inline fn isHeaderValueByte(byte: u8) bool {
 }
 
 /// Returns an integer filled with a given byte.
-inline fn broadcast(comptime T: type, byte: u8) T {
-    comptime {
-        const bits = @ctz(@as(T, 0));
-        const b = @as(T, byte);
-        return switch (bits) {
-            8 => b * 0x01,
-            16 => b * 0x01_01,
-            32 => b * 0x01_01_01_01,
-            64 => b * 0x01_01_01_01_01_01_01_01,
-            else => @compileError("unexpected broadcast size"),
-        };
-    }
+fn broadcast(byte: u8) usize {
+    return @as(usize, @intCast(byte)) * 0x01_01_01_01_01_01_01_01;
 }
 
 inline fn matchHeaderKey(cursor: *Cursor) void {
