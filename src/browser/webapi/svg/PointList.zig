@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
@@ -24,6 +25,7 @@ const Page = @import("../../Page.zig");
 const DOMPoint = @import("../DOMPoint.zig");
 const DOMPointReadOnly = @import("../DOMPointReadOnly.zig");
 const Element = @import("../Element.zig");
+const reflected_list = @import("reflected_list.zig");
 
 const PointList = @This();
 
@@ -34,6 +36,16 @@ _synced: bool = false,
 _snapshot: std.ArrayList(u8) = .empty,
 _items: std.ArrayList(*DOMPoint) = .empty,
 _retired: std.ArrayList(*DOMPoint) = .empty,
+
+const M = reflected_list.Mixin(PointList, DOMPoint, .{
+    .attrName = attrName,
+    .parse = parse,
+    .writeItem = writeItem,
+    .prepareItem = prepareItem,
+    .attach = attach,
+    .detachItem = detachItem,
+    .releaseItem = releaseItem,
+});
 
 pub const Kind = enum { base, animated };
 
@@ -61,114 +73,19 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*PointList {
     return gop.value_ptr.*;
 }
 
-pub fn deinit(self: *PointList, page: *Page) void {
-    for (self._items.items) |point| {
-        point._proto.detach(self);
-        point._proto.releaseRef(page);
-    }
-    self._items.clearRetainingCapacity();
-    self.releaseRetired(page);
-}
+pub const deinit = M.deinit;
+pub const getLength = M.getLength;
+pub const getNumberOfItems = M.getNumberOfItems;
+pub const clear = M.clear;
+pub const initialize = M.initialize;
+pub const getItem = M.getItem;
+pub const insertItemBefore = M.insertItemBefore;
+pub const replaceItem = M.replaceItem;
+pub const removeItem = M.removeItem;
+pub const appendItem = M.appendItem;
 
-pub fn getLength(self: *PointList, frame: *Frame) !u32 {
-    try self.sync(frame);
-    return @intCast(self._items.items.len);
-}
-
-pub fn getNumberOfItems(self: *PointList, frame: *Frame) !u32 {
-    return self.getLength(frame);
-}
-
-pub fn clear(self: *PointList, frame: *Frame) !void {
-    try self.requireMutable();
-    try self.sync(frame);
-    try self.retireAll(frame);
-    try self.setAttribute(&.{}, frame);
-}
-
-pub fn initialize(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
-    try self.requireMutable();
-    try self.sync(frame);
-
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared._proto.releaseRef(frame._page);
-
-    try self.retireAll(frame);
-    try self._items.ensureTotalCapacity(frame.arena, 1);
-    try self.setAttribute(&.{prepared}, frame);
-    self._items.appendAssumeCapacity(prepared);
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn getItem(self: *PointList, index: u32, frame: *Frame) !*DOMPoint {
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-    return self._items.items[index];
-}
-
-pub fn insertItemBefore(self: *PointList, item: *DOMPoint, index: u32, frame: *Frame) !*DOMPoint {
-    try self.requireMutable();
-    try self.sync(frame);
-
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared._proto.releaseRef(frame._page);
-    const at = @min(@as(usize, index), self._items.items.len);
-    const next = try frame.local_arena.alloc(*DOMPoint, self._items.items.len + 1);
-    @memcpy(next[0..at], self._items.items[0..at]);
-    next[at] = prepared;
-    @memcpy(next[at + 1 ..], self._items.items[at..]);
-
-    try self._items.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    self._items.insertAssumeCapacity(at, prepared);
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn replaceItem(self: *PointList, item: *DOMPoint, index: u32, frame: *Frame) !*DOMPoint {
-    try self.requireMutable();
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-
-    const prepared = try self.prepareItem(item, frame);
-    errdefer prepared._proto.releaseRef(frame._page);
-    const next = try frame.local_arena.dupe(*DOMPoint, self._items.items);
-    next[index] = prepared;
-
-    try self._retired.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    const replaced = self._items.items[index];
-    replaced._proto.detach(self);
-    self._retired.appendAssumeCapacity(replaced);
-    self._items.items[index] = prepared;
-    self.attach(prepared);
-    return prepared;
-}
-
-pub fn removeItem(self: *PointList, index: u32, frame: *Frame) !*DOMPoint {
-    try self.requireMutable();
-    try self.sync(frame);
-    if (index >= self._items.items.len) return error.IndexSizeError;
-
-    const next = try frame.local_arena.alloc(*DOMPoint, self._items.items.len - 1);
-    @memcpy(next[0..index], self._items.items[0..index]);
-    @memcpy(next[index..], self._items.items[index + 1 ..]);
-
-    try self._retired.ensureUnusedCapacity(frame.arena, 1);
-    try self.setAttribute(next, frame);
-    const removed = self._items.orderedRemove(index);
-    removed._proto.detach(self);
-    self._retired.appendAssumeCapacity(removed);
-    return removed;
-}
-
-pub fn appendItem(self: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
-    return self.insertItemBefore(item, std.math.maxInt(u32), frame);
-}
-
-fn requireMutable(self: *const PointList) !void {
-    if (self._read_only) return error.NoModificationAllowed;
+fn attrName(_: *const PointList) lp.String {
+    return .wrap("points");
 }
 
 fn prepareItem(_: *PointList, item: *DOMPoint, frame: *Frame) !*DOMPoint {
@@ -189,6 +106,14 @@ fn attach(self: *PointList, point: *DOMPoint) void {
     }, self._read_only);
 }
 
+fn detachItem(point: *DOMPoint, owner: *PointList) void {
+    point._proto.detach(owner);
+}
+
+fn releaseItem(point: *DOMPoint, page: *Page) void {
+    point._proto.releaseRef(page);
+}
+
 fn mutatePoint(
     context: *anyopaque,
     point: *DOMPointReadOnly,
@@ -197,7 +122,7 @@ fn mutatePoint(
 ) anyerror!void {
     const self: *PointList = @ptrCast(@alignCast(context));
     const frame = self._frame;
-    try self.sync(frame);
+    try M.sync(self, frame);
 
     // An external attribute mutation detaches the old item during sync. The
     // caller still owns that DOMPoint identity, but it no longer mutates the list.
@@ -220,43 +145,6 @@ fn mutatePoint(
     point.setCoordinateRaw(coordinate, value);
 }
 
-fn sync(self: *PointList, frame: *Frame) !void {
-    self.releaseRetired(frame._page);
-
-    const raw = self._element.getAttributeSafe(comptime .wrap("points")) orelse "";
-    if (self._synced and std.mem.eql(u8, self._snapshot.items, raw)) {
-        return;
-    }
-
-    self._synced = false;
-    var parsed = parse(raw, frame) catch |err| switch (err) {
-        error.SyntaxError => std.ArrayList(*DOMPoint).empty,
-        else => return err,
-    };
-    errdefer for (parsed.items) |point| point._proto.releaseRef(frame._page);
-
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, raw);
-    try self.retireAll(frame);
-    try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
-    for (parsed.items) |point| {
-        self._items.appendAssumeCapacity(point);
-        self.attach(point);
-    }
-    parsed.clearRetainingCapacity();
-    self._synced = true;
-}
-
-// A retired item must outlive the operation that retired it: removeItem's
-// return value has no JS wrapper until the bridge wraps it after we return.
-// By the next operation, anything still reachable holds its own ref.
-fn releaseRetired(self: *PointList, page: *Page) void {
-    for (self._retired.items) |point| {
-        point._proto.releaseRef(page);
-    }
-    self._retired.clearRetainingCapacity();
-}
-
 fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     var scanner = NumberScanner{ .input = raw };
     var parsed: std.ArrayList(*DOMPoint) = .empty;
@@ -276,24 +164,8 @@ fn parse(raw: []const u8, frame: *Frame) !std.ArrayList(*DOMPoint) {
     return parsed;
 }
 
-fn retireAll(self: *PointList, frame: *Frame) !void {
-    self._synced = false;
-    try self._retired.ensureUnusedCapacity(frame.arena, self._items.items.len);
-    for (self._items.items) |point| {
-        point._proto.detach(self);
-        self._retired.appendAssumeCapacity(point);
-    }
-    self._items.clearRetainingCapacity();
-}
-
-fn setAttribute(self: *PointList, items: []const *DOMPoint, frame: *Frame) !void {
-    var serialized: std.Io.Writer.Allocating = .init(frame.local_arena);
-    const writer = &serialized.writer;
-    for (items, 0..) |point, i| {
-        if (i != 0) try writer.writeByte(' ');
-        try writer.print("{d} {d}", .{ point._proto._x, point._proto._y });
-    }
-    try self.commitAttribute(serialized.written(), frame);
+fn writeItem(point: *DOMPoint, writer: *std.Io.Writer) !void {
+    try writer.print("{d} {d}", .{ point._proto._x, point._proto._y });
 }
 
 fn setAttributeWithOverride(
@@ -311,15 +183,7 @@ fn setAttributeWithOverride(
         const y = if (i == index and coordinate == .y) value else point._proto._y;
         try writer.print("{d} {d}", .{ x, y });
     }
-    try self.commitAttribute(serialized.written(), frame);
-}
-
-fn commitAttribute(self: *PointList, serialized: []const u8, frame: *Frame) !void {
-    self._synced = false;
-    try self._element.setAttributeSafe(comptime .wrap("points"), .wrap(serialized), frame);
-    self._snapshot.clearRetainingCapacity();
-    try self._snapshot.appendSlice(frame.arena, serialized);
-    self._synced = true;
+    try M.commitAttribute(self, serialized.written(), frame);
 }
 
 const NumberScanner = struct {

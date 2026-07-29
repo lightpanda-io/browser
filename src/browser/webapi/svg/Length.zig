@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Page = @import("../../Page.zig");
+const units = @import("../../css/units.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
@@ -119,11 +120,17 @@ pub fn getValue(self: *Length, frame: *Frame) f64 {
     return self._value * self.unitToUserUnits(self._unit, frame);
 }
 
+// Sets the value in user units; the stored unit is preserved and
+// valueInSpecifiedUnits converts, matching Blink and Gecko.
 pub fn setValue(self: *Length, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
-    self._value = value;
-    self._unit = .number;
+    self.syncFromAttribute();
+    if (self._unit == .unknown) {
+        self._unit = .number;
+    }
+    const factor = self.unitToUserUnits(self._unit, frame);
+    self._value = if (factor == 0) 0 else value / factor;
     try self.writeBack(frame);
 }
 
@@ -210,21 +217,17 @@ fn writeBack(self: *Length, frame: *Frame) !void {
 }
 
 fn serialize(self: *const Length, frame: *Frame) ![]const u8 {
-    return std.fmt.allocPrint(frame.local_arena, "{d}{s}", .{ self._value, unitSuffix(self._unit) });
+    return std.fmt.allocPrint(frame.local_arena, "{d}{s}", .{ self._value, units.suffix(toShared(self._unit)) });
 }
 
 fn unitToUserUnits(self: *const Length, unit: Unit, frame: *Frame) f64 {
-    if (absoluteUnitFactor(unit)) |factor| {
-        return factor;
-    }
     return switch (unit) {
-        .unknown => 1,
         .percentage => self.percentageBasis(frame) / 100.0,
         .em => self.fontSize(frame),
         // Lightpanda does not load font metrics for DOM-only SVG values. CSS
         // defines 0.5em as the fallback when the x-height is unavailable.
         .ex => self.fontSize(frame) / 2.0,
-        else => unreachable,
+        else => units.absoluteLengthFactor(toShared(unit)).?,
     };
 }
 
@@ -285,83 +288,17 @@ fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
 }
 
 fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, frame: *Frame, depth: u8) f64 {
-    const factor = absoluteUnitFactor(parsed.unit) orelse switch (parsed.unit) {
-        .unknown => 1,
+    const factor = switch (parsed.unit) {
         .percentage => ancestorViewportDimensionAt(element, direction, frame, depth) / 100.0,
-        .em => resolvedFontSizeAt(element, frame, depth),
-        .ex => resolvedFontSizeAt(element, frame, depth) / 2.0,
-        else => unreachable,
+        .em => frame._style_manager.computedFontSize(element),
+        .ex => frame._style_manager.computedFontSize(element) / 2.0,
+        else => units.absoluteLengthFactor(toShared(parsed.unit)).?,
     };
     return parsed.value * factor;
 }
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
-    return resolvedFontSize(self._element, frame);
-}
-
-// The style engine currently exposes inline declarations but does not compute
-// stylesheet font inheritance. Resolve the sources it can represent exactly,
-// then fall back to CSS's initial medium size (16px).
-fn resolvedFontSize(element: ?*Element, frame: *Frame) f64 {
-    return resolvedFontSizeAt(element, frame, 0);
-}
-
-fn resolvedFontSizeAt(element: ?*Element, frame: *Frame, depth: u8) f64 {
-    if (depth >= MAX_ANCESTOR_DEPTH) {
-        return 16;
-    }
-    const current = element orelse return 16;
-    const parent = current.parentElement();
-
-    if (frame._style_manager.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {
-        if (parseFontSize(raw, parent, frame, depth + 1)) |size| {
-            return size;
-        }
-    }
-    if (current.getAttributeSafe(comptime .wrap("font-size"))) |raw| {
-        if (parseFontSize(raw, parent, frame, depth + 1)) |size| {
-            return size;
-        }
-    }
-    return resolvedFontSizeAt(parent, frame, depth + 1);
-}
-
-pub fn fontSizeForElement(element: *Element, frame: *Frame) f64 {
-    return resolvedFontSize(element, frame);
-}
-
-fn parseFontSize(raw: []const u8, parent: ?*Element, frame: *Frame, depth: u8) ?f64 {
-    const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
-    if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) {
-        return resolvedFontSizeAt(parent, frame, depth);
-    }
-    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "medium")) {
-        return 16;
-    }
-
-    const parsed = parse(value) catch return null;
-    const parent_size = resolvedFontSizeAt(parent, frame, depth);
-    const factor = absoluteUnitFactor(parsed.unit) orelse switch (parsed.unit) {
-        .unknown => return null,
-        .percentage => parent_size / 100.0,
-        .em => parent_size,
-        .ex => parent_size / 2.0,
-        else => unreachable,
-    };
-    const size = parsed.value * factor;
-    return if (size >= 0 and std.math.isFinite(size)) size else null;
-}
-
-fn absoluteUnitFactor(unit: Unit) ?f64 {
-    return switch (unit) {
-        .number, .px => 1,
-        .cm => 96.0 / 2.54,
-        .mm => 96.0 / 25.4,
-        .in => 96,
-        .pt => 96.0 / 72.0,
-        .pc => 16,
-        .unknown, .percentage, .em, .ex => null,
-    };
+    return frame._style_manager.computedFontSize(self._element);
 }
 
 const Parsed = struct {
@@ -370,44 +307,40 @@ const Parsed = struct {
 };
 
 fn parse(input: []const u8) !Parsed {
-    const value = std.mem.trim(u8, input, " \t\r\n\x0c");
-    if (value.len == 0) {
-        return error.SyntaxError;
-    }
-
-    const suffixes = [_]struct { []const u8, Unit }{
-        .{ "%", .percentage },
-        .{ "em", .em },
-        .{ "ex", .ex },
-        .{ "px", .px },
-        .{ "cm", .cm },
-        .{ "mm", .mm },
-        .{ "in", .in },
-        .{ "pt", .pt },
-        .{ "pc", .pc },
-    };
-
-    for (suffixes) |entry| {
-        const suffix, const unit = entry;
-        if (value.len <= suffix.len) {
-            continue;
-        }
-        if (!std.ascii.eqlIgnoreCase(value[value.len - suffix.len ..], suffix)) {
-            continue;
-        }
-        const number = std.mem.trim(u8, value[0 .. value.len - suffix.len], " \t\r\n\x0c");
-        return .{ .value = try parseNumber(number), .unit = unit };
-    }
-
-    return .{ .value = try parseNumber(value), .unit = .number };
+    const parsed = try units.parse(input);
+    const unit = fromShared(parsed.unit) orelse return error.SyntaxError;
+    return .{ .value = parsed.value, .unit = unit };
 }
 
-fn parseNumber(value: []const u8) !f64 {
-    const number = std.fmt.parseFloat(f64, value) catch return error.SyntaxError;
-    if (!std.math.isFinite(number)) {
-        return error.SyntaxError;
-    }
-    return number;
+fn fromShared(unit: units.Unit) ?Unit {
+    return switch (unit) {
+        .none => .number,
+        .percentage => .percentage,
+        .em => .em,
+        .ex => .ex,
+        .px => .px,
+        .cm => .cm,
+        .mm => .mm,
+        .in => .in,
+        .pt => .pt,
+        .pc => .pc,
+        .vh, .vw, .deg, .rad, .grad, .turn => null,
+    };
+}
+
+fn toShared(unit: Unit) units.Unit {
+    return switch (unit) {
+        .unknown, .number => .none,
+        .percentage => .percentage,
+        .em => .em,
+        .ex => .ex,
+        .px => .px,
+        .cm => .cm,
+        .mm => .mm,
+        .in => .in,
+        .pt => .pt,
+        .pc => .pc,
+    };
 }
 
 fn checkedUnit(value: u16) !Unit {
@@ -423,21 +356,6 @@ fn checkedUnit(value: u16) !Unit {
         9 => .pt,
         10 => .pc,
         else => error.NotSupported,
-    };
-}
-
-fn unitSuffix(unit: Unit) []const u8 {
-    return switch (unit) {
-        .unknown, .number => "",
-        .percentage => "%",
-        .em => "em",
-        .ex => "ex",
-        .px => "px",
-        .cm => "cm",
-        .mm => "mm",
-        .in => "in",
-        .pt => "pt",
-        .pc => "pc",
     };
 }
 

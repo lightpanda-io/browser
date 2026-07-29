@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Page = @import("../../Page.zig");
+const units = @import("../../css/units.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
@@ -77,11 +78,16 @@ pub fn getValue(self: *Angle) f64 {
     return toDegrees(self._value, self._unit);
 }
 
+// Sets the value in degrees; the stored unit is preserved and
+// valueInSpecifiedUnits converts, matching Blink and Gecko.
 pub fn setValue(self: *Angle, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
-    self._value = value;
-    self._unit = .unspecified;
+    self.syncFromAttribute();
+    if (self._unit == .unknown) {
+        self._unit = .unspecified;
+    }
+    self._value = fromDegrees(value, self._unit);
     try self.writeBack(frame);
 }
 
@@ -176,37 +182,16 @@ const Parsed = struct {
 };
 
 fn parse(input: []const u8) !Parsed {
-    const value = std.mem.trim(u8, input, " \t\r\n\x0c");
-    if (value.len == 0) {
-        return error.SyntaxError;
-    }
-
-    const suffixes = [_]struct { []const u8, Unit }{
-        .{ "turn", .turn },
-        .{ "grad", .grad },
-        .{ "deg", .deg },
-        .{ "rad", .rad },
+    const parsed = try units.parse(input);
+    const unit: Unit = switch (parsed.unit) {
+        .none => .unspecified,
+        .deg => .deg,
+        .rad => .rad,
+        .grad => .grad,
+        .turn => .turn,
+        else => return error.SyntaxError,
     };
-    for (suffixes) |entry| {
-        const suffix, const unit = entry;
-        if (value.len <= suffix.len) {
-            continue;
-        }
-        if (!std.ascii.eqlIgnoreCase(value[value.len - suffix.len ..], suffix)) {
-            continue;
-        }
-        const number = std.mem.trim(u8, value[0 .. value.len - suffix.len], " \t\r\n\x0c");
-        return .{ .value = try parseNumber(number), .unit = unit };
-    }
-    return .{ .value = try parseNumber(value), .unit = .unspecified };
-}
-
-fn parseNumber(value: []const u8) !f64 {
-    const number = std.fmt.parseFloat(f64, value) catch return error.SyntaxError;
-    if (!std.math.isFinite(number)) {
-        return error.SyntaxError;
-    }
-    return number;
+    return .{ .value = parsed.value, .unit = unit };
 }
 
 fn checkedUnit(value: u16) !Unit {
