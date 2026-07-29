@@ -274,6 +274,7 @@
   const src = new FormData();
   src.append('username', 'alice');
   src.append('note', 'two\r\nlines');
+  src.append('a\tb', 'tabbed');
   src.append('username', 'bob');
   const req2 = new Request('https://example.com', { method: 'POST', body: src });
   const fd2 = await req2.formData();
@@ -340,6 +341,7 @@
     testing.expectEqual('alice', fd2.getAll('username')[0]);
     testing.expectEqual('bob', fd2.getAll('username')[1]);
     testing.expectEqual('two\r\nlines', fd2.get('note'));
+    testing.expectEqual('tabbed', fd2.get('a\tb'));
 
     testing.expectEqual('y z', fd3.get('x'));
 

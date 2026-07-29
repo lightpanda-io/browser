@@ -390,16 +390,22 @@ test "header_parser: parse HTTP header" {
     try testing.expectString("def", header.value);
     try testing.expectEqual(true, cursor.reachedEnd());
 
-    // Leading whitespaces of the value are skipped, trailing ones are kept.
-    cursor = initCursor("Key:    value  \r\n");
+    // Leading whitespaces of the value — spaces and HTABs — are skipped,
+    // trailing ones are kept.
+    cursor = initCursor("Key:  \t value \t\r\n");
     try header.parse(&cursor);
-    try testing.expectString("value  ", header.value);
+    try testing.expectString("value \t", header.value);
 
     // 0 length values are fine.
     cursor = initCursor("Key:\r\n");
     try header.parse(&cursor);
     try testing.expectString("Key", header.key);
     try testing.expectString("", header.value);
+
+    // HTAB is legal field content, including next to spaces.
+    cursor = initCursor("Key: a\tb\t c\r\n");
+    try header.parse(&cursor);
+    try testing.expectString("a\tb\t c", header.value);
 }
 
 test "header_parser: parse HTTP header incomplete" {
@@ -490,8 +496,8 @@ test "header_parser: cursor" {
     try testing.expectEqual(true, cursor.reachedEnd());
     try testing.expectString("", cursor.remaining());
 
-    // Skipping spaces stops at the end of the buffer.
-    cursor = initCursor("   ");
+    // Skipping spaces covers HTABs too and stops at the end of the buffer.
+    cursor = initCursor(" \t \t");
     cursor.skipSpaces();
     try testing.expectEqual(true, cursor.reachedEnd());
 }
@@ -520,6 +526,20 @@ test "header_parser: match functions against scalar reference" {
             for (0..256) |c| {
                 @memset(buf[0..len], 'a');
                 buf[pos] = @intCast(c);
+                try expectMatchesReference(buf[0..len]);
+            }
+        }
+    }
+
+    // HTAB is the one valid byte below space; pair it with every byte at
+    // every position to prove it never disturbs its neighbor's verdict
+    // (a cross-lane borrow in the SWAR path would).
+    for (2..buf.len + 1) |len| {
+        for (0..len - 1) |pos| {
+            for (0..256) |c| {
+                @memset(buf[0..len], 'a');
+                buf[pos] = '\t';
+                buf[pos + 1] = @intCast(c);
                 try expectMatchesReference(buf[0..len]);
             }
         }

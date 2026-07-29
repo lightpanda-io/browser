@@ -99,6 +99,7 @@
   const src = new FormData();
   src.append('username', 'alice');
   src.append('note', 'two\r\nlines');
+  src.append('a\tb', 'tabbed');
   src.append('username', 'bob');
   const res2 = new Response(src);
   const fd2 = await res2.formData();
@@ -123,6 +124,28 @@
   const promised6 = p6 instanceof Promise;
   try { await p6; } catch (e) { rejected6 = e instanceof TypeError; }
 
+  // A null body with a form Content-Type acts as an empty byte sequence and
+  // resolves with an empty FormData.
+  const res7 = new Response(null, {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const fd7 = await res7.formData();
+
+  // A multipart Content-Type without a boundary rejects with a TypeError.
+  let rejected8 = false;
+  const res8 = new Response('x', {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  try { await res8.formData(); } catch (e) { rejected8 = e instanceof TypeError; }
+
+  // A part with an unquoted RFC 5987 filename* parameter — which real
+  // servers emit — parses; the parameter itself is skipped.
+  const res9 = new Response(
+    '--B\r\nContent-Disposition: form-data; filename*=UTF-8\'\'a.jpg; name="n"\r\n\r\nv\r\n--B--\r\n',
+    { headers: { 'Content-Type': 'multipart/form-data; boundary=B' } },
+  );
+  const fd9 = await res9.formData();
+
   state.resolve();
   await state.done(() => {
     testing.expectEqual(true, fd1 instanceof FormData);
@@ -136,6 +159,7 @@
     testing.expectEqual('alice', fd2.getAll('username')[0]);
     testing.expectEqual('bob', fd2.getAll('username')[1]);
     testing.expectEqual('two\r\nlines', fd2.get('note'));
+    testing.expectEqual('tabbed', fd2.get('a\tb'));
 
     testing.expectEqual('y z', fd3.get('x'));
 
@@ -144,6 +168,11 @@
 
     testing.expectEqual(true, promised6);
     testing.expectEqual(true, rejected6);
+
+    testing.expectEqual(true, fd7 instanceof FormData);
+    testing.expectEqual(0, [...fd7].length);
+    testing.expectEqual(true, rejected8);
+    testing.expectEqual('v', fd9.get('n'));
   });
 </script>
 

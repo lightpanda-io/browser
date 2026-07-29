@@ -1314,6 +1314,9 @@ test "FormData: multipart round-trip" {
     try src.appendText("username", "alice");
     try src.appendText("username", "bob");
     try src.appendText("a\"b\r\nc", "quoted \"value\"");
+    // HTAB in a name survives the trip: the encoder writes it raw into the
+    // Content-Disposition value and the parser accepts it (RFC 9110).
+    try src.appendText("a\tb", "tabbed");
 
     var buf = std.Io.Writer.Allocating.init(allocator);
     try src.write(.{
@@ -1328,10 +1331,11 @@ test "FormData: multipart round-trip" {
     };
     try fd.parseMultipart(frame._page, buf.written(), "BOUNDARY");
 
-    try testing.expectEqual(3, fd._entries.items.len);
+    try testing.expectEqual(4, fd._entries.items.len);
     try testing.expectString("username", fd._entries.items[0].name.str());
     try testing.expectString("alice", fd._entries.items[0].value.asString());
     try testing.expectString("username", fd._entries.items[1].name.str());
     try testing.expectString("bob", fd._entries.items[1].value.asString());
     try testing.expectString("quoted \"value\"", fd.get(.wrap("a\"b\r\nc")).?);
+    try testing.expectString("tabbed", fd.get(.wrap("a\tb")).?);
 }
