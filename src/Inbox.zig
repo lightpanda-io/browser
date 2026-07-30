@@ -30,9 +30,6 @@ const lp = @import("lightpanda");
 
 const CDP = @import("cdp/CDP.zig");
 
-const ArenaPool = @import("ArenaPool.zig");
-
-const Allocator = std.mem.Allocator;
 const DoublyLinkedList = std.DoublyLinkedList;
 
 const Inbox = @This();
@@ -47,16 +44,16 @@ queue: DoublyLinkedList = .{},
 // a syncRequest and we want the following non-nested tick to pick it up again.
 terminated: bool = false,
 
-pub fn deinit(self: *Inbox, arena_pool: *ArenaPool) void {
+pub fn deinit(self: *Inbox) void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     while (self.queue.popFirst()) |node| {
         const msg: *Message = @fieldParentPtr("node", node);
-        msg.deinit(arena_pool);
+        msg.deinit();
     }
 }
 
-pub fn push(self: *Inbox, arena: Allocator, payload: Message.Payload) void {
+pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
     const msg = arena.create(Message) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM"),
     };
@@ -109,7 +106,7 @@ pub fn popIf(self: *Inbox, predicate: *const fn (*Message) bool) ?*Message {
 }
 
 pub const Message = struct {
-    arena: Allocator,
+    arena: *lp.Arena,
     payload: Payload,
     node: DoublyLinkedList.Node = .{},
 
@@ -145,8 +142,8 @@ pub const Message = struct {
         input: CDP.InputMessage,
     };
 
-    pub fn deinit(self: *const Message, pool: *ArenaPool) void {
-        pool.release(self.arena);
+    pub fn deinit(self: *const Message) void {
+        self.arena.release();
     }
 };
 
@@ -155,7 +152,7 @@ test "Inbox: push then pop returns FIFO order" {
     const arena_pool = &testing.test_app.arena_pool;
 
     var inbox = Inbox{};
-    defer inbox.deinit(&testing.test_app.arena_pool);
+    defer inbox.deinit();
 
     {
         const arena = try arena_pool.acquire(.tiny, "inbox test");
@@ -174,17 +171,17 @@ test "Inbox: push then pop returns FIFO order" {
 
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("first", m.payload.ping);
     }
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("second", m.payload.ping);
     }
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual(@as(?anyerror, null), m.payload.disconnect);
     }
     try testing.expect(inbox.pop() == null);
@@ -203,7 +200,7 @@ test "Inbox: deinit frees remaining items" {
         inbox.push(arena, .{ .disconnect = error.PeerClosed });
     }
 
-    inbox.deinit(&testing.test_app.arena_pool);
+    inbox.deinit();
     // Memory leaks would be caught by the test runner.
 }
 
@@ -221,14 +218,14 @@ fn testIsPing(msg: *Message) bool {
 
 test "Inbox: popIf on empty queue returns null" {
     var inbox = Inbox{};
-    defer inbox.deinit(&testing.test_app.arena_pool);
+    defer inbox.deinit();
     try testing.expect(inbox.popIf(testAlwaysTrue) == null);
 }
 
 test "Inbox: popIf with no match leaves queue intact" {
     const arena_pool = &testing.test_app.arena_pool;
     var inbox = Inbox{};
-    defer inbox.deinit(arena_pool);
+    defer inbox.deinit();
 
     {
         const arena = try arena_pool.acquire(.tiny, "popif test");
@@ -244,12 +241,12 @@ test "Inbox: popIf with no match leaves queue intact" {
     // Original FIFO order preserved.
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("first", m.payload.ping);
     }
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("second", m.payload.ping);
     }
     try testing.expect(inbox.pop() == null);
@@ -258,7 +255,7 @@ test "Inbox: popIf with no match leaves queue intact" {
 test "Inbox: popIf with always-true predicate behaves like pop" {
     const arena_pool = &testing.test_app.arena_pool;
     var inbox = Inbox{};
-    defer inbox.deinit(arena_pool);
+    defer inbox.deinit();
 
     {
         const arena = try arena_pool.acquire(.tiny, "popif test");
@@ -271,12 +268,12 @@ test "Inbox: popIf with always-true predicate behaves like pop" {
 
     {
         const m = inbox.popIf(testAlwaysTrue).?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("a", m.payload.ping);
     }
     {
         const m = inbox.popIf(testAlwaysTrue).?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("b", m.payload.ping);
     }
     try testing.expect(inbox.popIf(testAlwaysTrue) == null);
@@ -285,7 +282,7 @@ test "Inbox: popIf with always-true predicate behaves like pop" {
 test "Inbox: popIf cherry-picks middle, preserves order of remainder" {
     const arena_pool = &testing.test_app.arena_pool;
     var inbox = Inbox{};
-    defer inbox.deinit(arena_pool);
+    defer inbox.deinit();
 
     {
         const arena = try arena_pool.acquire(.tiny, "popif test");
@@ -303,19 +300,19 @@ test "Inbox: popIf cherry-picks middle, preserves order of remainder" {
     // testIsPing skips the disconnect at the head and picks the middle.
     {
         const m = inbox.popIf(testIsPing).?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expectEqual("middle", m.payload.ping);
     }
 
     // Remaining two disconnects pop in original order.
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expect(m.payload.disconnect == null);
     }
     {
         const m = inbox.pop().?;
-        defer m.deinit(arena_pool);
+        defer m.deinit();
         try testing.expect(m.payload.disconnect.? == error.PeerClosed);
     }
     try testing.expect(inbox.pop() == null);
@@ -324,7 +321,7 @@ test "Inbox: popIf cherry-picks middle, preserves order of remainder" {
 test "Inbox: popIf picks first match in FIFO order" {
     const arena_pool = &testing.test_app.arena_pool;
     var inbox = Inbox{};
-    defer inbox.deinit(arena_pool);
+    defer inbox.deinit();
 
     {
         const arena = try arena_pool.acquire(.tiny, "popif test");
@@ -340,6 +337,6 @@ test "Inbox: popIf picks first match in FIFO order" {
     }
 
     const m = inbox.popIf(testIsPing).?;
-    defer m.deinit(arena_pool);
+    defer m.deinit();
     try testing.expectEqual("first", m.payload.ping);
 }

@@ -38,7 +38,7 @@ pub const Proto = EventTarget;
 _rc: lp.RC = .{},
 _exec: *Execution,
 _proto: *EventTarget,
-_arena: Allocator,
+_arena: *lp.Arena,
 
 _ready_state: ReadyState = .empty,
 _result: ?Result = null,
@@ -67,16 +67,16 @@ const Result = union(enum) {
 
 pub fn init(exec: *Execution) !*FileReader {
     const arena = try exec.getArena(.tiny, "FileReader");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
-    return exec._factory.eventTargetWithAllocator(arena, FileReader{
+    return exec._factory.eventTargetWithAllocator(arena.allocator(), FileReader{
         ._exec = exec,
         ._arena = arena,
         ._proto = undefined,
     });
 }
 
-pub fn deinit(self: *FileReader, page: *Page) void {
+pub fn deinit(self: *FileReader, _: *Page) void {
     if (self._on_abort) |func| func.release();
     if (self._on_error) |func| func.release();
     if (self._on_load) |func| func.release();
@@ -84,7 +84,7 @@ pub fn deinit(self: *FileReader, page: *Page) void {
     if (self._on_load_start) |func| func.release();
     if (self._on_progress) |func| func.release();
 
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *FileReader, page: *Page) void {
@@ -219,7 +219,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
         .data_url => blk: {
             // Create data URL with base64 encoding
             const mime = if (blob._mime.len > 0) blob._mime else "application/octet-stream";
-            const data_url = try encodeDataURL(self._arena, mime, data);
+            const data_url = try encodeDataURL(self._arena.allocator(), mime, data);
             break :blk .{ .string = data_url };
         },
     };

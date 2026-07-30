@@ -89,7 +89,7 @@ fn txn(self: *IDBIndex) !*IDBTransaction {
 
 pub fn get(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveKey(t._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(t._arena.allocator(), query, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get = .{ .index = self, .bounds = bounds } }, exec);
 }
@@ -107,7 +107,7 @@ pub fn runGet(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, exec
 
 pub fn getKey(self: *IDBIndex, query: js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveKey(t._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(t._arena.allocator(), query, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get_key = .{ .index = self, .bounds = bounds } }, exec);
 }
@@ -133,14 +133,14 @@ pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, ex
 
 pub fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const args = try IDBKeyRange.resolveGetAllOptions(t._arena, options, exec);
+    const args = try IDBKeyRange.resolveGetAllOptions(t._arena.allocator(), options, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = .record } }, exec);
 }
 
 fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const args = try IDBKeyRange.resolveGetAll(t._arena, query_or_options, count_, exec);
+    const args = try IDBKeyRange.resolveGetAll(t._arena.allocator(), query_or_options, count_, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = mode } }, exec);
 }
@@ -184,7 +184,7 @@ fn rowToValue(self: *IDBIndex, mode: IDBObjectStore.GetAllMode, key: []const u8,
 
 pub fn count(self: *IDBIndex, query: ?js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
-    const bounds = try IDBKeyRange.resolveQuery(t._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     const request = try t.newRequest();
     return request.submit(.{ .index_count = .{ .index = self, .bounds = bounds } }, exec);
 }
@@ -200,13 +200,13 @@ pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, ex
 
 pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, true, exec);
 }
 

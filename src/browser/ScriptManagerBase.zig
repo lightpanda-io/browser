@@ -185,12 +185,8 @@ pub fn getHeaders(self: *ScriptManagerBase) !http.Headers {
     return headers;
 }
 
-fn acquireArena(self: *ScriptManagerBase, size_or_bucket: anytype, debug: []const u8) !Allocator {
+fn acquireArena(self: *ScriptManagerBase, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.owner.session().getArena(size_or_bucket, debug);
-}
-
-fn releaseArena(self: *ScriptManagerBase, arena: Allocator) void {
-    self.owner.session().releaseArena(arena);
 }
 
 pub fn scriptList(self: *ScriptManagerBase, script: *const Script) *std.DoublyLinkedList {
@@ -239,7 +235,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     errdefer _ = self.imported_modules.remove(url);
 
     const arena = try self.acquireArena(.large, "SM.preloadImport");
-    errdefer self.releaseArena(arena);
+    errdefer arena.release();
 
     const script = try arena.create(Script);
     script.* = .{
@@ -431,7 +427,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     }
 
     const arena = try self.acquireArena(.large, "SM.getAsyncImport");
-    errdefer self.releaseArena(arena);
+    errdefer arena.release();
 
     const script = try arena.create(Script);
     script.* = .{
@@ -614,7 +610,7 @@ pub const Script = struct {
     status: u16 = 0,
     source: Source,
     url: []const u8,
-    arena: Allocator,
+    arena: *lp.Arena,
     extra: Extra,
     node: std.DoublyLinkedList.Node,
     manager: *ScriptManagerBase,
@@ -691,7 +687,7 @@ pub const Script = struct {
     };
 
     pub fn deinit(self: *Script) void {
-        self.manager.releaseArena(self.arena);
+        self.arena.release();
     }
 
     pub fn startCallback(transfer: *HttpClient.Transfer) !void {
@@ -754,7 +750,7 @@ pub const Script = struct {
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
         var buffer: std.ArrayList(u8) = .empty;
         if (transfer.getContentLength()) |cl| {
-            try buffer.ensureTotalCapacity(self.arena, cl);
+            try buffer.ensureTotalCapacity(self.arena.allocator(), cl);
         }
         self.source = .{ .remote = buffer };
         return .proceed;
@@ -769,7 +765,7 @@ pub const Script = struct {
     }
 
     fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
-        try self.source.remote.appendSlice(self.arena, data);
+        try self.source.remote.appendSlice(self.arena.allocator(), data);
     }
 
     pub fn doneCallback(ctx: *anyopaque) !void {
@@ -1148,7 +1144,7 @@ test "ScriptManagerBase: waitForImport stops when teardown is pending" {
         .raw = try message_arena.dupe(u8, "{}"),
         .input = .{ .method = "Target.disposeBrowserContext" },
     } });
-    defer client.inbox.pop().?.deinit(client.arena_pool);
+    defer client.inbox.pop().?.deinit();
 
     try testing.expectError(error.SyncWaitInterrupted, sm.waitForImport(url));
 }

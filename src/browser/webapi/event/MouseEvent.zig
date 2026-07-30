@@ -29,7 +29,6 @@ const UIEvent = @import("UIEvent.zig");
 const PointerEvent = @import("PointerEvent.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 const MouseEvent = @This();
 
@@ -89,18 +88,18 @@ pub const Options = Event.inheritOptions(
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*MouseEvent {
     const arena = try frame.getArena(.tiny, "MouseEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, frame);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*MouseEvent {
     const arena = try frame.getArena(.tiny, "MouseEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*MouseEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*MouseEvent {
     const opts = _opts orelse Options{};
 
     const event = try frame._factory.uiEvent(
@@ -242,7 +241,7 @@ pub fn initMouseEvent(
     }
 
     event._initialized = true;
-    event._type_string = try String.init(event._arena, typ, .{});
+    event._type_string = try String.init(event._arena.allocator(), typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     ui._view = view;

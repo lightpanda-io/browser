@@ -52,7 +52,7 @@ pub fn parseFromString(
     return switch (target_mime) {
         .@"text/html" => {
             const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
-            defer frame.releaseArena(arena);
+            defer arena.release();
 
             // DOMParser builds a detached Document. Borrow the same fragment
             // parse-mode that `Frame.parse` uses so frame-side hooks
@@ -76,7 +76,7 @@ pub fn parseFromString(
             }
 
             // Parse HTML into the document
-            var parser = Parser.init(arena, doc.asNode(), frame, .{});
+            var parser = Parser.init(arena.allocator(), doc.asNode(), frame, .{});
             parser.parse(normalized);
             if (parser.terminated) {
                 return error.ExecutionTerminated;

@@ -20,6 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
+const Arena = @import("Arena.zig");
+
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -27,24 +29,15 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const ArenaPool = @This();
 
 const IS_DEBUG = builtin.mode == .Debug;
-
-// In Debug, disable pooling to better catch UAF.
-const SAFETY = IS_DEBUG == true and builtin.is_test == false;
+const SAFETY = Arena.SAFETY;
 
 pub const BucketSize = enum { tiny, small, medium, large };
 
-const Bucket = struct {
-    free_list: ?*Entry = null,
+pub const Bucket = struct {
+    free_list: ?*Arena = null,
     free_list_len: u16 = 0,
     free_list_max: u16,
     retain_bytes: usize,
-};
-
-const Entry = struct {
-    next: ?*Entry,
-    arena: ArenaAllocator,
-    bucket: *Bucket,
-    debug: if (IS_DEBUG) []const u8 else void = if (IS_DEBUG) "" else {},
 };
 
 pub const Config = struct {
@@ -65,7 +58,7 @@ medium: Bucket,
 large: Bucket,
 allocator: Allocator,
 mutex: std.Io.Mutex = .init,
-entry_pool: std.heap.MemoryPool(Entry),
+entry_pool: std.heap.MemoryPool(Arena),
 
 _leak_track: if (IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (IS_DEBUG) .empty else {},
 
@@ -101,7 +94,7 @@ pub fn deinit(self: *ArenaPool) void {
         var entry = bucket.free_list;
         while (entry) |e| {
             entry = e.next;
-            e.arena.deinit();
+            e._arena.deinit();
         }
     }
     self.entry_pool.deinit(self.allocator);
@@ -110,7 +103,7 @@ pub fn deinit(self: *ArenaPool) void {
 // Acquire an arena from the pool.
 // - Pass a BucketSize (.tiny, .small, .medium, .large) for explicit bucket selection
 // - Pass a usize for automatic bucket selection based on expected size
-pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !*Arena {
     const bucket_size: BucketSize = blk: {
         const T = @TypeOf(size_or_bucket);
         if (T == BucketSize or T == @TypeOf(.enum_literal)) {
@@ -147,7 +140,7 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
             gop.value_ptr.* += 1;
         }
         lp.metrics.arena_hit.incr(bucket_size);
-        return entry.arena.allocator();
+        return entry;
     }
 
     lp.metrics.arena_miss.incr(bucket_size);
@@ -155,9 +148,10 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
     const entry = try self.entry_pool.create(self.allocator);
     entry.* = .{
         .next = null,
+        .pool = self,
         .bucket = bucket,
         .debug = if (IS_DEBUG) debug else {},
-        .arena = ArenaAllocator.init(self.allocator),
+        ._arena = ArenaAllocator.init(self.allocator),
     };
 
     if (IS_DEBUG) {
@@ -167,13 +161,12 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !Al
         }
         gop.value_ptr.* += 1;
     }
-    return entry.arena.allocator();
+    return entry;
 }
 
-// Universal release - determines bucket from the Entry automatically
-pub fn release(self: *ArenaPool, allocator: Allocator) void {
-    const arena: *ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
-    const entry: *Entry = @fieldParentPtr("arena", arena);
+// Prefer Arena.release(). Determines the bucket from the Arena automatically.
+pub fn release(self: *ArenaPool, entry: *Arena) void {
+    const arena = &entry._arena;
     const bucket = entry.bucket;
 
     if (IS_DEBUG) {
@@ -208,18 +201,6 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     bucket.free_list_len += 1;
 }
 
-pub fn reset(_: *const ArenaPool, allocator: Allocator, retain: usize) void {
-    const arena: *ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
-    // In Debug, free_all, it's less likely to hide things
-    _ = arena.reset(if (comptime SAFETY) .free_all else .{ .retain_with_limit = retain });
-}
-
-pub fn resetRetain(_: *const ArenaPool, allocator: Allocator) void {
-    const arena: *ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
-    // In Debug, free_all, it's less likely to hide things
-    _ = arena.reset(if (comptime SAFETY) .free_all else .retain_capacity);
-}
-
 const testing = std.testing;
 test "ArenaPool: basic acquire and release" {
     var pool = ArenaPool.init(testing.allocator, .{});
@@ -230,17 +211,17 @@ test "ArenaPool: basic acquire and release" {
     const large = try pool.acquire(.large, "test-large");
 
     // All three must be distinct arenas
-    try testing.expect(tiny.ptr != medium.ptr);
-    try testing.expect(medium.ptr != large.ptr);
+    try testing.expect(tiny != medium);
+    try testing.expect(medium != large);
 
     _ = try tiny.alloc(u8, 64);
     _ = try medium.alloc(u8, 1024);
     _ = try large.alloc(u8, 4096);
 
     // Universal release works for all buckets
-    pool.release(tiny);
-    pool.release(medium);
-    pool.release(large);
+    tiny.release();
+    medium.release();
+    large.release();
 
     try testing.expectEqual(1, pool.tiny.free_list_len);
     try testing.expectEqual(1, pool.medium.free_list_len);
@@ -252,20 +233,20 @@ test "ArenaPool: reuse from correct bucket" {
     defer pool.deinit();
 
     const tiny1 = try pool.acquire(.tiny, "test");
-    pool.release(tiny1);
+    tiny1.release();
     try testing.expectEqual(1, pool.tiny.free_list_len);
 
     // Next acquire with .tiny should reuse from tiny bucket
     const tiny2 = try pool.acquire(.tiny, "test");
     try testing.expectEqual(0, pool.tiny.free_list_len);
-    try testing.expectEqual(tiny1.ptr, tiny2.ptr);
+    try testing.expectEqual(tiny1, tiny2);
 
     // acquire with .medium should NOT get the tiny arena
     const medium = try pool.acquire(.medium, "test-medium");
-    try testing.expect(medium.ptr != tiny2.ptr);
+    try testing.expect(medium != tiny2);
 
-    pool.release(tiny2);
-    pool.release(medium);
+    tiny2.release();
+    medium.release();
 }
 
 test "ArenaPool: respects per-bucket max limits" {
@@ -282,11 +263,11 @@ test "ArenaPool: respects per-bucket max limits" {
     const t3 = try pool.acquire(.tiny, "t3");
 
     // Release all 3, but only 1 should be kept (tiny_max = 1)
-    pool.release(t1);
+    t1.release();
     try testing.expectEqual(1, pool.tiny.free_list_len);
-    pool.release(t2);
+    t2.release();
     try testing.expectEqual(1, pool.tiny.free_list_len); // still 1, t2 discarded
-    pool.release(t3);
+    t3.release();
     try testing.expectEqual(1, pool.tiny.free_list_len); // still 1, t3 discarded
 
     // Acquire 3 medium arenas
@@ -295,9 +276,9 @@ test "ArenaPool: respects per-bucket max limits" {
     const m3 = try pool.acquire(.medium, "m3");
 
     // Release all 3, but only 2 should be kept (medium_max = 2)
-    pool.release(m1);
-    pool.release(m2);
-    pool.release(m3);
+    m1.release();
+    m2.release();
+    m3.release();
     try testing.expectEqual(2, pool.medium.free_list_len);
 }
 
@@ -311,7 +292,7 @@ test "ArenaPool: reset clears memory without releasing" {
     @memset(buf, 0xFF);
 
     // reset() frees arena memory but keeps the allocator in-flight.
-    pool.reset(alloc, 0);
+    alloc.reset(0);
 
     // The free list must stay empty; the allocator was not released.
     try testing.expectEqual(0, pool.medium.free_list_len);
@@ -321,7 +302,7 @@ test "ArenaPool: reset clears memory without releasing" {
     @memset(buf2, 0x00);
     try testing.expectEqual(@as(u8, 0x00), buf2[0]);
 
-    pool.release(alloc);
+    alloc.release();
 }
 
 test "ArenaPool: deinit with entries in free list" {
@@ -333,8 +314,8 @@ test "ArenaPool: deinit with entries in free list" {
     const a2 = try pool.acquire(.medium, "test2");
     _ = try a1.alloc(u8, 256);
     _ = try a2.alloc(u8, 512);
-    pool.release(a1);
-    pool.release(a2);
+    a1.release();
+    a2.release();
     try testing.expectEqual(1, pool.tiny.free_list_len);
     try testing.expectEqual(1, pool.medium.free_list_len);
 
@@ -351,9 +332,9 @@ test "ArenaPool: small bucket" {
     const s2 = try pool.acquire(.small, "s2");
     const s3 = try pool.acquire(.small, "s3");
 
-    pool.release(s1);
-    pool.release(s2);
-    pool.release(s3);
+    s1.release();
+    s2.release();
+    s3.release();
 
     try testing.expectEqual(2, pool.small.free_list_len);
 }
@@ -371,10 +352,10 @@ test "ArenaPool: size-based acquire" {
     // > 16KB -> large
     const d = try pool.acquire(20000, "fits-large");
 
-    pool.release(a);
-    pool.release(b);
-    pool.release(c);
-    pool.release(d);
+    a.release();
+    b.release();
+    c.release();
+    d.release();
 
     try testing.expectEqual(1, pool.tiny.free_list_len);
     try testing.expectEqual(1, pool.small.free_list_len);

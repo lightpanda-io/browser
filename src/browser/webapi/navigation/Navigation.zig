@@ -213,9 +213,9 @@ pub fn pushEntry(
     const id = self._next_entry_id;
     self._next_entry_id += 1;
 
-    const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
+    const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
 
-    const entry = try Factory.chainedWithAllocator(arena, .{
+    const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
         EventTarget{ ._type = undefined },
         NavigationHistoryEntry{
             ._proto = undefined,
@@ -229,7 +229,7 @@ pub fn pushEntry(
 
     // we don't always have a current entry...
     const previous = if (self._entries.items.len > 0) self.getCurrentEntry() else null;
-    try self._entries.append(arena, entry);
+    try self._entries.append(arena.allocator(), entry);
     self._index = index;
 
     if (previous != null and should_dispatch) {
@@ -260,9 +260,9 @@ pub fn replaceEntry(
 
     const id = self._next_entry_id;
     self._next_entry_id += 1;
-    const id_str = try std.fmt.allocPrint(arena, "{d}", .{id});
+    const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
 
-    const entry = try Factory.chainedWithAllocator(arena, .{
+    const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
         EventTarget{ ._type = undefined },
         NavigationHistoryEntry{
             ._proto = undefined,
@@ -320,7 +320,7 @@ pub fn navigateInner(
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
 
-    var new_url = try URL.resolve(arena, frame.url, url, .{});
+    var new_url = try URL.resolve(arena.allocator(), frame.url, url, .{});
     const is_same_document = URL.eqlDocument(new_url, frame.url);
 
     // In case of navigation to the same document, we force an url duplication.
@@ -406,7 +406,7 @@ pub fn navigateInner(
 pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, frame: *Frame) !NavigationReturn {
     const arena = frame._session.arena;
     const opts = _opts orelse NavigateOptions{};
-    const json = if (opts.state) |state| state.toJson(arena) catch return error.DataClone else null;
+    const json = if (opts.state) |state| state.toJson(arena.allocator()) catch return error.DataClone else null;
 
     const kind: NavigationKind = if (opts.history) |history|
         if (std.mem.eql(u8, "replace", history)) .{ .replace = json } else .{ .push = json }
@@ -469,7 +469,7 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
     const previous = self.getCurrentEntry();
     self.getCurrentEntry()._state = .{
         .source = .navigation,
-        .value = options.state.toJson(arena) catch return error.DataClone,
+        .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
     };
 
     if (self._on_currententrychange) |cec| {

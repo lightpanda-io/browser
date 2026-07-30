@@ -27,13 +27,12 @@ const EventTarget = @import("EventTarget.zig");
 
 const String = lp.String;
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 pub const Event = @This();
 
 pub const _prototype_root = true;
 _type: Type,
-_arena: Allocator,
+_arena: *lp.Arena,
 _bubbles: bool = false,
 _cancelable: bool = false,
 _composed: bool = false,
@@ -107,18 +106,18 @@ pub const Options = struct {
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.tiny, "Event");
-    errdefer page.releaseArena(arena);
-    const str = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const str = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, str, opts_, false);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.tiny, "Event.trusted");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, opts_, true);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, comptime trusted: bool) !*Event {
+fn initWithTrusted(arena: *lp.Arena, typ: String, opts_: ?Options, comptime trusted: bool) !*Event {
     const opts = opts_ orelse Options{};
 
     // Same (already coarsened) clock as the performance time origin, so the
@@ -150,7 +149,7 @@ pub fn initEvent(
     }
 
     self._initialized = true;
-    self._type_string = try String.init(self._arena, event_string, .{});
+    self._type_string = try String.init(self._arena.allocator(), event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
     self._stop_propagation = false;
@@ -162,8 +161,8 @@ pub fn acquireRef(self: *Event) void {
     self._rc.acquire();
 }
 
-pub fn deinit(self: *Event, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Event, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *Event, page: *Page) void {

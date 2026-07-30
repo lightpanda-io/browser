@@ -717,13 +717,13 @@ pub const BrowserContext = struct {
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
-        errdefer browser.arena_pool.release(arena);
+        errdefer arena.release();
 
         const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
-        errdefer browser.arena_pool.release(call_arena);
+        errdefer call_arena.release();
 
         const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
-        errdefer browser.arena_pool.release(local_arena);
+        errdefer local_arena.release();
 
         const world = try arena.create(IsolatedWorld);
         world.* = .{
@@ -750,7 +750,7 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn axnodeWriter(self: *BrowserContext, temp_arena: Allocator, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
+    pub fn axnodeWriter(self: *BrowserContext, temp_arena: *lp.Arena, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         // Bind the writer to the frame that owns the root node. Name resolution
         // (`Label.findLabelByFor` against `ownerDocument`) and visibility
         // checks (`frame._style_manager`) are per-frame; getting this wrong on
@@ -1148,9 +1148,9 @@ const ScriptOnNewDocument = struct {
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
-    arena: Allocator,
-    call_arena: Allocator,
-    local_arena: Allocator,
+    arena: *lp.Arena,
+    call_arena: *lp.Arena,
+    local_arena: *lp.Arena,
     browser: *Browser,
     name: []const u8,
     context: ?*js.Context = null,
@@ -1162,9 +1162,9 @@ const IsolatedWorld = struct {
 
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeContext();
-        self.browser.arena_pool.release(self.call_arena);
-        self.browser.arena_pool.release(self.local_arena);
-        self.browser.arena_pool.release(self.arena);
+        self.call_arena.release();
+        self.local_arena.release();
+        self.arena.release();
     }
 
     pub fn removeContext(self: *IsolatedWorld) void {
@@ -1187,9 +1187,9 @@ const IsolatedWorld = struct {
         if (self.context == null) {
             const ctx = try self.browser.env.createContext(frame, .{
                 .identity = &self.identity,
-                .identity_arena = self.arena,
-                .call_arena = self.call_arena,
-                .local_arena = self.local_arena,
+                .identity_arena = self.arena.allocator(),
+                .call_arena = self.call_arena.allocator(),
+                .local_arena = self.local_arena.allocator(),
                 .debug_name = "IsolatedContext",
             });
             self.context = ctx;

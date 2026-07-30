@@ -469,7 +469,7 @@ pub const RequestWriter = struct {
                 try SafeString.writeObjectField(jws, hdr.name);
                 try jws.write(SafeString.wrap(hdr.value));
             }
-            if (try request.getCookieString(transfer.arena)) |cookies| {
+            if (try request.getCookieString(transfer.arena.allocator())) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }

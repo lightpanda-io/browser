@@ -27,7 +27,6 @@ const MessagePort = @import("../MessagePort.zig");
 const Window = @import("../Window.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const MessageEvent = @This();
@@ -65,18 +64,18 @@ const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
     const arena = try page.getArena(.small, "MessageEvent");
-    errdefer page.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*MessageEvent {
     const arena = try page.getArena(.small, "MessageEvent.trusted");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, opts_, true, page);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
     const opts = opts_ orelse Options{};
 
     const event = try page.factory.event(

@@ -16,14 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const Animation = @This();
 
@@ -36,7 +34,7 @@ const PlayState = enum {
 
 _rc: lp.RC = .{},
 _frame: *Frame,
-_arena: Allocator,
+_arena: *lp.Arena,
 
 _effect: ?js.Object.Global = null,
 _timeline: ?js.Object.Global = null,
@@ -53,7 +51,7 @@ _playState: PlayState = .idle,
 // TODO add support for effect and timeline
 pub fn init(frame: *Frame) !*Animation {
     const arena = try frame.getArena(.tiny, "Animation");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(Animation);
     self.* = .{
@@ -64,8 +62,8 @@ pub fn init(frame: *Frame) !*Animation {
     return self;
 }
 
-pub fn deinit(self: *Animation, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Animation, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *Animation, page: *Page) void {

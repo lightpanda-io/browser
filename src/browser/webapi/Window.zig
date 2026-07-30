@@ -55,7 +55,6 @@ const Notification = @import("../../Notification.zig");
 const log = lp.log;
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -816,7 +815,7 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
     const source_window = target_frame.js.getIncumbent().window;
 
     const arena = try target_frame.getArena(.medium, "Window.postMessage");
-    errdefer target_frame.releaseArena(arena);
+    errdefer arena.release();
 
     // StructuredSerialize runs synchronously (per spec): clone the message into
     // the target window's realm now. The receiver gets a fresh, independent copy
@@ -1079,13 +1078,13 @@ pub const Access = union(enum) {
 const PostMessageCallback = struct {
     frame: *Frame,
     source: *Window,
-    arena: Allocator,
+    arena: *lp.Arena,
     origin: []const u8,
     message: js.Value.Global,
     ports: []const *MessagePort,
 
     fn deinit(self: *PostMessageCallback) void {
-        self.frame.releaseArena(self.arena);
+        self.arena.release();
     }
 
     // Called by the scheduler if the task is dropped before it runs. `run` and

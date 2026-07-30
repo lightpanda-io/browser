@@ -35,7 +35,6 @@ const DOMStringList = @import("../../collections.zig").DOMStringList;
 
 const log = lp.log;
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 const FunctionSetter = idb.FunctionSetter;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -62,7 +61,7 @@ _durability: Durability = .default,
 // engine's connection gate (gate ownership needs no ref of its own: it's only
 // ever held while a drain task exists).
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 
 // v8 handles owned by the transaction, swept (reset) in deinit. Slots are
 // arena-allocated so an early release and the sweep hit the same instance —
@@ -127,8 +126,8 @@ pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Executi
     const arena = try exec.getArena(.small, "IDBTransaction");
 
     const self = blk: {
-        errdefer exec.releaseArena(arena);
-        const s = try exec._factory.eventTargetWithAllocator(arena, IDBTransaction{
+        errdefer arena.release();
+        const s = try exec._factory.eventTargetWithAllocator(arena.allocator(), IDBTransaction{
             ._proto = undefined,
             ._exec = exec,
             ._db = db,
@@ -154,9 +153,9 @@ pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Executi
 // path) must pin it for the duration of the upgrade.
 pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
     const arena = try exec.getArena(.small, "IDBTransaction");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
-    const self = try exec._factory.eventTargetWithAllocator(arena, IDBTransaction{
+    const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), IDBTransaction{
         ._proto = undefined,
         ._exec = exec,
         ._db = db,
@@ -175,7 +174,7 @@ pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
     return self;
 }
 
-pub fn deinit(self: *IDBTransaction, page: *Page) void {
+pub fn deinit(self: *IDBTransaction, _: *Page) void {
     if (comptime IS_DEBUG) {
         // Pins hold refs, so the last release can't happen while parked (nor
         // while a drain task is scheduled).
@@ -184,7 +183,7 @@ pub fn deinit(self: *IDBTransaction, page: *Page) void {
     for (self._globals.items) |slot| {
         slot.reset();
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *IDBTransaction) void {
@@ -199,9 +198,9 @@ pub fn releaseRef(self: *IDBTransaction, page: *Page) void {
 // transaction's memory is released — or earlier, by calling reset() on the
 // returned slot (the sweep's second reset is then a no-op).
 pub fn persist(self: *IDBTransaction, value: js.Value) !*js.GlobalSlot {
-    const slot = try value.persistBare(self._arena);
+    const slot = try value.persistBare(self._arena.allocator());
     errdefer slot.reset();
-    try self._globals.append(self._arena, slot);
+    try self._globals.append(self._arena.allocator(), slot);
     return slot;
 }
 
@@ -364,14 +363,14 @@ pub fn ensureBegun(self: *IDBTransaction) !void {
 }
 
 pub fn newRequest(self: *IDBTransaction) !*IDBRequest {
-    const request = try self._exec._factory.eventTargetWithAllocator(self._arena, IDBRequest{ ._proto = undefined });
+    const request = try self._exec._factory.eventTargetWithAllocator(self._arena.allocator(), IDBRequest{ ._proto = undefined });
     request._txn = .{ .owned = self };
     return request;
 }
 
 pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
     request._txn_index = self._queue.items.len;
-    try self._queue.append(self._arena, request);
+    try self._queue.append(self._arena.allocator(), request);
 }
 
 pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
@@ -382,20 +381,20 @@ pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
     }
 
     const database_id = self._db._database_id;
-    const info = (try self._engine.objectStoreInfo(self._arena, database_id, name)) orelse {
+    const info = (try self._engine.objectStoreInfo(self._arena.allocator(), database_id, name)) orelse {
         return error.NotFound;
     };
 
     const owned_name = try self.dupe(name);
     const store = try IDBObjectStore.init(self, info.id, owned_name, info.key_path, info.auto_increment);
-    try self._stores.append(self._arena, store);
+    try self._stores.append(self._arena.allocator(), store);
     return store;
 }
 
 // Register a store created during an upgrade so a later objectStore() returns
 // the same object.
 pub fn cacheStore(self: *IDBTransaction, store: *IDBObjectStore) !void {
-    try self._stores.append(self._arena, store);
+    try self._stores.append(self._arena.allocator(), store);
 }
 
 // A store was deleted during an upgrade; a later objectStore() must miss.
@@ -423,14 +422,14 @@ pub fn getDb(self: *IDBTransaction) *IDBDatabase {
 
 pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringList {
     const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     // A versionchange transaction spans every store; its set changes as the
     // upgrade creates/deletes stores, so resolve it live rather than caching.
     // The list is refcounted and can outlive the transaction, so the scope
     // names are copied onto the list's own arena.
     const names = if (self._mode == .versionchange)
-        try self._engine.objectStoreNames(arena, self._db._database_id)
+        try self._engine.objectStoreNames(arena.allocator(), self._db._database_id)
     else blk: {
         const copy = try arena.alloc([]const u8, self._scope.len);
         for (self._scope, 0..) |name, i| {

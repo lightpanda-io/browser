@@ -35,7 +35,6 @@ const TouchEvent = @import("event/TouchEvent.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 // This type is only included when the binary is built with the -Dwpt_extensions flag
 const WebDriver = @This();
@@ -135,7 +134,7 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !js
     }
 
     const arena = try frame.getArena(.tiny, "WebDriver.actionSequence");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const persisted = try sources.persist();
     errdefer persisted.release();
@@ -164,7 +163,7 @@ pub fn actionSequence(_: *const WebDriver, sources: js.Value, frame: *Frame) !js
 
 const ActionSequence = struct {
     frame: *Frame,
-    arena: Allocator,
+    arena: *lp.Arena,
     sources: js.Value.Global,
     resolver: js.PromiseResolver.Global,
 
@@ -211,7 +210,7 @@ const ActionSequence = struct {
     fn deinit(self: *ActionSequence) void {
         self.sources.release();
         self.resolver.release();
-        self.frame.releaseArena(self.arena);
+        self.arena.release();
     }
 };
 

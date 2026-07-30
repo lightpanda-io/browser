@@ -50,7 +50,7 @@ pub fn init(opts: StaticRangeInit, frame: *Frame) !*StaticRange {
     }
 
     const arena = try frame.getArena(.medium, "StaticRange");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const static_range = try frame._factory.abstractRange(arena, StaticRange{ ._proto = undefined }, frame);
     const proto = static_range._proto;

@@ -23,15 +23,13 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const DOMMatrix = @import("DOMMatrix.zig");
 
-const Allocator = std.mem.Allocator;
-
 const DOMMatrixReadOnly = @This();
 
 pub const _prototype_root = true;
 
 _type: Type,
 _rc: lp.RC,
-_arena: Allocator,
+_arena: *lp.Arena,
 
 // Stored column-major, matching the spec's mAB naming where A is the column
 // and B is the row:
@@ -68,8 +66,8 @@ pub fn init(init_: ?js.Value, exec: *const js.Execution) !*DOMMatrixReadOnly {
     return createBare(parsed.m, parsed.is_2d, exec.page);
 }
 
-pub fn deinit(self: *DOMMatrixReadOnly, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *DOMMatrixReadOnly, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *DOMMatrixReadOnly) void {
@@ -82,14 +80,14 @@ pub fn releaseRef(self: *DOMMatrixReadOnly, page: *Page) void {
 
 pub fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
     const arena = try page.getArena(.tiny, "DOMMatrix");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(DOMMatrixReadOnly);
     self.* = buildValue(arena, m, is_2d);
     return self;
 }
 
-pub fn buildValue(arena: std.mem.Allocator, m: [16]f64, is_2d: bool) DOMMatrixReadOnly {
+pub fn buildValue(arena: *lp.Arena, m: [16]f64, is_2d: bool) DOMMatrixReadOnly {
     return .{
         ._rc = .{},
         ._arena = arena,

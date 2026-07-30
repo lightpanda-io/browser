@@ -47,9 +47,9 @@ pub fn init(
     const opts = opts_ orelse InitOptions{};
     const session = page.session;
     const arena = try session.getArena(.large, "Blob");
-    errdefer session.releaseArena(arena);
+    errdefer arena.release();
 
-    const file = try Factory.chainedWithAllocator(arena, .{
+    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
         try Blob.buildValue(arena, parts_, .{
             .type = opts.type,
             .endings = opts.endings,
@@ -90,9 +90,9 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
     const last_modified = try reader.readUint64();
 
     const arena = try page.getArena(data.len + mime.len + name.len + 256, "Blob.clone");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
 
-    const file = try Factory.chainedWithAllocator(arena, .{
+    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
         Blob{
             ._rc = .{},
             ._arena = arena,

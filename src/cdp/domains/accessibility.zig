@@ -73,7 +73,7 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
     const node = try bc.node_registry.register(doc);
 
     const temp_arena = try frame.getArena(.medium, "AXNode");
-    defer frame.releaseArena(temp_arena);
+    defer temp_arena.release();
 
     return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{}) }, .{});
 }
@@ -93,7 +93,7 @@ fn queryAXTree(cmd: *CDP.Command) !void {
 
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
-    defer frame.releaseArena(temp_arena);
+    defer temp_arena.release();
 
     return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(temp_arena, node, .{
         .filter = .{
@@ -128,7 +128,7 @@ fn getPartialAXTree(cmd: *CDP.Command) !void {
 
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const temp_arena = try frame.getArena(.medium, "AXNode");
-    defer frame.releaseArena(temp_arena);
+    defer temp_arena.release();
 
     // No filter: emit the full accessibility subtree rooted at the resolved
     // node, the same shape getFullAXTree produces for the document root.

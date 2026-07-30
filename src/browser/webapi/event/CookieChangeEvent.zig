@@ -47,8 +47,8 @@ const Options = Event.inheritOptions(CookieChangeEvent, CookieChangeEventOptions
 
 pub fn init(typ: []const u8, _opts: ?Options, exec: *const Execution) !*CookieChangeEvent {
     const arena = try exec.getArena(.tiny, "CookieChangeEvent");
-    errdefer exec.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = _opts orelse Options{};
 
@@ -57,8 +57,8 @@ pub fn init(typ: []const u8, _opts: ?Options, exec: *const Execution) !*CookieCh
         type_string,
         CookieChangeEvent{
             ._proto = undefined,
-            ._changed = try cloneListItems(arena, opts.changed),
-            ._deleted = try cloneListItems(arena, opts.deleted),
+            ._changed = try cloneListItems(arena.allocator(), opts.changed),
+            ._deleted = try cloneListItems(arena.allocator(), opts.deleted),
         },
     );
 
@@ -75,20 +75,20 @@ pub fn initSingle(
     exec: *const Execution,
 ) !*CookieChangeEvent {
     const arena = try exec.getArena(.tiny, "CookieChangeEvent");
-    errdefer exec.releaseArena(arena);
-    const type_string = try String.init(arena, "change", .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), "change", .{});
 
     const item = try arena.create(CookieStore.CookieListItem);
     item.* = .{
-        .name = try String.init(arena, snapshot.name, .{}),
+        .name = try String.init(arena.allocator(), snapshot.name, .{}),
         // Deletions report no value (the `deleted` accessor serializes the
         // resulting null as undefined); changes carry the new value.
-        .value = if (kind == .deleted) null else try String.init(arena, snapshot.value, .{}),
+        .value = if (kind == .deleted) null else try String.init(arena.allocator(), snapshot.value, .{}),
         .domain = if (snapshot.domain.len > 0 and snapshot.domain[0] == '.')
-            try String.init(arena, snapshot.domain[1..], .{})
+            try String.init(arena.allocator(), snapshot.domain[1..], .{})
         else
             null,
-        .path = try String.init(arena, snapshot.path, .{}),
+        .path = try String.init(arena.allocator(), snapshot.path, .{}),
         .expires = null,
         .secure = snapshot.secure,
         .sameSite = switch (snapshot.same_site) {

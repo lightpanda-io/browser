@@ -113,10 +113,10 @@ pub const Cache = struct {
     }
 };
 
-fn collectAll(arena: Allocator, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
+fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
     for (selectors) |selector| {
-        try List.collect(arena, root, selector, &nodes, frame);
+        try List.collect(arena.allocator(), root, selector, &nodes, frame);
     }
 
     const list = try arena.create(List);
@@ -142,7 +142,7 @@ pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Elem
 
 pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     const arena = try frame.getArena(.small, "querySelectorAll");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return collectAll(arena, try cachedParse(frame._session.browser, input), root, frame);
 }
 
@@ -171,8 +171,8 @@ pub fn querySelectorAllUncached(root: *Node, input: []const u8, frame: *Frame) !
         return error.SyntaxError;
     }
     const arena = try frame.getArena(.small, "querySelectorAllUncached");
-    errdefer frame.releaseArena(arena);
-    return collectAll(arena, try Parser.parseList(arena, input), root, frame);
+    errdefer arena.release();
+    return collectAll(arena, try Parser.parseList(arena.allocator(), input), root, frame);
 }
 
 pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, frame: *Frame) !bool {

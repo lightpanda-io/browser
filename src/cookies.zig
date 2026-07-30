@@ -33,9 +33,9 @@ pub fn loadFromFile(session: *Session, path: []const u8) void {
 
 fn _loadFromFile(session: *Session, path: []const u8) !void {
     const arena = try session.getArena(.medium, "Cookies.loadFromFile");
-    defer session.releaseArena(arena);
+    defer arena.release();
 
-    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch |err| {
+    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena.allocator(), .limited(1024 * 1024)) catch |err| {
         switch (err) {
             error.FileNotFound => log.debug(.app, "Cookie.readFile", .{ .path = path, .note = "file not found" }),
             else => log.err(.app, "Cookie.readFile", .{ .path = path, .err = err }),
@@ -43,7 +43,7 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         return;
     };
 
-    const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena, content, .{
+    const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena.allocator(), content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.err(.app, "Cookie.parseFile", .{ .path = path, .err = err });

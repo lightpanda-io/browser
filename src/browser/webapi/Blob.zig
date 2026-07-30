@@ -26,7 +26,6 @@ const Mime = @import("../Mime.zig");
 
 const Writer = std.Io.Writer;
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 /// https://w3c.github.io/FileAPI/#blob-section
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
@@ -37,7 +36,7 @@ pub const _prototype_root = true;
 _type: Type,
 _rc: lp.RC,
 
-_arena: Allocator,
+_arena: *lp.Arena,
 
 /// Immutable slice of blob.
 /// Note that another blob may hold a pointer/slice to this,
@@ -82,7 +81,7 @@ const InitOptions = struct {
 pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
     const session = page.session;
     const arena = try session.getArena(.large, "Blob");
-    errdefer session.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(Blob);
     self.* = try buildValue(arena, parts_, opts_ orelse .{});
@@ -92,13 +91,13 @@ pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob 
 // The Blob value for `parts`, with everything it references copied to
 // `arena`. Callers either arena.create it (init) or embed it as the root of
 // a {Blob, File} chain.
-pub fn buildValue(arena: Allocator, parts_: ?[]const js.Value, opts: InitOptions) !Blob {
-    const mime = try Mime.serialize(arena, opts.type);
+pub fn buildValue(arena: *lp.Arena, parts_: ?[]const js.Value, opts: InitOptions) !Blob {
+    const mime = try Mime.serialize(arena.allocator(), opts.type);
 
     const data = blk: {
         if (parts_) |blob_parts| {
             const use_native_endings = std.mem.eql(u8, opts.endings, "native");
-            var w: Writer.Allocating = .init(arena);
+            var w: Writer.Allocating = .init(arena.allocator());
             for (blob_parts) |js_val| {
                 const part = try js_val.toStringSmart();
                 try writePartWithEndings(part, use_native_endings, &w.writer);
@@ -118,28 +117,28 @@ pub fn buildValue(arena: Allocator, parts_: ?[]const js.Value, opts: InitOptions
     };
 }
 
-pub fn buildValueFromBytes(arena: Allocator, data: []const u8, content_type: []const u8) !Blob {
+pub fn buildValueFromBytes(arena: *lp.Arena, data: []const u8, content_type: []const u8) !Blob {
     return .{
         ._rc = .{},
         ._arena = arena,
         ._type = .generic,
         ._slice = try arena.dupe(u8, data),
-        ._mime = try Mime.serialize(arena, content_type),
+        ._mime = try Mime.serialize(arena.allocator(), content_type),
     };
 }
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
 pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
     const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(Blob);
     self.* = try buildValueFromBytes(arena, data, content_type);
     return self;
 }
 
-pub fn deinit(self: *Blob, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Blob, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *Blob, page: *Page) void {
@@ -160,7 +159,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
     const data = try reader.readBytes();
 
     const arena = try page.getArena(data.len + mime.len + 256, "Blob.clone");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(Blob);
     self.* = .{

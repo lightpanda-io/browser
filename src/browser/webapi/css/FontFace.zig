@@ -16,26 +16,23 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
-const Allocator = std.mem.Allocator;
-
 const FontFace = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _family: []const u8,
 
 pub fn init(family: []const u8, source: []const u8, frame: *Frame) !*FontFace {
     _ = source;
 
     const arena = try frame.getArena(.tiny, "FontFace");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(FontFace);
     self.* = .{
@@ -45,8 +42,8 @@ pub fn init(family: []const u8, source: []const u8, frame: *Frame) !*FontFace {
     return self;
 }
 
-pub fn deinit(self: *FontFace, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *FontFace, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *FontFace, page: *Page) void {

@@ -79,7 +79,7 @@ pub fn waitForFrameCDP(self: *Runner, frame_id: u32, timeout_ms: u32, until: lp.
 pub fn waitForAll(self: *Runner, timeout_ms: u32, opts: WaitForFrameOpts) !void {
     const session = self.session;
     const arena = try session.getArena(.tiny, "Runner.waitForAll");
-    defer session.releaseArena(arena);
+    defer arena.release();
 
     var pages_to_wait: usize = 0;
     for (session.pages.items) |page| {
@@ -332,10 +332,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeout_ms: u32) !*Node.Element {
     const session = self.session;
     const arena = try session.getArena(.small, "Runner.waitForSelector");
-    defer session.releaseArena(arena);
+    defer arena.release();
 
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
-    const selector = try Selector.parseLeaky(arena, input);
+    const selector = try Selector.parseLeaky(arena.allocator(), input);
 
     while (true) {
         if (session.isCancelled()) {

@@ -103,7 +103,7 @@ fn htmlAsChildrenInner(frame: *Frame, node: *Node, html: []const u8, opts: Fragm
 // XML.
 pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     const arena = try frame.getArena(.medium, "parse.xmlDocument");
-    defer frame.releaseArena(arena);
+    defer arena.release();
 
     const previous_parse_mode = frame._parse_mode;
     frame._parse_mode = .fragment;
@@ -111,7 +111,7 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
 
     const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
     const doc_node = doc.asNode();
-    var parser = Parser.init(arena, doc_node, frame, .{});
+    var parser = Parser.init(arena.allocator(), doc_node, frame, .{});
     parser.parseXML(xml);
     if (parser.terminated) {
         return error.ExecutionTerminated;
