@@ -27,6 +27,7 @@ const ArenaPool = @import("../ArenaPool.zig");
 
 const WS = @import("../network/WS.zig");
 const sys_net = @import("../sys/net.zig");
+const header_parser = @import("../network/header_parser.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -433,59 +434,96 @@ fn pushCdp(self: *Connection, bytes: []const u8) !bool {
 }
 
 pub fn upgrade(self: *Connection, request: []u8) !void {
-    // our caller already confirmed that we have a trailing \r\n\r\n
-    const request_line_end = std.mem.indexOfScalar(u8, request, '\r') orelse unreachable;
-    const request_line = request[0..request_line_end];
-
-    if (!std.ascii.endsWithIgnoreCase(request_line, "http/1.1")) {
+    var cursor = header_parser.Cursor{
+        .idx = request.ptr,
+        .start = request.ptr,
+        .end = request.ptr + request.len,
+    };
+    // A malformed request line maps to a 400 in processHttpRequest.
+    header_parser.validateWebSocketRequestLine(&cursor) catch {
         return error.InvalidProtocol;
-    }
+    };
 
-    // we need to extract the sec-websocket-key value
-    var key: []const u8 = "";
+    // We need to extract the `Sec-WebSocket-Key` value.
+    var sec_websocket_key: []const u8 = "";
+    // We need to make sure that we got all the necessary headers + values.
+    const RequiredHeaders = packed struct(u8) {
+        /// Upgrade: websocket
+        upgrade: bool = false,
+        sec_websocket_version: bool = false,
+        /// Connection: upgrade
+        connection: bool = false,
+        sec_websocket_key: bool = false,
+        __pad: u4 = 0,
+    };
 
-    // we need to make sure that we got all the necessary headers + values
-    var required_headers: u8 = 0;
+    var required_headers = RequiredHeaders{};
+    // We reuse this to parse headers that're required.
+    var header: header_parser.Header = undefined;
+    while (true) {
+        if (cursor.reachedEnd()) {
+            return error.InvalidRequest;
+        }
 
-    // can't std.mem.split because it forces the iterated value to be const
-    // (we could @constCast...)
+        // Check if headers part has finished.
+        switch (cursor.char()) {
+            '\n' => {
+                // End of headers.
+                cursor.advance(1);
+                break;
+            },
+            '\r' => {
+                // We need an LF too.
+                if (!cursor.hasLength(2) or !cursor.peek2('\r', '\n')) {
+                    return error.InvalidRequest;
+                }
+                // End of headers.
+                cursor.advance(2);
+                break;
+            },
+            else => {},
+        }
 
-    var buf = request[request_line_end + 2 ..];
+        // A malformed header maps to a 400 in processHttpRequest.
+        header.parse(&cursor) catch {
+            return error.InvalidRequest;
+        };
+        const key = header.key;
+        const value = header.value;
 
-    while (buf.len > 4) {
-        const index = std.mem.indexOfScalar(u8, buf, '\r') orelse unreachable;
-        const separator = std.mem.indexOfScalar(u8, buf[0..index], ':') orelse return error.InvalidRequest;
-
-        const name = std.mem.trim(u8, toLower(buf[0..separator]), &std.ascii.whitespace);
-        const value = std.mem.trim(u8, buf[(separator + 1)..index], &std.ascii.whitespace);
-
-        if (std.mem.eql(u8, name, "upgrade")) {
+        // Header names are case-insensitive; `Header.parse` keeps their
+        // original casing.
+        if (std.ascii.eqlIgnoreCase(key, "upgrade")) {
             if (!std.ascii.eqlIgnoreCase("websocket", value)) {
                 return error.InvalidUpgradeHeader;
             }
-            required_headers |= 1;
-        } else if (std.mem.eql(u8, name, "sec-websocket-version")) {
+            required_headers.upgrade = true;
+        } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-version")) {
             if (value.len != 2 or value[0] != '1' or value[1] != '3') {
                 return error.InvalidVersionHeader;
             }
-            required_headers |= 2;
-        } else if (std.mem.eql(u8, name, "connection")) {
+            required_headers.sec_websocket_version = true;
+        } else if (std.ascii.eqlIgnoreCase(key, "connection")) {
             // find if connection header has upgrade in it, example header:
             // Connection: keep-alive, Upgrade
             if (std.ascii.indexOfIgnoreCase(value, "upgrade") == null) {
                 return error.InvalidConnectionHeader;
             }
-            required_headers |= 4;
-        } else if (std.mem.eql(u8, name, "sec-websocket-key")) {
-            key = value;
-            required_headers |= 8;
+            required_headers.connection = true;
+        } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-key")) {
+            sec_websocket_key = value;
+            required_headers.sec_websocket_key = true;
         }
-
-        const next = index + 2;
-        buf = buf[next..];
     }
 
-    if (required_headers != 15) {
+    // Check if we've received all related headers.
+    const satisfied = @as(u8, @bitCast(required_headers)) == @as(u8, @bitCast(RequiredHeaders{
+        .upgrade = true,
+        .sec_websocket_version = true,
+        .connection = true,
+        .sec_websocket_key = true,
+    }));
+    if (!satisfied) {
         return error.MissingHeaders;
     }
 
@@ -513,7 +551,7 @@ pub fn upgrade(self: *Connection, request: []u8) !void {
         const key_pos = res.len - 32;
         var h: [20]u8 = undefined;
         var hasher = std.crypto.hash.Sha1.init(.{});
-        hasher.update(key);
+        hasher.update(sec_websocket_key);
         // websocket spec always used this value
         hasher.update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
         hasher.final(&h);
@@ -597,12 +635,4 @@ fn websocketHeader(buf: []u8, op_code: WS.OpCode, payload_len: usize) []const u8
     buf[8] = @intCast((len >> 8) & 0xFF);
     buf[9] = @intCast(len & 0xFF);
     return buf[0..10];
-}
-
-// In-place string lowercase
-fn toLower(str: []u8) []u8 {
-    for (str, 0..) |ch, i| {
-        str[i] = std.ascii.toLower(ch);
-    }
-    return str;
 }

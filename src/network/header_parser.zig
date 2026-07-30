@@ -230,6 +230,66 @@ pub const Header = struct {
     }
 };
 
+/// Validates WebSocket initialization requests.
+/// Currently does not validate paths.
+pub fn validateWebSocketRequestLine(cursor: *Cursor) !void {
+    // GET / HTTP/1.1\n
+    const min_request_len = 0xf;
+    if (cursor.hasLength(min_request_len) == false) {
+        return error.Incomplete;
+    }
+
+    // WS requests can only be send w/ GET method.
+    if (!cursor.peek4('G', 'E', 'T', ' ')) {
+        return error.Invalid;
+    }
+    cursor.advance(4);
+
+    const path_start = cursor.current();
+    // Find the first space.
+    while (cursor.end - cursor.current() > 0 and cursor.char() != ' ') : (cursor.advance(1)) {}
+    const path_end = cursor.current();
+    // 0 length path.
+    if (path_start == path_end) {
+        return error.Invalid;
+    }
+    const path = path_start[0 .. path_end - path_start];
+    _ = path;
+
+    // Skip past the delimiting space(s); the scan above guarantees we're on
+    // a space or at the end, and recipients may parse on whitespace
+    // boundaries (RFC 9112 §3).
+    while (cursor.end - cursor.current() > 0 and cursor.char() == ' ') : (cursor.advance(1)) {}
+
+    // HTTP/1.1(\r)\n
+    if (cursor.hasLength(9) == false) {
+        return error.Incomplete;
+    }
+    // Make sure we got HTTP/1.1.
+    if (cursor.asInteger(u64) != @as(u64, @bitCast(@as([]const u8, "HTTP/1.1")[0..8].*))) {
+        return error.Invalid;
+    }
+    cursor.advance(8);
+
+    // Trailing (CR)LF.
+    switch (cursor.char()) {
+        '\n' => cursor.advance(1),
+        '\r' => {
+            // We need an LF too.
+            if (!cursor.hasLength(2)) {
+                return error.Incomplete;
+            }
+            if (!cursor.peek2('\r', '\n')) {
+                @branchHint(.unlikely);
+                return error.Invalid;
+            }
+            cursor.advance(2);
+        },
+        // Any other character is invalid.
+        else => return error.Invalid,
+    }
+}
+
 pub const Disposition = struct {
     name: ?[]const u8 = null,
     filename: ?[]const u8 = null,
@@ -340,6 +400,12 @@ pub const Cursor = struct {
     /// SAFETY: This function doesn't check if out of bounds reachable.
     pub fn peek2(cursor: *const Cursor, c0: u8, c1: u8) bool {
         return cursor.asInteger(u16) == @as(u16, @bitCast([2]u8{ c0, c1 }));
+    }
+
+    /// Peek the current and next 3 characters but don't advance.
+    /// SAFETY: This function doesn't check if out of bounds reachable.
+    pub fn peek4(cursor: *const Cursor, c0: u8, c1: u8, c2: u8, c3: u8) bool {
+        return cursor.asInteger(u32) == @as(u32, @bitCast([4]u8{ c0, c1, c2, c3 }));
     }
 
     /// Moves the cursor until no leading spaces there are.
