@@ -240,6 +240,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
     const js_val = try ls.local.zigValueToJs(self._response, .{});
     self._owns_response = false;
+    response._arena.report();
     return ls.toLocal(self._resolver).resolve("fetch done", js_val);
 }
 

@@ -75,7 +75,7 @@ pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const session = exec.session;
-    const arena = try session.getArena(.large, "Response");
+    const arena = try session.getPinnedArena(.large, "Response");
     errdefer arena.release();
 
     const opts = opts_ orelse InitOpts{};
@@ -112,12 +112,13 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
         ._is_redirected = false,
         ._headers = headers,
     };
+    arena.report();
     return self;
 }
 
 pub fn createError(exec: *const Execution) !*Response {
     const session = exec.session;
-    const arena = try session.getArena(.large, "Response.error");
+    const arena = try session.getPinnedArena(.large, "Response.error");
     errdefer arena.release();
 
     const self = try arena.create(Response);
@@ -131,6 +132,7 @@ pub fn createError(exec: *const Execution) !*Response {
         ._is_redirected = false,
         ._headers = try Headers.init(null, exec),
     };
+    arena.report();
     return self;
 }
 
@@ -142,7 +144,7 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     }
 
     const session = exec.session;
-    const arena = try session.getArena(.large, "Response.redirect");
+    const arena = try session.getPinnedArena(.large, "Response.redirect");
     errdefer arena.release();
 
     const location = try URL.resolve(arena.allocator(), exec.base(), url_, .{ .encoding = exec.charset.* });
@@ -161,12 +163,13 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
         ._is_redirected = false,
         ._headers = headers,
     };
+    arena.report();
     return self;
 }
 
 pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const session = exec.session;
-    const arena = try session.getArena(.medium, "Response.json");
+    const arena = try session.getPinnedArena(.medium, "Response.json");
     errdefer arena.release();
 
     const json = data.toJson(arena.allocator()) catch |err| switch (err) {
@@ -196,6 +199,7 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
         ._is_redirected = false,
         ._headers = headers,
     };
+    arena.report();
     return self;
 }
 
@@ -508,7 +512,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         .empty => 0,
         .stream => 0,
     };
-    const arena = try session.getArena(body_len + self._url.len + 256, "Response.clone");
+    const arena = try session.getPinnedArena(body_len + self._url.len + 256, "Response.clone");
     errdefer arena.release();
 
     const body: Body = switch (self._body) {
@@ -531,6 +535,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._headers = try Headers.init(.{ .obj = self._headers }, exec),
         ._http_transfer = null,
     };
+    arena.report();
     return cloned;
 }
 

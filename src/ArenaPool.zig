@@ -104,6 +104,16 @@ pub fn deinit(self: *ArenaPool) void {
 // - Pass a BucketSize (.tiny, .small, .medium, .large) for explicit bucket selection
 // - Pass a usize for automatic bucket selection based on expected size
 pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !*Arena {
+    return self._acquire(null, size_or_bucket, debug);
+}
+
+// An arena that, once its owner's last native reference is gone, is kept alive
+// by nothing but a V8 finalizer. These are the only arenas wort telling v8 about.//
+pub fn acquirePinned(self: *ArenaPool, account: *Arena.Account, size_or_bucket: anytype, debug: []const u8) !*Arena {
+    return self._acquire(account, size_or_bucket, debug);
+}
+
+fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype, debug: []const u8) !*Arena {
     const bucket_size: BucketSize = blk: {
         const T = @TypeOf(size_or_bucket);
         if (T == BucketSize or T == @TypeOf(.enum_literal)) {
@@ -139,6 +149,7 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !*A
             }
             gop.value_ptr.* += 1;
         }
+        entry.account = account;
         lp.metrics.arena_hit.incr(bucket_size);
         return entry;
     }
@@ -150,9 +161,15 @@ pub fn acquire(self: *ArenaPool, size_or_bucket: anytype, debug: []const u8) !*A
         .next = null,
         .pool = self,
         .bucket = bucket,
+        .bytes = 0,
+        .account = account,
+        .reported = 0,
         .debug = if (IS_DEBUG) debug else {},
-        ._arena = ArenaAllocator.init(self.allocator),
+        ._arena = undefined,
     };
+    // Routed through the entry so it sees every node the arena takes and gives
+    // back. entry is pool-allocated, so this pointer is stable.
+    entry._arena = ArenaAllocator.init(entry.backing());
 
     if (IS_DEBUG) {
         const gop = try self._leak_track.getOrPut(self.allocator, debug);
@@ -184,6 +201,7 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
         }
     }
 
+    entry.unpin();
     _ = arena.reset(.{ .retain_with_limit = bucket.retain_bytes });
 
     self.mutex.lockUncancelable(lp.io);
@@ -361,4 +379,109 @@ test "ArenaPool: size-based acquire" {
     try testing.expectEqual(1, pool.small.free_list_len);
     try testing.expectEqual(1, pool.medium.free_list_len);
     try testing.expectEqual(1, pool.large.free_list_len);
+}
+
+test "ArenaPool: bytes track the arena's backing allocations" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const arena = try pool.acquire(.large, "bytes");
+    defer arena.release();
+    try testing.expectEqual(0, arena.bytes);
+
+    _ = try arena.alloc(u8, 256 * 1024);
+    try testing.expect(arena.bytes >= 256 * 1024);
+
+    arena.reset(0);
+    try testing.expectEqual(0, arena.bytes);
+}
+
+test "ArenaPool: only a pinned arena reports, and only when asked" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var account: Arena.Account = .{};
+
+    // An unpinned arena never touches the account.
+    {
+        const arena = try pool.acquire(.large, "unpinned");
+        defer arena.release();
+        _ = try arena.alloc(u8, 256 * 1024);
+        arena.report();
+        try testing.expectEqual(0, account.pending);
+    }
+
+    const arena = try pool.acquirePinned(&account, .large, "pinned");
+    _ = try arena.alloc(u8, 256 * 1024);
+
+    // Growing is not enough: until the owner reports, V8 hears nothing.
+    try testing.expectEqual(0, account.pending);
+
+    arena.report();
+    const reported = account.pending;
+    try testing.expect(reported >= 256 * 1024);
+
+    // report() is a delta, so repeating it is a no-op.
+    arena.report();
+    try testing.expectEqual(reported, account.pending);
+
+    // Release takes back exactly what was reported.
+    arena.release();
+    try testing.expectEqual(0, account.pending);
+}
+
+test "ArenaPool: release un-reports even when the owner never reported" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var account: Arena.Account = .{};
+
+    const arena = try pool.acquirePinned(&account, .large, "unreported");
+    _ = try arena.alloc(u8, 256 * 1024);
+    arena.release();
+    try testing.expectEqual(0, account.pending);
+}
+
+test "ArenaPool: a reused arena carries its retained bytes to the new owner" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var first: Arena.Account = .{};
+    var second: Arena.Account = .{};
+
+    const a = try pool.acquirePinned(&first, .tiny, "first");
+    _ = try a.alloc(u8, 256);
+    a.report();
+    try testing.expect(first.pending > 0);
+    a.release();
+    try testing.expectEqual(0, first.pending);
+
+    const retained = a.bytes;
+    try testing.expect(retained > 0);
+
+    const b = try pool.acquirePinned(&second, .tiny, "second");
+    try testing.expectEqual(a, b);
+    try testing.expectEqual(retained, b.bytes);
+
+    // The new owner inherits the bytes but still has to report them itself.
+    try testing.expectEqual(0, second.pending);
+    b.report();
+    try testing.expectEqual(@as(i64, @intCast(retained)), second.pending);
+
+    b.release();
+    try testing.expectEqual(0, second.pending);
+}
+
+test "ArenaPool: bytes agrees with the arena's own view of its capacity" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const arena = try pool.acquire(.large, "capacity");
+    defer arena.release();
+
+    // queryCapacity excludes each node's header, which `bytes` counts, so the
+    // two bracket each other rather than matching exactly.
+    for ([_]usize{ 64, 4096, 300 * 1024, 2 * 1024 * 1024 }) |n| {
+        _ = try arena.alloc(u8, n);
+        const capacity = arena._arena.queryCapacity();
+        try testing.expect(arena.bytes >= capacity);
+        try testing.expect(arena.bytes - capacity < 1024); // header slop only
+    }
 }

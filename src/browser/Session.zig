@@ -402,6 +402,11 @@ pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !*lp
     return self.arena_pool.acquire(size_or_bucket, debug);
 }
 
+// For an arena owned by a JS-exposed object, freed by its finalizer.
+pub fn getPinnedArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.arena_pool.acquirePinned(&self.browser.arena_account, size_or_bucket, debug);
+}
+
 // The live page for a top-level browsing context, by its root frame id.
 pub fn livePage(self: *Session, frame_id: u32) ?*Page {
     for (self.pages.items) |page| {

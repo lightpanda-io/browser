@@ -80,6 +80,10 @@ pub fn getArena(self: *const Execution, size_or_bucket: anytype, debug: []const 
     return self.page.getArena(size_or_bucket, debug);
 }
 
+pub fn getPinnedArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.page.getPinnedArena(size_or_bucket, debug);
+}
+
 pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {
     return switch (self.js.global) {
         inline else => |g| g.headersForRequest(headers),

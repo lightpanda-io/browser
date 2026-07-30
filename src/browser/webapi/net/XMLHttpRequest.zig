@@ -108,7 +108,7 @@ const ResponseType = enum {
 };
 
 pub fn init(exec: *const Execution) !*XMLHttpRequest {
-    const arena = try exec.getArena(.large, "XMLHttpRequest");
+    const arena = try exec.getPinnedArena(.large, "XMLHttpRequest");
     errdefer arena.release();
     const self = try exec._factory.xhrEventTarget(arena.allocator(), XMLHttpRequest{
         ._exec = exec,
@@ -141,6 +141,9 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
         return;
     }
     self._active_requests -= 1;
+    if (self._active_requests == 0) {
+        self._arena.report();
+    }
     self.releaseRef(self._exec.page);
 }
 
