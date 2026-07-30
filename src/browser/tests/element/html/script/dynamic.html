@@ -42,3 +42,46 @@
     testing.expectEqual(2, loaded2);
   });
 </script>
+
+<script id=set_attribute_src_before_append>
+  loadedByAttribute = 0;
+  const attributeBeforeAppend = document.createElement('script');
+  attributeBeforeAppend.setAttribute('src', 'dynamic_attribute.js');
+  document.getElementsByTagName('head')[0].appendChild(attributeBeforeAppend);
+  testing.onload(() => {
+    testing.expectEqual(1, loadedByAttribute);
+  });
+</script>
+
+<script id=set_attribute_src_after_append>
+  loadedByAttribute2 = 0;
+  const attributeAfterAppend = document.createElement('script');
+  document.getElementsByTagName('head')[0].appendChild(attributeAfterAppend);
+  attributeAfterAppend.setAttribute('src', 'dynamic_attribute2.js');
+  attributeAfterAppend.setAttribute('src', 'dynamic_attribute2.js');
+  testing.onload(() => {
+    testing.expectEqual(1, loadedByAttribute2);
+  });
+</script>
+
+<script id=remove_attribute_src>
+  loadedByAttribute3 = 0;
+  const attributeRemoved = document.createElement('script');
+  attributeRemoved.setAttribute('src', 'dynamic_attribute3.js');
+  attributeRemoved.removeAttribute('src');
+  document.getElementsByTagName('head')[0].appendChild(attributeRemoved);
+  testing.onload(() => {
+    testing.expectEqual(0, loadedByAttribute3);
+  });
+</script>
+
+<script id=empty_attribute_src>
+  loadedByAttribute4 = 0;
+  const attributeEmptySrc = document.createElement('script');
+  document.getElementsByTagName('head')[0].appendChild(attributeEmptySrc);
+  attributeEmptySrc.setAttribute('src', '');
+  attributeEmptySrc.setAttribute('src', 'dynamic_attribute4.js');
+  testing.onload(() => {
+    testing.expectEqual(1, loadedByAttribute4);
+  });
+</script>

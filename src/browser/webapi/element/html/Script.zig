@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -24,6 +25,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const Script = @This();
 
 pub const Proto = HtmlElement;
@@ -52,12 +54,7 @@ pub fn getSrc(self: *Script, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
-    self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
-    if (element.asNode().isConnected()) {
-        try frame.scriptAddedCallback(false, self);
-    }
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }
 
 pub fn getType(self: *const Script) []const u8 {
@@ -164,6 +161,24 @@ pub const Build = struct {
         const self = node.as(Script);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+
+        const self = element.as(Script);
+        self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+        if (self._src.len > 0 and element.asNode().isConnected()) {
+            try frame.scriptAddedCallback(false, self);
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
+        if (name.eql(comptime .wrap("src"))) {
+            element.as(Script)._src = "";
+        }
     }
 
     // Per the HTML spec, the "already started" flag must be propagated to the

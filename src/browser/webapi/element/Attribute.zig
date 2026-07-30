@@ -208,18 +208,20 @@ pub const List = struct {
         return gop.value_ptr.*;
     }
 
-    pub fn put(self: *List, name: String, value: String, element: *Element, frame: *Frame) !*Entry {
+    pub fn put(self: *List, name: String, value: String, element: *Element, frame: *Frame) ![]const u8 {
         const result = try self.getEntryAndNormalizedName(name, frame);
         return self._put(result, value, element, frame);
     }
 
-    pub fn putSafe(self: *List, name: String, value: String, element: *Element, frame: *Frame) !*Entry {
+    pub fn putSafe(self: *List, name: String, value: String, element: *Element, frame: *Frame) ![]const u8 {
         const entry = self.getEntryWithNormalizedName(name);
         return self._put(.{ .entry = entry, .normalized = name }, value, element, frame);
     }
 
-    // The returned *Entry is only valid until the next mutation of the list.
-    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) !*Entry {
+    // Returns the entry's canonical name, not the *Entry: attributeChange can
+    // run script which mutates the list, moving or shifting entries. The
+    // canonical name is interned, so it stays valid.
+    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) ![]const u8 {
         const owner = element.ownerFrame(frame);
         const is_id = shouldAddToIdMap(result.normalized, element);
 
@@ -243,15 +245,16 @@ pub const List = struct {
             self._len += 1;
         }
 
+        const name = entry.name();
         if (is_id) {
             const parent = element.asNode()._parent orelse {
-                return entry;
+                return name;
             };
             try owner.addElementId(parent, element, entry.value());
         }
         owner.domChanged();
         owner.attributeChange(element, result.normalized, .wrap(entry.value()), old_value);
-        return entry;
+        return name;
     }
 
     // Optimized for cloning. We know the names are already normalized and
@@ -286,10 +289,10 @@ pub const List = struct {
             ea._element = null;
         }
 
-        const entry = try self.put(attribute._name, attribute._value, element, frame);
+        const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
         const owner = element.ownerFrame(frame);
-        try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = entry._name_ptr }, attribute);
+        try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
 
