@@ -1215,9 +1215,7 @@ test "cdp.frame: child navigation preserves node registry" {
 }
 
 test "cdp.frame: captureScreenshot" {
-    const LogFilter = @import("../../testing.zig").LogFilter;
-    const filter: LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1235,9 +1233,7 @@ test "cdp.frame: captureScreenshot" {
 }
 
 test "cdp.frame: printToPDF" {
-    const LogFilter = @import("../../testing.zig").LogFilter;
-    const filter: LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1536,8 +1532,7 @@ test "cdp.frame: navigate does not follow Location on a non-redirect 3xx" {
 }
 
 test "cdp.frame: navigate answers with errorText when the navigation fails" {
-    const filter: testing.LogFilter = .init(&.{.frame});
-    defer filter.deinit();
+    testing.silenceLog(&.{.frame});
 
     // A root navigation that fails before commit (here: connection refused —
     // nothing listens on port 1) must still answer the Page.navigate command.

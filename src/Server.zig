@@ -331,8 +331,7 @@ test "server: buildJSONVersionResponse" {
 }
 
 test "Client: http invalid request" {
-    const filter: testing.LogFilter = .init(&.{.cdp});
-    defer filter.deinit();
+    testing.silenceLog(&.{.cdp});
 
     var c = try createTestClient();
     defer c.deinit();
@@ -449,8 +448,7 @@ test "Client: read invalid websocket message" {
     }
 
     {
-        const filter: testing.LogFilter = .init(&.{.cdp});
-        defer filter.deinit();
+        testing.expectLog(&.{.cdp});
         // length of message is 0, 0, 0, 0, 0, 16, 0, 1 i.e: 1024 * 1024 + 1
         try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 16, 0, 1, 'm', 'a', 's', 'k' });
     }

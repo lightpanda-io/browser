@@ -474,7 +474,6 @@ test "Runner: waitForSelector timeout" {
 }
 
 test "Runner: waitForSelector" {
-    defer testing.reset();
     const page = try testing.pageTest("runner/runner1.html", .{});
 
     var runner = page.session.runner(.{});

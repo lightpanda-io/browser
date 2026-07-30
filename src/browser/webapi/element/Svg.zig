@@ -157,5 +157,6 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: Svg" {
+    testing.expectLog(&.{ .not_implemented, .not_implemented });
     try testing.htmlRunner("element/svg", .{});
 }

@@ -3460,8 +3460,7 @@ test "Frame: urlBasename" {
 }
 
 test "WebApi: Frame" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
     try testing.htmlRunner("page", .{});
 }
 
@@ -3470,8 +3469,7 @@ test "WebApi: Frames" {
 }
 
 test "WebApi: Frame Blob" {
-    const filter: testing.LogFilter = .init(&.{ .frame, .browser, .js });
-    defer filter.deinit();
+    testing.silenceLog(&.{ .frame, .browser, .js });
     try testing.htmlRunner("frames/blob", .{});
 }
 
@@ -3524,6 +3522,8 @@ test "Page: isSameOrigin" {
 }
 
 test "Frame: httpMetadata after navigation" {
+    testing.expectLog(&.{.http});
+
     const page = try testing.pageTest("page/meta.html", .{});
     defer page.close();
 
@@ -3544,8 +3544,6 @@ test "Frame: httpMetadata 404" {
 }
 
 test "Frame: 401" {
-    defer testing.reset();
-
     var page = try testing.pageTest("401", .{});
     defer page.close();
 

@@ -566,7 +566,6 @@ const PreloadedScript = struct {
 const testing = @import("../testing.zig");
 
 test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" {
-    defer testing.reset();
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
 
@@ -598,7 +597,6 @@ test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" 
 }
 
 test "ScriptManager: waitForPreload stops when teardown is pending" {
-    defer testing.reset();
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
 

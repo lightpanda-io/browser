@@ -1666,7 +1666,6 @@ test "Selector: Parser.parseNthPattern" {
 }
 
 test "Selector: Parser.attributeValue" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     // Unquoted identifier value (unchanged path).
@@ -1759,7 +1758,6 @@ test "Selector: Parser.attributeValue" {
 }
 
 test "Selector: Parser.attributeName" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     // Plain name (fast path).

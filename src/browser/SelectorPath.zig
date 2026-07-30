@@ -213,8 +213,6 @@ fn isFirstMatch(self: SelectorPath, target: *Element, candidate: []const u8) boo
 const testing = @import("../testing.zig");
 
 fn expectSelector(comptime selector: []const u8, comptime expected: []const u8) !void {
-    defer testing.reset();
-
     var page = try testing.pageTest("selector_path.html", .{});
     defer page.close();
     const frame = page.frame().?;

@@ -382,7 +382,6 @@ const testing = @import("../testing.zig");
 // <base> element), so reusing one frame across opts would leak that mutation
 // into later dumps.
 fn expectDump(opts: Opts, expected: []const u8) !void {
-    defer testing.reset();
     var page = try testing.pageTest("dump.html", .{});
     defer page.close();
 

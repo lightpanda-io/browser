@@ -652,8 +652,7 @@ test "cdp.network setExtraHTTPHeaders" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -674,8 +673,7 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -709,8 +707,7 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -731,8 +728,7 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -989,8 +985,7 @@ test "cdp.Network: configured CDP ignores setCacheDisabled" {
 }
 
 test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
 
     var ctx = try testing.context();
     defer ctx.deinit();

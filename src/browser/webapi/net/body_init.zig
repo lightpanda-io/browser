@@ -136,14 +136,12 @@ pub fn stripUtf8Bom(bytes: []const u8) []const u8 {
 
 const testing = @import("../../../testing.zig");
 test "BodyInit: bytes pass through with text/plain" {
-    defer testing.reset();
     const r = try (BodyInit{ .bytes = "hello" }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectString("text/plain;charset=UTF-8", r.content_type.?);
 }
 
 test "BodyInit: URLSearchParams emit urlencoded body + content-type" {
-    defer testing.reset();
     const arena = try testing.test_app.arena_pool.acquire(.small, "body_init test");
     defer arena.release();
 
@@ -158,7 +156,6 @@ test "BodyInit: URLSearchParams emit urlencoded body + content-type" {
 }
 
 test "BodyInit: FormData emits multipart with random boundary" {
-    defer testing.reset();
     const arena = try testing.test_app.arena_pool.acquire(.small, "body_init test");
     defer arena.release();
 
@@ -184,7 +181,6 @@ test "BodyInit: FormData emits multipart with random boundary" {
 }
 
 test "BodyInit: buffer source has no default Content-Type" {
-    defer testing.reset();
     const r = try (BodyInit{ .buffer = .{ .values = "hello" } }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectEqual(true, r.content_type == null);

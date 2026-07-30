@@ -194,7 +194,7 @@ pub const Build = struct {
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: Script" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
+    testing.expectLog(&.{ .js, .js });
     try testing.htmlRunner("element/html/script", .{});
 }

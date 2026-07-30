@@ -123,7 +123,6 @@ const Server = @import("Server.zig");
 const testing = @import("../testing.zig");
 
 test "MCP.router - handleMessage - synchronous unit tests" {
-    defer testing.reset();
     const allocator = testing.allocator;
     const app = testing.test_app;
 
@@ -168,8 +167,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
 
     // 5. Parse error
     {
-        const filter: testing.LogFilter = .init(&.{.mcp});
-        defer filter.deinit();
+        testing.expectLog(&.{.mcp});
 
         try handleMessage(server, aa, "invalid json");
         try testing.expectJson("{\"jsonrpc\": \"2.0\", \"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());

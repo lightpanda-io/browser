@@ -1449,6 +1449,8 @@ test "cdp: disconnect latches so the worker keeps exiting" {
 }
 
 test "cdp: tick sends a close frame on pending terminate" {
+    testing.expectLog(&.{.cdp});
+
     var ctx = try testing.context();
     defer ctx.deinit();
 
