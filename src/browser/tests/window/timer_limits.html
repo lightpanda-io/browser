@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=one-shot-limit>
+  // One-shot timers pile up legitimately: a fan-out of async tasks that each
+  // yield through `new Promise((r) => setTimeout(r))` queues one per task, and
+  // none of them can run until the microtask queue drains.
+  const timeouts = [];
+  for (let i = 0; i < 1000; i++) {
+    timeouts.push(window.setTimeout(() => {}, 100000));
+  }
+  testing.expectEqual(1000, timeouts.length);
+
+  for (const id of timeouts) {
+    window.clearTimeout(id);
+  }
+</script>
+
+<script id=interval-limit>
+  const intervals = [];
+  let threw = false;
+  try {
+    for (let i = 0; i < 600; i++) {
+      intervals.push(window.setInterval(() => {}, 100000));
+    }
+  } catch (e) {
+    threw = true;
+  }
+  testing.expectEqual(true, threw);
+  testing.expectEqual(512, intervals.length);
+
+  window.clearInterval(intervals.pop());
+  intervals.push(window.setInterval(() => {}, 100000));
+  testing.expectEqual(512, intervals.length);
+
+  for (const id of intervals) {
+    window.clearInterval(id);
+  }
+</script>
+:
