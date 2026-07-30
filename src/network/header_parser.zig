@@ -567,6 +567,55 @@ test "header_parser: cursor" {
     try testing.expectEqual(true, cursor.reachedEnd());
 }
 
+test "header_parser: validate WebSocket request line" {
+    // Both CRLF and LF request lines validate; the cursor is left at the
+    // first header, so `Header.parse` can pick up from there.
+    var cursor = initCursor("GET / HTTP/1.1\r\nHost: a\r\n");
+    try validateWebSocketRequestLine(&cursor);
+    try testing.expectEqual(16, consumed(&cursor));
+    var header: Header = undefined;
+    try header.parse(&cursor);
+    try testing.expectString("Host", header.key);
+
+    cursor = initCursor("GET / HTTP/1.1\n");
+    try validateWebSocketRequestLine(&cursor);
+    try testing.expectEqual(true, cursor.reachedEnd());
+
+    // Longer paths are accepted (but not validated).
+    cursor = initCursor("GET /chat/room?id=1 HTTP/1.1\r\n");
+    try validateWebSocketRequestLine(&cursor);
+    try testing.expectEqual(true, cursor.reachedEnd());
+
+    // Multiple spaces before the version are tolerated (RFC 9112 §3).
+    cursor = initCursor("GET /   HTTP/1.1\r\n");
+    try validateWebSocketRequestLine(&cursor);
+    try testing.expectEqual(true, cursor.reachedEnd());
+
+    const invalid_cases = [_][]const u8{
+        "POST / HTTP/1.1\r\n", // non-GET method
+        "get / HTTP/1.1\r\n", // methods are case-sensitive
+        "GET  HTTP/1.1\r\n", // 0 length path
+        "GET  / HTTP/1.1\r\n", // double space, so a 0 length path
+        "GET / HTTP/1.0\r\n", // wrong version
+        "GET / http/1.1\r\n", // the version is case-sensitive
+        "GET / HTTP/1.1\rX\n", // `\r` must be followed by `\n`
+        "GET / HTTP/1.1X\r\n", // junk after the version
+    };
+    for (invalid_cases) |case| {
+        cursor = initCursor(case);
+        try testing.expectError(error.Invalid, validateWebSocketRequestLine(&cursor));
+    }
+
+    // Buffer may end anywhere before the line ending is complete; the path
+    // being longer than the minimum request length proves the scan can't run
+    // past the end of a buffer that stops mid-path.
+    const bytes = "GET /websocket/endpoint HTTP/1.1\r\n";
+    for (0..bytes.len) |len| {
+        cursor = initCursor(bytes[0..len]);
+        try testing.expectError(error.Incomplete, validateWebSocketRequestLine(&cursor));
+    }
+}
+
 fn expectMatchesReference(bytes: []const u8) !void {
     var key_expected: usize = 0;
     while (key_expected < bytes.len and isHeaderKeyByte(bytes[key_expected])) key_expected += 1;
