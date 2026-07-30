@@ -159,11 +159,13 @@ pub const Build = struct {
         self._disabled = element.getAttributeSafe(comptime .wrap("disabled")) != null;
     }
 
-    pub fn attributeChange(element: *Element, name: String, value: String, _: *Frame) !void {
+    pub fn attributeChange(element: *Element, name: String, _: String, _: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { value, selected }, name.str()) orelse return;
         const self = element.as(Option);
         switch (attribute) {
-            .value => self._value = value.str(),
+            // `value` is passed by value; for <= 12 bytes, str() points into our
+            // own parameter copy, so we have to re-read the owned bytes.
+            .value => self._value = element.getAttributeSafe(comptime .wrap("value")),
             .selected => {
                 self._default_selected = true;
                 self._selected = true;
