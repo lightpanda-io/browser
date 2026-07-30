@@ -168,7 +168,7 @@ pub const Build = struct {
 
         const self = element.as(Script);
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
-        if (element.asNode().isConnected()) {
+        if (self._src.len > 0 and element.asNode().isConnected()) {
             try frame.scriptAddedCallback(false, self);
         }
     }
