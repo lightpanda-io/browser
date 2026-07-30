@@ -930,8 +930,6 @@ pub const Script = struct {
             return;
         }
 
-        defer frame._event_manager.clearIgnoreList();
-
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
         defer try_catch.deinit();
@@ -990,12 +988,23 @@ pub const Script = struct {
             };
         }
 
-        self.executeCallback(comptime .wrap("error"));
+        // a classic script that throws is still "loaded". For a module, we can't
+        // currently tell the difference between loaded, but errors, and failed
+        // to load, so we stick with just error.
+        self.executeCallback(switch (fe.kind) {
+            .javascript => comptime .wrap("load"),
+            else => comptime .wrap("error"),
+        });
     }
 
     // Frame-only: fires load/error on the <script> element itself,
     // synchronously. Hint <link> events go through queueHintEvent instead.
     pub fn executeCallback(self: *const Script, typ: String) void {
+        if (self.source != .remote) {
+            // an inline script fires nothing
+            return;
+        }
+
         const fe = self.extra.frame;
         const frame = fe.frame;
         const Event = @import("webapi/Event.zig");
@@ -1007,7 +1016,7 @@ pub const Script = struct {
             });
             return;
         };
-        frame._event_manager.dispatchOpts(fe.script_element.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
+        frame._event_manager.dispatch(fe.script_element.asNode().asEventTarget(), event) catch |err| {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,

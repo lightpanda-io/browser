@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<head></head>
+<script src="../../../testing.js"></script>
+
+<!--
+  https://github.com/lightpanda-io/browser/issues/3069
+
+  The listener is registered from a timer, i.e. outside of any script execution,
+  and must still receive the load event of the script inserted by that same
+  callback. This is the shape every "load a script, resolve a promise from its
+  load event" loader uses.
+
+  Keep this file free of any other external script: a listener registered
+  outside of a script execution used to be suppressed only until the *next*
+  script ran, so a second script here would hide the regression.
+-->
+
+<script id=listener_from_timer>
+  testing.async().then((state) => {
+    window.load_fired = 0;
+    window.error_fired = 0;
+
+    setTimeout(() => {
+      const s = document.createElement('script');
+      s.addEventListener('load', () => {
+        window.load_fired += 1;
+        state.resolve();
+      });
+      s.addEventListener('error', () => {
+        window.error_fired += 1;
+        state.resolve();
+      });
+      s.src = 'empty.js';
+      document.head.appendChild(s);
+    }, 20);
+
+    // so that a missing event is an assertion failure, not a runner timeout
+    setTimeout(() => state.resolve(), 500);
+
+    state.done(() => {
+      testing.expectEqual(1, window.load_fired);
+      testing.expectEqual(0, window.error_fired);
+    });
+  });
+</script>

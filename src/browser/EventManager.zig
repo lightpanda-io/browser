@@ -50,12 +50,9 @@ base: EventManagerBase,
 // 'load' event (e.g. amazon product page has no listener and ~350 resources)
 has_dom_load_listener: bool,
 
-ignore_list: std.ArrayList(*Listener),
-
 pub fn init(arena: Allocator, frame: *Frame) EventManager {
     return .{
         .frame = frame,
-        .ignore_list = .empty,
         .has_dom_load_listener = false,
         .base = EventManagerBase.init(arena),
     };
@@ -64,14 +61,9 @@ pub fn init(arena: Allocator, frame: *Frame) EventManager {
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     const listener = (try self.base.register(target, typ, callback, opts)) orelse return;
 
-    if (listener.typ.eql(comptime .wrap("load"))) {
-        if (target._type == .node) {
-            // Track load listeners on DOM nodes for optimization
-            self.has_dom_load_listener = true;
-        }
-        // Track load listeners for script execution ignore list. See the
-        // `apply_ignore` field of DispatchOpts
-        try self.ignore_list.append(self.base.arena, listener);
+    // Track load listeners on DOM nodes for optimization
+    if (target._type == .node and listener.typ.eql(comptime .wrap("load"))) {
+        self.has_dom_load_listener = true;
     }
 }
 
@@ -79,27 +71,10 @@ pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callba
     self.base.remove(target, typ, callback, use_capture);
 }
 
-pub fn clearIgnoreList(self: *EventManager) void {
-    self.ignore_list.clearRetainingCapacity();
-}
-
 // Re-export DispatchError from base
 pub const DispatchError = EventManagerBase.DispatchError;
 
-pub const DispatchOpts = struct {
-    // A "load" event triggered by a script (in ScriptManager) should not trigger
-    // a "load" listener added within that script. Therefore, any "load" listener
-    // that we add go into an ignore list until after the script finishes executing.
-    // The ignore list is only checked when apply_ignore  == true, which is only
-    // set by the ScriptManager when raising the script's "load" event.
-    apply_ignore: bool = false,
-};
-
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
-    return self.dispatchOpts(target, event, .{});
-}
-
-pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     event.acquireRef();
     defer _ = event.releaseRef(self.frame._page);
 
@@ -111,7 +86,7 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
     }
 
     switch (target._type) {
-        .node => |node| try self.dispatchNode(node, event, opts),
+        .node => |node| try self.dispatchNode(node, event),
         .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
@@ -161,7 +136,7 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
     return self.base.hasDirectListeners(target, typ, handler);
 }
 
-fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
+fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     {
         const et = target.asEventTarget();
         event._target = et;
@@ -329,7 +304,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (event._stop_propagation) return;
         const current_target = path[i];
         if (self.base.getListeners(current_target, event._type_string)) |list| {
-            try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(true, opts));
+            try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, true);
         }
     }
 
@@ -375,13 +350,13 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         // of the listener list: a bubble listener added while running the
         // target's capture listeners must run.
         if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(true, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, true);
             if (event._stop_propagation) {
                 return;
             }
         }
         if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(false, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, false);
             if (event._stop_propagation) {
                 return;
             }
@@ -434,7 +409,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             }
 
             if (self.base.getListeners(current_target, event._type_string)) |list| {
-                try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(false, opts));
+                try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, false);
             }
         }
     }
@@ -453,19 +428,7 @@ fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
     return if (rootIsShadowRoot(target)) null else event;
 }
 
-const DispatchPhaseOpts = struct {
-    capture_only: ?bool = null,
-    apply_ignore: bool = false,
-
-    fn init(capture_only: ?bool, opts: DispatchOpts) DispatchPhaseOpts {
-        return .{
-            .capture_only = capture_only,
-            .apply_ignore = opts.apply_ignore,
-        };
-    }
-};
-
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
+fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
     const frame = self.frame;
     const base = &self.base;
 
@@ -495,7 +458,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
     // Iterate through the list, stopping after we've encountered the last_listener
     var node = list.first;
     var is_done = false;
-    node_loop: while (node) |n| {
+    while (node) |n| {
         if (is_done) {
             break;
         }
@@ -505,7 +468,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         node = n.next;
 
         // Skip non-matching listeners
-        if (comptime opts.capture_only) |capture| {
+        if (comptime capture_only) |capture| {
             if (listener.capture != capture) {
                 continue;
             }
@@ -521,14 +484,6 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             if (signal.getAborted()) {
                 base.removeListener(list, listener);
                 continue;
-            }
-        }
-
-        if (comptime opts.apply_ignore) {
-            for (self.ignore_list.items) |ignored| {
-                if (ignored == listener) {
-                    continue :node_loop;
-                }
             }
         }
 
