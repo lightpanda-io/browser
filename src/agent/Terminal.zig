@@ -364,6 +364,16 @@ pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) voi
     std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
 }
 
+/// REPL startup banner line: plain labels, dimmed values.
+pub fn printSessionBanner(self: *Terminal, model: []const u8, effort: []const u8, stream_enabled: bool) void {
+    if (!self.isRepl()) return;
+    std.debug.print("  model: {s}{s}{s}  effort: {s}{s}{s}  stream: {s}{s}{s}\n", .{
+        ansi.dim, model,                               ansi.reset,
+        ansi.dim, effort,                              ansi.reset,
+        ansi.dim, if (stream_enabled) "on" else "off", ansi.reset,
+    });
+}
+
 pub fn printItalic(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
     if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
     std.debug.print(ansi.italic ++ fmt ++ ansi.reset ++ "\n", args);

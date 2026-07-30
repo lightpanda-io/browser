@@ -28,25 +28,61 @@ const lp = @import("lightpanda");
 const Config = lp.Config;
 const picker = @import("picker.zig");
 const string = @import("../string.zig");
-const Credentials = zenai.provider.Credentials;
+const auth = @import("auth/auth.zig");
+const Candidate = zenai.provider.Candidate;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud)";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
 /// decides whether that's fatal — basic REPL tolerates it).
 pub const ResolvedProvider = struct {
-    credentials: Credentials,
+    credential: Credential,
     source: enum { flag, remembered, detected, picked },
-    /// Key allocated (Vertex gcloud token) rather than an env pointer; the
-    /// caller frees it, only after the client that references it is gone.
-    key_owned: bool = false,
+};
+
+/// The provider credential in effect: the key lives in exactly one place —
+/// inside the variant that owns it. The AI client borrows `keySlice()`, so
+/// deinit only after that client is gone.
+pub const Credential = struct {
+    provider: Config.AiProvider,
+    key: union(enum) {
+        /// Unowned env-var pointer.
+        env: [:0]const u8,
+        /// Allocated key (Vertex gcloud token).
+        owned: [:0]const u8,
+        /// Subscription (bearer) auth; the key is the access token, refreshed
+        /// between turns.
+        session: auth.Session,
+    },
+
+    pub fn keySlice(self: *const Credential) [:0]const u8 {
+        return switch (self.key) {
+            .env, .owned => |k| k,
+            .session => |*s| s.tokens.access_token,
+        };
+    }
+
+    pub fn accountId(self: *const Credential) ?[]const u8 {
+        return switch (self.key) {
+            .session => |*s| s.tokens.account_id,
+            else => null,
+        };
+    }
+
+    pub fn deinit(self: *Credential, allocator: std.mem.Allocator) void {
+        switch (self.key) {
+            .env => {},
+            .owned => |k| allocator.free(k),
+            .session => |*s| s.deinit(),
+        }
+    }
 };
 
 /// Probe a keyless local provider (Ollama, llama.cpp): its env key is a
 /// placeholder, so the only honest availability signal is the server answering
 /// `/v1/models` with a loaded model. Null means no server responded.
-pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Credentials {
+pub fn detectLocalProvider(allocator: std.mem.Allocator, tag: Config.AiProvider, base_url: ?[:0]const u8) ?Candidate {
     const key = zenai.provider.envApiKey(lp.environ(), tag) orelse return null;
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
@@ -97,13 +133,16 @@ pub fn gcloudAccessToken(allocator: std.mem.Allocator) ![:0]const u8 {
 /// env-detected). Skips the Ollama probe so it isn't run twice at startup; the
 /// interactive picker only fires on detected keys, which this still catches.
 pub fn hasDetectableKey(opts: Config.Agent, remembered: ?Remembered) bool {
-    if (opts.provider) |p| return zenai.provider.envApiKey(lp.environ(), p) != null or (p == .vertex and vertexProjectMode());
-    if (remembered) |r| if (r.provider) |p| {
-        if (zenai.provider.envApiKey(lp.environ(), p) != null) return true;
-        if (p == .vertex and vertexProjectMode()) return true;
-    };
-    var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
+    if (opts.provider) |p| return detectableKey(p);
+    if (remembered) |r| if (r.provider) |p| if (detectableKey(p)) return true;
+    var buf: [zenai.provider.default_candidates.len]Candidate = undefined;
     return availableProviders(&buf).len > 0;
+}
+
+fn detectableKey(p: Config.AiProvider) bool {
+    return zenai.provider.envApiKey(lp.environ(), p) != null or
+        (p == .vertex and vertexProjectMode()) or
+        auth.subscriptionAvailable(p);
 }
 
 /// Precedence: `--provider` > remembered (if its key is still set) > first
@@ -112,8 +151,11 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     if (opts.provider) |p| {
         if (p == .vertex and vertexProjectMode()) {
             const token = try gcloudAccessToken(allocator);
-            return .{ .credentials = .{ .provider = p, .key = token }, .source = .flag, .key_owned = true };
+            return .{ .credential = .{ .provider = p, .key = .{ .owned = token } }, .source = .flag };
         }
+        // A subscription takes priority over an API key; null = not a
+        // subscription provider (or none available), so fall through.
+        if (try subscriptionResolved(allocator, p, .flag)) |resolved| return resolved;
         const key = zenai.provider.envApiKey(lp.environ(), p) orelse {
             if (p == .vertex) {
                 std.debug.print(
@@ -128,28 +170,33 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
             );
             return error.MissingApiKey;
         };
-        return .{ .credentials = .{ .provider = p, .key = key }, .source = .flag };
+        return .{ .credential = .{ .provider = p, .key = .{ .env = key } }, .source = .flag };
     }
 
     if (remembered) |r| if (r.provider) |p| {
         if (p == .vertex and vertexProjectMode()) {
             // On failure the reason is already printed; fall through to detection.
             if (gcloudAccessToken(allocator)) |token| {
-                return .{ .credentials = .{ .provider = p, .key = token }, .source = .remembered, .key_owned = true };
+                return .{ .credential = .{ .provider = p, .key = .{ .owned = token } }, .source = .remembered };
             } else |_| {}
-        } else if (zenai.provider.envApiKey(lp.environ(), p)) |key| {
-            return .{ .credentials = .{ .provider = p, .key = key }, .source = .remembered };
+        } else {
+            // Subscription takes priority over an API key; both fall through to
+            // detection on miss.
+            if (try subscriptionResolved(allocator, p, .remembered)) |resolved| return resolved;
+            if (zenai.provider.envApiKey(lp.environ(), p)) |key| {
+                return .{ .credential = .{ .provider = p, .key = .{ .env = key } }, .source = .remembered };
+            }
         }
     };
 
-    var buf: [zenai.provider.default_candidates.len]Credentials = undefined;
+    var buf: [zenai.provider.default_candidates.len]Candidate = undefined;
     const found = availableProviders(&buf);
     if (found.len == 0) {
         if (detectLocalProvider(allocator, .ollama, opts.base_url)) |creds| {
-            return .{ .credentials = creds, .source = .detected };
+            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
         }
         if (detectLocalProvider(allocator, .llama_cpp, opts.base_url)) |creds| {
-            return .{ .credentials = creds, .source = .detected };
+            return .{ .credential = .{ .provider = creds.provider, .key = .{ .env = creds.key } }, .source = .detected };
         }
         std.debug.print(
             \\No API key detected. Set {s}, or run a local Ollama or llama.cpp server with a loaded model.
@@ -173,14 +220,37 @@ pub fn resolveCredentials(allocator: std.mem.Allocator, opts: Config.Agent, reme
     return try finishResolved(allocator, found[idx], .picked);
 }
 
-/// Swaps the placeholder key of a detected project-mode Vertex for a real
-/// gcloud token.
-fn finishResolved(allocator: std.mem.Allocator, credentials: Credentials, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
-    if (credentials.provider == .vertex and vertexProjectMode()) {
+/// Swaps a placeholder credential for a live token: a gcloud token for
+/// project-mode Vertex, or a stored subscription session for the subscription
+/// (empty-key) placeholder.
+fn finishResolved(allocator: std.mem.Allocator, candidate: Candidate, source: @FieldType(ResolvedProvider, "source")) !ResolvedProvider {
+    if (candidate.provider == .vertex and vertexProjectMode()) {
         const token = try gcloudAccessToken(allocator);
-        return .{ .credentials = .{ .provider = .vertex, .key = token }, .source = source, .key_owned = true };
+        return .{ .credential = .{ .provider = .vertex, .key = .{ .owned = token } }, .source = source };
     }
-    return .{ .credentials = credentials, .source = source };
+    if (auth.descriptorFor(candidate.provider) != null and candidate.key.len == 0) {
+        if (try subscriptionResolved(allocator, candidate.provider, source)) |resolved| return resolved;
+        return error.MissingApiKey;
+    }
+    return .{ .credential = .{ .provider = candidate.provider, .key = .{ .env = candidate.key } }, .source = source };
+}
+
+/// Load a stored subscription session and wrap it as a resolved credential.
+/// The session owns the key; the caller takes ownership via
+/// `ownership.deinit`. Null when the user hasn't logged in.
+fn subscriptionResolved(allocator: std.mem.Allocator, provider: Config.AiProvider, source: @FieldType(ResolvedProvider, "source")) !?ResolvedProvider {
+    const session = (try auth.sessionFor(allocator, provider)) orelse return null;
+    // Name the credential in effect — a set-but-ignored API key would otherwise
+    // be a silent surprise.
+    if (zenai.provider.envApiKey(lp.environ(), provider) != null) {
+        std.debug.print("{s}: using your {s}; {s} is set but the subscription takes priority.\n", .{ @tagName(provider), session.descriptor.label, zenai.provider.envVarName(provider) });
+    } else {
+        std.debug.print("{s}: using your {s}.\n", .{ @tagName(provider), session.descriptor.label });
+    }
+    return .{
+        .credential = .{ .provider = provider, .key = .{ .session = session } },
+        .source = source,
+    };
 }
 
 pub const remembered_path = ".lp-agent.zon";
@@ -234,13 +304,31 @@ pub fn saveRemembered(remembered: Remembered) !void {
 /// a live probe (`detectLocalProvider`), too costly for an unconditional startup scan.
 /// Vertex project mode joins with a placeholder key — no subprocess during a
 /// scan; the gcloud token is fetched on selection (`finishResolved`).
-pub fn availableProviders(buf: []Credentials) []Credentials {
-    const found = zenai.provider.detectKeys(lp.environ(), buf, zenai.provider.default_candidates);
+pub fn availableProviders(buf: []Candidate) []Candidate {
+    var found = zenai.provider.detectKeys(lp.environ(), buf, zenai.provider.default_candidates);
+    // A subscription takes priority over an API key: offer it as a bearer
+    // placeholder (replacing any API-key entry) that `finishResolved` swaps for a
+    // live token on selection, mirroring Vertex project mode below.
+    for (auth.registry) |desc| {
+        if (!auth.subscriptionAvailable(desc.provider)) continue;
+        const placeholder: Candidate = .{ .provider = desc.provider, .key = "" };
+        if (indexOfProvider(found, desc.provider)) |i| {
+            found[i] = placeholder;
+        } else if (found.len < buf.len) {
+            buf[found.len] = placeholder;
+            found = buf[0 .. found.len + 1];
+        }
+    }
     if (zenai.provider.useVertex(lp.environ()) and vertexProjectMode() and found.len < buf.len) {
         buf[found.len] = .{ .provider = .vertex, .key = "" };
         return buf[0 .. found.len + 1];
     }
     return found;
+}
+
+fn indexOfProvider(candidates: []const Candidate, provider: Config.AiProvider) ?usize {
+    for (candidates, 0..) |c, i| if (c.provider == provider) return i;
+    return null;
 }
 
 pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembered: ?Remembered) []const u8 {
@@ -249,9 +337,9 @@ pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembe
         // Use the remembered model whenever it matches the chosen provider,
         // not only when the provider itself came from the remembered file.
         if (remembered) |rem| {
-            if (rem.provider) |p| if (p == r.credentials.provider) return rem.model;
+            if (rem.provider) |p| if (p == r.credential.provider) return rem.model;
         }
-        return zenai.provider.defaultModel(r.credentials.provider);
+        return zenai.provider.defaultModel(r.credential.provider);
     }
     return "";
 }
@@ -303,26 +391,30 @@ pub const ReconciledModel = union(enum) {
 /// model when unloaded; cloud defaults are hardcoded real models, trusted as-is.
 pub fn reconcileModel(
     allocator: std.mem.Allocator,
-    llm: Credentials,
+    credential: *const Credential,
     desired: []const u8,
     base_url: ?[:0]const u8,
     explicit: bool,
 ) !ReconciledModel {
+    // A subscription provider can't list models via the provider API; trust the
+    // desired model as-is rather than error against `/models`.
+    if (auth.descriptorFor(credential.provider) != null) return .{ .use = try allocator.dupe(u8, desired) };
+
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
-    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), llm.provider, llm.key, .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
+    const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.provider, credential.keySlice(), .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
     if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
 
     if (!explicit) {
-        switch (llm.provider) {
+        switch (credential.provider) {
             .ollama, .llama_cpp => {},
             else => return .{ .use = try allocator.dupe(u8, desired) },
         }
-        std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(llm.provider), desired, ids[0] });
+        std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });
         return .{ .use = try allocator.dupe(u8, ids[0]) };
     }
 
-    if (llm.provider == .ollama) {
+    if (credential.provider == .ollama) {
         const installed = std.mem.join(arena.allocator(), ", ", ids) catch "";
         std.debug.print(
             "Model '{s}' is not installed in Ollama.\nInstalled: {s}\nRun `ollama pull {s}` to install it, or choose one of the above.\n",
@@ -331,7 +423,7 @@ pub fn reconcileModel(
     } else {
         std.debug.print(
             "Model '{s}' is not available for {s}.\nRun with --list-models to see options.\n",
-            .{ desired, @tagName(llm.provider) },
+            .{ desired, @tagName(credential.provider) },
         );
     }
     return .abort;
@@ -377,4 +469,11 @@ test "resolveStream: default on, remembered wins" {
     try testing.expect(resolveStream(.{ .model = "m", .stream = null }));
     try testing.expect(resolveStream(.{ .model = "m", .stream = true }));
     try testing.expect(!resolveStream(.{ .model = "m", .stream = false }));
+}
+
+test {
+    // Pull the auth module tests into the suite (a `const` import alone doesn't).
+    _ = @import("auth/auth.zig");
+    _ = @import("auth/codex.zig");
+    _ = @import("auth/models_dev.zig");
 }
