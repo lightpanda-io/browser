@@ -622,6 +622,10 @@ pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.A
     return self._session.getArena(size_or_bucket, debug);
 }
 
+pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self._session.getPinnedArena(size_or_bucket, debug);
+}
+
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
 

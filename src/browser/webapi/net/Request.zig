@@ -92,7 +92,7 @@ const Cache = enum {
 };
 
 pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
-    const arena = try exec.getArena(.medium, "Request");
+    const arena = try exec.getPinnedArena(.medium, "Request");
     errdefer arena.release();
 
     const url = switch (input) {
@@ -160,6 +160,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._body = body,
         ._signal = signal,
     };
+    arena.report();
     return self;
 }
 
@@ -343,7 +344,7 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    const arena = try exec.getArena(if (self._body) |b| b.len else 512, "Request.clone");
+    const arena = try exec.getPinnedArena(if (self._body) |b| b.len else 512, "Request.clone");
     errdefer arena.release();
 
     const request = try arena.create(Request);
@@ -358,6 +359,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
     };
+    arena.report();
     return request;
 }
 

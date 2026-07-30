@@ -80,11 +80,12 @@ const InitOptions = struct {
 /// This is the JS Constructor
 pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
     const session = page.session;
-    const arena = try session.getArena(.large, "Blob");
+    const arena = try session.getPinnedArena(.large, "Blob");
     errdefer arena.release();
 
     const self = try arena.create(Blob);
     self.* = try buildValue(arena, parts_, opts_ orelse .{});
+    arena.report();
     return self;
 }
 
@@ -129,11 +130,12 @@ pub fn buildValueFromBytes(arena: *lp.Arena, data: []const u8, content_type: []c
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
 pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
-    const arena = try page.getArena(data.len + content_type.len + 256, "Blob");
+    const arena = try page.getPinnedArena(data.len + content_type.len + 256, "Blob");
     errdefer arena.release();
 
     const self = try arena.create(Blob);
     self.* = try buildValueFromBytes(arena, data, content_type);
+    arena.report();
     return self;
 }
 
@@ -158,7 +160,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
     const mime = try reader.readBytes();
     const data = try reader.readBytes();
 
-    const arena = try page.getArena(data.len + mime.len + 256, "Blob.clone");
+    const arena = try page.getPinnedArena(data.len + mime.len + 256, "Blob.clone");
     errdefer arena.release();
 
     const self = try arena.create(Blob);
@@ -170,6 +172,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
         // the serialized mime is already in normalized form; copy it verbatim
         ._mime = try arena.dupe(u8, mime),
     };
+    arena.report();
     return self;
 }
 
@@ -371,4 +374,23 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Blob" {
     try testing.htmlRunner("blob.html", .{});
+}
+
+test "Blob: a pinned arena reaches the browser's account and is given back" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const page = frame._page;
+    const browser = frame._session.browser;
+
+    browser.flushArenaMemory();
+    try testing.expectEqual(0, browser.arena_account.pending);
+
+    const data = [_]u8{'x'} ** (64 * 1024);
+    const blob = try Blob.initFromBytes(&data, "text/plain", page);
+    try testing.expect(browser.arena_account.pending >= data.len);
+
+    // The finalizer path hands every reported byte back.
+    blob.deinit(page);
+    try testing.expectEqual(0, browser.arena_account.pending);
 }

@@ -46,7 +46,7 @@ pub fn init(
 ) !*File {
     const opts = opts_ orelse InitOptions{};
     const session = page.session;
-    const arena = try session.getArena(.large, "Blob");
+    const arena = try session.getPinnedArena(.large, "Blob");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{
@@ -62,6 +62,7 @@ pub fn init(
     });
     file._proto._type = .{ .file = file };
 
+    arena.report();
     return file;
 }
 
@@ -89,7 +90,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
     const name = try reader.readBytes();
     const last_modified = try reader.readUint64();
 
-    const arena = try page.getArena(data.len + mime.len + name.len + 256, "Blob.clone");
+    const arena = try page.getPinnedArena(data.len + mime.len + name.len + 256, "Blob.clone");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{
@@ -108,6 +109,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
         },
     });
     file._proto._type = .{ .file = file };
+    arena.report();
     return file;
 }
 

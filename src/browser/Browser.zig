@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const CDP = @import("../cdp/CDP.zig");
@@ -48,6 +49,9 @@ http_client: HttpClient,
 
 // Shared across pages, survives navigation. See Selector.Cache.
 selector_cache: Selector.Cache,
+
+// Pinned-arena bytes we haven't told v8 about yet
+arena_account: lp.Arena.Account = .{},
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
@@ -193,6 +197,17 @@ pub fn closeSession(self: *Browser) void {
         session.deinit();
         self.session = null;
     }
+    self.flushArenaMemory();
+}
+
+// Tell v8 the net change in pinned native memory. This can start a GC.
+pub fn flushArenaMemory(self: *Browser) void {
+    const delta = self.arena_account.pending;
+    if (delta == 0) {
+        return;
+    }
+    self.arena_account.pending = 0;
+    self.env.isolate.adjustAmountOfExternalAllocatedMemory(delta);
 }
 
 pub fn runMicrotasks(self: *Browser) void {

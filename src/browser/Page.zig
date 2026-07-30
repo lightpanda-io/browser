@@ -242,6 +242,10 @@ pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Ar
     return self.session.getArena(size_or_bucket, debug);
 }
 
+pub fn getPinnedArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.session.getPinnedArena(size_or_bucket, debug);
+}
+
 pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
     const session = self.session;
     const key = key_ orelse {
