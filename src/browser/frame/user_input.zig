@@ -274,7 +274,7 @@ pub fn findClickActivationTarget(target: *Node, bubbles: bool) ?*Node {
 
 fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
     const arena = try frame.getArena(.tiny, "javascript-url");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const task = try arena.create(JavascriptUrlTask);
     task.* = .{
@@ -292,7 +292,7 @@ fn runJavascriptUrl(frame: *Frame, source: []const u8) !void {
 
 const JavascriptUrlTask = struct {
     frame: *Frame,
-    arena: std.mem.Allocator,
+    arena: *lp.Arena,
     source: []const u8,
 
     fn run(ptr: *anyopaque) !?u32 {
@@ -320,7 +320,7 @@ const JavascriptUrlTask = struct {
     }
 
     fn deinit(self: *JavascriptUrlTask) void {
-        self.frame.releaseArena(self.arena);
+        self.arena.release();
     }
 };
 

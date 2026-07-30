@@ -77,10 +77,10 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
 }
 
 // this is a root object
-pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn event(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -90,10 +90,10 @@ pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !
     return chain.get(1);
 }
 
-pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn uiEvent(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -104,10 +104,10 @@ pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype)
     return chain.get(2);
 }
 
-pub fn mouseEvent(_: *const Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
+pub fn mouseEvent(_: *const Factory, arena: *lp.Arena, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -236,7 +236,7 @@ fn AutoPrototypeChain(comptime types: []const type) type {
     };
 }
 
-fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
+fn eventInit(arena: *lp.Arena, typ: String, value: anytype) !Event {
     // Round to 2ms for privacy (browsers do this)
     // Same (already coarsened) clock as the performance time origin, so the
     // timeStamp getter can report it relative to that origin.
@@ -255,7 +255,7 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     // Special case: Blob has slice and mime fields, so we need manual setup
     const chain = try PrototypeChain(
         &.{ Blob, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
@@ -270,8 +270,8 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     return chain.get(1);
 }
 
-pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame: *Frame) !*@TypeOf(child) {
-    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena);
+pub fn abstractRange(_: *const Factory, arena: *lp.Arena, child: anytype, frame: *Frame) !*@TypeOf(child) {
+    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena.allocator());
 
     const doc = frame.document.asNode();
     const abstract_range = chain.get(0);

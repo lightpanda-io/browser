@@ -255,7 +255,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const is_frame = T == *Frame;
 
     const context_arena = try self.app.arena_pool.acquire(.medium, params.debug_name);
-    errdefer self.app.arena_pool.release(context_arena);
+    errdefer context_arena.release();
 
     const isolate = self.isolate;
     var hs: js.HandleScope = undefined;
@@ -340,7 +340,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         .local_arena = params.local_arena,
         .microtask_queue = microtask_queue,
         .script_manager = if (comptime is_frame) &global._script_manager.base else &global._script_manager,
-        .scheduler = .init(context_arena),
+        .scheduler = .init(context_arena.allocator()),
         .identity = params.identity,
         .identity_arena = params.identity_arena,
         .execution = undefined,

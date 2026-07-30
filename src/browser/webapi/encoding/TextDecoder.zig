@@ -24,13 +24,11 @@ const Page = @import("../../Page.zig");
 
 const html5ever = @import("../../parser/html5ever.zig");
 
-const Allocator = std.mem.Allocator;
-
 const TextDecoder = @This();
 
 _rc: lp.RC = .{},
 _fatal: bool,
-_arena: Allocator,
+_arena: *lp.Arena,
 _ignore_bom: bool,
 _bom_seen: bool,
 _decoder: ?*anyopaque, // Persistent streaming decoder
@@ -58,7 +56,7 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     }
 
     const arena = try page.getArena(.large, "TextDecoder");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
 
     const opts = opts_ orelse InitOpts{};
     const self = try arena.create(TextDecoder);
@@ -75,11 +73,11 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     return self;
 }
 
-pub fn deinit(self: *TextDecoder, page: *Page) void {
+pub fn deinit(self: *TextDecoder, _: *Page) void {
     if (self._decoder) |decoder| {
         html5ever.encoding_decoder_free(decoder);
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *TextDecoder, page: *Page) void {
@@ -104,7 +102,7 @@ pub fn getEncoding(self: *TextDecoder) ![]const u8 {
     if (self._lowercase_name.len > 0) {
         return self._lowercase_name;
     }
-    self._lowercase_name = try std.ascii.allocLowerString(self._arena, self._encoding_name);
+    self._lowercase_name = try std.ascii.allocLowerString(self._arena.allocator(), self._encoding_name);
     return self._lowercase_name;
 }
 

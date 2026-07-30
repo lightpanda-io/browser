@@ -16,14 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 const ProgressEvent = @This();
 
@@ -43,18 +41,18 @@ const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*ProgressEvent {
     const arena = try page.getArena(.tiny, "ProgressEvent");
-    errdefer page.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*ProgressEvent {
     const arena = try page.getArena(.tiny, "ProgressEvent.trusted");
-    errdefer page.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, page);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*ProgressEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*ProgressEvent {
     const opts = _opts orelse Options{};
 
     const event = try page.factory.event(

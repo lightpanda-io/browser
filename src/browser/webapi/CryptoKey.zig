@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../../sys/libcrypto.zig");
 
@@ -24,14 +23,13 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 /// Represents a cryptographic key obtained from one of the SubtleCrypto methods
 /// generateKey(), deriveKey(), importKey(), or unwrapKey().
 const CryptoKey = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator = undefined,
+_arena: *lp.Arena = undefined,
 /// Algorithm being used.
 _type: Type,
 /// Whether this is a secret (symmetric), public, or private key. Surfaced as
@@ -105,7 +103,7 @@ pub const Usages = struct {
 /// are expected to be static strings. Takes ownership of `_vary.pkey`.
 pub fn init(exec: *const Execution, key: CryptoKey) !*CryptoKey {
     const arena = try exec.getArena(.tiny, "CryptoKey");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(CryptoKey);
     self.* = key;
@@ -117,12 +115,12 @@ pub fn init(exec: *const Execution, key: CryptoKey) !*CryptoKey {
     return self;
 }
 
-pub fn deinit(self: *CryptoKey, page: *Page) void {
+pub fn deinit(self: *CryptoKey, _: *Page) void {
     switch (self._vary) {
         .pkey => |pkey| crypto.EVP_PKEY_free(pkey),
         .none, .digest => {},
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *CryptoKey, page: *Page) void {

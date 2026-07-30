@@ -93,7 +93,7 @@ heap_profiler: ?*v8.HeapProfiler = null,
 templates: []*const v8.FunctionTemplate,
 
 // Arena for the lifetime of the context
-arena: Allocator,
+arena: *lp.Arena,
 
 // The call_arena for this context. For main world contexts this is
 // frame.call_arena. For isolated world contexts this is a separate arena
@@ -205,7 +205,7 @@ pub fn deinit(self: *Context) void {
     }
 
     const env = self.env;
-    defer env.app.arena_pool.release(self.arena);
+    defer self.arena.release();
 
     // Unlink any IndexedDB gate participants first: the session-scoped engine
     // must never wake a waiter into this scheduler once it's torn down.
@@ -353,7 +353,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         // gop will _always_ initiated if cacheable == true
         var gop: std.StringHashMapUnmanaged(ModuleEntry).GetOrPutResult = undefined;
         if (cacheable) {
-            gop = try self.module_cache.getOrPut(arena, url);
+            gop = try self.module_cache.getOrPut(arena.allocator(), url);
             if (gop.found_existing) {
                 if (gop.value_ptr.module) |cache_mod| {
                     if (gop.value_ptr.module_promise == null) {
@@ -514,7 +514,7 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
 // we always want to track its identity (so that, if this module imports other
 // modules, we can resolve the full URL), and preload any dependent modules.
 fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *const js.Local) !void {
-    try self.module_identifier.putNoClobber(self.arena, mod.getIdentityHash(), url);
+    try self.module_identifier.putNoClobber(self.arena.allocator(), mod.getIdentityHash(), url);
 
     // Non-async modules are blocking. We can download them in parallel, but
     // they need to be processed serially. So we want to get the list of
@@ -534,7 +534,7 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
                 return err;
             },
         };
-        const nested_gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
+        const nested_gop = try self.module_cache.getOrPut(self.arena.allocator(), normalized_specifier);
         if (!nested_gop.found_existing) {
             const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
             nested_gop.key_ptr.* = owned_specifier;
@@ -636,7 +636,7 @@ pub fn dynamicModuleCallback(
     };
 
     const normalized_specifier = self.script_manager.resolveSpecifier(
-        self.arena, // might need to survive until the module is loaded
+        self.arena.allocator(), // might need to survive until the module is loaded
         resource,
         specifier,
     ) catch |err| switch (err) {
@@ -749,7 +749,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
     };
 
     const normalized_specifier = try self.script_manager.resolveSpecifier(
-        self.arena,
+        self.arena.allocator(),
         referrer_path,
         specifier,
     );
@@ -804,7 +804,7 @@ const DynamicModuleResolveState = struct {
 };
 
 fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8, local: *const js.Local) !js.Promise {
-    const gop = try self.module_cache.getOrPut(self.arena, specifier);
+    const gop = try self.module_cache.getOrPut(self.arena.allocator(), specifier);
     if (gop.found_existing) {
         if (gop.value_ptr.resolver_promise) |rp| {
             return local.toLocal(rp);

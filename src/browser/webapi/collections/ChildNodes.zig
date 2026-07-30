@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
+const lp = @import("lightpanda");
 
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
@@ -29,7 +29,7 @@ const GenericIterator = @import("iterator.zig").Entry;
 // No need to go through a TreeWalker or add any filtering.
 const ChildNodes = @This();
 
-_arena: std.mem.Allocator,
+_arena: *lp.Arena,
 _last_index: usize,
 _last_length: ?u32,
 _last_node: ?*Node,
@@ -42,7 +42,7 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 
 pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
     const arena = try frame.getArena(.small, "ChildNodes");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(ChildNodes);
     self.* = .{
@@ -56,8 +56,8 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
     return self;
 }
 
-pub fn deinit(self: *const ChildNodes, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *const ChildNodes, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn length(self: *ChildNodes, frame: *const Frame) !u32 {

@@ -39,7 +39,6 @@ const XMLHttpRequestUpload = @import("XMLHttpRequestUpload.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
@@ -49,7 +48,7 @@ _rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *XMLHttpRequestEventTarget,
 _upload: ?*XMLHttpRequestUpload = null,
-_arena: Allocator,
+_arena: *lp.Arena,
 _http_transfer: ?*Transfer = null,
 
 // number of inflight requests, we can have multiple, e.g. xhr calling its own
@@ -109,9 +108,9 @@ const ResponseType = enum {
 };
 
 pub fn init(exec: *const Execution) !*XMLHttpRequest {
-    const arena = try exec.getArena(.large, "XMLHttpRequest");
-    errdefer exec.releaseArena(arena);
-    const self = try exec._factory.xhrEventTarget(arena, XMLHttpRequest{
+    const arena = try exec.getPinnedArena(.large, "XMLHttpRequest");
+    errdefer arena.release();
+    const self = try exec._factory.xhrEventTarget(arena.allocator(), XMLHttpRequest{
         ._exec = exec,
         ._arena = arena,
         ._proto = undefined,
@@ -120,7 +119,7 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
     return self;
 }
 
-pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
+pub fn deinit(self: *XMLHttpRequest, _: *Page) void {
     if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
         self._http_transfer = null;
@@ -134,7 +133,7 @@ pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._upload) |upload| {
         upload._proto.releaseListeners();
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 fn releaseSelfRef(self: *XMLHttpRequest) void {
@@ -142,6 +141,9 @@ fn releaseSelfRef(self: *XMLHttpRequest) void {
         return;
     }
     self._active_requests -= 1;
+    if (self._active_requests == 0) {
+        self._arena.report();
+    }
     self.releaseRef(self._exec.page);
 }
 
@@ -212,7 +214,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .encoding = exec.charset.* });
+    self._url = try URL.resolve(self._arena.allocator(), exec.base(), url, .{ .encoding = exec.charset.* });
     try self.stateChanged(.opened, exec);
 }
 
@@ -242,7 +244,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     if (body_) |b| {
         if (self._method != .GET and self._method != .HEAD) {
-            const extracted = try b.extract(self._arena);
+            const extracted = try b.extract(self._arena.allocator());
             self._request_body = extracted.bytes;
             // Per XHR §4.7.6 "send()" step 4, the default Content-Type only
             // applies if the author hasn't already set one via
@@ -322,7 +324,7 @@ pub fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
         return upload;
     }
     const upload = try self._exec._factory.xhrEventTarget(
-        self._arena,
+        self._arena.allocator(),
         XMLHttpRequestUpload{ ._proto = undefined, ._xhr = self },
     );
     self._upload = upload;
@@ -529,14 +531,14 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
-        const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena, joined);
+        const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
+        try self._response_headers.append(self._arena.allocator(), joined);
     }
 
     self._response_status = transfer.responseStatus().?;
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
-        try self._response_data.ensureTotalCapacity(self._arena, cl);
+        try self._response_data.ensureTotalCapacity(self._arena.allocator(), cl);
     }
     self._response_url = try self._arena.dupeZ(u8, transfer.req.url);
 
@@ -555,7 +557,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
 fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._response_data.appendSlice(self._arena, data);
+    try self._response_data.appendSlice(self._arena.allocator(), data);
 
     try self._proto.dispatch(.progress, .{
         .total = self._response_len orelse 0,

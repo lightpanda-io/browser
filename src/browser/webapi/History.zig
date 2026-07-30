@@ -54,11 +54,11 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     const session = frame._session;
     const arena = session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, frame.url, u, .{})
+        try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 
-    const json = state.toJson(arena) catch return error.DataClone;
+    const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.pushEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;
@@ -76,11 +76,11 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     const session = frame._session;
     const arena = session.arena;
     const url = if (_url) |u|
-        try @import("../URL.zig").resolve(arena, frame.url, u, .{})
+        try @import("../URL.zig").resolve(arena.allocator(), frame.url, u, .{})
     else
         try arena.dupeZ(u8, frame.url);
 
-    const json = state.toJson(arena) catch return error.DataClone;
+    const json = state.toJson(arena.allocator()) catch return error.DataClone;
     _ = try session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, frame, true);
 
     frame.url = url;

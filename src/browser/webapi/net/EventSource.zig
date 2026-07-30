@@ -33,7 +33,6 @@ const MessageEvent = @import("../event/MessageEvent.zig");
 const log = lp.log;
 const String = lp.String;
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // https://html.spec.whatwg.org/multipage/server-sent-events.html
@@ -44,7 +43,7 @@ pub const Proto = EventTarget;
 _rc: lp.RC = .{},
 _exec: *const Execution,
 _proto: *EventTarget,
-_arena: Allocator,
+_arena: *lp.Arena,
 
 _url: [:0]const u8,
 _with_credentials: bool = false,
@@ -96,13 +95,13 @@ const Opts = struct {
 
 pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource {
     const arena = try exec.getArena(.medium, "EventSource");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
-    const resolved = URL.resolve(arena, exec.base(), url, .{ .encoding = exec.charset.* }) catch {
+    const resolved = URL.resolve(arena.allocator(), exec.base(), url, .{ .encoding = exec.charset.* }) catch {
         return error.SyntaxError;
     };
 
-    const self = try exec._factory.eventTargetWithAllocator(arena, EventSource{
+    const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), EventSource{
         ._exec = exec,
         ._arena = arena,
         ._proto = undefined,
@@ -130,7 +129,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
     return self;
 }
 
-pub fn deinit(self: *EventSource, page: *Page) void {
+pub fn deinit(self: *EventSource, _: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
@@ -147,7 +146,7 @@ pub fn deinit(self: *EventSource, page: *Page) void {
         func.release();
     }
 
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *EventSource, page: *Page) void {
@@ -174,7 +173,7 @@ fn connect(self: *EventSource) !void {
     self._event_type_buf.clearRetainingCapacity();
 
     self._id_buf.clearRetainingCapacity();
-    try self._id_buf.appendSlice(self._arena, self._last_event_id.items);
+    try self._id_buf.appendSlice(self._arena.allocator(), self._last_event_id.items);
 
     var headers = try http_client.newHeaders();
     try headers.add("Accept: text/event-stream");
@@ -344,7 +343,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     defer ls.deinit();
 
     const final_url = try self._arena.dupeZ(u8, transfer.req.url);
-    self._event_origin = (URL.getOrigin(self._arena, final_url) catch null) orelse "";
+    self._event_origin = (URL.getOrigin(self._arena.allocator(), final_url) catch null) orelse "";
 
     // https://html.spec.whatwg.org/multipage/server-sent-events.html#announce-the-connection
     self._ready_state = .open;
@@ -463,7 +462,7 @@ fn bufferLine(self: *EventSource, bytes: []const u8) !void {
     if (self._line_buf.items.len + bytes.len > self._max_response_size) {
         return error.ResponseTooLarge;
     }
-    return self._line_buf.appendSlice(self._arena, bytes);
+    return self._line_buf.appendSlice(self._arena.allocator(), bytes);
 }
 
 fn processLine(self: *EventSource) !void {
@@ -501,20 +500,20 @@ fn processLine(self: *EventSource) !void {
         if (self._data_buf.items.len + add_len > self._max_response_size) {
             return error.ResponseTooLarge;
         }
-        try self._data_buf.ensureUnusedCapacity(arena, add_len);
+        try self._data_buf.ensureUnusedCapacity(arena.allocator(), add_len);
         self._data_buf.appendSliceAssumeCapacity(value);
         self._data_buf.appendAssumeCapacity('\n');
     }
 
     if (std.mem.eql(u8, field, "event")) {
         self._event_type_buf.clearRetainingCapacity();
-        try self._event_type_buf.appendSlice(arena, value);
+        try self._event_type_buf.appendSlice(arena.allocator(), value);
     }
 
     if (std.mem.eql(u8, field, "id")) {
         if (std.mem.indexOfScalar(u8, value, 0) == null) {
             self._id_buf.clearRetainingCapacity();
-            try self._id_buf.appendSlice(arena, value);
+            try self._id_buf.appendSlice(arena.allocator(), value);
         }
     }
 
@@ -529,7 +528,7 @@ fn processLine(self: *EventSource) !void {
 // An empty line completed an event block.
 fn dispatchPending(self: *EventSource) !void {
     self._last_event_id.clearRetainingCapacity();
-    try self._last_event_id.appendSlice(self._arena, self._id_buf.items);
+    try self._last_event_id.appendSlice(self._arena.allocator(), self._id_buf.items);
 
     const data = self._data_buf.items;
     if (data.len == 0) {

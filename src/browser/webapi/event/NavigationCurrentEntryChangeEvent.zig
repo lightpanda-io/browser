@@ -27,7 +27,6 @@ const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig
 const NavigationType = @import("../navigation/root.zig").NavigationType;
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 const NavigationCurrentEntryChangeEvent = @This();
 
@@ -49,19 +48,19 @@ const Options = Event.inheritOptions(
 
 pub fn init(typ: []const u8, opts: Options, frame: *Frame) !*NavigationCurrentEntryChangeEvent {
     const arena = try frame.getArena(.tiny, "NavigationCurrentEntryChangeEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, opts, false, frame);
 }
 
 pub fn initTrusted(typ: String, opts: Options, frame: *Frame) !*NavigationCurrentEntryChangeEvent {
     const arena = try frame.getArena(.tiny, "NavigationCurrentEntryChangeEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, opts, true, frame);
 }
 
 fn initWithTrusted(
-    arena: Allocator,
+    arena: *lp.Arena,
     typ: String,
     opts: Options,
     trusted: bool,

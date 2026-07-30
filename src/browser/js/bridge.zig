@@ -782,7 +782,7 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
 
 fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
     const ctx = local.ctx;
-    const gop = try ctx.unknown_properties.getOrPut(ctx.arena, key);
+    const gop = try ctx.unknown_properties.getOrPut(ctx.arena.allocator(), key);
     if (gop.found_existing) {
         gop.value_ptr.count += 1;
     } else {

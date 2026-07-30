@@ -44,8 +44,8 @@ pub const Options = Event.inheritOptions(
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TextEvent {
     const arena = try frame.getArena(.tiny, "TextEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = _opts orelse Options{};
 
@@ -86,7 +86,7 @@ pub fn initTextEvent(
 
     const arena = event._arena;
     event._initialized = true;
-    event._type_string = try String.init(arena, typ, .{});
+    event._type_string = try String.init(arena.allocator(), typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     ui._view = view;

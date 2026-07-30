@@ -53,7 +53,7 @@ pub fn deinit(self: *RobotsGate) void {
 
 pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
     const url = transfer.req.url;
-    const robots_url = try URL.getRobotsUrl(transfer.arena, url);
+    const robots_url = try URL.getRobotsUrl(transfer.arena.allocator(), url);
 
     if (self.network.robot_store.get(robots_url)) |robot_entry| {
         switch (robot_entry) {
@@ -104,7 +104,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     // fetch's callbacks must survive that. The arena is released by
     // whichever terminal callback fires (done / error / shutdown).
     const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
-    errdefer client.arena_pool.release(arena);
+    errdefer arena.release();
 
     const owned_url = try arena.dupeZ(u8, robots_url);
     const robots_ctx = try arena.create(RobotsContext);
@@ -200,7 +200,7 @@ fn flushPendingShutdown(self: *RobotsGate, robots_url: []const u8) void {
 
 const RobotsContext = struct {
     gate: *RobotsGate,
-    arena: Allocator,
+    arena: *lp.Arena,
     arena_pool: *ArenaPool,
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
@@ -214,7 +214,7 @@ const RobotsContext = struct {
         }
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
         if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacity(self.arena, cl);
+            try self.buffer.ensureTotalCapacity(self.arena.allocator(), cl);
         }
         return .proceed;
     }
@@ -222,7 +222,7 @@ const RobotsContext = struct {
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *RobotsContext = @ptrCast(@alignCast(transfer.req.ctx));
         if (self.status == 200) {
-            try self.buffer.appendSlice(self.arena, data);
+            try self.buffer.appendSlice(self.arena.allocator(), data);
         }
     }
 
@@ -277,17 +277,15 @@ const RobotsContext = struct {
 
         log.debug(.http, "robots fetch shutdown", .{});
         const gate = self.gate;
-        const pool = self.arena_pool;
         const arena = self.arena;
         gate.flushPendingShutdown(self.robots_url);
-        pool.release(arena);
+        arena.release();
     }
 
     fn resolve(self: *RobotsContext) void {
         const gate = self.gate;
-        const pool = self.arena_pool;
         const arena = self.arena;
         gate.flushPending(self.robots_url);
-        pool.release(arena);
+        arena.release();
     }
 };

@@ -32,7 +32,6 @@
 //! `InvalidStateError` is what decision #4 captures and what most
 //! legacy XPath consumers expect.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
@@ -48,8 +47,6 @@ const xpath = struct {
     const Parser = @import("../xpath/Parser.zig");
     const Evaluator = @import("../xpath/Evaluator.zig");
 };
-
-const Allocator = std.mem.Allocator;
 
 const XPathResult = @This();
 
@@ -76,7 +73,7 @@ const Value = union(enum) {
 };
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _type: u16,
 _value: Value,
 _iter_pos: usize = 0,
@@ -93,15 +90,15 @@ pub fn fromExpression(
     frame: *Frame,
 ) !*XPathResult {
     const arena = try frame.getArena(.medium, "XPathResult");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     // The AST borrows string slices from its input (literals, names,
     // var refs, function names). `expression` is materialized in the JS
     // call_arena and is reclaimed when the top-level call returns, so
     // dupe into our long-lived arena before parsing.
     const owned = try arena.dupe(u8, expression);
-    const expr = try xpath.Parser.parse(arena, owned);
-    const result = try xpath.Evaluator.evaluate(arena, expr, context_node, frame);
+    const expr = try xpath.Parser.parse(arena.allocator(), owned);
+    const result = try xpath.Evaluator.evaluate(arena.allocator(), expr, context_node, frame);
     return fromResult(arena, requested_type, result);
 }
 
@@ -110,7 +107,7 @@ pub fn fromExpression(
 /// it on deinit. Used by `XPathExpression.evaluate` (which has its own
 /// AST cache and only allocates a fresh result arena).
 pub fn fromResult(
-    arena: Allocator,
+    arena: *lp.Arena,
     requested_type: u16,
     result: xpath.result.Result,
 ) !*XPathResult {
@@ -121,8 +118,8 @@ pub fn fromResult(
             .boolean => |b| .{ .boolean = b },
             .node_set => |ns| .{ .nodes = ns },
         },
-        NUMBER_TYPE => .{ .number = try xpath.result.toNumber(arena, result) },
-        STRING_TYPE => .{ .string = try xpath.result.toString(arena, result) },
+        NUMBER_TYPE => .{ .number = try xpath.result.toNumber(arena.allocator(), result) },
+        STRING_TYPE => .{ .string = try xpath.result.toString(arena.allocator(), result) },
         BOOLEAN_TYPE => .{ .boolean = xpath.result.toBoolean(result) },
         UNORDERED_NODE_ITERATOR_TYPE,
         ORDERED_NODE_ITERATOR_TYPE,
@@ -159,8 +156,8 @@ pub fn fromResult(
 
 // ----- lifecycle -----
 
-pub fn deinit(self: *XPathResult, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *XPathResult, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *XPathResult) void {

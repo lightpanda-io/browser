@@ -72,6 +72,7 @@ factory: Factory,
 
 // The arena for this Page's lifetime. Document / Frame / Factory / DOM
 // objects allocate out of this.
+_frame_arena: *lp.Arena,
 frame_arena: Allocator,
 
 // Origin map for same-origin context sharing. Entries live for the Page's
@@ -150,13 +151,14 @@ pub fn getViewport(self: *const Page) Viewport {
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
-    errdefer session.arena_pool.release(frame_arena);
+    errdefer frame_arena.release();
 
     self.* = .{
         .session = session,
         .frame = undefined,
-        .frame_arena = frame_arena,
-        .factory = Factory.init(frame_arena),
+        ._frame_arena = frame_arena,
+        .frame_arena = frame_arena.allocator(),
+        .factory = Factory.init(frame_arena.allocator()),
         .globals = .init(session.browser.app.allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
@@ -228,7 +230,7 @@ pub fn deinit(self: *Page) void {
         self.origins = .empty;
     }
 
-    session.arena_pool.release(self.frame_arena);
+    self._frame_arena.release();
 }
 
 pub fn recordJsError(self: *Page, err: anyerror) void {
@@ -236,12 +238,12 @@ pub fn recordJsError(self: *Page, err: anyerror) void {
     lp.metrics.js_errors.incr(if (err == error.JsException) .js_exception else .other);
 }
 
-pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.session.getArena(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *Page, allocator: Allocator) void {
-    return self.session.releaseArena(allocator);
+pub fn getPinnedArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.session.getPinnedArena(size_or_bucket, debug);
 }
 
 pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
@@ -255,7 +257,7 @@ pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
         return js.Origin.init(session.browser.app, session.browser.env.isolate, &opaque_origin);
     };
 
-    const gop = try self.origins.getOrPut(session.arena, key);
+    const gop = try self.origins.getOrPut(session.arena.allocator(), key);
     if (gop.found_existing) {
         const origin = gop.value_ptr.*;
         origin.rc += 1;
@@ -320,7 +322,7 @@ pub fn scheduleNavigation(self: *Page, frame: *Frame) !void {
         }
     }
 
-    return list.append(self.session.arena, frame);
+    return list.append(self.session.arena.allocator(), frame);
 }
 
 pub fn findFrameByFrameId(self: *Page, frame_id: u32) ?*Frame {

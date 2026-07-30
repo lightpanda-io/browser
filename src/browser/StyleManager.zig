@@ -53,7 +53,7 @@ const RuleList = std.MultiArrayList(VisibilityRule);
 
 frame: *Frame,
 
-arena: Allocator,
+arena: *lp.Arena,
 
 // Bucketed rules for fast lookup - keyed by rightmost selector part
 id_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
@@ -89,7 +89,7 @@ pub fn init(frame: *Frame) !StyleManager {
 }
 
 pub fn deinit(self: *StyleManager) void {
-    self.frame.releaseArena(self.arena);
+    self.arena.release();
 }
 
 const IS_DEBUG = builtin.mode == .Debug;
@@ -118,7 +118,7 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
 
     const owner_node = sheet.getOwnerNode() orelse return;
     if (owner_node.is(Element.Html.Style)) |style| {
-        const text = try style.asNode().getTextContentAlloc(self.arena);
+        const text = try style.asNode().getTextContentAlloc(self.arena.allocator());
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
@@ -475,7 +475,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
     if (!props.isRelevant()) return;
 
-    const selectors = SelectorParser.parseList(self.arena, selector_text) catch return;
+    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
     for (selectors) |selector| {
         const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
         const bucket_key = getBucketKey(rightmost) orelse continue;
@@ -489,22 +489,22 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
         switch (bucket_key) {
             .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena, id);
+                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena, class);
+                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena, tag);
+                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .other => {
-                try self.other_rules.append(self.arena, rule);
+                try self.other_rules.append(self.arena.allocator(), rule);
             },
         }
     }
@@ -536,7 +536,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
         self.layer_ids = .empty;
         self.next_anon_layer = 0;
         self.rule_layers = .empty;
-        self.frame.releaseArena(build_arena);
+        build_arena.release();
     }
 
     self.dirty = false;
@@ -546,31 +546,31 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const tag_rules_count = self.tag_rules.count();
     const other_rules_count = self.other_rules.len;
 
-    self.frame._session.arena_pool.resetRetain(self.arena);
+    self.arena.resetRetain();
 
     self.next_doc_order = 1;
 
     self.id_rules = .empty;
-    try self.id_rules.ensureTotalCapacity(self.arena, id_rules_count);
+    try self.id_rules.ensureTotalCapacity(self.arena.allocator(), id_rules_count);
 
     self.class_rules = .empty;
-    try self.class_rules.ensureTotalCapacity(self.arena, class_rules_count);
+    try self.class_rules.ensureTotalCapacity(self.arena.allocator(), class_rules_count);
 
     self.tag_rules = .empty;
-    try self.tag_rules.ensureTotalCapacity(self.arena, tag_rules_count);
+    try self.tag_rules.ensureTotalCapacity(self.arena.allocator(), tag_rules_count);
 
     self.other_rules = .{};
-    try self.other_rules.ensureTotalCapacity(self.arena, other_rules_count);
+    try self.other_rules.ensureTotalCapacity(self.arena.allocator(), other_rules_count);
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
-        self.parseSheet(build_arena, sheet) catch |err| {
+        self.parseSheet(build_arena.allocator(), sheet) catch |err| {
             log.err(.browser, "StyleManager parseSheet", .{ .err = err });
             return err;
         };
     }
 
-    try self.finalizeLayerRanks(build_arena);
+    try self.finalizeLayerRanks(build_arena.allocator());
 }
 
 // Check if an element is hidden based on options.
@@ -946,7 +946,7 @@ fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRul
     }
 
     // Parse the selector list
-    const selectors = SelectorParser.parseList(self.arena, selector_text) catch return;
+    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
     if (selectors.len == 0) {
         return;
     }
@@ -974,22 +974,22 @@ fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRul
         // Add to appropriate bucket
         switch (bucket_key) {
             .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena, id);
+                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena, class);
+                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena, tag);
+                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
                 if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena, rule);
+                try gop.value_ptr.append(self.arena.allocator(), rule);
             },
             .other => {
-                try self.other_rules.append(self.arena, rule);
+                try self.other_rules.append(self.arena.allocator(), rule);
             },
         }
     }

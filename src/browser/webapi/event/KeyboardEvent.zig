@@ -26,7 +26,6 @@ const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 const KeyboardEvent = @This();
 
@@ -297,18 +296,18 @@ const Options = Event.inheritOptions(
 
 pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*KeyboardEvent {
     const arena = try frame.getArena(.tiny, "KeyboardEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*KeyboardEvent {
     const arena = try frame.getArena(.tiny, "KeyboardEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*KeyboardEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*KeyboardEvent {
     const opts = _opts orelse Options{};
 
     const event = try frame._factory.uiEvent(
@@ -316,7 +315,7 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
         typ,
         KeyboardEvent{
             ._proto = undefined,
-            ._key = try Key.fromString(arena, opts.key),
+            ._key = try Key.fromString(arena.allocator(), opts.key),
             ._location = opts.location,
             ._code = if (opts.code) |c| try arena.dupe(u8, c) else "",
             ._repeat = opts.repeat,
@@ -431,11 +430,11 @@ pub fn initKeyboardEvent(
 
     const arena = event._arena;
     event._initialized = true;
-    event._type_string = try String.init(arena, typ, .{});
+    event._type_string = try String.init(arena.allocator(), typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     ui._view = view;
-    self._key = try Key.fromString(arena, key orelse "");
+    self._key = try Key.fromString(arena.allocator(), key orelse "");
     self._location = location orelse 0;
     self._ctrl_key = ctrl_key orelse false;
     self._alt_key = alt_key orelse false;
@@ -444,7 +443,7 @@ pub fn initKeyboardEvent(
 }
 
 pub fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
-    const key = try Key.fromString(self._proto._proto._arena, str);
+    const key = try Key.fromString(self._proto._proto._arena.allocator(), str);
 
     switch (key) {
         .Alt, .AltGraph => return self._alt_key,

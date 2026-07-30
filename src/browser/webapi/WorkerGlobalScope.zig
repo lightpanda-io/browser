@@ -73,6 +73,8 @@ _identity: JS.Identity = .{},
 _http_owner: HttpClient.Owner,
 
 arena: Allocator,
+_call_arena: *lp.Arena,
+_local_arena: *lp.Arena,
 call_arena: Allocator,
 local_arena: Allocator,
 url: [:0]const u8,
@@ -135,10 +137,10 @@ pub fn init(
     const session = frame._session;
 
     const call_arena = try session.getArena(.small, "WorkerGlobalScope.call_arena");
-    errdefer session.releaseArena(call_arena);
+    errdefer call_arena.release();
 
     const local_arena = try session.getArena(.small, "WorkerGlobalScope.local_arena");
-    errdefer session.releaseArena(local_arena);
+    errdefer local_arena.release();
 
     const factory = frame._factory;
     const leaf = try Factory.chainedWithAllocator(arena, .{
@@ -148,8 +150,10 @@ pub fn init(
             .arena = arena,
             .origin = frame.origin,
             .js = undefined,
-            .call_arena = call_arena,
-            .local_arena = local_arena,
+            ._call_arena = call_arena,
+            ._local_arena = local_arena,
+            .call_arena = call_arena.allocator(),
+            .local_arena = local_arena.allocator(),
             ._frame = frame,
             ._page = frame._page,
             ._session = session,
@@ -181,8 +185,8 @@ pub fn init(
     );
 
     self.js = try session.browser.env.createWorkerContext(self, .{
-        .call_arena = call_arena,
-        .local_arena = local_arena,
+        .call_arena = call_arena.allocator(),
+        .local_arena = local_arena.allocator(),
         .identity_arena = arena,
         .identity = &self._identity,
     });
@@ -216,8 +220,8 @@ pub fn deinit(self: *WorkerGlobalScope) void {
 
     page.revokeBlobUrlsFor(self._frame_id);
     browser.env.destroyContext(self.js);
-    session.releaseArena(self.call_arena);
-    session.releaseArena(self.local_arena);
+    self._call_arena.release();
+    self._local_arena.release();
 }
 
 pub fn base(self: *const WorkerGlobalScope) [:0]const u8 {
@@ -393,11 +397,11 @@ pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void
 
     const session = self._session;
     const arena = try session.getArena(.large, "importScript");
-    defer session.releaseArena(arena);
+    defer arena.release();
 
     for (urls) |url| {
-        defer session.arena_pool.resetRetain(arena);
-        try self.importScript(arena, url);
+        defer arena.resetRetain();
+        try self.importScript(arena.allocator(), url);
     }
 }
 

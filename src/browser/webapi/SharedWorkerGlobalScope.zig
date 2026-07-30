@@ -30,7 +30,6 @@ const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const SharedWorkerGlobalScope = @This();
@@ -38,7 +37,7 @@ const SharedWorkerGlobalScope = @This();
 pub const Proto = WorkerGlobalScope;
 
 _proto: *WorkerGlobalScope,
-_arena: Allocator,
+_arena: *lp.Arena,
 
 _url: [:0]const u8,
 _name: []const u8,
@@ -55,7 +54,7 @@ _loader_id: u32,
 
 _closed: bool = false,
 _script_loaded: bool = false,
-_script_arena: ?Allocator = null,
+_script_arena: ?*lp.Arena = null,
 _script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
 
@@ -68,13 +67,13 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     const session = frame._session;
 
     const arena = try session.getArena(.small, "SharedWorker");
-    errdefer session.releaseArena(arena);
+    errdefer arena.release();
 
     const owned_url = try arena.dupeZ(u8, url);
     const frame_id = session.nextFrameId();
     const loader_id = session.nextLoaderId();
     const self = try WorkerGlobalScope.init(
-        arena,
+        arena.allocator(),
         owned_url,
         .shared,
         SharedWorkerGlobalScope{
@@ -143,7 +142,7 @@ pub fn deinit(self: *SharedWorkerGlobalScope) void {
     self.releaseScriptArena();
     self.unregister();
     self._proto.deinit();
-    self._proto._session.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn register(self: *SharedWorkerGlobalScope, lookup_key: []const u8) !void {
@@ -152,7 +151,7 @@ pub fn register(self: *SharedWorkerGlobalScope, lookup_key: []const u8) !void {
     const key = try self._arena.dupe(u8, lookup_key);
 
     const session = self._proto._session;
-    try session.shared_workers.put(session.arena, key, self);
+    try session.shared_workers.put(session.arena.allocator(), key, self);
     self._registry_key = key;
 }
 
@@ -172,7 +171,7 @@ pub fn connect(self: *SharedWorkerGlobalScope, client_exec: *js.Execution) !*Mes
     MessagePort.entangle(client_port, worker_port);
 
     if (self._script_loaded == false) {
-        try self._pending_connects.append(self._arena, worker_port);
+        try self._pending_connects.append(self._arena.allocator(), worker_port);
         return client_port;
     }
 
@@ -214,7 +213,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacity(self._script_arena.?, cl);
+        try self._script_buffer.ensureTotalCapacity(self._script_arena.?.allocator(), cl);
     }
 
     return .proceed;
@@ -222,7 +221,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
 fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     const self: *SharedWorkerGlobalScope = @ptrCast(@alignCast(transfer.req.ctx));
-    try self._script_buffer.appendSlice(self._script_arena.?, data);
+    try self._script_buffer.appendSlice(self._script_arena.?.allocator(), data);
 }
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
@@ -297,7 +296,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
             }
 
             js_context.page.recordJsError(err);
-            const caught = try_catch.caughtOrError(self._script_arena.?, err);
+            const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
             log.err(.browser, "shared worker script error", .{ .url = self._url, .caught = caught });
             return;
         },
@@ -307,7 +306,7 @@ fn loadInitialScript(self: *SharedWorkerGlobalScope, script: []const u8) !void {
             }
 
             js_context.page.recordJsError(err);
-            const caught = try_catch.caughtOrError(self._script_arena.?, err);
+            const caught = try_catch.caughtOrError(self._script_arena.?.allocator(), err);
             log.err(.browser, "shared worker module error", .{ .url = self._url, .caught = caught });
             return;
         },
@@ -322,7 +321,7 @@ fn releaseScriptArena(self: *SharedWorkerGlobalScope) void {
     const arena = self._script_arena orelse return;
     self._script_arena = null;
     self._script_buffer = .empty;
-    self._proto._session.releaseArena(arena);
+    arena.release();
 }
 
 fn drainPendingConnects(self: *SharedWorkerGlobalScope) void {
@@ -339,7 +338,7 @@ fn scheduleConnect(self: *SharedWorkerGlobalScope, port: *MessagePort) !void {
     const session = wgs._session;
 
     const connect_arena = try session.getArena(.tiny, "SharedWorkerGlobalScope.connect");
-    errdefer session.releaseArena(connect_arena);
+    errdefer connect_arena.release();
 
     const callback = try connect_arena.create(ConnectCallback);
     callback.* = .{
@@ -357,7 +356,7 @@ fn scheduleConnect(self: *SharedWorkerGlobalScope, port: *MessagePort) !void {
 
 const ConnectCallback = struct {
     port: *MessagePort,
-    arena: Allocator,
+    arena: *lp.Arena,
     worker_scope: *SharedWorkerGlobalScope,
 
     fn cancelled(ctx: *anyopaque) void {
@@ -366,7 +365,7 @@ const ConnectCallback = struct {
     }
 
     fn deinit(self: *ConnectCallback) void {
-        self.worker_scope._proto._session.releaseArena(self.arena);
+        self.arena.release();
     }
 
     fn run(ctx: *anyopaque) !?u32 {

@@ -28,7 +28,6 @@ const Element = @import("Element.zig");
 
 const log = lp.log;
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -40,7 +39,7 @@ pub fn registerTypes() []const type {
 const MutationObserver = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _callback: js.Function.Global,
 _observing: std.ArrayList(Observing) = .empty,
 _pending_records: std.ArrayList(*MutationRecord) = .empty,
@@ -76,7 +75,7 @@ pub const ObserveOptions = struct {
 
 pub fn init(callback: js.Function.Global, frame: *Frame) !*MutationObserver {
     const arena = try frame.getArena(.small, "MutationObserver");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     const self = try arena.create(MutationObserver);
     self.* = .{
         ._arena = arena,
@@ -92,7 +91,7 @@ pub fn deinit(self: *MutationObserver, page: *Page) void {
         record.deinit(page);
     }
     self._callback.release();
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *MutationObserver, page: *Page) void {
@@ -165,7 +164,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
         }
     }
 
-    try self._observing.append(arena, .{
+    try self._observing.append(arena.allocator(), .{
         .target = target,
         .options = store_options,
     });
@@ -242,7 +241,7 @@ pub fn notifyAttributeChange(
             ._next_sibling = null,
         };
 
-        try self._pending_records.append(self._arena, record);
+        try self._pending_records.append(self._arena.allocator(), record);
 
         try Frame.observers.scheduleMutationDelivery(frame);
         break;
@@ -286,7 +285,7 @@ pub fn notifyCharacterDataChange(
             ._next_sibling = null,
         };
 
-        try self._pending_records.append(self._arena, record);
+        try self._pending_records.append(self._arena.allocator(), record);
 
         try Frame.observers.scheduleMutationDelivery(frame);
         break;
@@ -330,7 +329,7 @@ pub fn notifyChildListChange(
             ._next_sibling = next_sibling,
         };
 
-        try self._pending_records.append(self._arena, record);
+        try self._pending_records.append(self._arena.allocator(), record);
 
         try Frame.observers.scheduleMutationDelivery(frame);
         break;
@@ -360,7 +359,7 @@ pub const MutationRecord = struct {
     _rc: lp.RC = .{},
     _type: Type,
     _target: *Node,
-    _arena: Allocator,
+    _arena: *lp.Arena,
     _attribute_name: ?[]const u8,
     _old_value: ?[]const u8,
     _added_nodes: []const *Node,
@@ -374,8 +373,8 @@ pub const MutationRecord = struct {
         characterData,
     };
 
-    pub fn deinit(self: *MutationRecord, session: *Page) void {
-        session.releaseArena(self._arena);
+    pub fn deinit(self: *MutationRecord, _: *Page) void {
+        self._arena.release();
     }
 
     pub fn releaseRef(self: *MutationRecord, session: *Page) void {
