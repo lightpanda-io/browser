@@ -34,6 +34,7 @@ const SAFETY = Arena.SAFETY;
 pub const BucketSize = enum { tiny, small, medium, large };
 
 pub const Bucket = struct {
+    size: BucketSize,
     free_list: ?*Arena = null,
     free_list_len: u16 = 0,
     free_list_max: u16,
@@ -66,10 +67,10 @@ pub fn init(allocator: Allocator, config: Config) ArenaPool {
     return .{
         .allocator = allocator,
         .entry_pool = .empty,
-        .tiny = .{ .free_list_max = config.tiny.max, .retain_bytes = config.tiny.retain },
-        .small = .{ .free_list_max = config.small.max, .retain_bytes = config.small.retain },
-        .medium = .{ .free_list_max = config.medium.max, .retain_bytes = config.medium.retain },
-        .large = .{ .free_list_max = config.large.max, .retain_bytes = config.large.retain },
+        .tiny = .{ .size = .tiny, .free_list_max = config.tiny.max, .retain_bytes = config.tiny.retain },
+        .small = .{ .size = .small, .free_list_max = config.small.max, .retain_bytes = config.small.retain },
+        .medium = .{ .size = .medium, .free_list_max = config.medium.max, .retain_bytes = config.medium.retain },
+        .large = .{ .size = .large, .free_list_max = config.large.max, .retain_bytes = config.large.retain },
     };
 }
 
@@ -100,6 +101,13 @@ pub fn deinit(self: *ArenaPool) void {
     self.entry_pool.deinit(self.allocator);
 }
 
+pub fn bucketFor(self: *const ArenaPool, size: usize) BucketSize {
+    if (size <= self.tiny.retain_bytes) return .tiny;
+    if (size <= self.small.retain_bytes) return .small;
+    if (size <= self.medium.retain_bytes) return .medium;
+    return .large;
+}
+
 // Acquire an arena from the pool.
 // - Pass a BucketSize (.tiny, .small, .medium, .large) for explicit bucket selection
 // - Pass a usize for automatic bucket selection based on expected size
@@ -120,10 +128,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
             break :blk @as(BucketSize, size_or_bucket);
         }
         if (T == usize or T == comptime_int) {
-            if (size_or_bucket <= self.tiny.retain_bytes) break :blk .tiny;
-            if (size_or_bucket <= self.small.retain_bytes) break :blk .small;
-            if (size_or_bucket <= self.medium.retain_bytes) break :blk .medium;
-            break :blk .large;
+            break :blk self.bucketFor(size_or_bucket);
         }
         @compileError("acquire expects BucketSize or usize, got " ++ @typeName(T));
     };
@@ -134,6 +139,8 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         .medium => &self.medium,
         .large => &self.large,
     };
+
+    lp.metrics.arena_inflight.incr(bucket_size);
 
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
@@ -185,6 +192,8 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
 pub fn release(self: *ArenaPool, entry: *Arena) void {
     const arena = &entry._arena;
     const bucket = entry.bucket;
+
+    lp.metrics.arena_inflight.decr(bucket.size);
 
     if (IS_DEBUG) {
         self.mutex.lockUncancelable(lp.io);

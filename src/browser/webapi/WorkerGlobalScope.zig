@@ -396,7 +396,8 @@ pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void
     }
 
     const session = self._session;
-    const arena = try session.getArena(.large, "importScript");
+    // HttpClient will take out a larger arena for the body, if necessary
+    const arena = try session.getArena(.small, "importScript");
     defer arena.release();
 
     for (urls) |url| {
@@ -415,7 +416,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     var headers = try http_client.newHeaders();
     try self.headersForRequest(&headers);
 
-    const response = http_client.syncRequest(arena, .{
+    var response = http_client.syncRequest(.{
         .url = resolved_url,
         .method = .GET,
         .frame_id = self._frame_id,
@@ -431,6 +432,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
+    defer response.deinit();
 
     if (response.status != 200) {
         log.warn(.http, "importScript", .{ .url = resolved_url, .status = response.status });

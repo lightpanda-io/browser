@@ -2180,7 +2180,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     }
     const element = link.asElement();
 
-    const arena = try session.getArena(.medium, "Frame.loadExternalStylesheet");
+    // HttpClient will take out a larger arena for the body, if necessary
+    const arena = try session.getArena(.small, "Frame.loadExternalStylesheet");
     defer arena.release();
 
     const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
@@ -2212,7 +2213,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = http_client.syncRequest(arena.allocator(), .{
+    var response = http_client.syncRequest(.{
         .url = resolved,
         .method = .GET,
         .frame_id = self._frame_id,
@@ -2227,7 +2228,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
-    defer response.deinit(arena.allocator());
+    defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });

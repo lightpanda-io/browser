@@ -18,7 +18,6 @@
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
-const Factory = @import("../Factory.zig");
 const RO = @import("DOMPointReadOnly.zig");
 
 const DOMPoint = @This();
@@ -32,11 +31,8 @@ pub fn init(x_: ?f64, y_: ?f64, z_: ?f64, w_: ?f64, exec: *const js.Execution) !
 }
 
 pub fn create(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPoint {
-    const arena = try page.getArena(.tiny, "DOMPoint");
-    errdefer arena.release();
-
-    const self = try Factory.chainedWithAllocator(arena.allocator(), .{
-        RO.buildValue(arena, x, y, z, w),
+    const self = try page.factory.chained(.{
+        RO.buildValue(x, y, z, w),
         DOMPoint{ ._proto = undefined },
     });
     self._proto._type = .{ .mutable = self };
