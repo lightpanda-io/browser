@@ -99,6 +99,28 @@ pub fn enabled(scope: Scope, level: Level) bool {
     return true;
 }
 
+// The number of log lines each scope is expected to emit for the current test.
+// A line from a scope with a pending count is consumed instead of written; see
+// testing.expectLog.
+var expected_logs: [num_scopes]u16 = @splat(0);
+
+// Registers one expected log line per entry in `scopes`.
+pub fn expectLog(comptime scopes: []const Scope) void {
+    comptime std.debug.assert(IS_TEST);
+    inline for (scopes) |scope| {
+        expected_logs[@intFromEnum(scope)] += 1;
+    }
+}
+
+// Called after each test. Returns the expectations that were never met.
+pub fn resetTestState() [num_scopes]u16 {
+    std.debug.assert(IS_TEST);
+    const unmet = expected_logs;
+    expected_logs = @splat(0);
+    opts.scope_enabled = @splat(true);
+    return unmet;
+}
+
 // Ugliness to support complex debug parameters. Could add better support for
 // this directly in writeValue, but we [currently] only need this in one place
 // and I kind of don't want to encourage / make this easy.
@@ -149,6 +171,14 @@ pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     if (enabled(scope, level) == false) {
         return;
+    }
+
+    if (comptime IS_TEST) {
+        const expected = &expected_logs[@intFromEnum(scope)];
+        if (expected.* > 0) {
+            expected.* -= 1;
+            return;
+        }
     }
 
     if (sink) |s| {

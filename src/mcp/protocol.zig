@@ -186,7 +186,6 @@ pub const JsonEscapingWriter = struct {
 const testing = @import("../testing.zig");
 
 test "MCP.protocol - request parsing" {
-    defer testing.reset();
     const raw_json =
         \\{
         \\  "jsonrpc": "2.0",
@@ -222,7 +221,6 @@ test "MCP.protocol - request parsing" {
 }
 
 test "MCP.protocol - ping request parsing" {
-    defer testing.reset();
     const raw_json =
         \\{
         \\  "jsonrpc": "2.0",
@@ -243,7 +241,6 @@ test "MCP.protocol - ping request parsing" {
 }
 
 test "MCP.protocol - response formatting" {
-    defer testing.reset();
     const response = Response{
         .id = .{ .integer = 42 },
         .result = .{ .string = "success" },
@@ -257,7 +254,6 @@ test "MCP.protocol - response formatting" {
 }
 
 test "MCP.protocol - error formatting" {
-    defer testing.reset();
     const response = Response{
         .id = .{ .string = "abc" },
         .@"error" = .{
@@ -274,7 +270,6 @@ test "MCP.protocol - error formatting" {
 }
 
 test "MCP.protocol - JsonEscapingWriter" {
-    defer testing.reset();
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer aw.deinit();
 
@@ -288,7 +283,6 @@ test "MCP.protocol - JsonEscapingWriter" {
 }
 
 test "MCP.protocol - Tool serialization" {
-    defer testing.reset();
     const t = Tool{
         .name = "test",
         .inputSchema = minify(

@@ -407,7 +407,8 @@ fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, li
 const testing = @import("../testing.zig");
 
 test "Page: js_error_count" {
-    defer testing.reset();
+    testing.expectLog(&.{ .js, .js, .js });
+
     // One uncaught top-level script exception, one uncaught timer-callback
     // exception.
     const page = try testing.pageTest("page_js_error.html", .{});

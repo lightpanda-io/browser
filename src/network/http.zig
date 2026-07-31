@@ -1029,8 +1029,7 @@ test "Headers.set adds a new header and preserves defaults" {
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
-    const lf: testing.LogFilter = .init(&.{.http});
-    defer lf.deinit();
+    testing.silenceLog(&.{.http});
 
     const filter = IpFilter.init(true, null);
     var sa = makeSockAddrV4(.{ 127, 0, 0, 1 });

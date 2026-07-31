@@ -119,16 +119,8 @@ run-debug: build-dev
 	@printf "\033[36mRunning...\033[0m\n"
 	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
 
-## Test - `grep` is used to filter out the huge compile command on build
-ifeq ($(OS), macos)
 test:
-	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' 2>&1 \
-		| grep --line-buffered -v "^/.*zig test -freference-trace"
-else
-test:
-	@script -qec 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' /dev/null 2>&1 \
-		| grep --line-buffered -v "^/.*zig test -freference-trace"
-endif
+	TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace
 
 ## Run demo/runner end to end tests
 end2end:

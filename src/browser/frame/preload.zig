@@ -155,8 +155,6 @@ fn hasNonRemoteScheme(href: []const u8) bool {
 const testing = @import("../../testing.zig");
 
 test "preload: prescan" {
-    defer testing.reset();
-
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
     const frame = page.frame().?;

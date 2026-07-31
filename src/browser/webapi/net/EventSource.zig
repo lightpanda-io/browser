@@ -650,13 +650,11 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: EventSource" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
     try testing.htmlRunner("net/eventsource.html", .{});
 }
 
 test "WebApi: EventSource in worker" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
     try testing.htmlRunner("net/eventsource_worker.html", .{});
 }

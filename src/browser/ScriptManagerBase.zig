@@ -1080,7 +1080,6 @@ pub const ImportedModule = struct {
 const testing = @import("../testing.zig");
 
 test "ScriptManagerBase: shutdownCallback fails a .loading module" {
-    defer testing.reset();
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
     const frame = page.frame().?;
@@ -1115,7 +1114,6 @@ test "ScriptManagerBase: shutdownCallback fails a .loading module" {
 }
 
 test "ScriptManagerBase: waitForImport stops when teardown is pending" {
-    defer testing.reset();
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
     const frame = page.frame().?;

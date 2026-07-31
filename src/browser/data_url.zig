@@ -72,28 +72,24 @@ fn base64Decode(arena: Allocator, input: []const u8) ![]const u8 {
 
 const testing = @import("../testing.zig");
 test "data_url: plain text, default content-type" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:,Hello%2C%20World");
     try testing.expectString("text/plain;charset=US-ASCII", r.content_type);
     try testing.expectString("Hello, World", r.body);
 }
 
 test "data_url: explicit mediatype" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:text/html,<b>hi</b>");
     try testing.expectString("text/html", r.content_type);
     try testing.expectString("<b>hi</b>", r.body);
 }
 
 test "data_url: base64" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:text/plain;base64,SGVsbG8=");
     try testing.expectString("text/plain", r.content_type);
     try testing.expectString("Hello", r.body);
 }
 
 test "data_url: base64 without padding decodes (forgiving)" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:application/octet-stream;base64,SGVsbG8");
     try testing.expectString("Hello", r.body);
 
@@ -106,7 +102,6 @@ test "data_url: base64 without padding decodes (forgiving)" {
 }
 
 test "data_url: forgiving-base64 rejects misplaced/over-padding" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
     try std.testing.expectError(error.InvalidBase64, parse(arena, "data:;base64,abcd=")); // len % 4 == 1
     try std.testing.expectError(error.InvalidBase64, parse(arena, "data:;base64,="));
@@ -115,18 +110,15 @@ test "data_url: forgiving-base64 rejects misplaced/over-padding" {
 }
 
 test "data_url: bare charset gets text/plain prefix" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:;charset=utf-8,x");
     try testing.expectString("text/plain;charset=utf-8", r.content_type);
 }
 
 test "data_url: empty body" {
-    defer testing.reset();
     const r = try parse(testing.arena_allocator, "data:text/plain,");
     try testing.expectString("", r.body);
 }
 
 test "data_url: missing comma is an error" {
-    defer testing.reset();
     try std.testing.expectError(error.InvalidDataUrl, parse(testing.arena_allocator, "data:text/plain"));
 }
