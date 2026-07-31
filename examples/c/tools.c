@@ -1,7 +1,7 @@
 /* Drive the browser through the tool surface: navigate, then extract the
  * page title and links via a selector schema.
  *
- * Build from the repo root after `make lib-shared`, with the link line
+ * Build from the repo root after `make lib`, with the link line
  * documented in include/lightpanda.h. Run:
  *   ./tools https://example.com
  */

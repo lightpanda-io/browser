@@ -233,7 +233,7 @@ pub fn build(b: *Build) !void {
         // The published prebuilt V8 is exe-only (local-exec TLS, malloc
         // shim); the .so needs a source-built V8. Drop this guard once the
         // fork releases library-safe archives.
-        const shared_step = b.step("shared-lib", "Build the C shared library (needs a source-built V8)");
+        const lib_step = b.step("lib", "Build the C shared library (needs a source-built V8)");
         if (prebuilt_v8_path == null) {
             const shared_lib = b.addLibrary(.{
                 .name = "lightpanda",
@@ -258,14 +258,14 @@ pub fn build(b: *Build) !void {
                 _ = export_check.addOutputFileArg("export-check-ok");
                 install_so.step.dependOn(&export_check.step);
             }
-            shared_step.dependOn(&install_so.step);
-            shared_step.dependOn(&install_header.step);
+            lib_step.dependOn(&install_so.step);
+            lib_step.dependOn(&install_header.step);
             // The .so resolves its own dependencies, so the link line is
             // just the library.
             const shared_pc = pkgConfigFile(b, version_string, "-L${libdir} -llightpanda");
-            shared_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
+            lib_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
         } else {
-            shared_step.dependOn(&b.addFail("shared-lib needs a source-built V8: drop -Dprebuilt_v8_path").step);
+            lib_step.dependOn(&b.addFail("lib needs a source-built V8: drop -Dprebuilt_v8_path").step);
         }
 
         // Own binary: the two test suites must not share one V8 platform.
@@ -284,8 +284,8 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
-        const lib_test_step = b.step("lib-test", "Run the C ABI unit tests");
-        lib_test_step.dependOn(&b.addRunArtifact(lib_tests).step);
+        const test_lib_step = b.step("test-lib", "Run the C ABI unit tests");
+        test_lib_step.dependOn(&b.addRunArtifact(lib_tests).step);
     }
 }
 

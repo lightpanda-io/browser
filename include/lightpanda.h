@@ -30,7 +30,7 @@
  *
  * Logging goes to stderr (level: warnings and errors in release builds).
  *
- * Linking: `make lib-shared` builds liblightpanda.so (zig-out/lib) and
+ * Linking: `make lib` builds liblightpanda.so (zig-out/lib) and
  * installs this header (zig-out/include) plus a pkg-config file:
  *   cc app.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda)
  * or by hand:

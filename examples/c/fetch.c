@@ -1,6 +1,6 @@
 /* Fetch a page and print it as markdown.
  *
- * Build from the repo root after `make lib-shared`, with the link line
+ * Build from the repo root after `make lib`, with the link line
  * documented in include/lightpanda.h. Run:
  *   ./fetch https://example.com
  */
