@@ -42,27 +42,25 @@ pub fn init(
     parts_: ?[]const js.Value,
     name: []const u8,
     opts_: ?InitOptions,
-    page: *Page,
+    exec: *js.Execution,
 ) !*File {
     const opts = opts_ orelse InitOptions{};
-    const session = page.session;
-    const arena = try session.getPinnedArena(.large, "Blob");
-    errdefer arena.release();
+    const blob = try Blob.buildValue(parts_, .{
+        .type = opts.type,
+        .endings = opts.endings,
+    }, exec);
 
-    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
-        try Blob.buildValue(arena, parts_, .{
-            .type = opts.type,
-            .endings = opts.endings,
-        }),
+    const file = try Factory.chainedWithAllocator(blob._arena.allocator(), .{
+        blob,
         File{
             ._proto = undefined,
-            ._name = try arena.dupe(u8, name),
+            ._name = try blob._arena.dupe(u8, name),
             ._last_modified = opts.lastModified orelse @intCast(lp.datetime.milliTimestamp(.real)),
         },
     });
     file._proto._type = .{ .file = file };
 
-    arena.report();
+    blob._arena.report();
     return file;
 }
 

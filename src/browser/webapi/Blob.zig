@@ -78,36 +78,43 @@ const InitOptions = struct {
 
 /// Creates a new Blob from JS values with optional MIME validation.
 /// This is the JS Constructor
-pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, page: *Page) !*Blob {
-    const session = page.session;
-    const arena = try session.getPinnedArena(.large, "Blob");
-    errdefer arena.release();
+pub fn init(parts_: ?[]const js.Value, opts_: ?InitOptions, exec: *const Execution) !*Blob {
+    const blob = try buildValue(parts_, opts_ orelse .{}, exec);
+    errdefer blob._arena.release();
 
-    const self = try arena.create(Blob);
-    self.* = try buildValue(arena, parts_, opts_ orelse .{});
-    arena.report();
+    const self = try blob._arena.create(Blob);
+    self.* = blob;
+
+    blob._arena.report();
     return self;
 }
 
-// The Blob value for `parts`, with everything it references copied to
-// `arena`. Callers either arena.create it (init) or embed it as the root of
-// a {Blob, File} chain.
-pub fn buildValue(arena: *lp.Arena, parts_: ?[]const js.Value, opts: InitOptions) !Blob {
-    const mime = try Mime.serialize(arena.allocator(), opts.type);
-
-    const data = blk: {
-        if (parts_) |blob_parts| {
-            const use_native_endings = std.mem.eql(u8, opts.endings, "native");
-            var w: Writer.Allocating = .init(arena.allocator());
-            for (blob_parts) |js_val| {
-                const part = try js_val.toStringSmart();
-                try writePartWithEndings(part, use_native_endings, &w.writer);
-            }
-            break :blk w.written();
+pub fn buildValue(parts_: ?[]const js.Value, opts: InitOptions, exec: *const Execution) !Blob {
+    const data, const arena = blk: {
+        const parts = parts_ orelse {
+            break :blk .{ "", try exec.getPinnedArena(.tiny, "Blob") };
+        };
+        var len: usize = 0;
+        const slices = try exec.call_arena.alloc([]const u8, parts.len);
+        for (parts, slices) |js_val, *s| {
+            s.* = try js_val.toStringSmart();
+            len += s.len;
         }
+        // +256, ~struct overhead, mime dupe, ...
+        const arena = try exec.getPinnedArena(len + 256, "blob");
 
-        break :blk "";
+        const buf = try arena.alloc(u8, len);
+        var w: Writer = .fixed(buf);
+
+        const use_native_endings = std.mem.eql(u8, opts.endings, "native");
+
+        for (slices) |part| {
+            try writePartWithEndings(part, use_native_endings, &w);
+        }
+        break :blk .{ w.buffered(), arena };
     };
+
+    const mime = try Mime.serialize(arena.allocator(), opts.type);
 
     return .{
         ._rc = .{},
@@ -129,8 +136,8 @@ pub fn buildValueFromBytes(arena: *lp.Arena, data: []const u8, content_type: []c
 }
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
-pub fn initFromBytes(data: []const u8, content_type: []const u8, page: *Page) !*Blob {
-    const arena = try page.getPinnedArena(data.len + content_type.len + 256, "Blob");
+pub fn initFromBytes(data: []const u8, content_type: []const u8, exec: *const Execution) !*Blob {
+    const arena = try exec.getPinnedArena(data.len + content_type.len + 256, "Blob");
     errdefer arena.release();
 
     const self = try arena.create(Blob);
@@ -318,7 +325,7 @@ pub fn slice(
     start_: ?i32,
     end_: ?i32,
     content_type_: ?[]const u8,
-    page: *Page,
+    exec: *const Execution,
 ) !*Blob {
     const data = self._slice;
 
@@ -339,7 +346,7 @@ pub fn slice(
         break :blk @min(data.len, @max(start, @as(u31, @intCast(requested_end))));
     };
 
-    return Blob.initFromBytes(data[start..end], content_type_ orelse "", page);
+    return Blob.initFromBytes(data[start..end], content_type_ orelse "", exec);
 }
 
 /// Returns the size of the Blob in bytes.
@@ -387,7 +394,7 @@ test "Blob: a pinned arena reaches the browser's account and is given back" {
     try testing.expectEqual(0, browser.arena_account.pending);
 
     const data = [_]u8{'x'} ** (64 * 1024);
-    const blob = try Blob.initFromBytes(&data, "text/plain", page);
+    const blob = try Blob.initFromBytes(&data, "text/plain", &frame.js.execution);
     try testing.expect(browser.arena_account.pending >= data.len);
 
     // The finalizer path hands every reported byte back.
