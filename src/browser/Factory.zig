@@ -485,11 +485,12 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     inline for (1..types.len - 1) |i| {
         const T = types[i];
         if (T == Element.Svg) {
-            chain.set(i, .{
-                ._proto = chain.get(i - 1),
+            const svg_ptr = chain.get(i);
+            svg_ptr.* = .{
                 ._tag_name = try String.init(self._arena, tag_name, .{}),
                 ._type = unionInit(Element.Svg.Type, chain.get(i + 1)),
-            });
+            };
+            setProto(svg_ptr, chain.get(i - 1));
         } else {
             chain.setMiddle(i, T.Type);
         }

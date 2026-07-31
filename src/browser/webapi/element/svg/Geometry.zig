@@ -23,6 +23,7 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Factory = @import("../../../Factory.zig");
 const DOMPoint = @import("../../DOMPoint.zig");
 
 const Graphics = @import("Graphics.zig");
@@ -37,11 +38,13 @@ pub const Path = @import("Path.zig");
 pub const Polygon = @import("Polygon.zig");
 pub const Polyline = @import("Polyline.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Geometry = @This();
 
 pub const Proto = Graphics;
-_proto: *Graphics,
 _type: Type,
+_proto_canary: if (IS_DEBUG) *Graphics else void = undefined,
 
 pub const Type = union(enum) {
     rect: *Rect,
@@ -65,7 +68,7 @@ pub fn is(self: *Geometry, comptime T: type) ?*T {
 }
 
 pub fn asElement(self: *Geometry) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Geometry) *Node {
     return self.asElement().asNode();

@@ -20,17 +20,20 @@ const js = @import("../../../js/js.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Factory = @import("../../../Factory.zig");
 
 const TextContent = @import("TextContent.zig");
 
 pub const Text = @import("Text.zig");
 pub const TSpan = @import("TSpan.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const TextPositioning = @This();
 
 pub const Proto = TextContent;
-_proto: *TextContent,
 _type: Type,
+_proto_canary: if (IS_DEBUG) *TextContent else void = undefined,
 
 pub const Type = union(enum) {
     text: *Text,
@@ -47,7 +50,7 @@ pub fn is(self: *TextPositioning, comptime T: type) ?*T {
 }
 
 pub fn asElement(self: *TextPositioning) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *TextPositioning) *Node {
     return self.asElement().asNode();

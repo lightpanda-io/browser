@@ -122,10 +122,10 @@ fn dispatchInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, f
 }
 
 pub fn asElement(self: *Input) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Input) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Input) *Node {
     return self.asElement().asNode();

@@ -404,7 +404,6 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
 pub fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
     try Element.Attribute.validateAttributeName(name.str);
     return frame._factory.node(Element.Attribute{
-        ._proto = undefined,
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
@@ -418,7 +417,6 @@ pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: String
 
     try Element.Attribute.validateAttributeName(name.str);
     return frame._factory.node(Element.Attribute{
-        ._proto = undefined,
         ._name = name.str,
         ._value = String.empty,
         ._element = null,

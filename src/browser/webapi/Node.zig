@@ -1211,7 +1211,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
         .document_fragment => |frag| return frag.cloneFragment(deep, frame),
         .attribute => |attr| {
             const cloned = attr.clone(frame) catch return error.CloneError;
-            return cloned._proto;
+            return cloned.asNode();
         },
     }
 }
