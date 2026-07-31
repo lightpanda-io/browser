@@ -32,6 +32,7 @@ const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
+const AbortSignal = @import("webapi/AbortSignal.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
@@ -510,6 +511,12 @@ pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !
     return try AutoPrototypeChain(
         &.{ EventTarget, XMLHttpRequestEventTarget, @TypeOf(child) },
     ).create(allocator, child);
+}
+
+pub fn taskSignal(self: *Factory, child: anytype) !*@TypeOf(child) {
+    return try AutoPrototypeChain(
+        &.{ EventTarget, AbortSignal, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
 }
 
 pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {

@@ -38,6 +38,7 @@ const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
 const Navigator = @import("Navigator.zig");
 const Timers = @import("Timers.zig");
+const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
@@ -118,6 +119,7 @@ _cookie_store: ?*CookieStore = null,
 _location: WorkerLocation,
 
 _timers: Timers = .{},
+_scheduler: Scheduler = .{},
 
 pub const Type = union(enum) {
     shared: *SharedWorkerGlobalScope,
@@ -303,6 +305,10 @@ pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
 
 pub fn getNavigator(self: *WorkerGlobalScope) *Navigator {
     return &self._navigator;
+}
+
+pub fn getScheduler(self: *WorkerGlobalScope) *Scheduler {
+    return &self._scheduler;
 }
 
 pub fn performance(self: *WorkerGlobalScope) *Performance {
@@ -583,6 +589,7 @@ pub const JsApi = struct {
     pub const console = bridge.accessor(WorkerGlobalScope.getConsole, WorkerGlobalScope.setConsole, .{});
     pub const crypto = bridge.accessor(WorkerGlobalScope.getCrypto, null, .{});
     pub const navigator = bridge.accessor(WorkerGlobalScope.getNavigator, null, .{});
+    pub const scheduler = bridge.accessor(WorkerGlobalScope.getScheduler, null, .{});
     pub const performance = bridge.accessor(struct {
         // Unnecessary, But, our WebAPI getters are ALWAYS `fn getPerformance()...`.
         // But for performance, we _need_ to have fn performance() *Performance to

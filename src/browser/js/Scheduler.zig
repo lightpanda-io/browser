@@ -68,6 +68,7 @@ pub fn reset(self: *Scheduler) void {
 
 const AddOpts = struct {
     name: []const u8 = "",
+    front: bool = false, // run before any timed tasks, multi-fronts are FIFO amongst themselves
     low_priority: bool = false,
     finalizer: ?Finalizer = null,
 };
@@ -84,7 +85,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .sequence = seq,
         .name = opts.name,
         .finalizer = opts.finalizer,
-        .run_at = lp.datetime.milliTimestamp(.boot) + run_in_ms,
+        .run_at = if (opts.front) 0 else lp.datetime.milliTimestamp(.boot) + run_in_ms,
     });
 }
 
