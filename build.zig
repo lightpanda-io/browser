@@ -216,6 +216,76 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        // C API (src/c_api.zig): liblightpanda.so for embedders.
+        const c_api_module = createCApiModule(b, lightpanda_module);
+
+        const c_api_check = b.addLibrary(.{
+            .name = "c_api_check",
+            .root_module = c_api_module,
+        });
+        check.dependOn(&c_api_check.step);
+
+        const install_header = b.addInstallHeaderFile(b.path("include/lightpanda.h"), "lightpanda.h");
+
+        // The published prebuilt V8 is exe-only (local-exec TLS, malloc
+        // shim); the .so needs a source-built V8. Drop this guard once the
+        // fork releases library-safe archives.
+        const shared_step = b.step("shared-lib", "Build the C shared library (needs a source-built V8)");
+        if (prebuilt_v8_path == null) {
+            const shared_lib = b.addLibrary(.{
+                .name = "lightpanda",
+                .linkage = .dynamic,
+                .use_llvm = true,
+                .root_module = c_api_module,
+            });
+            shared_lib.version_script = b.path("src/lightpanda.map");
+            shared_lib.linker_allow_shlib_undefined = false;
+            const install_so = b.addInstallArtifact(shared_lib, .{});
+            // The version script is load-bearing: a host's own OpenSSL/curl
+            // must not collide with the bundled copies. Gate the install on
+            // the check so an installed .so is always a checked one.
+            if (target.result.os.tag == .linux) {
+                const export_check = b.addSystemCommand(&.{
+                    "sh", "-ec",
+                    \\test -z "$(nm -D "$0" | awk '$2 == "T" && $3 !~ /^lp_/')" ||
+                    \\  { echo "liblightpanda.so exports non-lp_ symbols" >&2; exit 1; }
+                    \\: > "$1"
+                });
+                export_check.addFileArg(shared_lib.getEmittedBin());
+                _ = export_check.addOutputFileArg("export-check-ok");
+                install_so.step.dependOn(&export_check.step);
+            }
+            shared_step.dependOn(&install_so.step);
+            shared_step.dependOn(&install_header.step);
+            // The .so resolves its own dependencies, so the link line is
+            // just the library.
+            const shared_pc = pkgConfigFile(b, version_string, "-L${libdir} -llightpanda");
+            shared_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
+        } else {
+            shared_step.dependOn(&b.addFail("shared-lib needs a source-built V8: drop -Dprebuilt_v8_path").step);
+        }
+
+        // Own binary: the two test suites must not share one V8 platform.
+        // The ABI-sync test compares c_api.zig's mirrors against the header
+        // itself. Test-only import: the .so module must not depend on the
+        // header, or every header edit relinks it.
+        const lib_tests_module = createCApiModule(b, lightpanda_module);
+        const header_translate_c = b.addTranslateC(.{
+            .root_source_file = b.path("include/lightpanda.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        lib_tests_module.addImport("lightpanda_h", header_translate_c.createModule());
+        const lib_tests = b.addTest(.{
+            .root_module = lib_tests_module,
+            .use_llvm = true,
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
+        });
+        const lib_test_step = b.step("lib-test", "Run the C ABI unit tests");
+        lib_test_step.dependOn(&b.addRunArtifact(lib_tests).step);
+    }
+
+    {
         // kcov can't read line info from the self-hosted backend's DWARF.
         const cov_tests = b.addTest(.{
             .root_module = lightpanda_module,
@@ -237,6 +307,37 @@ pub fn build(b: *Build) !void {
         const coverage_step = b.step("coverage", "Run unit tests under kcov (zig-out/coverage/index.html)");
         coverage_step.dependOn(&install.step);
     }
+}
+
+/// Root module for a C-API artifact. The ABI tests get their own instance
+/// so their test-only header import stays off the .so.
+fn createCApiModule(b: *Build, lightpanda: *Build.Module) *Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = lightpanda.resolved_target.?,
+        .optimize = lightpanda.optimize.?,
+        .link_libc = true,
+        .link_libcpp = true,
+        .sanitize_c = lightpanda.sanitize_c,
+        .sanitize_thread = lightpanda.sanitize_thread,
+    });
+    mod.addImport("lightpanda", lightpanda);
+    return mod;
+}
+
+fn pkgConfigFile(b: *Build, version: []const u8, libs: []const u8) Build.LazyPath {
+    return b.addWriteFiles().add("lightpanda.pc", b.fmt(
+        \\prefix=${{pcfiledir}}/../..
+        \\libdir=${{prefix}}/lib
+        \\includedir=${{prefix}}/include
+        \\
+        \\Name: lightpanda
+        \\Description: Lightpanda headless browser C library
+        \\Version: {s}
+        \\Cflags: -I${{includedir}}
+        \\Libs: {s}
+        \\
+    , .{ version, libs }));
 }
 
 const Deps = struct {

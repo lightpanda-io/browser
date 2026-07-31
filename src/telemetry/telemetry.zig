@@ -8,6 +8,9 @@ const log = lp.log;
 const IID_FILE = "iid";
 const Allocator = std.mem.Allocator;
 
+/// The env/build-level opt-out. Config.telemetryDisabled folds it into
+/// the predicate everything else reads; only crash_handler calls this
+/// directly (no Config exists on the crash path).
 pub fn isDisabled() bool {
     if (lp.IS_DEBUG or lp.IS_TEST) {
         return true;
@@ -27,7 +30,7 @@ fn TelemetryT(comptime P: type) type {
         const Self = @This();
 
         pub fn init(app: *App) !Self {
-            const disabled = isDisabled();
+            const disabled = app.config.telemetryDisabled();
             if (lp.IS_DEBUG == false and lp.IS_TEST == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
