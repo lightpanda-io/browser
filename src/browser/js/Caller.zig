@@ -605,8 +605,27 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
         };
     };
 
+    if (comptime returnsPromise(F) and @TypeOf(info) == FunctionCallbackInfo) {
+        // An operation that returns a promise must not throw. It rejects.
+        const resolver = js.PromiseResolver.init(&err_local);
+        resolver.rejectValue(.{ .local = &err_local, .handle = js_err }) catch |reject_err| {
+            log.err(.bug, "handleError reject", .{ .err = reject_err });
+        };
+        info.getReturnValue().set(resolver.promise().toValue());
+        return;
+    }
+
     const js_exception = isolate.throwException(js_err);
     info.getReturnValue().setValueHandle(js_exception);
+}
+
+fn returnsPromise(comptime F: type) bool {
+    const R = @typeInfo(F).@"fn".return_type orelse return false;
+    const payload = switch (@typeInfo(R)) {
+        .error_union => |eu| eu.payload,
+        else => R,
+    };
+    return payload == js.Promise;
 }
 
 // Convert a Zig error to a DOMException. If the error is unknown, return null.

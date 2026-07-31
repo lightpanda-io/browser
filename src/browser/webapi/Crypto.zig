@@ -20,6 +20,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const SubtleCrypto = @import("SubtleCrypto.zig");
+const QuotaExceededError = @import("QuotaExceededError.zig");
 
 const Crypto = @This();
 _subtle: SubtleCrypto = .{},
@@ -28,11 +29,17 @@ pub const init: Crypto = .{};
 
 // We take a js.Value, because we want to return the same instance, not a new
 // TypedArray
-pub fn getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
+pub fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
+    const value = js_obj.toValue();
+    if (value.isFloat16Array() or value.isFloat32Array() or value.isFloat64Array() or (value.isArrayBufferView() and !value.isTypedArray())) {
+        // only integer TypedArrays are supported
+        return error.TypeMismatch;
+    }
+
     var into = try js_obj.toZig(RandomValues);
     const buf = into.asBuffer();
     if (buf.len > 65_536) {
-        return error.QuotaExceeded;
+        return QuotaExceededError.throw(js_obj.local, exec);
     }
     lp.io.random(buf);
     return js_obj;
