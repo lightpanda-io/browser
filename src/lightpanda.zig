@@ -173,6 +173,72 @@ pub fn Once(comptime f: fn () void) type {
     };
 }
 
+/// What a tool-driving embedder owns per isolated browsing context: a Browser
+/// (its own V8 isolate), that browser's session, the notification hub, and
+/// the node registry `tools.call` needs. Used by the C API. `self` must not
+/// move after `init` — Browser registers self-pointers.
+pub const ToolSession = struct {
+    browser: Browser,
+    session: *Session,
+    notification: *Notification,
+    registry: CDPNode.Registry,
+    // The hook is session-scoped; storing it here lets `reset` re-apply it
+    // so cancellation survives session replacement.
+    cancel_hook: ?Session.CancelHook,
+
+    /// Leaves the browser's isolate entered, like `Browser.init`; callers
+    /// sharing one thread between several isolates park it with
+    /// `exitIsolate` afterwards.
+    pub fn init(self: *ToolSession, app: *App) !void {
+        self.cancel_hook = null;
+
+        self.notification = try Notification.init(app.allocator);
+        errdefer self.notification.deinit();
+
+        self.registry = .init(app.allocator);
+        errdefer self.registry.deinit();
+
+        try self.browser.init(app, .{}, null);
+        errdefer self.browser.deinit();
+
+        try self.reset();
+    }
+
+    /// Install a cancellation probe on this and every future session.
+    pub fn setCancelHook(self: *ToolSession, hook: Session.CancelHook) void {
+        self.cancel_hook = hook;
+        self.session.cancel_hook = hook;
+    }
+
+    /// Replace the browsing session with a fresh one (`Browser.newSession`
+    /// closes the old one, cookies and all); the stored cancel hook is
+    /// re-applied.
+    pub fn reset(self: *ToolSession) !void {
+        self.session = try self.browser.newSession(self.notification);
+        self.session.cancel_hook = self.cancel_hook;
+        try self.session.enableConsoleCapture();
+    }
+
+    /// The isolate must be current (`enterIsolate` if parked): Browser.deinit's
+    /// Env.deinit exit has to balance against this context's isolate.
+    pub fn deinit(self: *ToolSession) void {
+        self.registry.deinit();
+        self.browser.deinit();
+        self.notification.deinit();
+    }
+
+    /// V8's "current isolate" is a per-thread stack: when several contexts
+    /// share a thread, bracket any use of the Browser/Session with
+    /// enterIsolate/exitIsolate and leave it un-entered otherwise.
+    pub fn enterIsolate(self: *ToolSession) void {
+        self.browser.env.isolate.enter();
+    }
+
+    pub fn exitIsolate(self: *ToolSession) void {
+        self.browser.env.isolate.exit();
+    }
+};
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,

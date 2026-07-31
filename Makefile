@@ -79,7 +79,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 lib-shared lib-shared-example lib-test run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 archive (skips the 10+ min source build)
 download-v8:
@@ -108,6 +108,26 @@ build-dev:
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
+
+## Run the C ABI unit tests
+lib-test:
+	@$(ZIG) build $(ZIGFLAGS) lib-test -freference-trace
+
+# No $(ZIGFLAGS): the published prebuilt V8 has an exe-only TLS model, so the
+# shared build compiles V8 from source (one-time, ~40 min).
+## Build the C shared library (zig-out/lib + zig-out/include)
+lib-shared:
+	@printf "\033[36mBuilding C shared library (first run builds V8 from source)...\033[0m\n"
+	@$(ZIG) build shared-lib || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mBuild OK: zig-out/lib/liblightpanda.so\033[0m\n"
+
+## Link and run the C example against the shared library (needs network)
+lib-shared-example: lib-shared
+	@mkdir -p zig-out/bin
+	@cc examples/c/fetch.c $$(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda) \
+		-Wl,-rpath,$(BC)zig-out/lib -o zig-out/bin/fetch-example
+	@./zig-out/bin/fetch-example https://example.com > /dev/null \
+		&& printf "\033[33mExample OK\033[0m\n"
 
 ## Run the server in release mode
 run: build
