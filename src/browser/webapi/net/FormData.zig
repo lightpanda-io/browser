@@ -158,7 +158,7 @@ pub fn initFromMultipart(bytes: []const u8, boundary: []const u8, exec: *const E
         else => {},
     };
 
-    try form_data.parseMultipart(exec.page, bytes, boundary);
+    try form_data.parseMultipart(bytes, boundary, exec);
     return form_data;
 }
 
@@ -226,7 +226,7 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
             if (filename) |n| {
                 // A supplied filename means a new File over the same bytes rather
                 // than a rename of the caller's object.
-                break :blk .{ .file = try fileFrom(blob, n, exec.page) };
+                break :blk .{ .file = try fileFrom(blob, n, exec) };
             }
 
             if (blob._type == .file) {
@@ -236,7 +236,7 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
             }
 
             // A Blob that is not a File becomes a File named "blob".
-            break :blk .{ .file = try fileFrom(blob, "blob", exec.page) };
+            break :blk .{ .file = try fileFrom(blob, "blob", exec) };
         },
         .bytes => |b| .{ .string = try String.init(self._arena.allocator(), b, .{}) },
     };
@@ -250,8 +250,9 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
 // Mirrors File.init — a Blob and File sharing one reference-counted arena —
 // but over bytes we already hold rather than JS parts. Returned at refcount 1:
 // the entry owns that reference and deleteByName releases it.
-fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
-    const arena = try page.getArena(source._slice.len + source._mime.len + 256, "Blob");
+
+fn fileFrom(source: *Blob, name: []const u8, exec: *Execution) !*File {
+    const arena = try exec.getArena(source._slice.len + source._mime.len + 256, "Blob");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{
@@ -528,7 +529,7 @@ fn urlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
 // preamble, CRLF line breaks). Parts carrying a filename become File
 // entries — the FormData holds a ref on each, released in deinit — and the
 // rest become string entries.
-fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []const u8) !void {
+fn parseMultipart(self: *FormData, bytes: []const u8, boundary: []const u8, exec: *const Execution) !void {
     // The body must open with the dash-boundary: "--" boundary.
     if (!std.mem.startsWith(u8, bytes, "--") or !std.mem.startsWith(u8, bytes[2..], boundary)) {
         return error.InvalidFormData;
@@ -613,8 +614,8 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
 
         // Got a file.
         if (parsed.filename) |filename| {
-            const blob = try Blob.initFromBytes(content, content_type, page);
-            errdefer blob.deinit(page);
+            const blob = try Blob.initFromBytes(content, content_type, exec);
+            errdefer blob.deinit(exec.page);
 
             const file = try blob._arena.create(File);
             file.* = .{
@@ -1251,7 +1252,7 @@ test "FormData: multipart parse" {
         ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, "--BOUNDARY\r\n" ++
+    try fd.parseMultipart("--BOUNDARY\r\n" ++
         "Content-Disposition: form-data; name=\"name\"\r\n\r\n" ++
         "John\r\n" ++
         "--BOUNDARY\r\n" ++
@@ -1260,7 +1261,7 @@ test "FormData: multipart parse" {
         "--BOUNDARY\r\n" ++
         "Content-Disposition: form-data; name=\"tricky\"\r\n\r\n" ++
         "a\r\n--BOUNDARYx b\r\n" ++
-        "--BOUNDARY--\r\n", "BOUNDARY");
+        "--BOUNDARY--\r\n", "BOUNDARY", &frame.js.execution);
 
     try testing.expectEqual(3, fd._entries.items.len);
     try testing.expectString("John", fd.get(.wrap("name")).?);
@@ -1282,14 +1283,14 @@ test "FormData: multipart parse with file" {
         ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, "--B\r\n" ++
+    try fd.parseMultipart("--B\r\n" ++
         "Content-Disposition: form-data; name=\"upload\"; filename=\"hello.txt\"\r\n" ++
         "Content-Type: text/plain\r\n\r\n" ++
         "hello\r\n" ++
         "--B\r\n" ++
         "Content-Disposition: form-data; name=\"raw\"; filename=\"raw.bin\"\r\n\r\n" ++
         "bytes\r\n" ++
-        "--B--\r\n", "B");
+        "--B--\r\n", "B", &frame.js.execution);
     defer for (fd._entries.items) |entry| switch (entry.value) {
         .file => |file| file.releaseRef(frame._page),
         else => {},
@@ -1330,7 +1331,7 @@ test "FormData: multipart parse rejects malformed bodies" {
             ._arena = arena,
             ._entries = .empty,
         };
-        try testing.expectError(error.InvalidFormData, fd.parseMultipart(frame._page, case, "B"));
+        try testing.expectError(error.InvalidFormData, fd.parseMultipart(case, "B", &frame.js.execution));
     }
 }
 
@@ -1364,7 +1365,7 @@ test "FormData: multipart round-trip" {
         ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, buf.written(), "BOUNDARY");
+    try fd.parseMultipart(buf.written(), "BOUNDARY", &frame.js.execution);
 
     try testing.expectEqual(4, fd._entries.items.len);
     try testing.expectString("username", fd._entries.items[0].name.str());
