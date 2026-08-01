@@ -22,6 +22,7 @@ pub const log = @import("log.zig");
 pub const datetime = @import("datetime.zig");
 pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
+pub const ArenaPool = @import("ArenaPool.zig");
 pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");

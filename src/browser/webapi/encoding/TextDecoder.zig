@@ -55,7 +55,9 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
         return error.RangeError;
     }
 
-    const arena = try page.getArena(.large, "TextDecoder");
+    // Only ever holds the decoder itself and the lazily-lowercased encoding
+    // name; decode output comes from the caller's call_arena.
+    const arena = try page.getArena(.tiny, "TextDecoder");
     errdefer arena.release();
 
     const opts = opts_ orelse InitOpts{};
@@ -110,7 +112,7 @@ const DecodeOpts = struct {
     stream: bool = false,
 };
 
-pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts) ![]const u8 {
+pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts, exec: *const js.Execution) ![]const u8 {
     const opts: DecodeOpts = opts_ orelse .{};
     const input = input_ orelse "";
 
@@ -122,12 +124,12 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts) ![]co
                 return error.OutOfMemory;
             }
         }
-        return self._decode(input, self._decoder, false);
+        return self._decode(exec.call_arena, input, self._decoder, false);
     }
 
     if (self._decoder) |decoder| {
         // Non-streaming with existing decoder: flush with is_last=true, then free
-        const result = try self._decode(input, decoder, true);
+        const result = try self._decode(exec.call_arena, input, decoder, true);
 
         // on error, _decode will free the decoder. So we only free it on non-error
         html5ever.encoding_decoder_free(decoder);
@@ -136,10 +138,10 @@ pub fn decode(self: *TextDecoder, input_: ?[]const u8, opts_: ?DecodeOpts) ![]co
     }
 
     // non-streaming, no existing decoder
-    return self._decode(input, null, true);
+    return self._decode(exec.call_arena, input, null, true);
 }
 
-fn _decode(self: *TextDecoder, input: []const u8, streaming_decoder: ?*anyopaque, is_last: bool) ![]const u8 {
+fn _decode(self: *TextDecoder, arena: std.mem.Allocator, input: []const u8, streaming_decoder: ?*anyopaque, is_last: bool) ![]const u8 {
     if (input.len == 0 and !is_last) {
         return "";
     }
@@ -155,7 +157,7 @@ fn _decode(self: *TextDecoder, input: []const u8, streaming_decoder: ?*anyopaque
     }
 
     // Allocate output buffer
-    const output = try self._arena.alloc(u8, max_out);
+    const output = try arena.alloc(u8, max_out);
 
     // Decode using either streaming or one-shot decoder
     const result = if (streaming_decoder) |decoder|

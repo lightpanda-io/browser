@@ -1489,7 +1489,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
     // per-test leak check, so it's verified by review. The latch check returns
     // before any other req field is read, so the rest are placeholders.
     const headers = try client.newHeaders();
-    try testing.expectError(error.ClientDisconnected, client.syncRequest(testing.allocator, .{
+    try testing.expectError(error.ClientDisconnected, client.syncRequest(.{
         .frame_id = 0,
         .loader_id = 0,
         .method = .GET,

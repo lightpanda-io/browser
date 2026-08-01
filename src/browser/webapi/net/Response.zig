@@ -75,9 +75,30 @@ pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const session = exec.session;
-    const arena = try session.getPinnedArena(.large, "Response");
-    errdefer arena.release();
 
+    const bucket: lp.ArenaPool.BucketSize = blk: {
+        const body = body_ orelse break :blk .small;
+        if (body == .stream) {
+            // A stream body is referenced below, never copied into the arena.
+            break :blk .small;
+        }
+        const hint = body.sizeHint() orelse break :blk .large;
+        break :blk session.arena_pool.bucketFor(hint + 512);
+    };
+
+    const arena = try session.getPinnedArena(bucket, "Response");
+    errdefer arena.release();
+    return initWithArena(arena, body_, opts_, exec);
+}
+
+// fetch()'s response shell.
+pub fn initPending(exec: *const Execution) !*Response {
+    const arena = try exec.session.getPinnedArena(.large, "Response.pending");
+    errdefer arena.release();
+    return initWithArena(arena, null, .{ .status = 0 }, exec);
+}
+
+fn initWithArena(arena: *lp.Arena, body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
 
@@ -118,7 +139,7 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
 
 pub fn createError(exec: *const Execution) !*Response {
     const session = exec.session;
-    const arena = try session.getPinnedArena(.large, "Response.error");
+    const arena = try session.getPinnedArena(.tiny, "Response.error");
     errdefer arena.release();
 
     const self = try arena.create(Response);
@@ -144,7 +165,7 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     }
 
     const session = exec.session;
-    const arena = try session.getPinnedArena(.large, "Response.redirect");
+    const arena = try session.getPinnedArena(.small, "Response.redirect");
     errdefer arena.release();
 
     const location = try URL.resolve(arena.allocator(), exec.base(), url_, .{ .encoding = exec.charset.* });

@@ -1069,7 +1069,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 }
 
 const SyncContext = struct {
-    allocator: Allocator,
+    client: *Client,
     completion: union(enum) {
         in_progress: void,
         done: void,
@@ -1080,19 +1080,35 @@ const SyncContext = struct {
     status: u16 = 0,
     body: std.ArrayList(u8),
 
+    // Acquired on the first byte we have to buffer, so a bodyless response
+    // never takes one. Ownership moves to the SyncResponse.
+    arena: ?*lp.Arena = null,
+
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacity(self.allocator, cl);
+            try self.body.ensureTotalCapacity(try self.bodyAllocator(cl), cl);
         }
         return .proceed;
     }
 
+    fn bodyAllocator(self: *SyncContext, content_length: ?usize) !Allocator {
+        if (self.arena) |arena| {
+            return arena.allocator();
+        }
+        const arena = if (content_length) |cl|
+            try self.client.arena_pool.acquire(cl, "syncRequest.body")
+        else
+            try self.client.arena_pool.acquire(.large, "syncRequest.body");
+        self.arena = arena;
+        return arena.allocator();
+    }
+
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
-        try self.body.appendSlice(self.allocator, data);
+        try self.body.appendSlice(try self.bodyAllocator(null), data);
     }
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
@@ -1111,7 +1127,8 @@ const SyncContext = struct {
     }
 };
 
-pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Owner) !SyncResponse {
+// Caller must deinit SyncResponse or otherwise take ownership of its optional arena
+pub fn syncRequest(self: *Client, req: Request, owner: *Owner) !SyncResponse {
     if (self.inbox.terminated) {
         // request() takes ownership of req.headers on every path; we return
         // before calling it, so free the curl_slist here to avoid leaking it.
@@ -1126,8 +1143,8 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         return error.SyncWaitInterrupted;
     }
 
-    var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
-    errdefer sync_ctx.body.deinit(allocator);
+    var sync_ctx = SyncContext{ .client = self, .body = .empty };
+    errdefer if (sync_ctx.arena) |arena| arena.release();
 
     var r = req;
     r.sync = true;
@@ -1168,6 +1185,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         .done, .shutdown => return .{
             .status = sync_ctx.status,
             .body = sync_ctx.body,
+            .arena = sync_ctx.arena,
         },
         .err => |e| return e,
     }
@@ -1705,8 +1723,14 @@ pub const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
 
-    pub fn deinit(self: *SyncResponse, allocator: Allocator) void {
-        self.body.deinit(allocator);
+    // Owns `body`. Null when the response had nothing to buffer. Callers that
+    // keep `body` past this call take the arena instead of releasing it.
+    arena: ?*lp.Arena,
+
+    pub fn deinit(self: *SyncResponse) void {
+        if (self.arena) |arena| {
+            arena.release();
+        }
     }
 };
 

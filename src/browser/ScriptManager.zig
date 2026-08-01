@@ -112,7 +112,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
     }
 
     const frame = self.frame;
-    const arena = try frame.getArena(.large, "SM.preloadScript");
+    const arena = try frame.getArena(.small, "SM.preloadScript");
     errdefer arena.release();
 
     const owned_url = try arena.dupeZ(u8, url);
@@ -240,7 +240,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     // released early on the adoption path — so the errdefer can't double-free.
     var handover = false;
 
-    const arena = try frame.getArena(.large, "SM.addFromElement");
+    const arena = try frame.getArena(.small, "SM.addFromElement");
     errdefer if (handover == false) {
         arena.release();
     };
@@ -354,7 +354,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
-                const response = try self.base.client.syncRequest(arena.allocator(), .{
+                const response = try self.base.client.syncRequest(.{
                     .url = remote_url,
                     .method = .GET,
                     .frame_id = frame._frame_id,
@@ -367,6 +367,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 }, &frame._http_owner);
 
+                // Take the body's arena rather than releasing it: `source`
+                // has to outlive this call, up to script.deinit().
+                script.source_arena = response.arena;
                 script.source = .{ .remote = response.body };
                 script.status = response.status;
                 script.complete = true;

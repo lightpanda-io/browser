@@ -49,6 +49,16 @@ pub const BodyInit = union(enum) {
     buffer: js.TypedArray(u8),
     bytes: []const u8, // must be last, js.Bridge will map anything to a string
 
+    // How much a call to `extract` will dupe. Used for ArenaPool size selection.
+    pub fn sizeHint(self: BodyInit) ?usize {
+        return switch (self) {
+            .bytes => |b| b.len,
+            .buffer => |b| b.values.len,
+            .blob => |b| b._slice.len + b._mime.len,
+            .form_data, .url_search_params, .stream => null,
+        };
+    }
+
     pub fn extract(self: BodyInit, arena: Allocator) !Extracted {
         switch (self) {
             .bytes => |b| {

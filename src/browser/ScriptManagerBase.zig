@@ -234,7 +234,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     }
     errdefer _ = self.imported_modules.remove(url);
 
-    const arena = try self.acquireArena(.large, "SM.preloadImport");
+    const arena = try self.acquireArena(.small, "SM.preloadImport");
     errdefer arena.release();
 
     const script = try arena.create(Script);
@@ -426,7 +426,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         }
     }
 
-    const arena = try self.acquireArena(.large, "SM.getAsyncImport");
+    const arena = try self.acquireArena(.small, "SM.getAsyncImport");
     errdefer arena.release();
 
     const script = try arena.create(Script);
@@ -611,6 +611,13 @@ pub const Script = struct {
     source: Source,
     url: []const u8,
     arena: *lp.Arena,
+
+    // Where `source` lives, when it isn't `arena`. The double-arena lets us
+    // use a .small arena for the Script itself, and then a properly sized one
+    // for the body, when we know its size. This avoids eager-usage of our
+    // limited .large arena pool
+    source_arena: ?*lp.Arena = null,
+
     extra: Extra,
     node: std.DoublyLinkedList.Node,
     manager: *ScriptManagerBase,
@@ -687,7 +694,16 @@ pub const Script = struct {
     };
 
     pub fn deinit(self: *Script) void {
+        if (self.source_arena) |source_arena| {
+            source_arena.release();
+        }
         self.arena.release();
+    }
+
+    // The allocator `source` grows from. Falls back to the control arena when
+    // no header callback ran to size a dedicated one.
+    fn sourceAllocator(self: *Script) Allocator {
+        return (self.source_arena orelse self.arena).allocator();
     }
 
     pub fn startCallback(transfer: *HttpClient.Transfer) !void {
@@ -748,9 +764,19 @@ pub const Script = struct {
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
+
+        const content_length = transfer.getContentLength();
+        if (self.source_arena == null) {
+            // A redirect re-runs this callback; keep the arena we already have.
+            self.source_arena = if (content_length) |cl|
+                try self.manager.acquireArena(cl, "SM.source")
+            else
+                try self.manager.acquireArena(.large, "SM.source");
+        }
+
         var buffer: std.ArrayList(u8) = .empty;
-        if (transfer.getContentLength()) |cl| {
-            try buffer.ensureTotalCapacity(self.arena.allocator(), cl);
+        if (content_length) |cl| {
+            try buffer.ensureTotalCapacity(self.sourceAllocator(), cl);
         }
         self.source = .{ .remote = buffer };
         return .proceed;
@@ -765,7 +791,7 @@ pub const Script = struct {
     }
 
     fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
-        try self.source.remote.appendSlice(self.arena.allocator(), data);
+        try self.source.remote.appendSlice(self.sourceAllocator(), data);
     }
 
     pub fn doneCallback(ctx: *anyopaque) !void {

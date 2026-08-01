@@ -69,7 +69,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
-    const response = try Response.init(null, .{ .status = 0 }, exec);
+    const response = try Response.initPending(exec);
     errdefer response.deinit(exec.page);
 
     const fetch = try response._arena.create(Fetch);
