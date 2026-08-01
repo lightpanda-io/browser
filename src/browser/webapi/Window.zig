@@ -50,6 +50,7 @@ const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 const Timers = @import("Timers.zig");
+const Scheduler = @import("Scheduler.zig");
 const Notification = @import("../../Notification.zig");
 
 const log = lp.log;
@@ -94,6 +95,7 @@ _reporting_error: bool = false,
 _current_event: ?*Event = null,
 _location: *Location,
 _timers: Timers = .{},
+_scheduler: Scheduler = .{},
 _custom_elements: CustomElementRegistry = .{},
 _scroll_pos: struct {
     x: u32,
@@ -244,6 +246,10 @@ pub fn setPageYOffset(self: *Window, value: js.Value) void {
 
 pub fn getNavigator(self: *Window) *Navigator {
     return &self._navigator;
+}
+
+pub fn getScheduler(self: *Window) *Scheduler {
+    return &self._scheduler;
 }
 
 pub fn getModelContext(self: *Window) *ModelContext {
@@ -1172,6 +1178,7 @@ pub const JsApi = struct {
     pub const window = bridge.accessor(Window.getWindow, null, .{});
     pub const parent = bridge.accessor(Window.getParent, Window.setParent, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
+    pub const scheduler = bridge.accessor(Window.getScheduler, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
     pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
