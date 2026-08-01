@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
@@ -29,7 +28,6 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const EventKey = struct {
     event_target: usize,
@@ -96,7 +94,7 @@ pub const Callback = union(enum) {
 // unless they need the resulting *Listener (e.g. Frame's load-listener
 // tracking).
 pub fn register(self: *EventManagerBase, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !?*Listener {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.event, "EventManager.register", .{
             .type = typ,
             .capture = opts.capture,
@@ -236,7 +234,7 @@ pub fn dispatchDirect(
     page: *Page,
     comptime opts: DispatchDirectOptions,
 ) DispatchError!void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.event, "dispatchDirect", .{ .type = event._type_string, .context = opts.context });
     }
 

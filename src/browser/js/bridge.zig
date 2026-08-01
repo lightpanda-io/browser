@@ -28,7 +28,6 @@ const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 
 const v8 = js.v8;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn Builder(comptime T: type) type {
     return struct {
@@ -671,7 +670,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         .worker => {}, // no global lookup in a worker
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (std.mem.startsWith(u8, property, "__")) {
             // some frameworks will extend built-in types using a __ prefix
             // these should always be safe to ignore.
@@ -717,7 +716,7 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
 
 // Only used for debugging
 pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-    if (comptime !IS_DEBUG) {
+    if (comptime !lp.IS_DEBUG) {
         @compileError("unknownObjectPropertyCallback should only be used in debug builds");
     }
 

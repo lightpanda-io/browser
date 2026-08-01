@@ -111,7 +111,7 @@ pub fn deinit(self: *App) void {
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {
-    if (@import("builtin").is_test) {
+    if (lp.IS_TEST) {
         return allocator.dupe(u8, "/tmp") catch unreachable;
     }
     const app_dir_path = getAppDataDir(allocator, "lightpanda") catch |err| {

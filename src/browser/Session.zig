@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 
@@ -39,7 +38,6 @@ const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
-const IS_DEBUG = builtin.mode == .Debug;
 
 // A Session represents a browsing context group (cookie jar, session storage,
 // navigation history) within a Browser. It owns a set of live Pages — each a
@@ -361,7 +359,7 @@ pub fn createPage(self: *Session) !PageHandle {
     // Drain any pending Page deinits now, while we're at a known-safe point
     self.processDestroyQueues();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "create page", .{});
     }
 
@@ -433,7 +431,7 @@ pub fn pendingOrLivePage(self: *Session, frame_id: u32) ?*Page {
 pub fn replacementOf(self: *Session, page: *Page) ?*Page {
     const replacement = page.replacement;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // quick check to make sure our replacement <=> replaces link is in sync
         var found: ?*Page = null;
         for (self.pages.items) |p| {
@@ -457,7 +455,7 @@ pub fn primaryPage(self: *Session) ?PageHandle {
         return null;
     }
     const page = self.pages.items[0];
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(page.replaces == null);
     }
     return .{ .session = self, .frame_id = page.frame._frame_id };
@@ -473,7 +471,7 @@ pub fn currentFrame(self: *Session) ?*Frame {
         return null;
     }
     const page = self.pages.items[0];
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(page.replaces == null);
     }
     return &page.frame;
@@ -799,7 +797,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
 fn replaceRootImmediate(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
     if (self.livePage(frame_id)) |page| {
         self.tearDownPage(page);
-    } else if (comptime IS_DEBUG) {
+    } else if (comptime lp.IS_DEBUG) {
         lp.assert(false, "Session.replaceRootImmediate - no live page", .{});
     }
     const new_frame = try self.installNewActivePage(frame_id);
@@ -847,7 +845,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     try self.pages.append(self.arena.allocator(), page);
     errdefer _ = self.pages.pop();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "initiate root navigation", .{ .url = url });
     }
 
@@ -888,7 +886,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
         lp.assert(false, "Session.commitPendingPage - page has no replaces", .{});
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "commit pending page", .{});
     }
 
@@ -926,7 +924,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
 // (HTTP error before commit, session deinit during pending, etc.). The
 // active page is untouched.
 pub fn discardPendingPage(self: *Session, replacement: *Page) void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "discard pending page", .{});
     }
 

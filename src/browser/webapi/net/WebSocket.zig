@@ -35,7 +35,6 @@ const MessageEvent = @import("../event/MessageEvent.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const WebSocket = @This();
 
@@ -201,7 +200,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     // the moment it's created. deactivate() releases this reference.
     self.acquireRef();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.info(.websocket, "connecting", .{ .url = url });
     }
 
@@ -797,7 +796,7 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
 }
 
 fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(buf_count == 1);
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
@@ -851,7 +850,7 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
 fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: Message.Content, frame_type: http.WsFrameType) !usize {
     if (self._send_offset == 0) {
         // start of the message
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.websocket, "send start", .{ .url = self._url, .len = byte_msg.data.len });
         }
         try conn.wsStartFrame(frame_type, byte_msg.data.len);
@@ -866,7 +865,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
     if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
         removed.deinit(self._exec.page);
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
         }
         self._send_offset = 0;
@@ -876,7 +875,7 @@ fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: M
 }
 
 fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(buf_count == 1);
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));
@@ -898,7 +897,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
     };
 
     if (meta.offset == 0) {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
         }
         // Start of new frame. Pre-allocate buffer
@@ -944,7 +943,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
 // libcurl has no mechanism to signal that the connection is established. The
 // best option I could come up with was looking for an upgrade header response.
 fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(header_count == 1);
     }
     const conn: *http.Connection = @ptrCast(@alignCast(data));

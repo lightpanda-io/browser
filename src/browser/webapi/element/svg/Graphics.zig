@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -42,13 +43,11 @@ pub const ForeignObject = @import("ForeignObject.zig");
 pub const TextContent = @import("TextContent.zig");
 pub const Geometry = @import("Geometry.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Graphics = @This();
 
 pub const Proto = SvgElement;
 _type: Type,
-_proto_canary: if (IS_DEBUG) *SvgElement else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *SvgElement else void = undefined,
 
 pub const Type = union(enum) {
     svg: *Svg,

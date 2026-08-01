@@ -39,7 +39,6 @@ const XMLHttpRequestUpload = @import("XMLHttpRequestUpload.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
 
@@ -235,7 +234,7 @@ pub fn overrideMimeType(self: *XMLHttpRequest, mime: []const u8) !void {
 }
 
 pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
     if (self._ready_state != .opened or self._send_flag) {
@@ -304,7 +303,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     // callbacks clear it.
     self._http_transfer = transfer;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
 
@@ -510,7 +509,7 @@ fn httpHeaderCallback(transfer: *Transfer, header: http.Header) !void {
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "xhr",
             .url = self._url,

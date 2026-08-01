@@ -41,7 +41,6 @@ const log = lp.log;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const DoublyLinkedList = std.DoublyLinkedList;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const Network = @This();
 
@@ -144,8 +143,8 @@ pub fn globalInit(allocator: Allocator) void {
     // Only route curl's own allocations through our allocator in Debug, so the
     // leak detector sees them. In Release it'd just wrap c_allocator (curl's
     // default malloc anyway) at the cost of a per-allocation header.
-    const curl_allocator = comptime if (IS_DEBUG) CurlDebugAllocator.interface() else null;
-    if (comptime IS_DEBUG) {
+    const curl_allocator = comptime if (lp.IS_DEBUG) CurlDebugAllocator.interface() else null;
+    if (comptime lp.IS_DEBUG) {
         CurlDebugAllocator.init(allocator);
     }
 

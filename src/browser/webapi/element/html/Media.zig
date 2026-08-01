@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -28,8 +29,6 @@ const Event = @import("../../Event.zig");
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
 const MediaError = @import("../../media/MediaError.zig");
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Media = @This();
 
@@ -57,7 +56,7 @@ pub const Type = union(enum) {
 };
 
 _type: Type,
-_proto_canary: if (IS_DEBUG) *HtmlElement else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _paused: bool = true,
 _current_time: f64 = 0,
 _volume: f64 = 1.0,

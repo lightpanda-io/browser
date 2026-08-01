@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 
 const Node = @import("../../Node.zig");
@@ -27,13 +28,11 @@ const TextContent = @import("TextContent.zig");
 pub const Text = @import("Text.zig");
 pub const TSpan = @import("TSpan.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const TextPositioning = @This();
 
 pub const Proto = TextContent;
 _type: Type,
-_proto_canary: if (IS_DEBUG) *TextContent else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *TextContent else void = undefined,
 
 pub const Type = union(enum) {
     text: *Text,

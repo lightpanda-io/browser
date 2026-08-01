@@ -29,7 +29,6 @@ pub const AttributeIterator = h5e.AttributeIterator;
 
 const Allocator = std.mem.Allocator;
 const TERMINATE_CHECK_INTERVAL = 1024;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const ParsedNode = struct {
     node: *Node,
@@ -682,7 +681,7 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 // in the wild, and I'm not sure why. In debug, let's crash so
                 // we can try to figure it out. In release, let's disconnect
                 // the child first.
-                if (comptime IS_DEBUG) {
+                if (comptime lp.IS_DEBUG) {
                     unreachable;
                 }
                 self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });

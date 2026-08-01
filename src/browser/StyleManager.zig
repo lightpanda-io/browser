@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
@@ -91,8 +90,6 @@ pub fn init(frame: *Frame) !StyleManager {
 pub fn deinit(self: *StyleManager) void {
     self.arena.release();
 }
-
-const IS_DEBUG = builtin.mode == .Debug;
 
 /// Hard cap on `@media` / `@layer` nesting depth. CSS allows arbitrarily-deep
 /// at-rule nesting; without a cap a hostile inline stylesheet could blow the
@@ -285,7 +282,7 @@ fn registerLayerPath(self: *StyleManager, build_arena: Allocator, parent: u16, d
     var it = std.mem.splitScalar(u8, dotted, '.');
     while (it.next()) |component| {
         // should have been verified by the caller, via isValidLayerName
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(isValidLayerComponent(component));
         }
 

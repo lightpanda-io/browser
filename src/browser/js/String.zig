@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("js.zig");
 
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const v8 = js.v8;
 
@@ -73,7 +72,7 @@ fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !
     const l = v8.v8__String__Utf8Length(handle, isolate);
     const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(l), 0) else allocator.alloc(u8, @intCast(l)));
     const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
 
@@ -95,7 +94,7 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
     if (l <= 12) {
         var content: [12]u8 = undefined;
         const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(n == l);
         }
         // Weird that we do this _after_, but we have to..I've seen weird issues
@@ -107,7 +106,7 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
 
     const buf = try allocator.alloc(u8, l);
     const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(n == l);
     }
 

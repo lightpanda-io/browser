@@ -35,8 +35,6 @@ const PageJsApis = bridge.PageJsApis;
 const SharedWorkerJsApis = bridge.SharedWorkerJsApis;
 const DedicatedWorkerJsApis = bridge.DedicatedWorkerJsApis;
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Snapshot = @This();
 
 const Caller = @import("Caller.zig");
@@ -476,7 +474,7 @@ fn countExternalReferences() comptime_int {
         }
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         inline for (JsApis) |JsApi| {
             if (!hasNamedIndexedGetter(JsApi)) {
                 count += 1;
@@ -594,7 +592,7 @@ fn collectExternalReferences() [countExternalReferences()]isize {
         }
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         inline for (JsApis) |JsApi| {
             if (!hasNamedIndexedGetter(JsApi)) {
                 references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
@@ -905,7 +903,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontDelete);
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (!has_named_index_getter) {
             var configuration: v8.NamedPropertyHandlerConfiguration = .{
                 .getter = bridge.unknownObjectPropertyCallback(JsApi),

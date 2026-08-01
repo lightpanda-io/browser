@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -32,13 +33,11 @@ const Svg = @import("../Svg.zig");
 pub const LinearGradient = @import("LinearGradient.zig");
 pub const RadialGradient = @import("RadialGradient.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const GradientElement = @This();
 
 pub const Proto = Svg;
 _type: Type,
-_proto_canary: if (IS_DEBUG) *Svg else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Svg else void = undefined,
 
 pub const Type = union(enum) {
     linear: *LinearGradient,

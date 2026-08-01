@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const log = lp.log;
 
@@ -1251,7 +1250,7 @@ test "Robots: RobotStore.getContentSignals round-trips" {
 }
 
 fn testMatch(pattern: []const u8, path: []const u8) bool {
-    comptime if (!builtin.is_test) unreachable;
+    comptime if (!lp.IS_TEST) unreachable;
 
     return matchPattern(CompiledPattern.compile(pattern), path);
 }

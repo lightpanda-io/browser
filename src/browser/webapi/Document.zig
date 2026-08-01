@@ -46,7 +46,6 @@ pub const HTMLDocument = @import("HTMLDocument.zig");
 
 const log = lp.log;
 const String = lp.String;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Document = @This();
 
@@ -1469,7 +1468,7 @@ pub fn injectBlank(self: *Document, frame: *Frame) error{InjectBlankError}!void 
 }
 
 fn _injectBlank(self: *Document, frame: *Frame) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // should only be called on an empty document
         std.debug.assert(self.asNode()._first_child == null);
     }

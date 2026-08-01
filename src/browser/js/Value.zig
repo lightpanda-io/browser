@@ -25,8 +25,6 @@ const TaggedOpaque = @import("TaggedOpaque.zig");
 const v8 = js.v8;
 const bridge = js.bridge;
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Allocator = std.mem.Allocator;
 
 const Value = @This();
@@ -274,7 +272,7 @@ pub fn toU32(self: Value) !u32 {
 }
 
 pub fn toPromise(self: Value) js.Promise {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.isPromise());
     }
     return .{
@@ -648,7 +646,7 @@ pub fn toZig(self: Value, comptime T: type) !T {
 }
 
 pub fn toObject(self: Value) js.Object {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.isObject());
     }
 
@@ -659,7 +657,7 @@ pub fn toObject(self: Value) js.Object {
 }
 
 pub fn toArray(self: Value) js.Array {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.isArray());
     }
 
@@ -670,7 +668,7 @@ pub fn toArray(self: Value) js.Array {
 }
 
 pub fn toBigInt(self: Value) js.BigInt {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.isBigInt());
     }
 
@@ -680,7 +678,7 @@ pub fn toBigInt(self: Value) js.BigInt {
 }
 
 pub fn format(self: Value, writer: *std.Io.Writer) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         return self.local.debugValue(self, writer);
     }
     const js_str = self.toString() catch return error.WriteFailed;

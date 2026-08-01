@@ -99,7 +99,6 @@ pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
 const log = lp.log;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 const GlobalEventHandler = global_event_handlers.Handler;
 
 const HtmlElement = @This();
@@ -107,7 +106,7 @@ const HtmlElement = @This();
 pub const Proto = Element;
 
 _type: Type,
-_proto_canary: if (IS_DEBUG) *Element else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 
 // Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
@@ -542,7 +541,7 @@ fn setAttributeListener(
     listener_callback: ?js.Function.Global,
     frame: *Frame,
 ) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.event, "Html.setAttributeListener", .{
             .type = std.meta.activeTag(self._type),
             .listener_type = listener_type,

@@ -23,7 +23,6 @@ const js = @import("js.zig");
 
 const v8 = js.v8;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const TryCatch = @This();
 
@@ -40,7 +39,7 @@ pub fn hasCaught(self: TryCatch) bool {
 }
 
 pub fn rethrow(self: *TryCatch) void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.hasCaught());
     }
     _ = v8.v8__TryCatch__ReThrow(&self.handle);

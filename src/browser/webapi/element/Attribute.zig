@@ -30,8 +30,6 @@ const GenericIterator = @import("../collections/iterator.zig").Entry;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 pub fn registerTypes() []const type {
     return &.{
         Attribute,
@@ -47,7 +45,7 @@ pub const Proto = Node;
 _name: String,
 _value: String,
 _element: ?*Element,
-_proto_canary: if (IS_DEBUG) *Node else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Node else void = undefined,
 
 pub fn asNode(self: *Attribute) *Node {
     return Factory.protoOf(self);
@@ -280,7 +278,7 @@ pub const List = struct {
     // not efficient, won't be called often (if ever!)
     pub fn putAttribute(self: *List, attribute: *Attribute, element: *Element, frame: *Frame) !?*Attribute {
         // we expect our caller to make sure this is true
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(attribute._element == null);
         }
 

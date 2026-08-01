@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const http = @import("../network/http.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -34,7 +33,6 @@ const Element = @import("webapi/Element.zig");
 const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const ScriptManagerBase = @This();
 
@@ -251,7 +249,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 
     gop.value_ptr.* = .{ .state = .{ .loading = script }, .hint = opts.hint };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         self.owner.jsContext().localScope(&ls);
         defer ls.deinit();
@@ -399,7 +397,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
                     // fetch is in flight, take the script and turn it into
                     // our normal getAsyncImport flow (e.g. what we do at the
                     // end of this file as-if imported_modules didn't have this script)
-                    if (comptime IS_DEBUG) {
+                    if (comptime lp.IS_DEBUG) {
                         log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "loading" });
                     }
                     script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
@@ -411,7 +409,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
                     // ready_scripts flow. evaluate() runs it now, or — if an
                     // evaluation window is open — evaluate_pending runs it
                     // when that window closes.
-                    if (comptime IS_DEBUG) {
+                    if (comptime lp.IS_DEBUG) {
                         log.debug(.http, "script adopt", .{ .url = url, .ctx = "dynamic module", .state = "done" });
                     }
                     script.extra = .{ .import_async = .{ .callback = cb, .data = cb_data } };
@@ -443,7 +441,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         } },
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         self.owner.jsContext().localScope(&ls);
         defer ls.deinit();
@@ -724,7 +722,7 @@ pub const Script = struct {
             return .abort;
         }
 
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script header", .{
                 .req = transfer,
                 .status = transfer.responseStatus(),
@@ -797,7 +795,7 @@ pub const Script = struct {
     pub fn doneCallback(ctx: *anyopaque) !void {
         const self: *Script = @ptrCast(@alignCast(ctx));
         self.complete = true;
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script fetch complete", .{ .req = self.url });
         }
 
@@ -976,7 +974,7 @@ pub const Script = struct {
             break :blk true;
         };
 
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
 

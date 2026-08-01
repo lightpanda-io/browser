@@ -17,11 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
-
-const IS_TEST = builtin.is_test;
-
-const is_debug = builtin.mode == .Debug;
+const lp = @import("lightpanda");
 
 pub const Scope = enum {
     app,
@@ -71,8 +67,8 @@ pub fn resolveFilterScopes(rules: []const FilterRule) [num_scopes]bool {
 }
 
 const Opts = struct {
-    format: Format = if (is_debug) .pretty else .logfmt,
-    level: Level = if (is_debug) .info else .warn,
+    format: Format = if (lp.IS_DEBUG) .pretty else .logfmt,
+    level: Level = if (lp.IS_DEBUG) .info else .warn,
     // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
     // Only consulted in Debug builds. Default: everything enabled.
     scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
@@ -90,7 +86,7 @@ pub fn enabled(scope: Scope, level: Level) bool {
         return false;
     }
 
-    if (comptime builtin.mode == .Debug) {
+    if (comptime lp.IS_DEBUG) {
         if (opts.scope_enabled[@intFromEnum(scope)] == false) {
             return false;
         }
@@ -106,7 +102,7 @@ var expected_logs: [num_scopes]u16 = @splat(0);
 
 // Registers one expected log line per entry in `scopes`.
 pub fn expectLog(comptime scopes: []const Scope) void {
-    comptime std.debug.assert(IS_TEST);
+    comptime std.debug.assert(lp.IS_TEST);
     inline for (scopes) |scope| {
         expected_logs[@intFromEnum(scope)] += 1;
     }
@@ -114,7 +110,7 @@ pub fn expectLog(comptime scopes: []const Scope) void {
 
 // Called after each test. Returns the expectations that were never met.
 pub fn resetTestState() [num_scopes]u16 {
-    std.debug.assert(IS_TEST);
+    std.debug.assert(lp.IS_TEST);
     const unmet = expected_logs;
     expected_logs = @splat(0);
     opts.scope_enabled = @splat(true);
@@ -163,7 +159,7 @@ pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
 }
 
 pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
-    if (comptime IS_TEST == false) {
+    if (comptime lp.IS_TEST == false) {
         log(scope, .note, msg, data);
     }
 }
@@ -173,7 +169,7 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
         return;
     }
 
-    if (comptime IS_TEST) {
+    if (comptime lp.IS_TEST) {
         const expected = &expected_logs[@intFromEnum(scope)];
         if (expected.* > 0) {
             expected.* -= 1;
@@ -214,7 +210,7 @@ fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.I
 }
 
 fn logToErased(scope: Scope, level: Level, msg: []const u8, kvs: []const KV, out: *std.Io.Writer) !void {
-    if (builtin.mode == .Debug) {
+    if (lp.IS_DEBUG) {
         if (msg.len > 30) {
             std.debug.print("debug-only-panic: log msg cannot be more than 30 characters: {s}", .{msg});
             @panic("invalid log msg");
@@ -540,7 +536,7 @@ fn elapsed() struct { time: f64, unit: []const u8 } {
 
 const datetime = @import("datetime.zig");
 fn timestamp(comptime clock: std.Io.Clock) u64 {
-    if (IS_TEST) {
+    if (lp.IS_TEST) {
         return 1739795092929;
     }
     return datetime.milliTimestamp(clock);

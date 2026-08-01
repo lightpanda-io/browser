@@ -44,7 +44,6 @@ const Custom = @import("webapi/element/html/Custom.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Self = @This();
 
@@ -96,7 +95,7 @@ fn route(self: *Self, frame: *Frame, reaction: Reaction) !void {
         try self.queue.append(self.allocator, reaction);
         return;
     }
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         lp.log.err(.bug, "custom element scope", .{ .note = "Missing explicit reaction scope, using fallback. This log is only generated in debug builds." });
     }
     try self.backup_queue.append(self.allocator, reaction);

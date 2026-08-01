@@ -40,14 +40,12 @@ pub const Stop = @import("svg/Stop.zig");
 
 const String = lp.String;
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Svg = @This();
 
 pub const Proto = Element;
 _type: Type,
 _tag_name: String, // Svg elements are case-preserving
-_proto_canary: if (IS_DEBUG) *Element else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 
 pub const Type = union(enum) {
     graphics: *Graphics,

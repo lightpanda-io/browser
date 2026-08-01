@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const Arena = @import("Arena.zig");
 
@@ -28,7 +27,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const ArenaPool = @This();
 
-const IS_DEBUG = builtin.mode == .Debug;
 const SAFETY = Arena.SAFETY;
 
 pub const BucketSize = enum { tiny, small, medium, large };
@@ -61,7 +59,7 @@ allocator: Allocator,
 mutex: std.Io.Mutex = .init,
 entry_pool: std.heap.MemoryPool(Arena),
 
-_leak_track: if (IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (IS_DEBUG) .empty else {},
+_leak_track: if (lp.IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (lp.IS_DEBUG) .empty else {},
 
 pub fn init(allocator: Allocator, config: Config) ArenaPool {
     return .{
@@ -75,7 +73,7 @@ pub fn init(allocator: Allocator, config: Config) ArenaPool {
 }
 
 pub fn deinit(self: *ArenaPool) void {
-    if (IS_DEBUG) {
+    if (lp.IS_DEBUG) {
         var has_leaks = false;
         var it = self._leak_track.iterator();
         while (it.next()) |kv| {
@@ -148,7 +146,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
     if (bucket.free_list) |entry| {
         bucket.free_list = entry.next;
         bucket.free_list_len -= 1;
-        if (IS_DEBUG) {
+        if (lp.IS_DEBUG) {
             entry.debug = debug;
             const gop = try self._leak_track.getOrPut(self.allocator, debug);
             if (!gop.found_existing) {
@@ -171,14 +169,14 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         .bytes = 0,
         .account = account,
         .reported = 0,
-        .debug = if (IS_DEBUG) debug else {},
+        .debug = if (lp.IS_DEBUG) debug else {},
         ._arena = undefined,
     };
     // Routed through the entry so it sees every node the arena takes and gives
     // back. entry is pool-allocated, so this pointer is stable.
     entry._arena = ArenaAllocator.init(entry.backing());
 
-    if (IS_DEBUG) {
+    if (lp.IS_DEBUG) {
         const gop = try self._leak_track.getOrPut(self.allocator, debug);
         if (!gop.found_existing) {
             gop.value_ptr.* = 0;
@@ -195,7 +193,7 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
 
     lp.metrics.arena_inflight.decr(bucket.size);
 
-    if (IS_DEBUG) {
+    if (lp.IS_DEBUG) {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         if (self._leak_track.getPtr(entry.debug)) |count| {

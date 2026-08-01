@@ -50,9 +50,6 @@ const MessagePort = @import("MessagePort.zig");
 const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
-const builtin = @import("builtin");
-const IS_DEBUG = builtin.mode == .Debug;
-
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
@@ -365,7 +362,7 @@ pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
 }
 
 pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rejection: JS.PromiseRejection) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
             .target = "worker",
             .value = rejection.reason(),
@@ -503,7 +500,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     // We still dispatch so that addEventListener('error', ...) listeners fire.
     try self.dispatch(self.asEventTarget(), event, null, .{});
 
-    if (comptime builtin.is_test == false) {
+    if (comptime lp.IS_TEST == false) {
         if (!event._prevent_default) {
             log.warn(.js, "worker.reportError", .{
                 .message = error_event._message,

@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const log = lp.log;
@@ -36,9 +35,9 @@ pub fn main(init: std.process.Init) !void {
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
     var gpa_instance: std.heap.DebugAllocator(.{ .stack_trace_frames = 10 }) = .init;
-    const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
+    const gpa = if (lp.IS_DEBUG) gpa_instance.allocator() else std.heap.c_allocator;
 
-    defer if (builtin.mode == .Debug) {
+    defer if (lp.IS_DEBUG) {
         if (gpa_instance.detectLeaks() != 0) std.process.exit(1);
     };
 
