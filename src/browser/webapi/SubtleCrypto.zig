@@ -524,10 +524,10 @@ pub fn verify(
 /// or an object (`{name: "SHA-256"}`). The object variant must come first — a
 /// `[]const u8` coerces *any* JS value to a string, so it has to be the fallback.
 const DigestInput = union(enum) {
-    obj: struct { name: []const u8 },
+    obj: struct { name: ?[]const u8 = null },
     str: []const u8,
 
-    fn name(self: DigestInput) []const u8 {
+    fn name(self: DigestInput) ?[]const u8 {
         return switch (self) {
             .obj => |o| o.name,
             .str => |s| s,
@@ -539,7 +539,9 @@ const DigestInput = union(enum) {
 pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8), exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
 
-    const algo_name = algo.name();
+    const algo_name = algo.name() orelse {
+        return local.rejectPromise(.{ .type_error = "required member name is undefined" });
+    };
     if (algo_name.len > 10) {
         return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
     }

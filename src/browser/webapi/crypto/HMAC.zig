@@ -37,6 +37,11 @@ pub fn init(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
+    // The union probe match to get here is pretty simple, so we can end up here
+    // for an unknown/invalid algo.
+    if (!std.ascii.eqlIgnoreCase(params.name, "HMAC")) {
+        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+    }
     const hash_name = switch (params.hash) {
         .string => |str| str,
         .object => |obj| obj.name,

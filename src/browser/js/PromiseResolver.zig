@@ -108,13 +108,19 @@ pub fn rejectError(
 fn _reject(self: PromiseResolver, value: anytype) !void {
     const local = self.local;
     const js_val = try local.zigValueToJs(value, .{});
+    try self.rejectValue(js_val);
+    local.runMicrotasks();
+}
 
+/// Rejects with an already-built JS value, without running a microtask
+/// checkpoint. For use while the calling script is still on the stack, where
+/// draining the queue would run unrelated reactions mid-script.
+pub fn rejectValue(self: PromiseResolver, value: js.Value) !void {
     var out: v8.MaybeBool = undefined;
-    v8.v8__Promise__Resolver__Reject(self.handle, local.handle, js_val.handle, &out);
+    v8.v8__Promise__Resolver__Reject(self.handle, self.local.handle, value.handle, &out);
     if (!out.has_value or !out.value) {
         return error.FailedToRejectPromise;
     }
-    local.runMicrotasks();
 }
 
 pub fn persist(self: PromiseResolver) !Global {
