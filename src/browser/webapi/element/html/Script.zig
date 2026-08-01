@@ -37,11 +37,11 @@ _executed: bool = false,
 _force_async: bool = true,
 
 pub fn asElement(self: *Script) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asConstElement(self: *const Script) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asNode(self: *Script) *Node {

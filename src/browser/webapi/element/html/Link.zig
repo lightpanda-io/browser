@@ -38,10 +38,10 @@ _proto: *HtmlElement,
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 
 pub fn asElement(self: *Link) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Link) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();

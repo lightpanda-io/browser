@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Factory = @import("../../Factory.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -43,10 +44,14 @@ pub const Attribute = @This();
 
 pub const Proto = Node;
 
-_proto: *Node,
 _name: String,
 _value: String,
 _element: ?*Element,
+_proto_canary: if (IS_DEBUG) *Node else void = undefined,
+
+pub fn asNode(self: *Attribute) *Node {
+    return Factory.protoOf(self);
+}
 
 pub fn format(self: *const Attribute, writer: *std.Io.Writer) !void {
     return formatAttribute(self._name.str(), self._value.str(), writer);
@@ -87,7 +92,6 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
 
 pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
     return frame._factory.node(Attribute{
-        ._proto = undefined,
         ._element = self._element,
         ._name = self._name,
         ._value = self._value,
@@ -463,7 +467,6 @@ pub const List = struct {
 
         pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
             return frame._factory.node(Attribute{
-                ._proto = undefined,
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.

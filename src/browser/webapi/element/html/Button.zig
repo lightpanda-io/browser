@@ -40,10 +40,10 @@ _validity: ?*ValidityState = null,
 _popover_target: ?*Element = null,
 
 pub fn asElement(self: *Button) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Button) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Button) *Node {
     return self.asElement().asNode();

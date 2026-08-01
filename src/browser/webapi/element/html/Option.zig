@@ -39,10 +39,10 @@ _default_selected: bool = false,
 _disabled: bool = false,
 
 pub fn asElement(self: *Option) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Option) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Option) *Node {
     return self.asElement().asNode();

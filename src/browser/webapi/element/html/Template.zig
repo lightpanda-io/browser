@@ -38,11 +38,11 @@ _proto: *HtmlElement,
 _content: *DocumentFragment,
 
 pub fn asElement(self: *Template) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asConstElement(self: *const Template) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Template) *Node {
     return self.asElement().asNode();

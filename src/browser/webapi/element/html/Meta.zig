@@ -32,7 +32,7 @@ const MetaElement = Meta;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Meta) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Meta) *Node {
     return self.asElement().asNode();

@@ -16,7 +16,7 @@ _tag: Element.Tag,
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Mod) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Mod) *Node {
     return self.asElement().asNode();

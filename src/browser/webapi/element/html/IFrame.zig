@@ -38,7 +38,7 @@ _executed: bool = false,
 _window: ?*Window = null,
 
 pub fn asElement(self: *IFrame) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();

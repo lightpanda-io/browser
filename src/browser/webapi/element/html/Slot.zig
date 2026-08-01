@@ -20,11 +20,11 @@ _assigned: std.ArrayList(*Node) = .empty,
 _manually_assigned: std.ArrayList(*Node) = .empty,
 
 pub fn asElement(self: *Slot) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asConstElement(self: *const Slot) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asNode(self: *Slot) *Node {

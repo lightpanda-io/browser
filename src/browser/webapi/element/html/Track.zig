@@ -38,7 +38,7 @@ _ready_state: ReadyState,
 const ReadyState = enum(u8) { none, loading, loaded, @"error" };
 
 pub fn asElement(self: *Track) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Track) *Node {
     return self.asElement().asNode();
