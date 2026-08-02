@@ -93,8 +93,13 @@ pub fn acquireRef(self: *Notification) void {
 
 pub fn close(_: *Notification) void {}
 
-fn getPermission() []const u8 {
-    return "default";
+fn getPermission(exec: *const Execution) []const u8 {
+    const state = exec.session.browser.permissions.get("notifications") orelse .prompt;
+    return switch (state) {
+        .granted => "granted",
+        .prompt => "default",
+        .denied => "denied",
+    };
 }
 
 fn getMaxActions() u32 {
@@ -102,7 +107,7 @@ fn getMaxActions() u32 {
 }
 
 fn requestPermission(_: ?js.Function, exec: *const Execution) !js.Promise {
-    return exec.js.local.?.resolvePromise("default");
+    return exec.js.local.?.resolvePromise(getPermission(exec));
 }
 
 fn getTitle(self: *const Notification) []const u8 {

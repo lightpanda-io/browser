@@ -267,6 +267,15 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-PERM", .url = "cdp/dom1.html" });
     const browser = bc.session.browser;
+    const frame = bc.mainFrame() orelse unreachable;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try testing.expect((try ls.local.exec(
+        \\Notification.permission === "default"
+    , null)).isTrue());
 
     // grantPermissions: each listed permission becomes "granted". State lives
     // on the Browser, not the Page.
@@ -281,15 +290,21 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     // page is replaced.
     try testing.expectEqual(.granted, browser.permissions.get("geolocation").?);
     try testing.expectEqual(.granted, browser.permissions.get("notifications").?);
+    try testing.expect((try ls.local.exec(
+        \\Notification.permission === "granted"
+    , null)).isTrue());
 
     // setPermission: override a single permission to an explicit state.
     try ctx.processMessage(.{
         .id = 41,
         .method = "Browser.setPermission",
-        .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
+        .params = .{ .permission = .{ .name = "notifications" }, .setting = "denied" },
     });
     try ctx.expectSentResult(null, .{ .id = 41, .session_id = null });
-    try testing.expectEqual(.denied, browser.permissions.get("geolocation").?);
+    try testing.expectEqual(.denied, browser.permissions.get("notifications").?);
+    try testing.expect((try ls.local.exec(
+        \\Notification.permission === "denied"
+    , null)).isTrue());
 
     // resetPermissions: clears everything; query falls back to "prompt".
     try ctx.processMessage(.{
@@ -298,6 +313,9 @@ test "cdp.browser: grant/set/reset permissions reach navigator.permissions" {
     });
     try ctx.expectSentResult(null, .{ .id = 42, .session_id = null });
     try testing.expectEqual(@as(usize, 0), browser.permissions.count());
+    try testing.expect((try ls.local.exec(
+        \\Notification.permission === "default"
+    , null)).isTrue());
 }
 
 test "cdp.browser: setDownloadBehavior stores config on the session" {
