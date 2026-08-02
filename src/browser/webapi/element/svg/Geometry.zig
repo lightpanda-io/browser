@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -38,13 +39,11 @@ pub const Path = @import("Path.zig");
 pub const Polygon = @import("Polygon.zig");
 pub const Polyline = @import("Polyline.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Geometry = @This();
 
 pub const Proto = Graphics;
 _type: Type,
-_proto_canary: if (IS_DEBUG) *Graphics else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Graphics else void = undefined,
 
 pub const Type = union(enum) {
     rect: *Rect,

@@ -33,7 +33,6 @@ const MessageEvent = @import("../event/MessageEvent.zig");
 const log = lp.log;
 const String = lp.String;
 const Execution = js.Execution;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // https://html.spec.whatwg.org/multipage/server-sent-events.html
 const EventSource = @This();
@@ -113,7 +112,7 @@ pub fn init(url: []const u8, opts_: ?Opts, exec: *const Execution) !*EventSource
     // deactivate() releases it.
     self.acquireRef();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "EventSource connecting", .{ .url = resolved });
     }
 
@@ -319,7 +318,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         break :blk mime.content_type == .text_event_stream;
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "eventsource",
             .url = self._url,

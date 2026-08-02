@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const JS = @import("js/js.zig");
 const Mime = @import("Mime.zig");
@@ -86,7 +85,6 @@ const log = lp.log;
 const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 pub const BUF_SIZE = 1024;
 
@@ -352,7 +350,7 @@ pub const InitOpts = struct {
 };
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.init", .{});
     }
 
@@ -456,7 +454,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     document._frame = self;
 
-    if (comptime builtin.is_test == false) {
+    if (comptime lp.IS_TEST == false) {
         if (parent == null) {
             // HTML test runner manually calls these as necessary
             try self.js.scheduler.add(session.browser, struct {
@@ -475,7 +473,7 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
 
         // Uncomment if you want slab statistics to print.
@@ -1210,7 +1208,7 @@ fn _documentIsComplete(self: *Frame) !void {
         try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "load", .{ .url = self.url, .type = self._type });
     }
 
@@ -1221,7 +1219,7 @@ fn notifyParentLoadComplete(self: *Frame) void {
     const parent = self.parent orelse return;
 
     if (self._parent_notified == true) {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(false);
         }
         // shouldn't happen, don't want to crash a release build over it
@@ -1271,7 +1269,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     self.window._location.releaseRef(self._page);
     self.window._location = location;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate header", .{
             .url = self.url,
             .status = transfer.responseStatus(),
@@ -1487,7 +1485,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             }
         }
 
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.frame, "navigate first chunk", .{
                 .content_type = mime.content_type,
                 .len = data.len,
@@ -1579,7 +1577,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
 fn frameDoneCallback(ctx: *anyopaque) !void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
 
@@ -1591,7 +1589,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
         self._pending_content_type = null;
     }
 
-    defer if (comptime IS_DEBUG) {
+    defer if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame load complete", .{
             .url = self.url,
             .type = self._type,
@@ -2009,7 +2007,7 @@ fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
                 };
             }
             // Detached nodes should not have IDs registered
-            if (IS_DEBUG) {
+            if (lp.IS_DEBUG) {
                 std.debug.assert(false);
             }
             return .{

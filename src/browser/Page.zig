@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
 
@@ -31,7 +30,6 @@ const Blob = @import("webapi/Blob.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 // A Page is the container for a root Frame and all of its descendants
 // (nested iframes). It owns the resources that share the lifetime of the root
@@ -187,7 +185,7 @@ pub fn deinit(self: *Page) void {
     self.shared_workers = .empty;
 
     {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(self.blob_urls.count() == 0);
         }
 
@@ -217,7 +215,7 @@ pub fn deinit(self: *Page) void {
 
     self.globals.deinit();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);
     }
     // Defensive cleanup in case origins leaked.

@@ -64,6 +64,9 @@ pub const Updater = @import("Updater.zig");
 
 pub var metrics = @import("Metrics.zig"){};
 
+pub const IS_TEST = @import("builtin").is_test;
+pub const IS_DEBUG = @import("builtin").mode == .Debug;
+
 /// Process-wide Io instance for blocking syscalls (fs, net, time, futex).
 /// Single-threaded-init only disables Io.async/Io.concurrent task spawning;
 /// blocking operations work from any thread.

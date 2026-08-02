@@ -19,7 +19,6 @@
 const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -865,9 +864,8 @@ pub const HttpHeaders = struct {
 pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: RunMode, success: bool) !void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
-    const is_debug = builtin.mode == .Debug;
-    const info_or_warn = if (comptime is_debug) "info" else "warn";
-    const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
+    const info_or_warn = if (comptime lp.IS_DEBUG) "info" else "warn";
+    const pretty_or_logfmt = if (comptime lp.IS_DEBUG) "pretty" else "logfmt";
     const comptimePrint = std.fmt.comptimePrint;
 
     const text = switch (help_for) {

@@ -17,9 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const M = @This();
 
@@ -188,7 +188,7 @@ pub const String = packed struct {
     // Dangerous. Use this only when you have to (and, obviously, when you know
     // a.len == b.len)
     pub fn eqlWithSameLen(a: String, b: String) bool {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(a.len == b.len);
         }
 
@@ -432,7 +432,7 @@ pub fn latin1ToUtf8(allocator: Allocator, bytes: []const u8) ![]u8 {
             extra += 1;
         }
     }
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // The way this is currently used:
         // 1 - the caller always wants the value duped,
         // 2 - the caller only got here because utf8ValidateSlice failed.

@@ -1,6 +1,5 @@
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
@@ -11,7 +10,7 @@ const IID_FILE = "iid";
 const Allocator = std.mem.Allocator;
 
 pub fn isDisabled() bool {
-    if (builtin.mode == .Debug or builtin.is_test) {
+    if (lp.IS_DEBUG or lp.IS_TEST) {
         return true;
     }
 
@@ -30,7 +29,7 @@ fn TelemetryT(comptime P: type) type {
 
         pub fn init(app: *App, run_mode: Config.RunMode, interactive: bool) !Self {
             const disabled = isDisabled();
-            if (builtin.mode != .Debug and builtin.is_test == false) {
+            if (lp.IS_DEBUG == false and lp.IS_TEST == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
 

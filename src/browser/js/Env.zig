@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -39,7 +38,6 @@ const log = lp.log;
 
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
@@ -109,7 +107,7 @@ pub const InitOpts = struct {
 };
 
 pub fn init(app: *App, opts: InitOpts) !Env {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         comptime {
             // V8 requirement for any data using SetAlignedPointerInInternalField
             const a = @alignOf(@import("TaggedOpaque.zig"));
@@ -151,7 +149,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
     v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         v8.v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(isolate_handle, true, 64);
     }
 
@@ -209,7 +207,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 }
 
 pub fn deinit(self: *Env) void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.contexts.items.len == 0);
     }
     for (self.contexts.items) |ctx| {
@@ -391,7 +389,7 @@ pub fn destroyContext(self: *Env, context: *Context) void {
             break;
         }
     } else {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             @panic("Tried to remove unknown context");
         }
     }
@@ -444,7 +442,7 @@ pub fn runMacrotasks(self: *Env) !void {
     var i: usize = 0;
     while (i < self.contexts.items.len) : (i += 1) {
         const ctx = self.contexts.items[i];
-        if (comptime builtin.is_test == false) {
+        if (comptime lp.IS_TEST == false) {
             // I hate this comptime check as much as you do. But we have tests
             // which rely on short execution before shutdown. In real world, it's
             // underterministic whether a timer will or won't run before the

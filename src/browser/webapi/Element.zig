@@ -43,7 +43,6 @@ pub const Attribute = @import("element/Attribute.zig");
 const DOMStringMap = @import("element/DOMStringMap.zig");
 
 const log = lp.log;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 const String = lp.String;
 
 const Element = @This();
@@ -114,7 +113,7 @@ _attributes: Attribute.List = .{},
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
 // work to resolve the proto).
-_proto_canary: if (IS_DEBUG) *Node else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *Node else void = undefined,
 
 pub const Type = union(enum) {
     html: *Html,

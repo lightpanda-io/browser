@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const HttpClient = @import("../network/HttpClient.zig");
 
@@ -31,7 +30,6 @@ const Element = @import("webapi/Element.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const ScriptManager = @This();
 
@@ -132,7 +130,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
     try self.preloaded_scripts.putNoClobber(self.base.allocator, owned_url, .{ .state = .{ .loading = script } });
     errdefer _ = self.preloaded_scripts.remove(owned_url);
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "script queue", .{ .url = owned_url, .ctx = "preload" });
     }
 
@@ -270,7 +268,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         break :blk .normal;
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         frame.js.localScope(&ls);
         defer ls.deinit();
@@ -296,7 +294,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             preloaded = self.base.takeModuleHint(remote_url);
         }
         if (preloaded) |pre| {
-            if (comptime IS_DEBUG) {
+            if (comptime lp.IS_DEBUG) {
                 log.debug(.http, "script adopt", .{ .url = remote_url, .ctx = ctx, .state = if (pre.complete) "done" else "loading" });
             }
             pre.extra = frame_extra;
@@ -520,7 +518,7 @@ const PreloadedScript = struct {
             return Script.doneCallback(ctx);
         }
         script.complete = true;
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script fetch complete", .{ .req = script.url });
         }
 

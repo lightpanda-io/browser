@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const CDP = @import("CDP.zig");
 
@@ -58,7 +57,7 @@ pub fn init(
 ) !void {
     const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
-    if (builtin.is_test == false) {
+    if (lp.IS_TEST == false) {
         lp.assert(socket_flags & nonblocking == nonblocking, "Connection.init blocking", .{});
     }
 

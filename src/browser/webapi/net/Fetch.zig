@@ -32,7 +32,6 @@ const Response = @import("Response.zig");
 const log = lp.log;
 const Execution = js.Execution;
 const Transfer = HttpClient.Transfer;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
 
@@ -92,7 +91,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     }
     try exec.headersForRequest(&headers);
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
 
@@ -157,7 +156,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const res = self._response;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "fetch",
             .url = self._url,

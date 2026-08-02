@@ -27,7 +27,6 @@ const MessagePort = @import("../MessagePort.zig");
 const Window = @import("../Window.zig");
 
 const String = lp.String;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const MessageEvent = @This();
 
@@ -143,7 +142,7 @@ pub fn getSource(self: *const MessageEvent, exec: *js.Execution) ?SourceAccess {
             .frame => |frame| return .{ .window = Window.Access.init(frame.window, window) },
             .worker => {
                 // a window source should never reach a worker context
-                if (comptime IS_DEBUG) {
+                if (comptime lp.IS_DEBUG) {
                     std.debug.assert(false);
                 }
                 return null;

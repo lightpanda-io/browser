@@ -34,7 +34,6 @@ const v8 = js.v8;
 const log = lp.log;
 const Caller = js.Caller;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Loosely maps to a Browser Page or Worker.
 const Context = @This();
@@ -152,7 +151,7 @@ scheduler: Scheduler,
 // interface that works in both Page and Worker contexts.
 execution: Execution,
 
-unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
+unknown_properties: (if (lp.IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (lp.IS_DEBUG) .{} else {},
 
 const ModuleEntry = struct {
     // Can be null if we're asynchronously loading the module, in
@@ -193,7 +192,7 @@ pub fn fromIsolate(isolate: js.Isolate) ?struct { *Context, *const v8.Context } 
 }
 
 pub fn deinit(self: *Context) void {
-    if (comptime IS_DEBUG and @import("builtin").is_test == false) {
+    if (comptime lp.IS_DEBUG and lp.IS_TEST == false) {
         var it = self.unknown_properties.iterator();
         while (it.next()) |kv| {
             log.debug(.unknown_prop, "unknown property", .{
@@ -408,7 +407,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
 fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
     const evaluated = mod.evaluate() catch {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
         }
 
@@ -420,7 +419,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
             break :blk e.toSlice() catch "???";
         };
         const stack = blk: {
-            if (comptime IS_DEBUG == false) {
+            if (comptime lp.IS_DEBUG == false) {
                 // SetCaptureStackTraceForUncaughtExceptions is only set in Debug
                 break :blk "";
             }
@@ -885,7 +884,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             }
 
             const evaluated = mod.evaluate() catch {
-                if (comptime IS_DEBUG) {
+                if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
@@ -956,7 +955,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     // we have a resolve loading this asynchronously.
     lp.assert(module_entry.module_promise != null, "Context.resolveDynamicModule has module_promise", .{});
     lp.assert(module_entry.resolver_promise != null, "Context.resolveDynamicModule has resolver_promise", .{});
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.module_cache.contains(state.specifier));
     }
     state.module = module_entry.module.?;
@@ -1157,7 +1156,7 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
 
 // == Profiler ==
 pub fn startCpuProfiler(self: *Context) void {
-    if (comptime !IS_DEBUG) {
+    if (comptime !lp.IS_DEBUG) {
         // Still testing this out, don't have it properly exposed, so add this
         // guard for the time being to prevent any accidental/weird prod issues.
         @compileError("CPU Profiling is only available in debug builds");
@@ -1188,7 +1187,7 @@ pub fn stopCpuProfiler(self: *Context) ![]const u8 {
 }
 
 pub fn startHeapProfiler(self: *Context) void {
-    if (comptime !IS_DEBUG) {
+    if (comptime !lp.IS_DEBUG) {
         @compileError("Heap Profiling is only available in debug builds");
     }
 

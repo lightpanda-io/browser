@@ -17,10 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Object = @This();
 
@@ -84,7 +83,7 @@ pub fn toValue(self: Object) js.Value {
 }
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         return self.local.ctx.debugValue(self.toValue(), writer);
     }
     const str = self.toString() catch return error.WriteFailed;

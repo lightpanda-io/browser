@@ -2,8 +2,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const IS_DEBUG = builtin.mode == .Debug;
-
 const abort = std.process.abort;
 
 // tracks how deep within a panic we're panicling
@@ -72,7 +70,7 @@ pub noinline fn crash(
 }
 
 fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         return;
     }
 

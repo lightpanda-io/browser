@@ -31,7 +31,6 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const log = lp.log;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Worker = @This();
 
@@ -190,7 +189,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     const url = self._url;
     const script = self._script_buffer.items;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.info(.browser, "worker fetch done", .{
             .url = url,
             .len = script.len,

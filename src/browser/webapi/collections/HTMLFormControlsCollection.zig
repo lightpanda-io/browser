@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
@@ -25,8 +26,6 @@ const Element = @import("../Element.zig");
 const NodeList = @import("NodeList.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const HTMLFormControlsCollection = @This();
 
@@ -120,7 +119,7 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Fr
     }
 
     // case == 2 was handled inside the loop
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(count == 1);
     }
 

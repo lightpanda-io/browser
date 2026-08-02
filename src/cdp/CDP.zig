@@ -47,8 +47,6 @@ const Allocator = std.mem.Allocator;
 
 pub const URL_BASE = "chrome://newtab/";
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const SessionIdGen = Incrementing(u32, "SID");
 const BrowserSessionIdGen = Incrementing(u32, "BSID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
@@ -1124,7 +1122,7 @@ pub const BrowserContext = struct {
         buf.appendSliceAssumeCapacity(field);
         buf.appendSliceAssumeCapacity(session_id);
         buf.appendSliceAssumeCapacity("\"}");
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(buf.items.len == message_len);
         }
 

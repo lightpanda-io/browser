@@ -35,7 +35,6 @@ const log = lp.log;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const CALL_ARENA_RETAIN = 1024 * 16;
 const LOCAL_ARENA_RETAIN = 1024 * 16;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Caller = @This();
 
@@ -110,7 +109,7 @@ pub fn deinit(self: *Caller) void {
     // to avoid realloc churn.
     {
         const local_arena: *ArenaAllocator = @ptrCast(@alignCast(ctx.local_arena.ptr));
-        _ = local_arena.reset(if (comptime IS_DEBUG) .free_all else .{ .retain_with_limit = LOCAL_ARENA_RETAIN });
+        _ = local_arena.reset(if (comptime lp.IS_DEBUG) .free_all else .{ .retain_with_limit = LOCAL_ARENA_RETAIN });
     }
 
     ctx.call_depth = call_depth;
@@ -176,7 +175,7 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo, compti
         const prototype_handle = v8.v8__Object__GetPrototype(new_this_handle).?;
         var out: v8.MaybeBool = undefined;
         v8.v8__Object__SetPrototype(this.handle, self.local.handle, prototype_handle, &out);
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(out.has_value and out.value);
         }
     }
@@ -562,7 +561,7 @@ fn protoNode(comptime T: type, instance: *T) *@import("../webapi/Node.zig") {
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype) void {
     const isolate = local.isolate;
 
-    if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
+    if (comptime lp.IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
         if (log.enabled(.js, .debug)) {
             const DOMException = @import("../webapi/DOMException.zig");
             if (DOMException.fromError(err) == null) {
@@ -930,7 +929,7 @@ pub const Function = struct {
                 // the receiver doesn't have expected internal fields (e.g., global
                 // proxy vs global object, cross-context scenarios).
                 if (v8.v8__Object__InternalFieldCount(js_this) <= idx) {
-                    if (comptime IS_DEBUG) {
+                    if (comptime lp.IS_DEBUG) {
                         std.debug.assert(false);
                     }
                     return false;

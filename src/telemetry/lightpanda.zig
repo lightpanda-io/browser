@@ -13,7 +13,6 @@ const telemetry = @import("telemetry.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const MAX_PENDING = 4096; // hard cap: drop + count beyond this (reported via buffer_overflow)
 const RECLAIM_CAPACITY = 64; // reclaim the drain buffer once a burst grows it past this
@@ -223,7 +222,7 @@ fn postEvents(self: *LightPanda, conn: *http.Connection, events: []const telemet
 
             // now re-write the message that didn't fit
             const fit = try self.writeEvent(event);
-            if (comptime IS_DEBUG) {
+            if (comptime lp.IS_DEBUG) {
                 std.debug.assert(fit);
             }
             if (fit == false) {
