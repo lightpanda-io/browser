@@ -348,7 +348,6 @@ fn scheduleConnect(self: *SharedWorkerGlobalScope, port: *MessagePort) !void {
 
     try wgs.js.scheduler.add(callback, ConnectCallback.run, 0, .{
         .name = "SharedWorkerGlobalScope.connect",
-        .low_priority = false,
         .finalizer = ConnectCallback.cancelled,
     });
 }

@@ -1827,7 +1827,7 @@ fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
     }
     try frame.js.scheduler.add(task, ScrollEventTask.run, 10, .{
         .name = "element.scrollEvents",
-        .low_priority = true,
+        .blocks_done = false,
         .finalizer = ScrollEventTask.cancelled,
     });
 }

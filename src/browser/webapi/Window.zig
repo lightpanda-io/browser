@@ -567,7 +567,7 @@ pub fn requestIdleCallback(self: *Window, cb: js.Function.Global, opts_: ?Reques
         .mode = .idle,
         .repeat = false,
         .params = &.{},
-        .low_priority = true,
+        .blocks_done = false,
         .name = "window.requestIdleCallback",
     });
 }
@@ -858,7 +858,6 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
 
     try target_frame.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
-        .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
     });
 }
@@ -969,7 +968,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
             }
         }.dispatch,
         10,
-        .{ .low_priority = true },
+        .{ .blocks_done = false },
     );
     // We dispatch scrollend event asynchronously after 20ms.
     try frame.js.scheduler.add(
@@ -995,7 +994,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
             }
         }.dispatch,
         20,
-        .{ .low_priority = true },
+        .{ .blocks_done = false },
     );
 }
 

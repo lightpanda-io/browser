@@ -117,7 +117,6 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
 
     try exec.js.scheduler.add(cb, ChangeCallback.run, 0, .{
         .name = "CookieStore.change",
-        .low_priority = false,
         .finalizer = ChangeCallback.cancelled,
     });
 }

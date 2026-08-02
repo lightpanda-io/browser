@@ -463,7 +463,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
                     b.runIdleTasks();
                     return 200;
                 }
-            }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .low_priority = true });
+            }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .blocks_done = false });
         }
     }
 }

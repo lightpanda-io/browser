@@ -365,7 +365,6 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
 
     try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
-        .low_priority = false,
         .finalizer = ReceiveMessageCallback.cancelled,
     });
 }
