@@ -915,7 +915,6 @@ pub const Script = struct {
         log.info(.browser, "executing script", .{
             .src = url,
             .kind = fe.kind,
-            .cacheable = cacheable,
         });
 
         var ls: js.Local.Scope = undefined;
@@ -941,7 +940,6 @@ pub const Script = struct {
                     .err = err,
                     .src = url,
                     .kind = fe.kind,
-                    .cacheable = cacheable,
                 });
                 self.executeCallback(comptime .wrap("error"));
                 return;
@@ -999,7 +997,6 @@ pub const Script = struct {
         log.warn(.js, "eval script", .{
             .url = url,
             .caught = caught,
-            .cacheable = cacheable,
         });
 
         if (try_catch.exceptionValue()) |exc| {
