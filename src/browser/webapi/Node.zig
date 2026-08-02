@@ -1576,6 +1576,19 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
             Frame.observers.notifyChildListChange(frame, self, added.items, removed.items, null, null);
         }
     }
+
+    // Fragment parsing builds a temporary <html> wrapper. Run connected-node
+    // ready work only after that wrapper is gone, so synchronous iframe loads
+    // observe the completed tree. Documents made by DOMParser have no browsing
+    // context and must stay inert even though their document node is connected.
+    const owner_document = self.ownerDocument(frame) orelse return;
+    if (owner_document._frame == null or !self.isConnected()) {
+        return;
+    }
+    var child_it = self.childrenIterator();
+    while (child_it.next()) |child| {
+        try frame.nodeIsReadySubtree(child);
+    }
 }
 
 // Writes a JSON representation of the node and its children

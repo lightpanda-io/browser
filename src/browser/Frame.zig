@@ -1770,7 +1770,14 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     };
 }
 
-pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
+pub fn iframeAddedCallback(incumbent: *Frame, iframe: *IFrame) !void {
+    // A Document without a browsing context (for example, one created by
+    // DOMParser) cannot host a child browsing context. Resolve without
+    // ownerFrame's incumbent fallback so cross-realm insertions also use the
+    // iframe node document's actual Frame.
+    const owner_document = iframe.asNode().ownerDocument(incumbent) orelse return;
+    const self = owner_document._frame orelse return;
+
     if (self.isGoingAway()) {
         // if we're planning on navigating to another frame, don't load this iframe
         return;
@@ -2881,18 +2888,40 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 // Runs the "ready" work for an inserted node and, when it's an element with
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
-fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
-    if (node._type != .element or node.firstChild() == null) {
+pub fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
+    const root = node.is(Element) orelse return self.nodeIsReady(false, node);
+    const owner_frame = node.ownerFrame(self);
+    if (node.firstChild() == null and owner_frame._element_shadow_roots.get(root) == null) {
         return self.nodeIsReady(false, node);
     }
 
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
-    while (tw.next()) |el| {
-        try elements.append(self.call_arena, el.asNode());
+    const ElementTreeWalker = @import("webapi/TreeWalker.zig").Full.Elements;
+    if (owner_frame._element_shadow_roots.count() == 0) {
+        var tw = ElementTreeWalker.init(node, .{});
+        while (tw.next()) |el| {
+            try elements.append(self.call_arena, el.asNode());
+        }
+    } else {
+        // A shadow root is outside its host's light-DOM children. Stack walkers
+        // so its descendants follow the host in shadow-including tree order.
+        var walkers: std.ArrayList(ElementTreeWalker) = .empty;
+        try walkers.append(self.call_arena, ElementTreeWalker.init(node, .{}));
+        while (walkers.items.len > 0) {
+            const walker = &walkers.items[walkers.items.len - 1];
+            const el = walker.next() orelse {
+                _ = walkers.pop();
+                continue;
+            };
+            try elements.append(self.call_arena, el.asNode());
+            if (owner_frame._element_shadow_roots.get(el)) |shadow_root| {
+                try walkers.append(self.call_arena, ElementTreeWalker.init(shadow_root.asNode(), .{}));
+            }
+        }
     }
+
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
     }
@@ -2917,8 +2946,9 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     // incumbent frame A, but the script's base URL and execution realm must come
     // from B (its node document). Resolving that owner frame is a parent-chain
     // walk, so we only do it once we've matched a node type that has ready work
-    // (the common text/element insertion does nothing here). The parser inserts
-    // into its own document, so from_parser always uses `self`.
+    // (the common text/element insertion does nothing here). The document
+    // parser inserts into its own document, so from_parser uses `self`;
+    // completed fragment setters enter with from_parser=false.
     // Scripts, iframes, links and styles activate on becoming connected;
     // appending them to a detached parent does nothing (they run/load later
     // if the subtree gets inserted into the document).

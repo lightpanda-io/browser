@@ -102,6 +102,27 @@
 }
 </script>
 
+<script id=parsedIframeHasNoBrowsingContext>
+{
+  const before = window.length;
+  const parsed = new DOMParser().parseFromString(
+    '<iframe id="parsed-frame" src="frames/support/page.html"></iframe>',
+    'text/html',
+  );
+  const iframe = parsed.querySelector('#parsed-frame');
+
+  // Connected to its own Document, but that Document has no browsing context.
+  testing.expectTrue(iframe.isConnected);
+  testing.expectEqual(null, iframe.contentWindow);
+  testing.expectEqual(null, iframe.contentDocument);
+  testing.expectEqual(before, window.length);
+
+  iframe.src = 'frames/support/page.html?updated';
+  testing.expectEqual(null, iframe.contentWindow);
+  testing.expectEqual(before, window.length);
+}
+</script>
+
 <script id=malformedHTMLDoesNotThrow>
 {
   const parser = new DOMParser();

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="cross_realm_fragment_iframe" type="module">
+  const state = await testing.async();
+  const child = document.createElement('iframe');
+  let nested;
+
+  child.addEventListener('load', () => {
+    child.contentDocument.body.innerHTML = '<iframe id="nested" src="page.html"></iframe>';
+    nested = child.contentDocument.querySelector('#nested');
+
+    testing.expectEqual(1, window.length);
+    testing.expectEqual(1, child.contentWindow.length);
+    testing.expectEqual(testing.BASE_URL + 'frames/support/page.html', nested.src);
+
+    // The initial about:blank load may dispatch synchronously inside the
+    // innerHTML setter, so observe the requested navigation's document.
+    const poll = setInterval(() => {
+      const body = nested.contentDocument && nested.contentDocument.body;
+      if (body && body.textContent === 'a-page\n') {
+        clearInterval(poll);
+        state.resolve();
+      }
+    }, 10);
+  });
+  child.src = 'support/page.html';
+  document.body.appendChild(child);
+
+  await state.done(() => {
+    testing.expectEqual(
+      '<html><head></head><body>a-page\n</body></html>',
+      nested.contentDocument.documentElement.outerHTML,
+    );
+  });
+</script>

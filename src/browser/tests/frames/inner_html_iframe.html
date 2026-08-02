@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="host"></div>
+
+<script id="inner_html_iframe">
+  window.innerHTMLScriptExecuted = false;
+  window.innerHTMLIframeParentAtLoad = null;
+
+  const host = $('#host');
+  host.innerHTML = '<script>window.innerHTMLScriptExecuted = true;<\/script><iframe id="blank" onload="window.innerHTMLIframeParentAtLoad = this.parentNode.id"></iframe><iframe id="child" sandbox="allow-same-origin allow-scripts" src="support/page.html"></iframe>';
+
+  const child = $('#child');
+  testing.expectFalse(window.innerHTMLScriptExecuted);
+  testing.expectEqual('host', window.innerHTMLIframeParentAtLoad);
+  testing.expectTrue(child.contentWindow !== null);
+
+  // A detached fragment marks innerHTML scripts inert, then activates its
+  // iframe when the subtree becomes connected.
+  window.detachedInnerHTMLScriptExecuted = false;
+  const detached = document.createElement('div');
+  detached.innerHTML = '<script>window.detachedInnerHTMLScriptExecuted = true;<\/script><iframe id="detached-child" src="support/page.html"></iframe>';
+  const detachedChild = detached.querySelector('#detached-child');
+  testing.expectEqual(null, detachedChild.contentWindow);
+  document.body.appendChild(detached);
+  testing.expectFalse(window.detachedInnerHTMLScriptExecuted);
+  testing.expectTrue(detachedChild.contentWindow !== null);
+
+  // Resource widgets commonly assemble a closed shadow tree while detached,
+  // then connect its host.
+  const shadowHost = document.createElement('div');
+  const shadowRoot = shadowHost.attachShadow({ mode: 'closed' });
+  const shadowChild = document.createElement('iframe');
+  shadowChild.sandbox = 'allow-same-origin allow-scripts';
+  shadowChild.src = 'support/page.html';
+  shadowRoot.appendChild(shadowChild);
+  testing.expectEqual(null, shadowChild.contentWindow);
+
+  document.body.appendChild(shadowHost);
+  testing.expectTrue(shadowChild.contentWindow !== null);
+  testing.expectEqual(4, window.length);
+
+  testing.onload(() => {
+    testing.expectEqual(
+      '<html><head></head><body>a-page\n</body></html>',
+      child.contentDocument.documentElement.outerHTML,
+    );
+    testing.expectEqual(
+      '<html><head></head><body>a-page\n</body></html>',
+      detachedChild.contentDocument.documentElement.outerHTML,
+    );
+    testing.expectEqual(
+      '<html><head></head><body>a-page\n</body></html>',
+      shadowChild.contentDocument.documentElement.outerHTML,
+    );
+  });
+</script>
