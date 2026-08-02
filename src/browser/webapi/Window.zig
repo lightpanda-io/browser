@@ -226,6 +226,14 @@ pub fn setInnerHeight(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "innerHeight");
 }
 
+pub fn getDevicePixelRatio(_: *const Window, frame: *Frame) f64 {
+    return frame._session.browser.device_scale_factor;
+}
+
+pub fn setDevicePixelRatio(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "devicePixelRatio");
+}
+
 pub fn setScrollX(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "scrollX");
 }
@@ -1249,7 +1257,7 @@ pub const JsApi = struct {
     // the attribute rather than throwing.
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
-    pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
+    pub const devicePixelRatio = bridge.accessor(Window.getDevicePixelRatio, Window.setDevicePixelRatio, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});

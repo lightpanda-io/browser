@@ -21,6 +21,8 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../Config.zig");
+const Browser = @import("../../browser/Browser.zig");
+const Viewport = @import("../../browser/Viewport.zig");
 
 const log = lp.log;
 
@@ -74,17 +76,59 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         scale: ?f64 = null,
         screenWidth: ?u32 = null,
         screenHeight: ?u32 = null,
+        screenOrientation: ?struct {
+            type: []const u8,
+            angle: i32,
+        } = null,
     })) orelse return error.InvalidParams;
+
+    const max_dimension = 10_000_000;
+    const screen_width = params.screenWidth orelse 0;
+    const screen_height = params.screenHeight orelse 0;
+    const device_scale_factor = params.deviceScaleFactor orelse 0;
+    if (params.width > max_dimension or
+        params.height > max_dimension or
+        screen_width > max_dimension or
+        screen_height > max_dimension or
+        device_scale_factor < 0)
+    {
+        return error.InvalidParams;
+    }
+
+    var screen_orientation: Browser.ScreenOrientation = .{};
+    if (params.screenOrientation) |orientation| {
+        if (orientation.angle < 0 or orientation.angle > 359) {
+            return error.InvalidParams;
+        }
+        screen_orientation = .{
+            .type = if (std.mem.eql(u8, orientation.type, "portraitPrimary"))
+                .portrait_primary
+            else if (std.mem.eql(u8, orientation.type, "portraitSecondary"))
+                .portrait_secondary
+            else if (std.mem.eql(u8, orientation.type, "landscapePrimary"))
+                .landscape_primary
+            else if (std.mem.eql(u8, orientation.type, "landscapeSecondary"))
+                .landscape_secondary
+            else
+                return error.InvalidParams,
+            .angle = orientation.angle,
+        };
+    }
+
+    const viewport_override: ?Viewport = if (params.width == 0 and params.height == 0)
+        null
+    else
+        .{
+            .width = if (params.width > 0) params.width else Viewport.default.width,
+            .height = if (params.height > 0) params.height else Viewport.default.height,
+        };
+    const screen_override: ?Viewport = if (screen_width > 0 and screen_height > 0)
+        .{ .width = screen_width, .height = screen_height }
+    else
+        null;
 
     // Not-yet-emulated parameters: accept them but warn so the caller knows
     // they are ignored.
-    if (params.deviceScaleFactor) |v| {
-        if (v != 0 and v != 1) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "deviceScaleFactor",
-            .value = v,
-        });
-    }
     if (params.mobile) |v| {
         if (v) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
             .cdp_cmd = "Emulation.setDeviceMetricsOverride",
@@ -99,43 +143,32 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
             .value = v,
         });
     }
-    if (params.screenWidth) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenWidth",
-            .value = v,
-        });
-    }
-    if (params.screenHeight) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenHeight",
-            .value = v,
-        });
-    }
-
     // The override is stored on the Browser so it persists across page
-    // navigations for the whole CDP connection.
+    // navigations in the current session.
     const browser = &cmd.cdp.browser;
-
-    // CDP convention: a 0 width/height means "don't override that dimension",
-    // so keep the current value for any dimension passed as 0.
-    const current = browser.getViewport();
-    browser.viewport_override = .{
-        .width = if (params.width > 0) params.width else current.width,
-        .height = if (params.height > 0) params.height else current.height,
-    };
+    browser.viewport_override = viewport_override;
+    browser.screen_override = screen_override;
+    browser.screen_orientation = screen_orientation;
+    browser.device_scale_factor = if (device_scale_factor > 0) device_scale_factor else 1;
 
     return cmd.sendResult(null, .{});
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.viewport_override = null;
+    cmd.cdp.browser.resetDeviceMetrics();
     return cmd.sendResult(null, .{});
 }
 
-// TODO: noop method
 fn setTouchEmulationEnabled(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        enabled: bool,
+        maxTouchPoints: u32 = 1,
+    })) orelse return error.InvalidParams;
+
+    if (params.maxTouchPoints < 1 or params.maxTouchPoints > 16) {
+        return error.InvalidParams;
+    }
+    cmd.cdp.browser.max_touch_points = if (params.enabled) params.maxTouchPoints else 0;
     return cmd.sendResult(null, .{});
 }
 
@@ -286,6 +319,11 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM1" });
     _ = try bc.session.createPage();
     const page = bc.mainPage().?;
+    const frame = bc.mainFrame() orelse unreachable;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
 
     // Defaults to the compile-time viewport before any override.
     try testing.expectEqual(1920, page.getViewport().width);
@@ -294,12 +332,55 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.processMessage(.{
         .id = 8,
         .method = "Emulation.setDeviceMetricsOverride",
-        .params = .{ .width = 375, .height = 812 },
+        .params = .{
+            .width = 375,
+            .height = 812,
+            .deviceScaleFactor = 3,
+            .screenWidth = 430,
+            .screenHeight = 932,
+            .screenOrientation = .{
+                .type = "portraitPrimary",
+                .angle = 0,
+            },
+        },
     });
 
     try ctx.expectSentResult(null, .{ .id = 8 });
     try testing.expectEqual(375, page.getViewport().width);
     try testing.expectEqual(812, page.getViewport().height);
+    try testing.expectEqual(430, bc.session.browser.getScreen().width);
+    try testing.expectEqual(932, bc.session.browser.getScreen().height);
+    try testing.expectEqual(3, bc.session.browser.device_scale_factor);
+    try testing.expect((try ls.local.exec(
+        \\innerWidth === 375 &&
+        \\innerHeight === 812 &&
+        \\screen.width === 430 &&
+        \\screen.height === 932 &&
+        \\screen.availWidth === 430 &&
+        \\screen.availHeight === 932 &&
+        \\screen.orientation.type === "portrait-primary" &&
+        \\devicePixelRatio === 3
+    , null)).isTrue());
+
+    try ctx.processMessage(.{
+        .id = 13,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{
+            .width = 800,
+            .height = 600,
+            .deviceScaleFactor = 2,
+            .screenOrientation = .{
+                .type = "sideways",
+                .angle = 0,
+            },
+        },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 13 });
+    try testing.expectEqual(375, page.getViewport().width);
+    try testing.expectEqual(812, page.getViewport().height);
+    try testing.expectEqual(430, bc.session.browser.getScreen().width);
+    try testing.expectEqual(932, bc.session.browser.getScreen().height);
+    try testing.expectEqual(3, bc.session.browser.device_scale_factor);
 
     // The override lives on the Browser, so it persists across page
     // navigations rather than being lost with the page.
@@ -314,4 +395,114 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+    try testing.expectEqual(1920, bc.session.browser.getScreen().width);
+    try testing.expectEqual(1080, bc.session.browser.getScreen().height);
+    try testing.expectEqual(1, bc.session.browser.device_scale_factor);
+    try testing.expect((try ls.local.exec(
+        \\innerWidth === 1920 &&
+        \\innerHeight === 1080 &&
+        \\screen.width === 1920 &&
+        \\screen.height === 1080 &&
+        \\screen.orientation.type === "landscape-primary" &&
+        \\devicePixelRatio === 1
+    , null)).isTrue());
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{
+            .width = 0,
+            .height = 900,
+            .deviceScaleFactor = 0,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 12 });
+    try testing.expectEqual(1920, page.getViewport().width);
+    try testing.expectEqual(900, page.getViewport().height);
+    try testing.expectEqual(1920, bc.session.browser.getScreen().width);
+    try testing.expectEqual(1080, bc.session.browser.getScreen().height);
+    try testing.expectEqual(1, bc.session.browser.device_scale_factor);
+}
+
+test "cdp.Emulation: overrides reset with the browser context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-RESET-1" });
+    try ctx.processMessage(.{
+        .id = 14,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{
+            .width = 800,
+            .height = 600,
+            .deviceScaleFactor = 2,
+            .screenWidth = 1024,
+            .screenHeight = 768,
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 14 });
+    try ctx.processMessage(.{
+        .id = 15,
+        .method = "Emulation.setTouchEmulationEnabled",
+        .params = .{ .enabled = true, .maxTouchPoints = 5 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 15 });
+
+    try testing.expectEqual(800, bc.session.browser.getViewport().width);
+    try testing.expectEqual(5, bc.session.browser.max_touch_points);
+
+    bc = try ctx.loadBrowserContext(.{ .id = "BID-RESET-2" });
+    try testing.expectEqual(1920, bc.session.browser.getViewport().width);
+    try testing.expectEqual(1080, bc.session.browser.getViewport().height);
+    try testing.expectEqual(1920, bc.session.browser.getScreen().width);
+    try testing.expectEqual(1080, bc.session.browser.getScreen().height);
+    try testing.expectEqual(1, bc.session.browser.device_scale_factor);
+    try testing.expectEqual(0, bc.session.browser.max_touch_points);
+}
+
+test "cdp.Emulation: setTouchEmulationEnabled updates navigator" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TOUCH" });
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ctx.processMessage(.{
+        .id = 10,
+        .method = "Emulation.setTouchEmulationEnabled",
+        .params = .{ .enabled = true, .maxTouchPoints = 5 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 10 });
+    try testing.expectEqual(5, bc.session.browser.max_touch_points);
+    try testing.expect((try ls.local.exec("navigator.maxTouchPoints === 5", null)).isTrue());
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "Emulation.setTouchEmulationEnabled",
+        .params = .{ .enabled = true, .maxTouchPoints = 0 },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 12 });
+    try testing.expectEqual(5, bc.session.browser.max_touch_points);
+
+    try ctx.processMessage(.{
+        .id = 13,
+        .method = "Emulation.setTouchEmulationEnabled",
+        .params = .{ .enabled = false, .maxTouchPoints = 17 },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 13 });
+    try testing.expectEqual(5, bc.session.browser.max_touch_points);
+
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "Emulation.setTouchEmulationEnabled",
+        .params = .{ .enabled = false },
+    });
+    try ctx.expectSentResult(null, .{ .id = 11 });
+    try testing.expectEqual(0, bc.session.browser.max_touch_points);
+    try testing.expect((try ls.local.exec("navigator.maxTouchPoints === 0", null)).isTrue());
 }

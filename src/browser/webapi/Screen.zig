@@ -48,11 +48,16 @@ pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
 }
 
 pub fn getWidth(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().width;
+    return frame._session.browser.getScreen().width;
 }
 
 pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().height;
+    return frame._session.browser.getScreen().height;
+}
+
+pub fn getAvailHeight(_: *const Screen, frame: *Frame) u32 {
+    const browser = frame._session.browser;
+    return if (browser.screen_override != null) browser.getScreen().height else 1040;
 }
 
 pub const JsApi = struct {
@@ -67,7 +72,7 @@ pub const JsApi = struct {
     pub const width = bridge.accessor(Screen.getWidth, null, .{});
     pub const height = bridge.accessor(Screen.getHeight, null, .{});
     pub const availWidth = bridge.accessor(Screen.getWidth, null, .{});
-    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
@@ -88,6 +93,14 @@ pub const Orientation = struct {
         return self._proto;
     }
 
+    fn getAngle(_: *const Orientation, frame: *Frame) i32 {
+        return frame._session.browser.screen_orientation.angle;
+    }
+
+    fn getType(_: *const Orientation, frame: *Frame) []const u8 {
+        return frame._session.browser.screen_orientation.type.toString();
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Orientation);
 
@@ -97,7 +110,7 @@ pub const Orientation = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const angle = bridge.property(0, .{ .template = false });
-        pub const @"type" = bridge.property("landscape-primary", .{ .template = false });
+        pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
+        pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
     };
 };

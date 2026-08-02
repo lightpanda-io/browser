@@ -82,8 +82,8 @@ pub fn getDeviceMemory(_: *const Navigator) f64 {
     return 8.0;
 }
 
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
-    return 0;
+pub fn getMaxTouchPoints(_: *const Navigator, exec: *const Execution) u32 {
+    return exec.session.browser.max_touch_points;
 }
 
 pub fn getVendor(_: *const Navigator) []const u8 {

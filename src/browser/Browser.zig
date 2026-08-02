@@ -60,13 +60,13 @@ arena_account: lp.Arena.Account = .{},
 // browser context. Keys are owned by `allocator`; values are enum tags.
 permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 
-// Runtime viewport override set via Emulation.setDeviceMetricsOverride and
-// cleared via clearDeviceMetricsOverride. Null means use the compile-time
-// Viewport.default. Scoped to the Browser so it persists across page
-// navigations (matching how Chrome scopes the override to the connection).
-// Every viewport consumer reads it through Page.getViewport so they all
-// observe the same (possibly overridden) value.
+// Runtime emulation state set through the CDP Emulation domain. Scoped to the
+// Browser so it persists across page navigations in the current session.
 viewport_override: ?Viewport = null,
+screen_override: ?Viewport = null,
+screen_orientation: ScreenOrientation = .{},
+device_scale_factor: f64 = 1,
+max_touch_points: u32 = 0,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
@@ -183,6 +183,43 @@ pub fn getViewport(self: *const Browser) Viewport {
     return self.viewport_override orelse Viewport.default;
 }
 
+pub fn getScreen(self: *const Browser) Viewport {
+    return self.screen_override orelse Viewport.default;
+}
+
+pub fn resetDeviceMetrics(self: *Browser) void {
+    self.viewport_override = null;
+    self.screen_override = null;
+    self.screen_orientation = .{};
+    self.device_scale_factor = 1;
+}
+
+fn resetEmulation(self: *Browser) void {
+    self.resetDeviceMetrics();
+    self.max_touch_points = 0;
+}
+
+pub const ScreenOrientation = struct {
+    type: Type = .landscape_primary,
+    angle: i32 = 0,
+
+    pub const Type = enum {
+        portrait_primary,
+        portrait_secondary,
+        landscape_primary,
+        landscape_secondary,
+
+        pub fn toString(self: Type) []const u8 {
+            return switch (self) {
+                .portrait_primary => "portrait-primary",
+                .portrait_secondary => "portrait-secondary",
+                .landscape_primary => "landscape-primary",
+                .landscape_secondary => "landscape-secondary",
+            };
+        }
+    };
+};
+
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
     self.closeSession();
     self.session = @as(Session, undefined);
@@ -196,6 +233,7 @@ pub fn closeSession(self: *Browser) void {
     if (self.session) |*session| {
         session.deinit();
         self.session = null;
+        self.resetEmulation();
     }
     self.flushArenaMemory();
 }
