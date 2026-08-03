@@ -51,9 +51,9 @@ const Status = enum(c_int) {
 };
 
 // Mirrored in include/lightpanda.h (lp_result), which documents the
-// result lifetime.
+// result lifetime and string contract.
 const Result = extern struct {
-    text: ?[*:0]const u8,
+    text: ?[*]const u8,
     len: usize,
     is_error: bool,
 
@@ -63,9 +63,12 @@ const Result = extern struct {
 // Mirrored in include/lightpanda.h (lp_options), which documents the
 // sentinel values. Zero-initialized means defaults everywhere.
 const InitOpts = extern struct {
-    user_agent: ?[*:0]const u8,
-    http_proxy: ?[*:0]const u8,
-    http_cache_dir: ?[*:0]const u8,
+    user_agent: ?[*]const u8,
+    user_agent_len: usize,
+    http_proxy: ?[*]const u8,
+    http_proxy_len: usize,
+    http_cache_dir: ?[*]const u8,
+    http_cache_dir_len: usize,
     http_timeout_ms: u32,
     watchdog_ms: i32,
     enable_telemetry: bool,
@@ -78,7 +81,8 @@ const FetchOpts = extern struct {
     format: c_int,
     wait_ms: u32,
     wait_until: c_int,
-    wait_selector: ?[*:0]const u8,
+    wait_selector: ?[*]const u8,
+    wait_selector_len: usize,
 };
 
 // Mirrored in include/lightpanda.h (lp_format).
@@ -159,15 +163,15 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
     if (opts_) |opts| {
         mode.enable_telemetry = opts.enable_telemetry;
         if (opts.user_agent) |ua| {
-            const span = std.mem.span(ua);
+            const span = ua[0..opts.user_agent_len];
             lp.Config.validateUserAgent(span) catch return error.InvalidParams;
             mode.user_agent = try arena.dupe(u8, span);
         }
         if (opts.http_proxy) |proxy| {
-            mode.http_proxy = try arena.dupeZ(u8, std.mem.span(proxy));
+            mode.http_proxy = try arena.dupeZ(u8, proxy[0..opts.http_proxy_len]);
         }
         if (opts.http_cache_dir) |dir| {
-            mode.http_cache_dir = try arena.dupe(u8, std.mem.span(dir));
+            mode.http_cache_dir = try arena.dupe(u8, dir[0..opts.http_cache_dir_len]);
         }
         if (opts.http_timeout_ms != 0) {
             mode.http_timeout = std.math.cast(u31, opts.http_timeout_ms) orelse return error.InvalidParams;
@@ -222,7 +226,8 @@ pub export fn lp_shutdown(handle_: ?*BrowserHandle) void {
 /// `lp_shutdown`.
 pub export fn lp_fetch(
     handle_: ?*BrowserHandle,
-    url_: ?[*:0]const u8,
+    url_: ?[*]const u8,
+    url_len: usize,
     opts_: ?*const FetchOpts,
     out_: ?*Result,
 ) Status {
@@ -230,7 +235,15 @@ pub export fn lp_fetch(
     const out = out_ orelse return .misuse;
     out.* = .empty;
     if (app_state != .live) return .misuse;
-    const url = url_ orelse return .invalid_params;
+    const url_ptr = url_ orelse return .invalid_params;
+    if (url_len == 0) return .invalid_params;
+
+    // At the start, not on the way out: the previous result must stay valid
+    // until this call begins. The reset precedes the option parsing because
+    // the input strings are duped into this arena.
+    _ = handle.fetch_arena.reset(.{ .retain_with_limit = result_retain_limit });
+    const arena = handle.fetch_arena.allocator();
+    const url = arena.dupeZ(u8, url_ptr[0..url_len]) catch return .out_of_memory;
 
     var fetch_opts: lp.FetchOpts = .{ .dump = .{}, .dump_mode = .html };
     if (opts_) |opts| {
@@ -251,11 +264,12 @@ pub export fn lp_fetch(
             .networkidle => .networkidle,
             .done => .done,
         };
-        if (opts.wait_selector) |selector| fetch_opts.wait_selector = std.mem.span(selector);
+        if (opts.wait_selector) |selector| {
+            fetch_opts.wait_selector = arena.dupeZ(u8, selector[0..opts.wait_selector_len]) catch return .out_of_memory;
+        }
     }
 
-    _ = handle.fetch_arena.reset(.{ .retain_with_limit = result_retain_limit });
-    var writer: std.Io.Writer.Allocating = .init(handle.fetch_arena.allocator());
+    var writer: std.Io.Writer.Allocating = .init(arena);
     fetch_opts.writer = &writer.writer;
 
     // Sessions park their isolate between calls, so entering this
@@ -273,9 +287,9 @@ pub export fn lp_fetch(
     const browser = &handle.fetch_browser.?;
     defer browser.env.isolate.exit();
 
-    lp.fetch(handle.app, browser, &.{std.mem.span(url)}, fetch_opts) catch |err| return errStatus(err);
+    lp.fetch(handle.app, browser, &.{url}, fetch_opts) catch |err| return errStatus(err);
 
-    const text = sentinelText(&writer) catch return .out_of_memory;
+    const text = writer.written();
     out.* = .{ .text = text.ptr, .len = text.len, .is_error = false };
     return .ok;
 }
@@ -372,8 +386,10 @@ fn destroySession(entry: *SessionHandle) void {
 /// `out->text`.
 pub export fn lp_call(
     entry_: ?*SessionHandle,
-    tool_: ?[*:0]const u8,
-    args_json_: ?[*:0]const u8,
+    tool_: ?[*]const u8,
+    tool_len: usize,
+    args_json_: ?[*]const u8,
+    args_json_len: usize,
     out_: ?*Result,
 ) Status {
     const entry = entry_ orelse return .misuse;
@@ -389,7 +405,7 @@ pub export fn lp_call(
 
     var args: ?std.json.Value = null;
     if (args_json_) |args_json| {
-        args = std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.span(args_json), .{}) catch {
+        args = std.json.parseFromSliceLeaky(std.json.Value, arena, args_json[0..args_json_len], .{}) catch {
             return .invalid_params;
         };
     }
@@ -397,21 +413,12 @@ pub export fn lp_call(
     entry.ts.enterIsolate();
     defer entry.ts.exitIsolate();
 
-    const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, std.mem.span(tool), args) catch |err| {
+    const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool[0..tool_len], args) catch |err| {
         return toolStatus(err);
     };
 
-    const text = arena.dupeZ(u8, result.text) catch return .out_of_memory;
-    out.* = .{ .text = text.ptr, .len = text.len, .is_error = result.is_error };
+    out.* = .{ .text = result.text.ptr, .len = result.text.len, .is_error = result.is_error };
     return .ok;
-}
-
-/// Terminate an Allocating writer's buffer in place — unlike
-/// `toOwnedSliceSentinel`, no resize-to-fit remap/copy on an arena.
-fn sentinelText(aw: *std.Io.Writer.Allocating) error{OutOfMemory}![:0]const u8 {
-    aw.writer.writeByte(0) catch return error.OutOfMemory;
-    const s = aw.written();
-    return s[0 .. s.len - 1 :0];
 }
 
 /// Pump the session's background work (timers, in-flight fetches, resumed
@@ -616,7 +623,7 @@ test "c_api: tools_json is valid JSON covering every tool" {
 test "c_api: null handles are rejected" {
     var result: Result = .empty;
     try testing.expectEqual(.misuse, lp_init(null, null));
-    try testing.expectEqual(.misuse, lp_call(null, "getUrl", null, &result));
+    try testing.expectEqual(.misuse, lp_call(null, "getUrl", "getUrl".len, null, 0, &result));
     try testing.expectEqual(.misuse, lp_session_new(null, null));
     lp_session_close(null);
     try testing.expectEqual(null, result.text);
@@ -629,8 +636,11 @@ test "c_api: lifecycle" {
     // must leave the library initializable.
     const bad_opts: InitOpts = .{
         .user_agent = "bad\nagent",
+        .user_agent_len = "bad\nagent".len,
         .http_proxy = null,
+        .http_proxy_len = 0,
         .http_cache_dir = null,
+        .http_cache_dir_len = 0,
         .http_timeout_ms = 0,
         .watchdog_ms = 0,
         .enable_telemetry = false,
@@ -646,23 +656,33 @@ test "c_api: lifecycle" {
     try testing.expectEqual(.ok, lp_session_new(browser, &session));
 
     var result: Result = .empty;
-    try testing.expectEqual(.invalid_params, lp_call(session, "nosuchtool", null, &result));
-    try testing.expectEqual(.invalid_params, lp_call(session, "goto", null, &result));
-    try testing.expectEqual(.invalid_params, lp_call(session, "goto", "not json", &result));
+    try testing.expectEqual(.invalid_params, lp_call(session, "nosuchtool", "nosuchtool".len, null, 0, &result));
+    try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, null, 0, &result));
+    try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, "not json", "not json".len, &result));
 
-    try testing.expectEqual(.ok, lp_call(session, "getEnv", null, &result));
+    try testing.expectEqual(.ok, lp_call(session, "getEnv", "getEnv".len, null, 0, &result));
     try testing.expect(result.text != null);
-    try testing.expectEqual(std.mem.span(result.text.?).len, result.len);
+    try testing.expect(result.len > 0);
+
+    // Lengths are the contract: trailing garbage past them must be ignored.
+    const padded_tool = "getEnvGARBAGE";
+    const padded_args = "{\"name\":\"PATH\"}GARBAGE";
+    try testing.expectEqual(.ok, lp_call(session, padded_tool, "getEnv".len, padded_args, "{\"name\":\"PATH\"}".len, &result));
+    try testing.expect(result.text != null);
 
     // Pumping must not invalidate a held result.
+    var held: [16]u8 = undefined;
+    const held_len = @min(result.len, held.len);
+    @memcpy(held[0..held_len], result.text.?[0..held_len]);
     try testing.expect(lp_session_pump(session) > 0);
-    try testing.expectEqual(std.mem.span(result.text.?).len, result.len);
+    try testing.expect(std.mem.eql(u8, held[0..held_len], result.text.?[0..held_len]));
 
-    // Twice: the second call reuses the lazily-created fetch browser.
-    try testing.expectEqual(.ok, lp_fetch(browser, "about:blank", null, &result));
+    // Twice: the second call reuses the lazily-created fetch browser; the
+    // second url carries trailing garbage past its length.
+    try testing.expectEqual(.ok, lp_fetch(browser, "about:blank", "about:blank".len, null, &result));
     try testing.expect(result.text != null);
-    try testing.expectEqual(.ok, lp_fetch(browser, "about:blank", null, &result));
-    try testing.expectEqual(std.mem.span(result.text.?).len, result.len);
+    try testing.expectEqual(.ok, lp_fetch(browser, "about:blankGARBAGE", "about:blank".len, null, &result));
+    try testing.expect(result.len > 0);
 
     lp_session_close(session);
     lp_shutdown(browser);

@@ -8,15 +8,16 @@
 
 #include <lightpanda.h>
 #include <stdio.h>
+#include <string.h>
 
 static lp_status call(lp_session *session, const char *tool, const char *args) {
     lp_result result = {0};
-    lp_status status = lp_call(session, tool, args, &result);
+    lp_status status = lp_call(session, tool, strlen(tool), args, args ? strlen(args) : 0, &result);
     if (status != LP_OK) {
         fprintf(stderr, "%s failed: %d\n", tool, status);
         return status;
     }
-    printf("--- %s%s ---\n%s\n", tool, result.is_error ? " (page error)" : "", result.text);
+    printf("--- %s%s ---\n%.*s\n", tool, result.is_error ? " (page error)" : "", (int)result.len, result.text);
     return LP_OK;
 }
 
