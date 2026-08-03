@@ -785,7 +785,17 @@ fn peerDisconnected(socket: posix.socket_t) bool {
     }};
     _ = posix.poll(&fds, 0) catch return true;
     const fatal_events: i16 = comptime @intCast(posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL);
-    return fds[0].revents & fatal_events != 0;
+    if (fds[0].revents & fatal_events != 0) return true;
+    if (fds[0].revents & posix.POLL.IN == 0) return false;
+
+    var byte: [1]u8 = undefined;
+    const rc = std.c.recv(socket, &byte, byte.len, posix.MSG.PEEK | posix.MSG.DONTWAIT);
+    if (rc == 0) return true;
+    if (rc > 0) return false;
+    return switch (std.c.errno(rc)) {
+        .AGAIN => false,
+        else => true,
+    };
 }
 
 fn respondBody(
@@ -954,6 +964,50 @@ test "render server: connection slots are bounded" {
     try std.testing.expect(acquireConnectionSlot(&active, 2));
     try std.testing.expect(acquireConnectionSlot(&active, 2));
     try std.testing.expect(!acquireConnectionSlot(&active, 2));
+}
+
+test "render server: connected peer stays live" {
+    var pair: [2]posix.socket_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair));
+    defer _ = std.c.close(pair[0]);
+    defer _ = std.c.close(pair[1]);
+
+    try std.testing.expect(!peerDisconnected(pair[0]));
+}
+
+test "render server: peer close and shutdown are detected" {
+    {
+        var pair: [2]posix.socket_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair));
+        defer _ = std.c.close(pair[0]);
+
+        _ = std.c.close(pair[1]);
+        try std.testing.expect(peerDisconnected(pair[0]));
+    }
+
+    {
+        var pair: [2]posix.socket_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair));
+        defer _ = std.c.close(pair[0]);
+        defer _ = std.c.close(pair[1]);
+
+        try sys_net.shutdown(pair[1], .send);
+        try std.testing.expect(peerDisconnected(pair[0]));
+    }
+}
+
+test "render server: pending peer byte stays live and is not consumed" {
+    var pair: [2]posix.socket_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair));
+    defer _ = std.c.close(pair[0]);
+    defer _ = std.c.close(pair[1]);
+
+    try sys_net.writeAll(pair[1], "x");
+    try std.testing.expect(!peerDisconnected(pair[0]));
+
+    var byte: [1]u8 = undefined;
+    try std.testing.expectEqual(@as(isize, 1), std.c.recv(pair[0], &byte, byte.len, 0));
+    try std.testing.expectEqual(@as(u8, 'x'), byte[0]);
 }
 
 test "render server: URL schemes and credentials are rejected" {
