@@ -114,6 +114,8 @@ const BrowserHandle = struct {
     // still gets a fresh session. Its isolate parks between calls.
     fetch_browser: ?lp.Browser,
     sessions: std.ArrayList(*SessionHandle),
+    // Static @errorName of the last failing lp_fetch/lp_session_new.
+    last_error: []const u8,
 };
 
 const Cancel = struct {
@@ -128,6 +130,8 @@ const SessionHandle = struct {
     // the next lp_call is the header's documented result lifetime.
     arena: std.heap.ArenaAllocator,
     cancel: ?Cancel,
+    // Static @errorName of the last failing lp_call.
+    last_error: []const u8,
 };
 
 // V8's platform is process-global and cannot be re-initialized after
@@ -196,6 +200,7 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
     };
     handle.fetch_browser = null;
     handle.sessions = .empty;
+    handle.last_error = "";
     return handle;
 }
 
@@ -242,6 +247,7 @@ pub export fn lp_fetch(
     // until this call begins. The reset precedes the option parsing because
     // the input strings are duped into this arena.
     _ = handle.fetch_arena.reset(.{ .retain_with_limit = result_retain_limit });
+    handle.last_error = "";
     const arena = handle.fetch_arena.allocator();
     const url = arena.dupeZ(u8, url_ptr[0..url_len]) catch return .out_of_memory;
 
@@ -279,15 +285,19 @@ pub export fn lp_fetch(
         browser.env.isolate.enter();
     } else {
         handle.fetch_browser = @as(lp.Browser, undefined);
-        (&handle.fetch_browser.?).init(handle.app, .{}, null) catch {
+        (&handle.fetch_browser.?).init(handle.app, .{}, null) catch |err| {
             handle.fetch_browser = null;
+            handle.last_error = @errorName(err);
             return .internal;
         };
     }
     const browser = &handle.fetch_browser.?;
     defer browser.env.isolate.exit();
 
-    lp.fetch(handle.app, browser, &.{url}, fetch_opts) catch |err| return errStatus(err);
+    lp.fetch(handle.app, browser, &.{url}, fetch_opts) catch |err| {
+        handle.last_error = @errorName(err);
+        return errStatus(err);
+    };
 
     const text = writer.written();
     out.* = .{ .text = text.ptr, .len = text.len, .is_error = false };
@@ -302,7 +312,11 @@ pub export fn lp_session_new(handle_: ?*BrowserHandle, out_: ?**SessionHandle) S
     const out = out_ orelse return .misuse;
     if (app_state != .live) return .misuse;
 
-    out.* = createSession(handle) catch |err| return errStatus(err);
+    out.* = createSession(handle) catch |err| {
+        handle.last_error = @errorName(err);
+        return errStatus(err);
+    };
+    handle.last_error = "";
     return .ok;
 }
 
@@ -337,6 +351,7 @@ fn createSession(handle: *BrowserHandle) !*SessionHandle {
 
     entry.owner = handle;
     entry.cancel = null;
+    entry.last_error = "";
     entry.arena = .init(c_allocator);
     errdefer entry.arena.deinit();
 
@@ -401,11 +416,13 @@ pub export fn lp_call(
     // At the start, not on the way out: the previous result must stay
     // valid until this call begins.
     _ = entry.arena.reset(.{ .retain_with_limit = result_retain_limit });
+    entry.last_error = "";
     const arena = entry.arena.allocator();
 
     var args: ?std.json.Value = null;
     if (args_json_) |args_json| {
-        args = std.json.parseFromSliceLeaky(std.json.Value, arena, args_json[0..args_json_len], .{}) catch {
+        args = std.json.parseFromSliceLeaky(std.json.Value, arena, args_json[0..args_json_len], .{}) catch |err| {
+            entry.last_error = @errorName(err);
             return .invalid_params;
         };
     }
@@ -414,6 +431,7 @@ pub export fn lp_call(
     defer entry.ts.exitIsolate();
 
     const result = lp.tools.call(arena, entry.ts.session, &entry.ts.registry, tool[0..tool_len], args) catch |err| {
+        entry.last_error = @errorName(err);
         return toolStatus(err);
     };
 
@@ -452,6 +470,26 @@ fn cancelTrampoline(ctx: *anyopaque) bool {
     const entry: *SessionHandle = @ptrCast(@alignCast(ctx));
     const cancel = entry.cancel orelse return false;
     return cancel.cb(cancel.ctx);
+}
+
+/// Error name of the most recent failing `lp_call` on this session; empty
+/// when the last call succeeded. Static storage — do not free.
+pub export fn lp_last_error(entry_: ?*SessionHandle, len_: ?*usize) ?[*]const u8 {
+    if (len_) |len| len.* = 0;
+    const entry = entry_ orelse return null;
+    if (app_state != .live) return null;
+    if (len_) |len| len.* = entry.last_error.len;
+    return entry.last_error.ptr;
+}
+
+/// Like `lp_last_error`, for the browser-level calls (`lp_fetch`,
+/// `lp_session_new`).
+pub export fn lp_browser_last_error(handle_: ?*BrowserHandle, len_: ?*usize) ?[*]const u8 {
+    if (len_) |len| len.* = 0;
+    const handle = handle_ orelse return null;
+    if (app_state != .live) return null;
+    if (len_) |len| len.* = handle.last_error.len;
+    return handle.last_error.ptr;
 }
 
 /// JSON array describing every tool `lp_call` accepts, in the MCP
@@ -627,6 +665,8 @@ test "c_api: null handles are rejected" {
     try testing.expectEqual(.misuse, lp_session_new(null, null));
     lp_session_close(null);
     try testing.expectEqual(null, result.text);
+    try testing.expectEqual(null, lp_last_error(null, null));
+    try testing.expectEqual(null, lp_browser_last_error(null, null));
 }
 
 test "c_api: lifecycle" {
@@ -660,9 +700,18 @@ test "c_api: lifecycle" {
     try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, null, 0, &result));
     try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, "not json", "not json".len, &result));
 
+    // The failing call left its error name behind; a successful one clears it.
+    var err_len: usize = 0;
+    try testing.expect(lp_last_error(session, &err_len) != null);
+    try testing.expect(err_len > 0);
+
     try testing.expectEqual(.ok, lp_call(session, "getEnv", "getEnv".len, null, 0, &result));
     try testing.expect(result.text != null);
     try testing.expect(result.len > 0);
+    _ = lp_last_error(session, &err_len);
+    try testing.expectEqual(0, err_len);
+    _ = lp_browser_last_error(browser, &err_len);
+    try testing.expectEqual(0, err_len);
 
     // Lengths are the contract: trailing garbage past them must be ignored.
     const padded_tool = "getEnvGARBAGE";
