@@ -110,7 +110,7 @@ build-pi: download-v8
 	@printf "\033[36mGenerating V8 snapshot ($(PI_JOBS) job)...\033[0m\n"
 	@CARGO_BUILD_JOBS=$(PI_JOBS) $(ZIG) build -j$(PI_JOBS) $(ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
 	@printf "\033[36mBuilding Raspberry Pi profile ($(PI_OPTIMIZE), $(PI_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(PI_JOBS) $(ZIG) build -j$(PI_JOBS) $(ZIGFLAGS) -Doptimize=$(PI_OPTIMIZE) -Dlink_gc_sections=true -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mPi build ERROR\033[0m\n"; exit 1;)
+	@CARGO_BUILD_JOBS=$(PI_JOBS) $(ZIG) build -j$(PI_JOBS) $(ZIGFLAGS) -Doptimize=$(PI_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mPi build ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mPi build OK: zig-out/bin/lightpanda\033[0m\n"
 
 ## Build in debug mode

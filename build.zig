@@ -42,11 +42,6 @@ pub fn build(b: *Build) !void {
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
-    const link_gc_sections = b.option(
-        bool,
-        "link_gc_sections",
-        "Place functions and data in separate sections, then remove unreachable sections",
-    ) orelse false;
 
     const version = resolveVersion(b);
     std.debug.print("Lightpanda {f}\n", .{version});
@@ -89,7 +84,7 @@ pub fn build(b: *Build) !void {
         b.default_step.dependOn(fmt_step);
 
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
-        try linkCurl(b, mod, enable_tsan, link_gc_sections);
+        try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
         linkIsocline(b, mod);
@@ -97,7 +92,7 @@ pub fn build(b: *Build) !void {
         break :blk mod;
     };
 
-    linkSqlite(b, lightpanda_module, enable_csan, enable_tsan, link_gc_sections);
+    linkSqlite(b, lightpanda_module, enable_csan, enable_tsan);
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -129,7 +124,6 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        enableLinkTimeGarbageCollection(exe, link_gc_sections);
         b.installArtifact(exe);
 
         const exe_check = b.addLibrary(.{
@@ -248,14 +242,6 @@ fn linkV8(
     mod.addImport("v8", dep.module("v8"));
 }
 
-fn enableLinkTimeGarbageCollection(compile: *Build.Step.Compile, enabled: bool) void {
-    if (!enabled) return;
-
-    compile.link_function_sections = true;
-    compile.link_data_sections = true;
-    compile.link_gc_sections = true;
-}
-
 fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     const is_debug = if (mod.optimize.? == .Debug) true else false;
 
@@ -290,7 +276,7 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     mod.addObjectFile(obj);
 }
 
-fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, link_gc_sections: bool) void {
+fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool) void {
     const dep = b.dependency("sqlite3", .{
         .target = mod.resolved_target.?,
         .optimize = mod.optimize.?,
@@ -299,7 +285,6 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     const lib = dep.artifact("sqlite3");
     lib.root_module.sanitize_c = enable_csan;
     lib.root_module.sanitize_thread = is_tsan;
-    enableLinkTimeGarbageCollection(lib, link_gc_sections);
 
     const macros = [_]struct { []const u8, []const u8 }{
         .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
@@ -349,10 +334,10 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     mod.addImport("sqlite3", translate_c.createModule());
 }
 
-fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, link_gc_sections: bool) !void {
+fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
     const target = mod.resolved_target.?;
 
-    const curl = buildCurl(b, target, mod.optimize.?, is_tsan, link_gc_sections);
+    const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
     mod.linkLibrary(curl);
 
     const dep = b.dependency("curl", .{});
@@ -364,16 +349,16 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, link_gc_sections: bool
     translate_c.addIncludePath(dep.path("include"));
     mod.addImport("curl", translate_c.createModule());
 
-    const zlib = buildZlib(b, target, mod.optimize.?, is_tsan, link_gc_sections);
+    const zlib = buildZlib(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(zlib);
 
-    const brotli = buildBrotli(b, target, mod.optimize.?, is_tsan, link_gc_sections);
+    const brotli = buildBrotli(b, target, mod.optimize.?, is_tsan);
     for (brotli) |lib| curl.root_module.linkLibrary(lib);
 
-    const nghttp2 = buildNghttp2(b, target, mod.optimize.?, is_tsan, link_gc_sections);
+    const nghttp2 = buildNghttp2(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(nghttp2);
 
-    const boringssl = buildBoringSsl(b, target, mod.optimize.?, link_gc_sections);
+    const boringssl = buildBoringSsl(b, target, mod.optimize.?);
     for (boringssl) |lib| curl.root_module.linkLibrary(lib);
 
     switch (target.result.os.tag) {
@@ -387,7 +372,7 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, link_gc_sections: bool
     }
 }
 
-fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, link_gc_sections: bool) *Build.Step.Compile {
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
 
     const mod = b.createModule(.{
@@ -398,7 +383,6 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     });
 
     const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
-    enableLinkTimeGarbageCollection(lib, link_gc_sections);
     lib.installHeadersDirectory(dep.path(""), "", .{});
     mod.addCSourceFiles(.{
         .root = dep.path(""),
@@ -420,7 +404,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     return lib;
 }
 
-fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, link_gc_sections: bool) [3]*Build.Step.Compile {
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) [3]*Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
     const mod = b.createModule(.{
@@ -434,9 +418,6 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = mod });
     const brotlidec = b.addLibrary(.{ .name = "brotlidec", .root_module = mod });
     const brotlienc = b.addLibrary(.{ .name = "brotlienc", .root_module = mod });
-    inline for (.{ brotlicmn, brotlidec, brotlienc }) |lib| {
-        enableLinkTimeGarbageCollection(lib, link_gc_sections);
-    }
 
     brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
@@ -470,7 +451,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     return .{ brotlicmn, brotlidec, brotlienc };
 }
 
-fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, link_gc_sections: bool) [2]*Build.Step.Compile {
+fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [2]*Build.Step.Compile {
     const dep = b.dependency("boringssl-zig", .{
         .target = target,
         .optimize = optimize,
@@ -483,13 +464,10 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
     const crypto = dep.artifact("crypto");
     crypto.bundle_ubsan_rt = false;
 
-    enableLinkTimeGarbageCollection(ssl, link_gc_sections);
-    enableLinkTimeGarbageCollection(crypto, link_gc_sections);
-
     return .{ ssl, crypto };
 }
 
-fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool, link_gc_sections: bool) *Build.Step.Compile {
+fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
 
     const mod = b.createModule(.{
@@ -510,7 +488,6 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     mod.addConfigHeader(config);
 
     const lib = b.addLibrary(.{ .name = "nghttp2", .root_module = mod });
-    enableLinkTimeGarbageCollection(lib, link_gc_sections);
 
     lib.installConfigHeader(config);
     lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
@@ -543,7 +520,6 @@ fn buildCurl(
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     is_tsan: bool,
-    link_gc_sections: bool,
 ) *Build.Step.Compile {
     const dep = b.dependency("curl", .{});
 
@@ -798,7 +774,6 @@ fn buildCurl(
     curl_config.addValues(config);
 
     const lib = b.addLibrary(.{ .name = "curl", .root_module = mod });
-    enableLinkTimeGarbageCollection(lib, link_gc_sections);
     mod.addConfigHeader(curl_config);
     lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
     mod.addCSourceFiles(.{
