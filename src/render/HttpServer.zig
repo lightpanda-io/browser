@@ -5,12 +5,13 @@
 // the Free Software Foundation, either version 3 of the License, or (at your
 // option) any later version.
 
-//! Bounded HTTP transport for one-shot client-side rendering.
+//! Bounded HTTP transport for one-shot and live client-side rendering.
 
 const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
+const LiveSession = @import("LiveSession.zig");
 const ResponseBuffer = @import("ResponseBuffer.zig");
 const sys_net = @import("../sys/net.zig");
 
@@ -25,7 +26,7 @@ const ns_per_ms = 1_000_000;
 
 const client_js = @embedFile("client.js");
 const client_etag = blk: {
-    @setEvalBranchQuota(10_000);
+    @setEvalBranchQuota(100_000);
     break :blk std.fmt.comptimePrint("W/\"{x}\"", .{std.hash.Wyhash.hash(0, client_js)});
 };
 
@@ -35,6 +36,10 @@ const Result = enum {
     timeout,
     navigation_failed,
     response_too_large,
+    not_found,
+    conflict,
+    live_active,
+    unsupported,
     shutting_down,
     internal_error,
 
@@ -45,6 +50,10 @@ const Result = enum {
             .timeout => .gateway_timeout,
             .navigation_failed => .bad_gateway,
             .response_too_large => .payload_too_large,
+            .not_found => .not_found,
+            .conflict => .conflict,
+            .live_active => .conflict,
+            .unsupported => .unprocessable_entity,
             .shutting_down => .service_unavailable,
             .internal_error => .internal_server_error,
         };
@@ -57,6 +66,10 @@ const Result = enum {
             .timeout => "{\"error\":\"render deadline exceeded\"}\n",
             .navigation_failed => "{\"error\":\"page navigation failed\"}\n",
             .response_too_large => "{\"error\":\"render snapshot too large\"}\n",
+            .not_found => "{\"error\":\"live session not found\"}\n",
+            .conflict => "{\"error\":\"live snapshot is stale\"}\n",
+            .live_active => "{\"error\":\"live session is active\"}\n",
+            .unsupported => "{\"error\":\"live target is not supported\"}\n",
             .shutting_down => "{\"error\":\"render server shutting down\"}\n",
             .internal_error => "{\"error\":\"render failed\"}\n",
         };
@@ -64,6 +77,7 @@ const Result = enum {
 };
 
 const Job = struct {
+    kind: Kind,
     body: []const u8,
     out: *std.Io.Writer,
     max_wait_ms: u32,
@@ -73,7 +87,12 @@ const Job = struct {
     done_cond: std.Io.Condition = .init,
     cancel_reason: std.atomic.Value(u8) = .init(@intFromEnum(CancelReason.none)),
     termination_requested: std.atomic.Value(bool) = .init(false),
+    live_snapshot: bool = false,
+    live_token: [32]u8 = undefined,
+    live_version: u64 = 0,
     next: ?*Job = null,
+
+    const Kind = enum { render, live, abandon_live };
 
     const CancelReason = enum(u8) {
         none,
@@ -83,6 +102,8 @@ const Job = struct {
     };
 
     fn cancel(self: *Job, reason: CancelReason) void {
+        self.done_mutex.lockUncancelable(lp.io);
+        defer self.done_mutex.unlock(lp.io);
         if (self.done.load(.acquire)) return;
         _ = self.cancel_reason.cmpxchgStrong(
             @intFromEnum(CancelReason.none),
@@ -94,13 +115,6 @@ const Job = struct {
 
     fn cancellation(self: *const Job) CancelReason {
         return @enumFromInt(self.cancel_reason.load(.acquire));
-    }
-
-    fn finish(self: *Job) void {
-        self.done_mutex.lockUncancelable(lp.io);
-        defer self.done_mutex.unlock(lp.io);
-        self.done.store(true, .release);
-        self.done_cond.broadcast(lp.io);
     }
 
     fn wait(self: *Job, timeout_ms: u32) bool {
@@ -134,11 +148,16 @@ const Queue = struct {
         return true;
     }
 
-    fn pop(self: *Queue) ?*Job {
+    fn pop(self: *Queue, timeout_ms: ?u64) ?*Job {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
         while (self.head == null and !self.closed.load(.acquire)) {
-            self.cond.waitUncancelable(lp.io, &self.mutex);
+            if (timeout_ms) |ms| {
+                if (ms == 0) return null;
+                lp.timedWait(&self.cond, &self.mutex, ms * ns_per_ms) catch return null;
+            } else {
+                self.cond.waitUncancelable(lp.io, &self.mutex);
+            }
         }
         const job = self.head orelse return null;
         self.head = job.next;
@@ -356,16 +375,40 @@ fn worker(self: *HttpServer) void {
 
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    while (self.queue.pop()) |job| {
+    var live = LiveSession.init(self.allocator, &browser);
+    defer live.deinit();
+    while (true) {
+        const now_ms = lp.datetime.milliTimestamp(.boot);
+        closeExpiredLiveSession(&live, now_ms);
+        const timeout_ms: ?u64 = if (live.isActive()) live.idleWaitMsAt(now_ms) else null;
+        const job = self.queue.pop(timeout_ms) orelse {
+            if (self.queue.closed.load(.acquire)) break;
+            live.close();
+            continue;
+        };
         if (self.queue.closed.load(.acquire)) job.cancel(.shutdown);
 
+        var processed_live = false;
         if (job.cancellation() == .none) {
             self.browser_mutex.lockUncancelable(lp.io);
             self.active_job = job;
             self.browser_mutex.unlock(lp.io);
 
             if (job.cancellation() == .none) {
-                processRender(self, &browser, arena.allocator(), job);
+                switch (job.kind) {
+                    .render => {
+                        if (live.isActive()) {
+                            job.result = .live_active;
+                        } else {
+                            processRender(self, &browser, arena.allocator(), job);
+                        }
+                    },
+                    .live => {
+                        processed_live = true;
+                        processLive(&live, arena.allocator(), job);
+                    },
+                    .abandon_live => live.closeForToken(job.live_token[0..]) catch {},
+                }
             }
 
             self.browser_mutex.lockUncancelable(lp.io);
@@ -376,14 +419,29 @@ fn worker(self: *HttpServer) void {
             }
         }
 
-        job.result = switch (job.cancellation()) {
+        // Freeze cancellation while finalizing. A disconnect that wins this
+        // lock is observed and closes live state; a later cancel sees done.
+        job.done_mutex.lockUncancelable(lp.io);
+        const cancellation = job.cancellation();
+        closeCancelledLiveJob(&live, cancellation, processed_live);
+        job.result = switch (cancellation) {
             .none => job.result,
             .timeout => .timeout,
             .disconnected, .shutdown => .shutting_down,
         };
         _ = arena.reset(.{ .retain_with_limit = worker_retained_arena_bytes });
-        job.finish();
+        job.done.store(true, .release);
+        job.done_cond.broadcast(lp.io);
+        job.done_mutex.unlock(lp.io);
     }
+}
+
+fn closeCancelledLiveJob(live: *LiveSession, cancellation: Job.CancelReason, processed_live: bool) void {
+    if (processed_live and cancellation != .none) live.close();
+}
+
+fn closeExpiredLiveSession(live: *LiveSession, now_ms: u64) void {
+    if (live.isActive() and live.idleWaitMsAt(now_ms) == 0) live.close();
 }
 
 const RenderRequest = struct {
@@ -391,6 +449,17 @@ const RenderRequest = struct {
     wait_ms: u32 = 5_000,
     wait_until: ?lp.Config.WaitUntil = null,
     wait_selector: ?[]const u8 = null,
+    width: u32 = 1280,
+    height: u32 = 720,
+};
+
+const LiveRequest = struct {
+    op: enum { open, activate, close },
+    url: ?[]const u8 = null,
+    session: ?[]const u8 = null,
+    version: ?u64 = null,
+    target: ?u64 = null,
+    wait_ms: u32 = 5_000,
     width: u32 = 1280,
     height: u32 = 720,
 };
@@ -415,17 +484,10 @@ fn processRender(self: *HttpServer, browser: *lp.Browser, arena: std.mem.Allocat
         }
     }
 
-    const canonical = lp.URL.resolveNavigation(arena, request.url, .{}) catch {
+    const canonical = validTargetUrl(arena, request.url) catch {
         job.result = .bad_request;
         return;
     };
-    const protocol = lp.URL.getProtocol(canonical);
-    if ((!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) or
-        lp.URL.getUsername(canonical).len != 0 or lp.URL.getPassword(canonical).len != 0)
-    {
-        job.result = .bad_request;
-        return;
-    }
 
     const selector: ?[:0]const u8 = if (request.wait_selector) |value|
         arena.dupeZ(u8, value) catch {
@@ -460,6 +522,110 @@ fn processRender(self: *HttpServer, browser: *lp.Browser, arena: std.mem.Allocat
         };
         return;
     };
+}
+
+fn processLive(live: *LiveSession, arena: std.mem.Allocator, job: *Job) void {
+    const request = std.json.parseFromSliceLeaky(LiveRequest, arena, job.body, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        job.result = .bad_request;
+        return;
+    };
+
+    switch (request.op) {
+        .open => {
+            const url = request.url orelse {
+                job.result = .bad_request;
+                return;
+            };
+            if (url.len == 0 or url.len > 8 * 1024 or !validViewport(request.width, request.height)) {
+                job.result = .bad_request;
+                return;
+            }
+            const canonical = validTargetUrl(arena, url) catch {
+                job.result = .bad_request;
+                return;
+            };
+            live.open(.{
+                .url = canonical,
+                .width = request.width,
+                .height = request.height,
+                .wait_ms = @min(request.wait_ms, job.max_wait_ms),
+            }, job.out) catch |err| {
+                job.result = mapLiveError(err);
+                return;
+            };
+            setLiveSnapshotHeaders(job, live);
+        },
+        .activate => {
+            const session = request.session orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const version = request.version orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const target64 = request.target orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const target = std.math.cast(usize, target64) orelse {
+                job.result = .unsupported;
+                return;
+            };
+            live.activate(session, version, target, @min(request.wait_ms, job.max_wait_ms), job.out) catch |err| {
+                job.result = mapLiveError(err);
+                return;
+            };
+            setLiveSnapshotHeaders(job, live);
+        },
+        .close => {
+            const session = request.session orelse {
+                job.result = .bad_request;
+                return;
+            };
+            live.closeForToken(session) catch |err| {
+                job.result = mapLiveError(err);
+                return;
+            };
+        },
+    }
+}
+
+fn validViewport(width: u32, height: u32) bool {
+    return width != 0 and width <= 8192 and height != 0 and height <= 8192;
+}
+
+fn validTargetUrl(arena: std.mem.Allocator, raw: []const u8) ![:0]const u8 {
+    const canonical = try lp.URL.resolveNavigation(arena, raw, .{});
+    const protocol = lp.URL.getProtocol(canonical);
+    if ((!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) or
+        lp.URL.getUsername(canonical).len != 0 or lp.URL.getPassword(canonical).len != 0)
+    {
+        return error.InvalidURL;
+    }
+    return canonical;
+}
+
+fn mapLiveError(err: anyerror) Result {
+    return switch (err) {
+        error.LiveSessionActive => .live_active,
+        error.StaleSnapshot => .conflict,
+        error.InvalidSession => .not_found,
+        error.UnsupportedTarget => .unsupported,
+        error.Timeout => .timeout,
+        error.WriteFailed, error.TargetLimit => .response_too_large,
+        error.TypeError, error.InvalidURL => .bad_request,
+        error.OutOfMemory => .internal_error,
+        else => .navigation_failed,
+    };
+}
+
+fn setLiveSnapshotHeaders(job: *Job, live: *const LiveSession) void {
+    job.live_token = live.tokenText();
+    job.live_version = live.version;
+    job.live_snapshot = true;
 }
 
 fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
@@ -506,12 +672,18 @@ fn serve(
         std.mem.eql(u8, path, "/lightpanda-renderer.js"))
     {
         if (headerEquals(request, "if-none-match", client_etag)) return respondNotModified(request, cors_value);
-        return respondBody(request, client_js, .ok, "text/javascript; charset=utf-8", "public,max-age=0,must-revalidate", client_etag, cors_value);
+        return respondBody(request, client_js, .ok, "text/javascript; charset=utf-8", "public,max-age=0,must-revalidate", client_etag, cors_value, &.{});
     }
     if ((request.head.method == .GET or request.head.method == .HEAD) and std.mem.eql(u8, path, "/healthz")) {
-        return respondBody(request, "ok\n", .ok, "text/plain; charset=utf-8", "no-store", null, cors_value);
+        return respondBody(request, "ok\n", .ok, "text/plain; charset=utf-8", "no-store", null, cors_value, &.{});
     }
-    if (request.head.method != .POST or !std.mem.eql(u8, path, "/v1/render")) {
+    const kind: Job.Kind = if (std.mem.eql(u8, path, "/v1/render"))
+        .render
+    else if (std.mem.eql(u8, path, "/v1/live"))
+        .live
+    else
+        return respondJson(request, .not_found, "{\"error\":\"not found\"}\n", cors_value);
+    if (request.head.method != .POST) {
         return respondJson(request, .not_found, "{\"error\":\"not found\"}\n", cors_value);
     }
     if (!authorized(request, self.auth_token)) {
@@ -531,6 +703,7 @@ fn serve(
         return respondJson(request, .payload_too_large, "{\"error\":\"request too large\"}\n", cors_value);
     };
     var job: Job = .{
+        .kind = kind,
         .body = body,
         .out = &out.writer,
         .max_wait_ms = self.max_wait_ms,
@@ -544,7 +717,24 @@ fn serve(
 
     if (out.failed and job.result == .ok) job.result = .response_too_large;
     if (job.result != .ok) return respondJson(request, job.result.status(), job.result.body(), cors_value);
-    return respondBody(request, out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value);
+    if (job.live_snapshot) {
+        var version_buf: [20]u8 = undefined;
+        const version = std.fmt.bufPrint(&version_buf, "{d}", .{job.live_version}) catch unreachable;
+        const headers = [_]std.http.Header{
+            .{ .name = "x-lightpanda-live-session", .value = job.live_token[0..] },
+            .{ .name = "x-lightpanda-live-version", .value = version },
+            .{ .name = "access-control-expose-headers", .value = "x-lightpanda-live-session, x-lightpanda-live-version" },
+        };
+        respondBody(request, out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &headers) catch |err| {
+            self.abandonLive(job.live_token);
+            return err;
+        };
+        return;
+    }
+    if (job.kind == .live) {
+        return respondBody(request, "", .no_content, "text/plain; charset=utf-8", "no-store", null, cors_value, &.{});
+    }
+    return respondBody(request, out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &.{});
 }
 
 const JobWaitResult = enum { complete, disconnected };
@@ -571,6 +761,22 @@ fn waitForJob(self: *HttpServer, job: *Job, socket: posix.socket_t) JobWaitResul
     return if (job.cancellation() == .disconnected) .disconnected else .complete;
 }
 
+fn abandonLive(self: *HttpServer, token: [32]u8) void {
+    var discard_buffer: [1]u8 = undefined;
+    var discard = std.Io.Writer.fixed(&discard_buffer);
+    var job: Job = .{
+        .kind = .abandon_live,
+        .body = "",
+        .out = &discard,
+        .max_wait_ms = self.max_wait_ms,
+        .live_token = token,
+    };
+    if (!self.queue.push(&job)) return;
+    while (!job.done.load(.acquire)) {
+        _ = job.wait(@max(self.max_wait_ms, 1));
+    }
+}
+
 fn peerDisconnected(socket: posix.socket_t) bool {
     var fds = [_]posix.pollfd{.{
         .fd = socket,
@@ -590,8 +796,9 @@ fn respondBody(
     cache_control: []const u8,
     etag: ?[]const u8,
     cors_value: ?[]const u8,
+    extra_headers: []const std.http.Header,
 ) !void {
-    var headers: [7]std.http.Header = undefined;
+    var headers: [10]std.http.Header = undefined;
     var count: usize = 0;
     headers[count] = .{ .name = "content-type", .value = content_type };
     count += 1;
@@ -609,6 +816,11 @@ fn respondBody(
         headers[count] = .{ .name = "access-control-allow-origin", .value = value };
         count += 1;
         headers[count] = .{ .name = "cross-origin-resource-policy", .value = "cross-origin" };
+        count += 1;
+    }
+    std.debug.assert(extra_headers.len <= headers.len - count);
+    for (extra_headers) |header| {
+        headers[count] = header;
         count += 1;
     }
     return request.respond(body, .{
@@ -769,4 +981,81 @@ test "render server: CORS values cannot inject headers" {
     try std.testing.expect(validHeaderValue("https://preview.example"));
     try std.testing.expect(!validHeaderValue(""));
     try std.testing.expect(!validHeaderValue("https://example.test\r\nx-injected: true"));
+}
+
+test "render server: live operations carry a versioned activation" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const open = try std.json.parseFromSliceLeaky(
+        LiveRequest,
+        arena.allocator(),
+        "{\"op\":\"open\",\"url\":\"https://example.test/\"}",
+        .{},
+    );
+    try std.testing.expect(open.op == .open);
+    try std.testing.expectEqualStrings("https://example.test/", open.url.?);
+
+    const activate = try std.json.parseFromSliceLeaky(
+        LiveRequest,
+        arena.allocator(),
+        "{\"op\":\"activate\",\"session\":\"0123456789abcdef0123456789abcdef\",\"version\":7,\"target\":3}",
+        .{},
+    );
+    try std.testing.expect(activate.op == .activate);
+    try std.testing.expectEqual(@as(u64, 7), activate.version.?);
+    try std.testing.expectEqual(@as(u64, 3), activate.target.?);
+
+    const close = try std.json.parseFromSliceLeaky(
+        LiveRequest,
+        arena.allocator(),
+        "{\"op\":\"close\",\"session\":\"0123456789abcdef0123456789abcdef\"}",
+        .{},
+    );
+    try std.testing.expect(close.op == .close);
+    try std.testing.expectEqualStrings("0123456789abcdef0123456789abcdef", close.session.?);
+}
+
+test "render server: live errors and one-shot conflicts are explicit" {
+    try std.testing.expectEqual(Result.conflict, mapLiveError(error.StaleSnapshot));
+    try std.testing.expectEqual(Result.live_active, mapLiveError(error.LiveSessionActive));
+    try std.testing.expectEqual(std.http.Status.conflict, Result.live_active.status());
+    try std.testing.expect(!std.mem.eql(u8, Result.conflict.body(), Result.live_active.body()));
+    try std.testing.expectEqual(Result.not_found, mapLiveError(error.InvalidSession));
+    try std.testing.expectEqual(Result.unsupported, mapLiveError(error.UnsupportedTarget));
+    try std.testing.expectEqual(Result.response_too_large, mapLiveError(error.TargetLimit));
+}
+
+test "render server: cancelled live work releases the worker session" {
+    inline for (.{ Job.CancelReason.timeout, Job.CancelReason.disconnected }) |reason| {
+        var live: LiveSession = .{
+            .allocator = std.testing.allocator,
+            .browser = undefined,
+            .page = .{ .frame_id = 0, .session = undefined },
+        };
+        defer live.deinit();
+
+        var job: Job = .{
+            .kind = .live,
+            .body = "",
+            .out = undefined,
+            .max_wait_ms = 1,
+        };
+        job.cancel(reason);
+        closeCancelledLiveJob(&live, job.cancellation(), true);
+        try std.testing.expect(!live.isActive());
+    }
+}
+
+test "render server: expired live state closes before queued work" {
+    var live: LiveSession = .{
+        .allocator = std.testing.allocator,
+        .browser = undefined,
+        .page = .{ .frame_id = 0, .session = undefined },
+        .last_activity_ms = 1,
+    };
+    defer live.deinit();
+
+    closeExpiredLiveSession(&live, LiveSession.idle_timeout_ms + 1);
+    try std.testing.expect(!live.isActive());
 }

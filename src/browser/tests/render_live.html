@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<body>
+<button id="update">Update</button>
+<p id="status">before</p>
+<script>
+document.getElementById("update").addEventListener("click", () => {
+    document.getElementById("status").textContent = "after";
+});
+</script>
+</body>
+</html>

@@ -22,12 +22,20 @@ const Frame = @import("Frame.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
+const Anchor = @import("webapi/element/html/Anchor.zig");
+const Button = @import("webapi/element/html/Button.zig");
+
+pub const DumpError = error{ WriteFailed, OutOfMemory, TargetLimit };
 
 pub const Opts = struct {
     with_base: bool = false,
     with_frames: bool = false,
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
+    // A render-only target table. The serializer writes opaque numeric markers
+    // without changing the source document.
+    live_targets: ?*LiveTargets = null,
+    strip_refresh: bool = false,
 
     pub const Strip = packed struct(u4) {
         js: bool = false,
@@ -48,8 +56,21 @@ pub const Opts = struct {
     };
 };
 
-pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
+pub const LiveTargets = struct {
+    pub const max_elements = 65_535;
+
+    elements: *std.ArrayListUnmanaged(*Node.Element),
+    allocator: std.mem.Allocator,
+
+    fn add(self: *LiveTargets, element: *Node.Element) !usize {
+        if (self.elements.items.len >= max_elements) return error.TargetLimit;
+        try self.elements.append(self.allocator, element);
+        return self.elements.items.len - 1;
+    }
+};
+
+pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
+    if (doc.is(Node.Document.HTMLDocument) != null) {
         blk: {
             // Ideally we just render the doctype which is part of the document
             if (doc.asNode().firstChild()) |first| {
@@ -61,38 +82,16 @@ pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Fra
             // well force it.
             try writer.writeAll("<!DOCTYPE html>");
         }
-
-        if (opts.with_base) {
-            const parent = if (html_doc.getHead()) |head|
-                head.asNode()
-            else blk: {
-                const document_element = html_doc.asDocument().getDocumentElement() orelse {
-                    const html = try doc.createElement("html", null, frame);
-                    _ = try doc.asNode().appendChild(html.asNode(), frame);
-                    break :blk html.asNode();
-                };
-                const head = try doc.createElement("head", null, frame);
-                _ = try document_element.asNode().insertBefore(
-                    head.asNode(),
-                    document_element.asNode().firstChild(),
-                    frame,
-                );
-                break :blk head.asNode();
-            };
-            const base = try doc.createElement("base", null, frame);
-            try base.setAttributeSafe(comptime .wrap("href"), .wrap(frame.base()), frame);
-            _ = try parent.insertBefore(base.asNode(), parent.firstChild(), frame);
-        }
     }
 
     return deep(doc.asNode(), opts, writer, frame);
 }
 
-pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
+pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
     return _deep(node, opts, false, writer, frame);
 }
 
-fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
+fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
     switch (node._type) {
         .cdata => |cd| {
             if (node.is(Node.CData.Comment)) |_| {
@@ -130,7 +129,15 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 }
             }
 
-            try el.format(writer);
+            try formatElement(el, opts, writer, frame);
+
+            if (opts.with_base and isDocumentHead(el, frame)) {
+                try writeBase(frame, writer);
+            } else if (opts.with_base and isDocumentElementWithoutHead(el, frame)) {
+                try writer.writeAll("<head>");
+                try writeBase(frame, writer);
+                try writer.writeAll("</head>");
+            }
 
             if (opts.shadow == .rendered) {
                 if (el.is(Slot)) |slot| {
@@ -211,10 +218,88 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
     }
 }
 
-pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         try deep(child, opts, writer, frame);
+    }
+}
+
+pub fn isLiveTarget(el: *Node.Element, frame: *Frame) bool {
+    return switch (el.getTag()) {
+        .anchor => if (el.is(Anchor)) |anchor|
+            isLiveAnchor(el, anchor)
+        else
+            false,
+        .button => if (el.is(Button)) |button|
+            !el.isDisabled() and button.getForm(frame) == null
+        else
+            false,
+        else => false,
+    };
+}
+
+fn isLiveAnchor(el: *Node.Element, anchor: *Anchor) bool {
+    const href = el.getAttributeSafe(comptime .wrap("href")) orelse return false;
+    if (href.len == 0 or el.hasAttributeSafe(comptime .wrap("download"))) return false;
+
+    const target = anchor.getTarget();
+    return target.len == 0 or
+        std.ascii.eqlIgnoreCase(target, "_self") or
+        std.ascii.eqlIgnoreCase(target, "_parent") or
+        std.ascii.eqlIgnoreCase(target, "_top");
+}
+
+fn formatElement(el: *Node.Element, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
+    try writer.writeByte('<');
+    try writer.writeAll(el.getTagNameDump());
+
+    for (el.attributeEntries()) |*attr| {
+        if (opts.live_targets != null and std.ascii.eqlIgnoreCase(attr.name(), "data-lp-live-target")) {
+            continue;
+        }
+        try writer.writeByte(' ');
+        try attr.format(writer);
+    }
+
+    if (opts.live_targets) |targets| {
+        if (isLiveTarget(el, frame)) {
+            const id = try targets.add(el);
+            try writer.print(" data-lp-live-target=\"{d}\"", .{id});
+        }
+    }
+    try writer.writeByte('>');
+}
+
+fn isDocumentHead(el: *Node.Element, frame: *Frame) bool {
+    const doc = frame.window._document;
+    const html_doc = doc.is(Node.Document.HTMLDocument) orelse return false;
+    return html_doc.getHead() == el;
+}
+
+fn isDocumentElementWithoutHead(el: *Node.Element, frame: *Frame) bool {
+    const doc = frame.window._document;
+    const html_doc = doc.is(Node.Document.HTMLDocument) orelse return false;
+    return el.getTag() == .html and
+        html_doc.asDocument().getDocumentElement() == el and
+        html_doc.getHead() == null;
+}
+
+fn writeBase(frame: *Frame, writer: *std.Io.Writer) !void {
+    try writer.writeAll("<base href=\"");
+    try writeEscapedAttributeValue(frame.base(), writer);
+    try writer.writeAll("\">");
+}
+
+fn writeEscapedAttributeValue(value: []const u8, writer: *std.Io.Writer) !void {
+    for (value) |byte| {
+        switch (byte) {
+            '&' => try writer.writeAll("&amp;"),
+            '"' => try writer.writeAll("&quot;"),
+            '<' => try writer.writeAll("&lt;"),
+            '>' => try writer.writeAll("&gt;"),
+            else => try writer.writeByte(byte),
+        }
     }
 }
 
@@ -258,7 +343,7 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
     try writer.endObject();
 }
 
-fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
     const assigned = slot.assignedNodes(null, frame) catch return;
 
     if (assigned.len > 0) {
@@ -282,11 +367,17 @@ fn isVoidElement(el: *const Node.Element) bool {
 
 fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u4, @bitCast(opts.strip)) == 0) {
+    if (@as(u4, @bitCast(opts.strip)) == 0 and !opts.strip_refresh) {
         return false;
     }
 
     const tag_name = el.getTagNameDump();
+
+    if (opts.strip_refresh and std.mem.eql(u8, tag_name, "meta")) {
+        if (el.getAttributeSafe(comptime .wrap("http-equiv"))) |http_equiv| {
+            if (std.ascii.eqlIgnoreCase(http_equiv, "refresh")) return true;
+        }
+    }
 
     if (opts.strip.js) {
         if (std.mem.eql(u8, tag_name, "script")) return true;
@@ -392,9 +483,7 @@ fn writeEscapedByte(input: []const u8, index: usize, writer: *std.Io.Writer) ![]
 
 const testing = @import("../testing.zig");
 
-// A fresh page per assertion: `with_base` mutates the document (it inserts a
-// <base> element), so reusing one frame across opts would leak that mutation
-// into later dumps.
+// A fresh page per assertion keeps each dump expectation independent.
 fn expectDump(opts: Opts, expected: []const u8) !void {
     var page = try testing.pageTest("dump.html", .{});
     defer page.close();
@@ -429,6 +518,7 @@ test "dump: with_base synthesizes a head after the doctype" {
     const html_doc = doc.is(Node.Document.HTMLDocument).?;
     const head = html_doc.getHead().?;
     _ = try head.asNode().parentNode().?.removeChild(head.asNode(), frame);
+    const dom_version = frame._page.dom_version;
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     try root(doc, .{ .with_base = true }, &aw.writer, frame);
@@ -436,6 +526,123 @@ test "dump: with_base synthesizes a head after the doctype" {
         \\<!DOCTYPE html>
         \\<html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump.html"></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     , aw.written());
+    try testing.expectEqual(dom_version, frame._page.dom_version);
+}
+
+test "dump: live targets replace author markers without mutating the DOM" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const body = doc.is(Node.Document.HTMLDocument).?.getBody().?;
+
+    const anchor = try doc.createElement("a", null, frame);
+    try anchor.setAttributeSafe(comptime .wrap("href"), .wrap("/next"), frame);
+    try anchor.setAttribute(.wrap("DATA-LP-LIVE-TARGET"), .wrap("forged"), frame);
+    _ = try body.asNode().appendChild(anchor.asNode(), frame);
+
+    const blank = try doc.createElement("a", null, frame);
+    try blank.setAttributeSafe(comptime .wrap("href"), .wrap("/blank"), frame);
+    try blank.setAttributeSafe(comptime .wrap("target"), .wrap("_blank"), frame);
+    _ = try body.asNode().appendChild(blank.asNode(), frame);
+
+    const download = try doc.createElement("a", null, frame);
+    try download.setAttributeSafe(comptime .wrap("href"), .wrap("/file"), frame);
+    try download.setAttributeSafe(comptime .wrap("download"), .wrap(""), frame);
+    _ = try body.asNode().appendChild(download.asNode(), frame);
+
+    const named = try doc.createElement("a", null, frame);
+    try named.setAttributeSafe(comptime .wrap("href"), .wrap("/child"), frame);
+    try named.setAttributeSafe(comptime .wrap("target"), .wrap("child"), frame);
+    _ = try body.asNode().appendChild(named.asNode(), frame);
+
+    const empty = try doc.createElement("a", null, frame);
+    try empty.setAttributeSafe(comptime .wrap("href"), .wrap(""), frame);
+    _ = try body.asNode().appendChild(empty.asNode(), frame);
+
+    const button = try doc.createElement("button", null, frame);
+    try button.setAttribute(.wrap("data-lp-live-target"), .wrap("forged"), frame);
+    _ = try body.asNode().appendChild(button.asNode(), frame);
+
+    const disabled = try doc.createElement("button", null, frame);
+    try disabled.setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
+    _ = try body.asNode().appendChild(disabled.asNode(), frame);
+
+    const form = try doc.createElement("form", null, frame);
+    const associated = try doc.createElement("button", null, frame);
+    _ = try form.asNode().appendChild(associated.asNode(), frame);
+    _ = try body.asNode().appendChild(form.asNode(), frame);
+
+    const file = try doc.createElement("input", null, frame);
+    try file.setAttributeSafe(comptime .wrap("type"), .wrap("file"), frame);
+    _ = try body.asNode().appendChild(file.asNode(), frame);
+
+    var elements: std.ArrayListUnmanaged(*Node.Element) = .empty;
+    defer elements.deinit(testing.allocator);
+    var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
+    const dom_version = frame._page.dom_version;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try root(doc, .{ .live_targets = &targets }, &aw.writer, frame);
+
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<a href=\"/next\" data-lp-live-target=\"0\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<button data-lp-live-target=\"1\">") != null);
+    try testing.expectEqual(@as(usize, 2), elements.items.len);
+    try testing.expectEqual(anchor, elements.items[0]);
+    try testing.expectEqual(button, elements.items[1]);
+    try testing.expect(!isLiveTarget(blank, frame));
+    try testing.expect(!isLiveTarget(download, frame));
+    try testing.expect(!isLiveTarget(named, frame));
+    try testing.expect(!isLiveTarget(empty, frame));
+    try testing.expect(!isLiveTarget(disabled, frame));
+    try testing.expect(!isLiveTarget(associated, frame));
+    try testing.expect(!isLiveTarget(file, frame));
+    try testing.expectEqual(dom_version, frame._page.dom_version);
+}
+
+test "dump: live snapshots strip meta refresh without mutating the DOM" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const head = doc.is(Node.Document.HTMLDocument).?.getHead().?;
+    const refresh = try doc.createElement("meta", null, frame);
+    try refresh.setAttributeSafe(comptime .wrap("http-equiv"), .wrap("refresh"), frame);
+    try refresh.setAttributeSafe(comptime .wrap("content"), .wrap("0;url=https://example.test/"), frame);
+    _ = try head.asNode().appendChild(refresh.asNode(), frame);
+    const dom_version = frame._page.dom_version;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try root(doc, .{ .strip_refresh = true }, &aw.writer, frame);
+
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "http-equiv=\"refresh\"") == null);
+    try testing.expectEqual(dom_version, frame._page.dom_version);
+}
+
+test "dump: with_base preserves non-element children without a document element" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const html = doc.getDocumentElement().?;
+    _ = try doc.asNode().removeChild(html.asNode(), frame);
+    const comment = try doc.createComment("still-here", frame);
+    _ = try doc.asNode().appendChild(comment, frame);
+    const dom_version = frame._page.dom_version;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try root(doc, .{ .with_base = true }, &aw.writer, frame);
+    try testing.expectString(
+        \\<!DOCTYPE html>
+        \\<!--still-here-->
+    , aw.written());
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<base") == null);
+    try testing.expectEqual(dom_version, frame._page.dom_version);
 }
 
 test "dump: strip.js removes script and noscript" {
