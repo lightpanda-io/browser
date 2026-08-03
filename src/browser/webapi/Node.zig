@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const URL = @import("../URL.zig");
 const Factory = @import("../Factory.zig");
-const reflect = @import("../reflect.zig");
 
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
@@ -60,14 +59,37 @@ _proto_canary: if (lp.IS_DEBUG) *EventTarget else void = undefined,
 // Lookup for nodes that have a different owner document than frame.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
 
-pub const Type = union(enum) {
-    cdata: *CData,
-    element: *Element,
-    document: *Document,
-    document_type: *DocumentType,
-    attribute: *Element.Attribute,
-    document_fragment: *DocumentFragment,
+pub const Type = enum(u8) {
+    cdata,
+    element,
+    document,
+    document_type,
+    attribute,
+    document_fragment,
 };
+
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .cdata => CData,
+        .element => Element,
+        .document => Document,
+        .document_type => DocumentType,
+        .attribute => Element.Attribute,
+        .document_fragment => DocumentFragment,
+    };
+}
+
+pub fn subtype(self: *const Node, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, Node);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
 
 pub fn asEventTarget(self: *Node) *EventTarget {
     return Factory.protoOf(self);
@@ -83,7 +105,8 @@ pub fn as(self: *Node, comptime T: type) *T {
 pub fn is(self: *Node, comptime T: type) ?*T {
     const type_name = @typeName(T);
     switch (self._type) {
-        .element => |el| {
+        .element => {
+            const el = self.subtype(Element);
             if (T == Element) {
                 return el;
             }
@@ -91,7 +114,8 @@ pub fn is(self: *Node, comptime T: type) ?*T {
                 return el.is(T);
             }
         },
-        .cdata => |cd| {
+        .cdata => {
+            const cd = self.subtype(CData);
             if (T == CData) {
                 return cd;
             }
@@ -99,12 +123,13 @@ pub fn is(self: *Node, comptime T: type) ?*T {
                 return cd.is(T);
             }
         },
-        .attribute => |attr| {
+        .attribute => {
             if (T == Element.Attribute) {
-                return attr;
+                return self.subtype(Element.Attribute);
             }
         },
-        .document => |doc| {
+        .document => {
+            const doc = self.subtype(Document);
             if (T == Document) {
                 return doc;
             }
@@ -112,12 +137,13 @@ pub fn is(self: *Node, comptime T: type) ?*T {
                 return doc.is(T);
             }
         },
-        .document_type => |dt| {
+        .document_type => {
             if (T == DocumentType) {
-                return dt;
+                return self.subtype(DocumentType);
             }
         },
-        .document_fragment => |doc| {
+        .document_fragment => {
+            const doc = self.subtype(DocumentFragment);
             if (T == DocumentFragment) {
                 return doc;
             }
@@ -259,7 +285,8 @@ fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime m
 
     switch (node._type) {
         .document, .attribute => return error.HierarchyError,
-        .cdata => |cd| {
+        .cdata => {
+            const cd = node.subtype(CData);
             if ((cd._type == .text or cd._type == .cdata_section) and parent._type == .document) {
                 // A Text node (CDATASection included) cannot be a child of a
                 // document.
@@ -285,7 +312,8 @@ fn ensurePreInsertValidity(parent: *Node, node: *Node, child: ?*Node, comptime m
             while (it.next()) |frag_child| {
                 switch (frag_child._type) {
                     .element => element_count += 1,
-                    .cdata => |cd| {
+                    .cdata => {
+                        const cd = frag_child.subtype(CData);
                         // A Text node (CDATASection included) cannot be a
                         // child of a document.
                         if (cd._type == .text or cd._type == .cdata_section) {
@@ -413,10 +441,10 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
                 try child.getTextContent(writer);
             }
         },
-        .cdata => |c| try writer.writeAll(c._data.str()),
+        .cdata => try writer.writeAll(self.subtype(CData)._data.str()),
         .document => {},
         .document_type => {},
-        .attribute => |attr| try writer.writeAll(attr._value.str()),
+        .attribute => try writer.writeAll(self.subtype(Element.Attribute)._value.str()),
     }
 }
 
@@ -456,39 +484,47 @@ pub fn childTextContentLen(self: *Node) usize {
 
 pub fn setTextContent(self: *Node, data: []const u8, frame: *Frame) !void {
     switch (self._type) {
-        .element => |el| {
+        .element => {
+            const el = self.subtype(Element);
             if (data.len == 0) {
                 return el.replaceChildren(&.{}, frame);
             }
             return el.replaceChildren(&.{.{ .text = data }}, frame);
         },
         // Per spec, setting textContent on CharacterData runs replaceData(0, length, value)
-        .cdata => |c| try c.replaceData(0, c.getLength(), data, frame),
+        .cdata => {
+            const c = self.subtype(CData);
+            try c.replaceData(0, c.getLength(), data, frame);
+        },
         .document => {},
         .document_type => {},
-        .document_fragment => |frag| {
+        .document_fragment => {
+            const frag = self.subtype(DocumentFragment);
             if (data.len == 0) {
                 return frag.replaceChildren(&.{}, frame);
             }
             return frag.replaceChildren(&.{.{ .text = data }}, frame);
         },
-        .attribute => |attr| return attr.setValue(.wrap(data), frame),
+        .attribute => return self.subtype(Element.Attribute).setValue(.wrap(data), frame),
     }
 }
 
 pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
     return switch (self._type) {
-        .element => |el| el.getTagNameSpec(buf),
-        .cdata => |cd| switch (cd._type) {
-            .text => "#text",
-            .cdata_section => "#cdata-section",
-            .comment => "#comment",
-            .processing_instruction => cd.subtype(CData.ProcessingInstruction)._target,
+        .element => self.subtype(Element).getTagNameSpec(buf),
+        .cdata => {
+            const cd = self.subtype(CData);
+            return switch (cd._type) {
+                .text => "#text",
+                .cdata_section => "#cdata-section",
+                .comment => "#comment",
+                .processing_instruction => cd.subtype(CData.ProcessingInstruction)._target,
+            };
         },
         .document => "#document",
-        .document_type => |dt| dt.getName(),
+        .document_type => self.subtype(DocumentType).getName(),
         .document_fragment => "#document-fragment",
-        .attribute => |attr| attr._name.str(),
+        .attribute => self.subtype(Element.Attribute)._name.str(),
     };
 }
 
@@ -496,7 +532,7 @@ pub fn getNodeType(self: *const Node) u8 {
     return switch (self._type) {
         .element => 1,
         .attribute => 2,
-        .cdata => |cd| switch (cd._type) {
+        .cdata => switch (self.subtype(CData)._type) {
             .text => 3,
             .cdata_section => 4,
             .processing_instruction => 7,
@@ -512,14 +548,14 @@ pub fn lookupNamespaceURI(self: *Node, prefix_arg: ?[]const u8, frame: *Frame) ?
     const prefix: ?[]const u8 = if (prefix_arg) |p| (if (p.len == 0) null else p) else null;
 
     switch (self._type) {
-        .element => |el| return el.lookupNamespaceURIForElement(prefix, frame),
-        .document => |doc| {
-            const de = doc.getDocumentElement() orelse return null;
+        .element => return self.subtype(Element).lookupNamespaceURIForElement(prefix, frame),
+        .document => {
+            const de = self.subtype(Document).getDocumentElement() orelse return null;
             return de.lookupNamespaceURIForElement(prefix, frame);
         },
         .document_type, .document_fragment => return null,
-        .attribute => |attr| {
-            const owner = attr.getOwnerElement() orelse return null;
+        .attribute => {
+            const owner = self.subtype(Element.Attribute).getOwnerElement() orelse return null;
             return owner.lookupNamespaceURIForElement(prefix, frame);
         },
         .cdata => {
@@ -534,14 +570,14 @@ pub fn lookupPrefix(self: *Node, namespace_arg: ?[]const u8, frame: *Frame) ?[]c
     if (namespace.len == 0) return null;
 
     switch (self._type) {
-        .element => |el| return el.lookupPrefixForElement(namespace, frame),
-        .document => |doc| {
-            const de = doc.getDocumentElement() orelse return null;
+        .element => return self.subtype(Element).lookupPrefixForElement(namespace, frame),
+        .document => {
+            const de = self.subtype(Document).getDocumentElement() orelse return null;
             return de.lookupPrefixForElement(namespace, frame);
         },
         .document_type, .document_fragment => return null,
-        .attribute => |attr| {
-            const owner = attr.getOwnerElement() orelse return null;
+        .attribute => {
+            const owner = self.subtype(Element.Attribute).getOwnerElement() orelse return null;
             return owner.lookupPrefixForElement(namespace, frame);
         },
         .cdata => {
@@ -620,7 +656,8 @@ pub fn isConnected(self: *const Node) bool {
 
     switch (root._type) {
         .document => return true,
-        .document_fragment => |df| {
+        .document_fragment => {
+            const df = root.subtype(DocumentFragment);
             const sr = df.is(ShadowRoot) orelse return false;
             return sr._host.asNode().isConnected();
         },
@@ -678,7 +715,7 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
     // An attribute node has no parent; its owner follows its element's
     // (including across adoption into another document).
     if (self._type == .attribute) {
-        if (self._type.attribute._element) |element| {
+        if (self.subtype(Element.Attribute)._element) |element| {
             return element.asNode().ownerDocument(frame);
         }
     }
@@ -691,16 +728,14 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
 
     // If the root is a document, then that's our owner.
     if (current._type == .document) {
-        return current._type.document;
+        return current.subtype(Document);
     }
 
     // A shadow tree's root is a parent-less ShadowRoot fragment; its owner
     // is the host's owner document.
-    // can't use current.is(ShadowRoot) without @constCast on `current`
     if (current._type == .document_fragment) {
-        const df = current._type.document_fragment;
-        if (df._type == .shadow_root) {
-            return df._type.shadow_root._host.asNode().ownerDocument(frame);
+        if (current.subtype(DocumentFragment).is(ShadowRoot)) |sr| {
+            return sr._host.asNode().ownerDocument(frame);
         }
     }
 
@@ -716,7 +751,7 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
 
 fn ownerDocumentIncludingSelf(self: *const Node, frame: *const Frame) ?*Document {
     if (self._type == .document) {
-        return self._type.document;
+        return self.subtype(Document);
     }
     return self.ownerDocument(frame);
 }
@@ -977,8 +1012,8 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
 
     if (self._type == .document) {
         switch (node._type) {
-            .cdata => |cd| {
-                if (cd._type == .text) {
+            .cdata => {
+                if (node.subtype(CData)._type == .text) {
                     // A Text node cannot be a child of a document.
                     return error.HierarchyError;
                 }
@@ -1044,8 +1079,8 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
 
 pub fn getNodeValue(self: *const Node) ?String {
     return switch (self._type) {
-        .cdata => |c| c.getData(),
-        .attribute => |attr| attr._value,
+        .cdata => self.subtype(CData).getData(),
+        .attribute => self.subtype(Element.Attribute)._value,
         .element => null,
         .document => null,
         .document_type => null,
@@ -1056,11 +1091,12 @@ pub fn getNodeValue(self: *const Node) ?String {
 pub fn setNodeValue(self: *const Node, value: ?String, frame: *Frame) !void {
     switch (self._type) {
         // Per spec, setting nodeValue on CharacterData runs replaceData(0, length, value)
-        .cdata => |c| {
+        .cdata => {
+            const c = self.subtype(CData);
             const new_value: []const u8 = if (value) |v| v.str() else "";
             try c.replaceData(0, c.getLength(), new_value, frame);
         },
-        .attribute => |attr| try attr.setValue(value, frame),
+        .attribute => try self.subtype(Element.Attribute).setValue(value, frame),
         .element => {},
         .document => {},
         .document_type => {},
@@ -1072,12 +1108,12 @@ pub fn format(self: *Node, writer: *std.Io.Writer) !void {
     // // If you need extra debugging:
     // return @import("../dump.zig").deep(self, .{}, writer);
     return switch (self._type) {
-        .cdata => |cd| cd.format(writer),
-        .element => |el| writer.print("{f}", .{el}),
+        .cdata => self.subtype(CData).format(writer),
+        .element => writer.print("{f}", .{self.subtype(Element)}),
         .document => writer.writeAll("<document>"),
         .document_type => writer.writeAll("<doctype>"),
         .document_fragment => writer.writeAll("<document_fragment>"),
-        .attribute => |attr| writer.print("{f}", .{attr}),
+        .attribute => writer.print("{f}", .{self.subtype(Element.Attribute)}),
     };
 }
 
@@ -1096,9 +1132,9 @@ pub fn getChildrenCount(self: *Node) usize {
 
 pub fn getLength(self: *Node) u32 {
     switch (self._type) {
-        .cdata => |cdata| {
+        .cdata => {
             // The node length of CharacterData is in UTF-16 code units.
-            return @intCast(cdata.getLength());
+            return @intCast(self.subtype(CData).getLength());
         },
         .element, .document, .document_fragment => {
             var count: u32 = 0;
@@ -1138,14 +1174,14 @@ pub fn getChildAt(self: *Node, index: u32) ?*Node {
 
 pub fn getData(self: *const Node) String {
     return switch (self._type) {
-        .cdata => |c| c.getData(),
+        .cdata => self.subtype(CData).getData(),
         else => .empty,
     };
 }
 
 pub fn setData(self: *Node, data: []const u8, frame: *Frame) !void {
     switch (self._type) {
-        .cdata => |c| try c.setData(data, frame),
+        .cdata => try self.subtype(CData).setData(data, frame),
         else => {},
     }
 }
@@ -1175,7 +1211,8 @@ const CloneError = error{
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
-        .cdata => |cd| {
+        .cdata => {
+            const cd = self.subtype(CData);
             const data = cd.getData().str();
             return switch (cd._type) {
                 .text => Frame.node_factory.createTextNode(frame, data),
@@ -1184,8 +1221,9 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
                 .processing_instruction => Frame.node_factory.createProcessingInstruction(frame, cd.subtype(CData.ProcessingInstruction)._target, data),
             };
         },
-        .element => |el| return el.clone(deep, frame),
-        .document => |doc| {
+        .element => return self.subtype(Element).clone(deep, frame),
+        .document => {
+            const doc = self.subtype(Document);
             const cloned = switch (doc._type) {
                 .xml => (frame._factory.document(Document.XMLDocument{ ._proto = undefined }) catch return error.CloneError).asDocument(),
                 else => (frame._factory.document(Document.HTMLDocument{ ._proto = undefined }) catch return error.CloneError).asDocument(),
@@ -1203,13 +1241,13 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
             }
             return cloned.asNode();
         },
-        .document_type => |dt| {
-            const cloned = dt.clone(frame) catch return error.CloneError;
+        .document_type => {
+            const cloned = self.subtype(DocumentType).clone(frame) catch return error.CloneError;
             return cloned.asNode();
         },
-        .document_fragment => |frag| return frag.cloneFragment(deep, frame),
-        .attribute => |attr| {
-            const cloned = attr.clone(frame) catch return error.CloneError;
+        .document_fragment => return self.subtype(DocumentFragment).cloneFragment(deep, frame),
+        .attribute => {
+            const cloned = self.subtype(Element.Attribute).clone(frame) catch return error.CloneError;
             return cloned.asNode();
         },
     }
@@ -1703,8 +1741,8 @@ pub const JsApi = struct {
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },
-            .cdata => |cdata| return cdata._data.str(),
-            .attribute => |attr| return attr._value.str(),
+            .cdata => return self.subtype(CData)._data.str(),
+            .attribute => return self.subtype(Element.Attribute)._value.str(),
             .document => return null,
             .document_type => return null,
         }
@@ -1758,23 +1796,22 @@ pub const Build = struct {
     // Calls `func_name` with `args` on the most specific type where it is
     // implement. This could be on the Node itself (as a last-resort);
     pub fn call(self: *const Node, comptime func_name: []const u8, args: anytype) !void {
-        inline for (@typeInfo(Node.Type).@"union".fields) |f| {
-            // The inner type has its own "call" method. Defer to it.
-            if (@field(Node.Type, f.name) == self._type) {
-                const S = reflect.Struct(f.type);
+        switch (self._type) {
+            inline else => |tag| {
+                const S = Subtype(tag);
                 if (@hasDecl(S, "Build")) {
+                    // The inner type has its own "call" method. Defer to it.
                     if (@hasDecl(S.Build, "call")) {
-                        const sub = @field(self._type, f.name);
-                        if (try S.Build.call(sub, func_name, args)) {
+                        if (try S.Build.call(self.subtype(S), func_name, args)) {
                             return;
                         }
                     }
                     // The inner type implements this function. Call it and we're done.
                     if (@hasDecl(S, func_name)) {
-                        return @call(.auto, @field(f.type, func_name), args);
+                        return @call(.auto, @field(S, func_name), args);
                     }
                 }
-            }
+            },
         }
 
         if (@hasDecl(Node.Build, func_name)) {

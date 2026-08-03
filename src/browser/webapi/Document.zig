@@ -1298,7 +1298,7 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
                                 }
                                 has_doctype = true;
                             },
-                            .cdata => |cd| switch (cd._type) {
+                            .cdata => switch (frag_child.subtype(Node.CData)._type) {
                                 .comment, .processing_instruction => {}, // Allowed
                                 .text, .cdata_section => return error.HierarchyError, // Not allowed in Document
                             },
@@ -1324,7 +1324,7 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
                             }
                             has_doctype = true;
                         },
-                        .cdata => |cd| switch (cd._type) {
+                        .cdata => switch (child.subtype(Node.CData)._type) {
                             .comment, .processing_instruction => {}, // Allowed
                             .text, .cdata_section => return error.HierarchyError, // Not allowed in Document
                         },
