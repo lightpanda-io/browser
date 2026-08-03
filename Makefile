@@ -32,6 +32,8 @@ else
 	$(error "Unhandled kernel: $(kernel)")
 endif
 
+LIB_EXT := $(if $(filter macos,$(OS)),dylib,so)
+
 
 # Prebuilt V8
 # -----------
@@ -119,7 +121,7 @@ test-lib:
 lib:
 	@printf "\033[36mBuilding C shared library (first run builds V8 from source)...\033[0m\n"
 	@$(ZIG) build lib || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mBuild OK: zig-out/lib/liblightpanda.so\033[0m\n"
+	@printf "\033[33mBuild OK: zig-out/lib/liblightpanda.$(LIB_EXT)\033[0m\n"
 
 ## Link and run the C example against the shared library (needs network)
 lib-example: lib

@@ -30,14 +30,17 @@
  *
  * Logging goes to stderr (level: warnings and errors in release builds).
  *
- * Linking: `make lib` builds liblightpanda.so (zig-out/lib) and
- * installs this header (zig-out/include) plus a pkg-config file:
+ * Linking: `make lib` builds liblightpanda.so (liblightpanda.dylib on macOS)
+ * into zig-out/lib and installs this header (zig-out/include) plus a
+ * pkg-config file:
  *   cc app.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda)
  * or by hand:
  *   cc app.c -Izig-out/include -Lzig-out/lib -llightpanda
- * The library resolves its dependencies internally and exports only lp_*
- * symbols (safe next to a host's own OpenSSL/curl/sqlite), and it is
- * dlopen-able for FFI (Python ctypes etc.).
+ * The library resolves its dependencies internally, and the bundled
+ * OpenSSL/curl/sqlite are hidden on both platforms, so it is safe to load
+ * next to a host's own copies — including dlopen'd for FFI (Python ctypes
+ * etc.). ELF exports nothing but lp_*; Mach-O has no version script, so V8's
+ * own C++ symbols stay visible there.
  */
 
 #ifndef LIGHTPANDA_H
