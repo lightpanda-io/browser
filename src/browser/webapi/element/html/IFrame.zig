@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -29,6 +30,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const IFrame = @This();
 
 pub const Proto = HtmlElement;
@@ -66,15 +68,7 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
-    self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
-    if (element.asNode().isConnected()) {
-        // unlike script, an iframe is reloaded every time the src is set
-        // even if it's set to the same URL.
-        self._executed = false;
-        try frame.iframeAddedCallback(self);
-    }
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }
 
 pub fn getName(self: *IFrame) []const u8 {
@@ -114,5 +108,29 @@ pub const Build = struct {
         const self = node.as(IFrame);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) return;
+
+        const self = element.as(IFrame);
+        self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+        if (element.asNode().isConnected()) {
+            // A connected iframe navigates whenever src is set, including
+            // setAttribute() and assigning the same value again.
+            self._executed = false;
+            try frame.iframeAddedCallback(self);
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) return;
+
+        const self = element.as(IFrame);
+        self._src = "";
+        if (element.asNode().isConnected()) {
+            self._executed = false;
+            try frame.iframeAddedCallback(self);
+        }
     }
 };

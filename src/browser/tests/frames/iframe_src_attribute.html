@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="connected_iframe_src_attribute_navigates" type="module">
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  const onceLoad = () => new Promise((resolve) => {
+    iframe.onload = () => resolve();
+  });
+
+  document.body.appendChild(iframe);
+
+  let loaded = onceLoad();
+  iframe.setAttribute('src', 'support/page.html');
+  await loaded;
+  testing.expectEqual(
+    '<html><head></head><body>a-page\n</body></html>',
+    iframe.contentDocument.documentElement.outerHTML,
+  );
+
+  loaded = onceLoad();
+  iframe.removeAttribute('src');
+  await loaded;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, iframe.getAttribute('src'));
+    testing.expectEqual(
+      '<html><head></head><body></body></html>',
+      iframe.contentDocument.documentElement.outerHTML,
+    );
+  });
+</script>
