@@ -69,6 +69,12 @@ link: Network.CdpLink,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
+target_auto_attach_session_id: ?[]const u8 = null,
+
+// Target discovery is scoped to the session that enabled it. Lightpanda
+// supports one active discovery subscription per connection.
+target_discovery: bool = false,
+target_discovery_session_id: ?[]const u8 = null,
 
 session_id_gen: SessionIdGen = .{},
 browser_session_id_gen: BrowserSessionIdGen = .{},
@@ -450,6 +456,30 @@ fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
     return std.mem.eql(u8, session_id, input_session_id);
 }
 
+pub fn clearTargetSessionState(self: *CDP, session_id: []const u8) void {
+    if (self.target_auto_attach_session_id) |owner_session_id| {
+        if (std.mem.eql(u8, owner_session_id, session_id)) {
+            self.target_auto_attach = false;
+            self.target_auto_attach_session_id = null;
+        }
+    }
+    if (self.target_discovery_session_id) |owner_session_id| {
+        if (std.mem.eql(u8, owner_session_id, session_id)) {
+            self.target_discovery = false;
+            self.target_discovery_session_id = null;
+        }
+    }
+}
+
+pub fn targetDestroyed(self: *CDP, target_id: []const u8) !void {
+    if (!self.target_discovery) {
+        return;
+    }
+    try self.sendEvent("Target.targetDestroyed", .{
+        .targetId = target_id,
+    }, .{ .session_id = self.target_discovery_session_id });
+}
+
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
     if (self.browser_context != null) {
         return error.AlreadyExists;
@@ -550,6 +580,9 @@ pub const BrowserContext = struct {
     // we should reject it.
     session_id: ?[]const u8,
 
+    // Session that owns session_id. null means the root connection owns it.
+    parent_session_id: ?[]const u8,
+
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,
@@ -619,6 +652,7 @@ pub const BrowserContext = struct {
             .cdp = cdp,
             .target_id = null,
             .session_id = null,
+            .parent_session_id = null,
             .session = session,
             .security_origin = URL_BASE,
             .secure_context_type = "Secure", // TODO = enum
@@ -650,6 +684,10 @@ pub const BrowserContext = struct {
     }
 
     pub fn deinit(self: *BrowserContext) void {
+        if (self.session_id) |session_id| {
+            self.cdp.clearTargetSessionState(session_id);
+        }
+
         const browser = &self.cdp.browser;
         const env = &browser.env;
 

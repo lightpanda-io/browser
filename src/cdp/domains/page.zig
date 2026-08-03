@@ -199,6 +199,7 @@ fn close(cmd: *CDP.Command) !void {
     lp.assert(bc.session.hasPage(), "CDP.frame.close null frame", .{});
 
     try cmd.sendResult(.{}, .{});
+    try cmd.cdp.targetDestroyed(&target_id);
 
     // Following code is similar to target.closeTarget
     //
@@ -214,9 +215,11 @@ fn close(cmd: *CDP.Command) !void {
             .targetId = target_id,
             .sessionId = session_id,
             .reason = "Render process gone.",
-        }, .{});
+        }, .{ .session_id = bc.parent_session_id });
 
+        cmd.cdp.clearTargetSessionState(session_id);
         bc.session_id = null;
+        bc.parent_session_id = null;
     }
 
     if (bc.page_handle) |handle| {
