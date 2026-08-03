@@ -1789,10 +1789,14 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         // the same reason that a "root" frame can't immediately navigate:
         // we could be in the middle of a JS callback or something else that
         // doesn't exit the frame to just suddenly go away.
-        return self.scheduleNavigation(src, .{
+        try self.scheduleNavigation(src, .{
             .reason = .script,
             .kind = .{ .push = null },
         }, .{ .iframe = iframe });
+        // The queued navigation now owns this source change. A later DOM move
+        // must not schedule the same navigation again.
+        iframe._executed = true;
+        return;
     }
 
     iframe._executed = true;
