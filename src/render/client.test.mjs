@@ -378,3 +378,53 @@ const { attachLightpandaRenderer } = await import(
   assert.deepEqual(operations, ["open", "close", "close", "render"]);
   assert.match(renderer.iframe.snapshot, /Recovered/);
 }
+
+{
+  autoLoadFrames = true;
+  const operations = [];
+  let closeAttempts = 0;
+  let timedOutSignal;
+  fetchImpl = async (_endpoint, options) => {
+    const request = JSON.parse(options.body);
+    operations.push(request.op ?? "render");
+    if (request.op === "open") {
+      return new Response("<p>Live</p>", {
+        headers: {
+          "x-lightpanda-live-session": "ffeeddccbbaa99887766554433221100",
+          "x-lightpanda-live-version": "1",
+        },
+      });
+    }
+    if (request.op === "close") {
+      closeAttempts += 1;
+      if (closeAttempts === 1) {
+        timedOutSignal = options.signal;
+        return new Promise((_resolve, reject) => {
+          const aborted = () => reject(options.signal.reason);
+          if (options.signal.aborted) aborted();
+          else options.signal.addEventListener("abort", aborted, { once: true });
+        });
+      }
+      return new Response(null, { status: 204 });
+    }
+    return new Response("<h1>Recovered after timeout</h1>");
+  };
+
+  const renderer = attachLightpandaRenderer(new FakeElement(), { closeTimeoutMs: 5 });
+  await renderer.open("https://source.example/live");
+  await assert.rejects(
+    renderer.render("https://source.example/static"),
+    { name: "TimeoutError" },
+  );
+  assert.equal(timedOutSignal.aborted, true);
+  assert.deepEqual(operations, ["open", "close"]);
+
+  await renderer.render("https://source.example/static");
+  assert.deepEqual(operations, ["open", "close", "close", "render"]);
+  assert.match(renderer.iframe.snapshot, /Recovered after timeout/);
+}
+
+assert.throws(
+  () => attachLightpandaRenderer(new FakeElement(), { closeTimeoutMs: 0 }),
+  /closeTimeoutMs must be a positive safe integer/,
+);

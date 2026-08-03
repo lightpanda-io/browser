@@ -1,5 +1,6 @@
 const DEFAULT_ENDPOINT = new URL("/v1/render", import.meta.url).href;
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_CLOSE_TIMEOUT_MS = 30_000;
 
 function resolveTarget(target) {
   if (typeof target === "string") target = document.querySelector(target);
@@ -92,6 +93,7 @@ export class LightpandaRenderer extends EventTarget {
   #liveEndpoint;
   #token;
   #maxResponseBytes;
+  #closeTimeoutMs;
   #credentialless;
   #supportsCredentialless;
   #controller = null;
@@ -111,6 +113,10 @@ export class LightpandaRenderer extends EventTarget {
     this.#maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
     if (!Number.isSafeInteger(this.#maxResponseBytes) || this.#maxResponseBytes < 1) {
       throw new RangeError("maxResponseBytes must be a positive safe integer");
+    }
+    this.#closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.#closeTimeoutMs) || this.#closeTimeoutMs < 1) {
+      throw new RangeError("closeTimeoutMs must be a positive safe integer");
     }
 
     const iframe = document.createElement("iframe");
@@ -390,8 +396,12 @@ export class LightpandaRenderer extends EventTarget {
     if (!live) return;
 
     this.#liveActivation = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort(new DOMException("Lightpanda live close timed out", "TimeoutError"));
+    }, this.#closeTimeoutMs);
     const closing = (async () => {
-      const response = await this.#postLive({ op: "close", session: live.session });
+      const response = await this.#postLive({ op: "close", session: live.session }, controller.signal);
       if (!response.ok && response.status !== 404) {
         const detail = await readResponseText(response, 512).catch((error) => error.message);
         throw new Error(`Lightpanda live close failed (${response.status}): ${detail}`);
@@ -402,6 +412,7 @@ export class LightpandaRenderer extends EventTarget {
     try {
       await closing;
     } finally {
+      clearTimeout(timeout);
       if (this.#liveClose === closing) this.#liveClose = null;
     }
   }

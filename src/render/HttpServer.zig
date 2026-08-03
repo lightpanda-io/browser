@@ -77,9 +77,11 @@ const Result = enum {
 };
 
 const Job = struct {
+    allocator: std.mem.Allocator,
+    refs: std.atomic.Value(u32) = .init(1),
     kind: Kind,
     body: []const u8,
-    out: *std.Io.Writer,
+    out: ResponseBuffer,
     max_wait_ms: u32,
     result: Result = .ok,
     done: std.atomic.Value(bool) = .init(false),
@@ -101,16 +103,52 @@ const Job = struct {
         shutdown,
     };
 
-    fn cancel(self: *Job, reason: CancelReason) void {
+    fn create(
+        allocator: std.mem.Allocator,
+        kind: Kind,
+        body: []const u8,
+        max_wait_ms: u32,
+        max_response_size: usize,
+    ) !*Job {
+        const job = try allocator.create(Job);
+        errdefer allocator.destroy(job);
+        const owned_body = try allocator.dupe(u8, body);
+        errdefer allocator.free(owned_body);
+        job.* = .{
+            .allocator = allocator,
+            .kind = kind,
+            .body = owned_body,
+            .out = .init(allocator, max_response_size),
+            .max_wait_ms = max_wait_ms,
+        };
+        return job;
+    }
+
+    fn retain(self: *Job) void {
+        const previous = self.refs.fetchAdd(1, .monotonic);
+        std.debug.assert(previous > 0);
+    }
+
+    fn release(self: *Job) void {
+        const previous = self.refs.fetchSub(1, .acq_rel);
+        std.debug.assert(previous > 0);
+        if (previous != 1) return;
+        const allocator = self.allocator;
+        self.out.deinit();
+        allocator.free(self.body);
+        allocator.destroy(self);
+    }
+
+    fn cancel(self: *Job, reason: CancelReason) bool {
         self.done_mutex.lockUncancelable(lp.io);
         defer self.done_mutex.unlock(lp.io);
-        if (self.done.load(.acquire)) return;
-        _ = self.cancel_reason.cmpxchgStrong(
+        if (self.done.load(.acquire)) return false;
+        return self.cancel_reason.cmpxchgStrong(
             @intFromEnum(CancelReason.none),
             @intFromEnum(reason),
             .acq_rel,
             .acquire,
-        );
+        ) == null;
     }
 
     fn cancellation(self: *const Job) CancelReason {
@@ -144,6 +182,7 @@ const Queue = struct {
         job.next = null;
         if (self.tail) |tail| tail.next = job else self.head = job;
         self.tail = job;
+        job.retain();
         self.cond.signal(lp.io);
         return true;
     }
@@ -163,6 +202,25 @@ const Queue = struct {
         self.head = job.next;
         if (self.head == null) self.tail = null;
         return job;
+    }
+
+    fn remove(self: *Queue, job: *Job) bool {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+
+        var previous: ?*Job = null;
+        var current = self.head;
+        while (current) |queued| {
+            if (queued == job) {
+                if (previous) |before| before.next = queued.next else self.head = queued.next;
+                if (self.tail == queued) self.tail = previous;
+                queued.next = null;
+                return true;
+            }
+            previous = queued;
+            current = queued.next;
+        }
+        return false;
     }
 
     fn close(self: *Queue) void {
@@ -257,22 +315,24 @@ fn cancelActiveJob(self: *HttpServer, reason: Job.CancelReason) void {
     self.browser_mutex.lockUncancelable(lp.io);
     defer self.browser_mutex.unlock(lp.io);
     const job = self.active_job orelse return;
-    job.cancel(reason);
+    _ = job.cancel(reason);
     const browser = self.active_browser orelse return;
     if (!job.termination_requested.swap(true, .acq_rel)) {
         browser.env.terminate();
     }
 }
 
-fn cancelJob(self: *HttpServer, job: *Job, reason: Job.CancelReason) void {
-    job.cancel(reason);
+fn cancelJob(self: *HttpServer, job: *Job, reason: Job.CancelReason) bool {
+    const cancelled = job.cancel(reason);
+    if (self.queue.remove(job)) job.release();
     self.browser_mutex.lockUncancelable(lp.io);
     defer self.browser_mutex.unlock(lp.io);
-    if (self.active_job != job) return;
-    const browser = self.active_browser orelse return;
+    if (self.active_job != job) return cancelled;
+    const browser = self.active_browser orelse return cancelled;
     if (!job.termination_requested.swap(true, .acq_rel)) {
         browser.env.terminate();
     }
+    return cancelled;
 }
 
 fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
@@ -386,9 +446,9 @@ fn worker(self: *HttpServer) void {
             live.close();
             continue;
         };
-        if (self.queue.closed.load(.acquire)) job.cancel(.shutdown);
+        closeExpiredLiveSession(&live, lp.datetime.milliTimestamp(.boot));
+        if (self.queue.closed.load(.acquire)) _ = job.cancel(.shutdown);
 
-        var processed_live = false;
         if (job.cancellation() == .none) {
             self.browser_mutex.lockUncancelable(lp.io);
             self.active_job = job;
@@ -403,10 +463,7 @@ fn worker(self: *HttpServer) void {
                             processRender(self, &browser, arena.allocator(), job);
                         }
                     },
-                    .live => {
-                        processed_live = true;
-                        processLive(&live, arena.allocator(), job);
-                    },
+                    .live => processLive(&live, arena.allocator(), job),
                     .abandon_live => live.closeForToken(job.live_token[0..]) catch {},
                 }
             }
@@ -423,7 +480,7 @@ fn worker(self: *HttpServer) void {
         // lock is observed and closes live state; a later cancel sees done.
         job.done_mutex.lockUncancelable(lp.io);
         const cancellation = job.cancellation();
-        closeCancelledLiveJob(&live, cancellation, processed_live);
+        closeCancelledLiveJob(&live, job, cancellation);
         job.result = switch (cancellation) {
             .none => job.result,
             .timeout => .timeout,
@@ -433,11 +490,12 @@ fn worker(self: *HttpServer) void {
         job.done.store(true, .release);
         job.done_cond.broadcast(lp.io);
         job.done_mutex.unlock(lp.io);
+        job.release();
     }
 }
 
-fn closeCancelledLiveJob(live: *LiveSession, cancellation: Job.CancelReason, processed_live: bool) void {
-    if (processed_live and cancellation != .none) live.close();
+fn closeCancelledLiveJob(live: *LiveSession, job: *const Job, cancellation: Job.CancelReason) void {
+    if (job.live_snapshot and cancellation != .none) live.close();
 }
 
 fn closeExpiredLiveSession(live: *LiveSession, now_ms: u64) void {
@@ -509,7 +567,7 @@ fn processRender(self: *HttpServer, browser: *lp.Browser, arena: std.mem.Allocat
             .strip = .{ .js = true },
         },
         .dump_mode = .html,
-        .writer = job.out,
+        .writer = &job.out.writer,
     }) catch |err| {
         job.result = if (err == error.Timeout)
             .timeout
@@ -551,7 +609,7 @@ fn processLive(live: *LiveSession, arena: std.mem.Allocator, job: *Job) void {
                 .width = request.width,
                 .height = request.height,
                 .wait_ms = @min(request.wait_ms, job.max_wait_ms),
-            }, job.out) catch |err| {
+            }, &job.out.writer) catch |err| {
                 job.result = mapLiveError(err);
                 return;
             };
@@ -574,7 +632,7 @@ fn processLive(live: *LiveSession, arena: std.mem.Allocator, job: *Job) void {
                 job.result = .unsupported;
                 return;
             };
-            live.activate(session, version, target, @min(request.wait_ms, job.max_wait_ms), job.out) catch |err| {
+            live.activate(session, version, target, @min(request.wait_ms, job.max_wait_ms), &job.out.writer) catch |err| {
                 job.result = mapLiveError(err);
                 return;
             };
@@ -643,14 +701,11 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
     var request = http_server.receiveHead() catch return;
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
-    var out: ResponseBuffer = .init(self.allocator, self.max_response_size);
-    defer out.deinit();
-    self.serve(&out, arena.allocator(), &request, socket) catch {};
+    self.serve(arena.allocator(), &request, socket) catch {};
 }
 
 fn serve(
     self: *HttpServer,
-    out: *ResponseBuffer,
     arena: std.mem.Allocator,
     request: *std.http.Server.Request,
     socket: posix.socket_t,
@@ -702,20 +757,22 @@ fn serve(
     const body = readRequestBody(arena, request.readerExpectNone(&body_buf), content_length, self.max_request_size) catch {
         return respondJson(request, .payload_too_large, "{\"error\":\"request too large\"}\n", cors_value);
     };
-    var job: Job = .{
-        .kind = kind,
-        .body = body,
-        .out = &out.writer,
-        .max_wait_ms = self.max_wait_ms,
-    };
-    if (!self.queue.push(&job)) {
+    const job = try Job.create(self.allocator, kind, body, self.max_wait_ms, self.max_response_size);
+    defer job.release();
+    if (!self.queue.push(job)) {
         return respondJson(request, .service_unavailable, Result.shutting_down.body(), cors_value);
     }
-    if (self.waitForJob(&job, socket) == .disconnected) {
-        return error.ClientDisconnected;
+    switch (self.waitForJob(job, socket)) {
+        .complete => {},
+        .disconnected => return error.ClientDisconnected,
+        .disconnected_complete => {
+            if (job.live_snapshot) self.abandonLive(job.live_token);
+            return error.ClientDisconnected;
+        },
+        .timeout => return respondJson(request, Result.timeout.status(), Result.timeout.body(), cors_value),
     }
 
-    if (out.failed and job.result == .ok) job.result = .response_too_large;
+    if (job.out.failed and job.result == .ok) job.result = .response_too_large;
     if (job.result != .ok) return respondJson(request, job.result.status(), job.result.body(), cors_value);
     if (job.live_snapshot) {
         var version_buf: [20]u8 = undefined;
@@ -725,7 +782,7 @@ fn serve(
             .{ .name = "x-lightpanda-live-version", .value = version },
             .{ .name = "access-control-expose-headers", .value = "x-lightpanda-live-session, x-lightpanda-live-version" },
         };
-        respondBody(request, out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &headers) catch |err| {
+        respondBody(request, job.out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &headers) catch |err| {
             self.abandonLive(job.live_token);
             return err;
         };
@@ -734,44 +791,49 @@ fn serve(
     if (job.kind == .live) {
         return respondBody(request, "", .no_content, "text/plain; charset=utf-8", "no-store", null, cors_value, &.{});
     }
-    return respondBody(request, out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &.{});
+    return respondBody(request, job.out.buffered(), .ok, "text/html; charset=utf-8", "no-store", null, cors_value, &.{});
 }
 
-const JobWaitResult = enum { complete, disconnected };
+const JobWaitResult = enum { complete, disconnected, disconnected_complete, timeout };
 
 fn waitForJob(self: *HttpServer, job: *Job, socket: posix.socket_t) JobWaitResult {
     var timer: std.Io.Timestamp = .now(lp.io, .boot);
-    while (!job.done.load(.acquire)) {
+    while (true) {
+        if (job.done.load(.acquire)) {
+            return if (job.cancellation() == .disconnected) .disconnected else .complete;
+        }
         if (peerDisconnected(socket)) {
-            self.cancelJob(job, .disconnected);
+            if (self.cancelJob(job, .disconnected)) return .disconnected;
+            return if (job.done.load(.acquire)) .disconnected_complete else .disconnected;
         }
 
-        const elapsed: u32 = @intCast(@min(
+        const elapsed: u64 = @intCast(@min(
             timer.untilNow(lp.io, .boot).toMilliseconds(),
-            std.math.maxInt(u32),
+            std.math.maxInt(u64),
         ));
-        if (elapsed >= job.max_wait_ms) {
-            self.cancelJob(job, .timeout);
+        if (deadlineExpired(elapsed, job.max_wait_ms)) {
+            if (self.cancelJob(job, .timeout)) return .timeout;
+            if (job.done.load(.acquire)) {
+                return if (job.cancellation() == .disconnected) .disconnected else .complete;
+            }
+            return .timeout;
         }
 
         const remaining = job.max_wait_ms -| elapsed;
-        const wait_ms = @max(@min(remaining, job_poll_interval_ms), 1);
+        const wait_ms: u32 = @intCast(@min(remaining, job_poll_interval_ms));
         _ = job.wait(wait_ms);
     }
-    return if (job.cancellation() == .disconnected) .disconnected else .complete;
+}
+
+fn deadlineExpired(elapsed_ms: u64, max_wait_ms: u32) bool {
+    return elapsed_ms >= max_wait_ms;
 }
 
 fn abandonLive(self: *HttpServer, token: [32]u8) void {
-    var discard_buffer: [1]u8 = undefined;
-    var discard = std.Io.Writer.fixed(&discard_buffer);
-    var job: Job = .{
-        .kind = .abandon_live,
-        .body = "",
-        .out = &discard,
-        .max_wait_ms = self.max_wait_ms,
-        .live_token = token,
-    };
-    if (!self.queue.push(&job)) return;
+    const job = Job.create(self.allocator, .abandon_live, "", self.max_wait_ms, 0) catch return;
+    defer job.release();
+    job.live_token = token;
+    if (!self.queue.push(job)) return;
     while (!job.done.load(.acquire)) {
         _ = job.wait(@max(self.max_wait_ms, 1));
     }
@@ -1089,16 +1151,81 @@ test "render server: cancelled live work releases the worker session" {
         };
         defer live.deinit();
 
-        var job: Job = .{
-            .kind = .live,
-            .body = "",
-            .out = undefined,
-            .max_wait_ms = 1,
-        };
-        job.cancel(reason);
-        closeCancelledLiveJob(&live, job.cancellation(), true);
+        const job = try Job.create(std.testing.allocator, .live, "", 1, 1);
+        defer job.release();
+        job.live_snapshot = true;
+        _ = job.cancel(reason);
+        closeCancelledLiveJob(&live, job, job.cancellation());
         try std.testing.expect(!live.isActive());
     }
+}
+
+test "render server: cancelled live work without a snapshot preserves the worker session" {
+    var live: LiveSession = .{
+        .allocator = std.testing.allocator,
+        .browser = undefined,
+        .page = .{ .frame_id = 0, .session = undefined },
+    };
+    defer live.deinit();
+
+    const job = try Job.create(std.testing.allocator, .live, "", 1, 1);
+    defer job.release();
+    _ = job.cancel(.timeout);
+    closeCancelledLiveJob(&live, job, job.cancellation());
+    try std.testing.expect(live.isActive());
+}
+
+test "render server: queue retains job storage until worker release" {
+    var queue: Queue = .{};
+    const job = try Job.create(std.testing.allocator, .render, "owned body", 1, 1);
+    try std.testing.expect(queue.push(job));
+    job.release();
+
+    const popped = queue.pop(null).?;
+    try std.testing.expectEqualStrings("owned body", popped.body);
+    popped.release();
+}
+
+test "render server: closed queue does not retain rejected job" {
+    var queue: Queue = .{};
+    queue.close();
+
+    const job = try Job.create(std.testing.allocator, .render, "", 1, 1);
+    defer job.release();
+    try std.testing.expect(!queue.push(job));
+    try std.testing.expectEqual(@as(u32, 1), job.refs.load(.acquire));
+}
+
+test "render server: cancelled queued job releases queue ownership" {
+    var queue: Queue = .{};
+    const job = try Job.create(std.testing.allocator, .render, "owned body", 1, 1);
+    defer job.release();
+    try std.testing.expect(queue.push(job));
+    try std.testing.expectEqual(@as(u32, 2), job.refs.load(.acquire));
+
+    try std.testing.expect(queue.remove(job));
+    job.release();
+    try std.testing.expectEqual(@as(u32, 1), job.refs.load(.acquire));
+    try std.testing.expect(queue.head == null);
+    try std.testing.expect(queue.tail == null);
+}
+
+test "render server: completed job rejects late timeout cancellation" {
+    const job = try Job.create(std.testing.allocator, .render, "", 1, 1);
+    defer job.release();
+
+    job.done_mutex.lockUncancelable(lp.io);
+    job.done.store(true, .release);
+    job.done_mutex.unlock(lp.io);
+
+    try std.testing.expect(!job.cancel(.timeout));
+    try std.testing.expectEqual(Job.CancelReason.none, job.cancellation());
+}
+
+test "render server: deadline expires at the wall limit" {
+    try std.testing.expect(!deadlineExpired(9, 10));
+    try std.testing.expect(deadlineExpired(10, 10));
+    try std.testing.expect(deadlineExpired(11, 10));
 }
 
 test "render server: expired live state closes before queued work" {
