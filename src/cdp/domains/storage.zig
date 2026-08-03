@@ -142,25 +142,19 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
         return error.NotImplemented;
     }
 
-    // The errdefer only protects construction failures. Once we `break :blk`
-    // with the Cookie value, `Jar.add` owns its lifetime.
-    const cookie = blk: {
-        var arena = std.heap.ArenaAllocator.init(cookie_jar.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
+    const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
 
-        // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-        const domain = try Cookie.parseDomain(a, param.url, param.domain);
-        const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
-
-        const secure = if (param.secure) |s| s else if (param.url) |url| URL.isSecure(url) else false;
-
-        break :blk Cookie{
-            .arena = arena,
-            .name = try a.dupe(u8, param.name),
-            .value = try a.dupe(u8, param.value),
-            .path = path,
-            .domain = domain,
+    // param.url affects the default domain, but CDP defaults path to "/"
+    // rather than deriving it from that URL.
+    const cookie = try Cookie.initNormalized(
+        cookie_jar.allocator,
+        param.name,
+        param.value,
+        param.url,
+        param.domain,
+        null,
+        param.path,
+        .{
             .expires = param.expires,
             .secure = secure,
             .http_only = param.httpOnly,
@@ -169,8 +163,8 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
                 .Lax => .lax,
                 .None => .none,
             },
-        };
-    };
+        },
+    );
     try cookie_jar.add(cookie, lp.datetime.timestamp(.real), true);
 }
 

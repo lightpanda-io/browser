@@ -26,7 +26,6 @@ const public_suffix_list = @import("../../../data/public_suffix_list.zig").looku
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Cookie = @This();
 
@@ -34,7 +33,8 @@ const max_cookie_size = 4 * 1024;
 const max_cookie_header_size = 8 * 1024;
 const max_jar_size = 1024;
 
-arena: ArenaAllocator,
+allocator: Allocator,
+backing: []u8,
 name: []const u8,
 value: []const u8,
 domain: []const u8,
@@ -51,7 +51,48 @@ pub const SameSite = enum {
 };
 
 pub fn deinit(self: *const Cookie) void {
-    self.arena.deinit();
+    if (self.backing.len > 0) {
+        self.allocator.free(self.backing);
+    }
+}
+
+pub const OwnedOptions = struct {
+    expires: ?f64 = null,
+    secure: bool = false,
+    http_only: bool = false,
+    same_site: SameSite = .none,
+};
+
+pub fn initOwned(
+    allocator: Allocator,
+    name: []const u8,
+    value: []const u8,
+    domain: []const u8,
+    path: []const u8,
+    opts: OwnedOptions,
+) !Cookie {
+    const total_len = try packedLength(&.{ name, value, domain, path });
+    const backing = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(backing);
+
+    var offset: usize = 0;
+    const owned_name = copyPart(backing, &offset, name);
+    const owned_value = copyPart(backing, &offset, value);
+    const owned_domain = copyPart(backing, &offset, domain);
+    const owned_path = copyPart(backing, &offset, path);
+
+    return .{
+        .allocator = allocator,
+        .backing = backing,
+        .name = owned_name,
+        .value = owned_value,
+        .domain = owned_domain,
+        .path = owned_path,
+        .expires = opts.expires,
+        .secure = opts.secure,
+        .http_only = opts.http_only,
+        .same_site = opts.same_site,
+    };
 }
 
 // There's https://datatracker.ietf.org/doc/html/rfc6265 but browsers are
@@ -169,14 +210,6 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         return error.CookieSizeExceeded;
     }
 
-    var arena = ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const aa = arena.allocator();
-    const owned_name = try aa.dupe(u8, cookie_name);
-    const owned_value = try aa.dupe(u8, cookie_value);
-    const owned_path = try parsePath(aa, url, path);
-    const owned_domain = try parseDomain(aa, url, domain);
-
     var normalized_expires: ?f64 = null;
     if (max_age) |ma| {
         normalized_expires = @as(f64, @floatFromInt(lp.datetime.timestamp(.real))) + @as(f64, @floatFromInt(ma));
@@ -187,7 +220,9 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
             if (exp_dt == null) {
                 if ((expires_.len > 11 and expires_[7] == '-' and expires_[11] == '-')) {
                     // Replace dashes and try again
-                    const output = try aa.dupe(u8, expires_);
+                    var output_buffer: [max_cookie_header_size]u8 = undefined;
+                    const output = output_buffer[0..expires_.len];
+                    @memcpy(output, expires_);
                     output[7] = ' ';
                     output[11] = ' ';
                     exp_dt = DateTime.parse(output, .rfc822) catch null;
@@ -204,17 +239,21 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         }
     }
 
-    return .{
-        .arena = arena,
-        .name = owned_name,
-        .value = owned_value,
-        .path = owned_path,
-        .same_site = same_site orelse .lax,
-        .secure = secure orelse false,
-        .http_only = http_only orelse false,
-        .domain = owned_domain,
-        .expires = normalized_expires,
-    };
+    return initNormalized(
+        allocator,
+        cookie_name,
+        cookie_value,
+        url,
+        domain,
+        url,
+        path,
+        .{
+            .expires = normalized_expires,
+            .same_site = same_site orelse .lax,
+            .secure = secure orelse false,
+            .http_only = http_only orelse false,
+        },
+    );
 }
 
 const ValidateCookieError = error{ Empty, InvalidByteSequence };
@@ -264,6 +303,153 @@ fn validateCookieString(str: []const u8) ValidateCookieError!void {
     }
 }
 
+const PathSource = struct {
+    value: []const u8,
+    percent_encode: bool,
+};
+
+pub fn initNormalized(
+    allocator: Allocator,
+    name: []const u8,
+    value: []const u8,
+    domain_url: ?[:0]const u8,
+    explicit_domain: ?[]const u8,
+    path_url: ?[:0]const u8,
+    explicit_path: ?[]const u8,
+    opts: OwnedOptions,
+) !Cookie {
+    const path_source = resolvePathSource(path_url, explicit_path);
+    const path_len = if (path_source.percent_encode)
+        try percentEncodedLength(path_source.value, isPathChar)
+    else
+        path_source.value.len;
+
+    const host_source: ?[]const u8 = if (domain_url) |url| URL.getHostname(url) else null;
+    const host_len = if (host_source) |host| try percentEncodedLength(host, isHostChar) else 0;
+
+    const domain_source: ?[]const u8 = if (explicit_domain) |domain|
+        if (domain.len > 0)
+            (if (domain[0] == '.') domain[1..] else domain)
+        else
+            null
+    else
+        null;
+    const explicit_domain_len = if (domain_source) |domain|
+        try std.math.add(usize, 1, try percentEncodedLength(domain, isHostChar))
+    else
+        0;
+
+    var total_len = try packedLength(&.{ name, value });
+    total_len = std.math.add(usize, total_len, path_len) catch return error.OutOfMemory;
+    total_len = std.math.add(usize, total_len, host_len) catch return error.OutOfMemory;
+    total_len = std.math.add(usize, total_len, explicit_domain_len) catch return error.OutOfMemory;
+    var backing = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(backing);
+
+    var offset: usize = 0;
+    const owned_name = copyPart(backing, &offset, name);
+    const owned_value = copyPart(backing, &offset, value);
+
+    const owned_path = blk: {
+        const dest = backing[offset..][0..path_len];
+        offset += path_len;
+        if (path_source.percent_encode) {
+            break :blk writePercentEncoded(dest, path_source.value, isPathChar);
+        }
+        @memcpy(dest, path_source.value);
+        break :blk dest;
+    };
+
+    const domain_start = offset;
+    const encoded_host: ?[]u8 = if (host_source) |host| blk: {
+        const dest = backing[offset..][0..host_len];
+        offset += host_len;
+        break :blk toLower(writePercentEncoded(dest, host, isHostChar));
+    } else null;
+
+    const encoded_domain: ?[]u8 = if (domain_source) |domain| blk: {
+        const dest = backing[offset..][0..explicit_domain_len];
+        offset += explicit_domain_len;
+        dest[0] = '.';
+        _ = writePercentEncoded(dest[1..], domain, isHostChar);
+        break :blk toLower(dest);
+    } else null;
+
+    const resolved_domain = try resolveEncodedDomain(encoded_host, encoded_domain);
+    if (resolved_domain.ptr != backing[domain_start..].ptr) {
+        std.mem.copyForwards(u8, backing[domain_start..][0..resolved_domain.len], resolved_domain);
+    }
+    const owned_domain = backing[domain_start..][0..resolved_domain.len];
+    const packed_len = domain_start + owned_domain.len;
+
+    if (packed_len < backing.len and allocator.resize(backing, packed_len)) {
+        backing = backing[0..packed_len];
+    }
+
+    return .{
+        .allocator = allocator,
+        .backing = backing,
+        .name = owned_name,
+        .value = owned_value,
+        .domain = owned_domain,
+        .path = owned_path,
+        .expires = opts.expires,
+        .secure = opts.secure,
+        .http_only = opts.http_only,
+        .same_site = opts.same_site,
+    };
+}
+
+fn resolvePathSource(url_: ?[:0]const u8, explicit_path: ?[]const u8) PathSource {
+    if (explicit_path) |path| {
+        if (path.len > 0 and path[0] == '/') {
+            return .{ .value = path, .percent_encode = false };
+        }
+    }
+
+    const url = url_ orelse return .{ .value = "/", .percent_encode = false };
+    const url_path = URL.getPathname(url);
+    if (url_path.len <= 1) {
+        return .{ .value = "/", .percent_encode = false };
+    }
+
+    const last = std.mem.lastIndexOfScalar(u8, url_path[1..], '/') orelse {
+        return .{ .value = "/", .percent_encode = false };
+    };
+    return .{ .value = url_path[0 .. last + 1], .percent_encode = true };
+}
+
+fn packedLength(parts: []const []const u8) Allocator.Error!usize {
+    var total: usize = 0;
+    for (parts) |part| {
+        total = std.math.add(usize, total, part.len) catch return error.OutOfMemory;
+    }
+    return total;
+}
+
+fn percentEncodedLength(part: []const u8, comptime isValidChar: fn (u8) bool) Allocator.Error!usize {
+    var len = part.len;
+    for (part) |c| {
+        if (!isValidChar(c)) {
+            len = std.math.add(usize, len, 2) catch return error.OutOfMemory;
+        }
+    }
+    return len;
+}
+
+fn writePercentEncoded(dest: []u8, part: []const u8, comptime isValidChar: fn (u8) bool) []u8 {
+    var writer: std.Io.Writer = .fixed(dest);
+    std.Uri.Component.percentEncode(&writer, part, isValidChar) catch unreachable;
+    return writer.buffered();
+}
+
+fn copyPart(backing: []u8, offset: *usize, part: []const u8) []u8 {
+    const owned = backing[offset.*..][0..part.len];
+    @memcpy(owned, part);
+    offset.* += part.len;
+    return owned;
+}
+
 pub fn parsePath(arena: Allocator, url_: ?[:0]const u8, explicit_path: ?[]const u8) ![]const u8 {
     // path attribute value either begins with a '/' or we
     // ignore it and use the "default-path" algorithm
@@ -304,38 +490,7 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
             try std.Uri.Component.percentEncode(&aw.writer, no_leading_dot, isHostChar);
             const owned_domain = toLower(aw.written());
 
-            if (std.mem.indexOfScalarPos(u8, owned_domain, 1, '.') == null and std.mem.eql(u8, "localhost", owned_domain[1..]) == false) {
-                // can't set a cookie for a TLD
-                return error.InvalidDomain;
-            }
-
-            if (public_suffix_list(owned_domain[1..])) {
-                // we're targetting a domain on the public suffix list. Such a
-                // cookie is only allowed on to do this for a host-only domain
-                // in order to make sure cookies don't get passed to a different
-                // subdomain
-                const host = encoded_host orelse return owned_domain[1..];
-                if (std.mem.eql(u8, host, owned_domain[1..])) {
-                    return owned_domain[1..];
-                }
-                return error.InvalidDomain;
-            }
-
-            if (encoded_host) |host| {
-                // The host must match the requested domain exactly or as a
-                // proper subdomain. A raw suffix check would incorrectly
-                // accept "attackerexample.com" as matching "example.com",
-                // letting a lookalike origin overwrite cookies on the victim
-                // domain. `owned_domain` always has a leading dot, so
-                // endsWith against it enforces the label boundary.
-                const exact_match = std.mem.eql(u8, host, owned_domain[1..]);
-                const subdomain_match = std.mem.endsWith(u8, host, owned_domain);
-                if (exact_match == false and subdomain_match == false) {
-                    return error.InvalidDomain;
-                }
-            }
-
-            return owned_domain;
+            return resolveEncodedDomain(encoded_host, owned_domain);
         }
     }
 
@@ -343,6 +498,47 @@ pub fn parseDomain(arena: Allocator, url_: ?[:0]const u8, explicit_domain: ?[]co
         if (host.len > 0) return host;
     }
     return error.InvalidDomain;
+}
+
+fn resolveEncodedDomain(encoded_host: ?[]const u8, encoded_domain: ?[]const u8) ![]const u8 {
+    const domain = encoded_domain orelse {
+        const host = encoded_host orelse return error.InvalidDomain;
+        if (host.len == 0) return error.InvalidDomain;
+        return host;
+    };
+
+    if (std.mem.indexOfScalarPos(u8, domain, 1, '.') == null and std.mem.eql(u8, "localhost", domain[1..]) == false) {
+        // can't set a cookie for a TLD
+        return error.InvalidDomain;
+    }
+
+    if (public_suffix_list(domain[1..])) {
+        // we're targetting a domain on the public suffix list. Such a
+        // cookie is only allowed on to do this for a host-only domain
+        // in order to make sure cookies don't get passed to a different
+        // subdomain
+        const host = encoded_host orelse return domain[1..];
+        if (std.mem.eql(u8, host, domain[1..])) {
+            return domain[1..];
+        }
+        return error.InvalidDomain;
+    }
+
+    if (encoded_host) |host| {
+        // The host must match the requested domain exactly or as a
+        // proper subdomain. A raw suffix check would incorrectly
+        // accept "attackerexample.com" as matching "example.com",
+        // letting a lookalike origin overwrite cookies on the victim
+        // domain. `domain` always has a leading dot, so endsWith against it
+        // enforces the label boundary.
+        const exact_match = std.mem.eql(u8, host, domain[1..]);
+        const subdomain_match = std.mem.endsWith(u8, host, domain);
+        if (exact_match == false and subdomain_match == false) {
+            return error.InvalidDomain;
+        }
+    }
+
+    return domain;
 }
 
 pub fn percentEncode(arena: Allocator, part: []const u8, comptime isValidChar: fn (u8) bool) ![]u8 {
@@ -791,14 +987,14 @@ test "Jar: add limit" {
     const now = lp.datetime.timestamp(.real);
 
     // add a too big cookie value.
-    try testing.expectError(error.CookieSizeExceeded, jar.add(.{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
-        .name = "v",
-        .domain = "lightpanda.io",
-        .path = "/",
-        .expires = null,
-        .value = "v" ** 4096 ++ "v",
-    }, now, true));
+    try testing.expectError(error.CookieSizeExceeded, jar.add(try Cookie.initOwned(
+        testing.allocator,
+        "v",
+        "v" ** 4096 ++ "v",
+        "lightpanda.io",
+        "/",
+        .{},
+    ), now, true));
 
     // generate unique names.
     const names = comptime blk: {
@@ -813,26 +1009,26 @@ test "Jar: add limit" {
     // test the max number limit
     var i: usize = 0;
     while (i < max_jar_size) : (i += 1) {
-        const c = Cookie{
-            .arena = std.heap.ArenaAllocator.init(testing.allocator),
-            .name = names[i],
-            .domain = "lightpanda.io",
-            .path = "/",
-            .expires = null,
-            .value = "v",
-        };
+        const c = try Cookie.initOwned(
+            testing.allocator,
+            names[i],
+            "v",
+            "lightpanda.io",
+            "/",
+            .{},
+        );
 
         try jar.add(c, now, true);
     }
 
-    try testing.expectError(error.CookieJarQuotaExceeded, jar.add(.{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
-        .name = "last",
-        .domain = "lightpanda.io",
-        .path = "/",
-        .expires = null,
-        .value = "v",
-    }, now, true));
+    try testing.expectError(error.CookieJarQuotaExceeded, jar.add(try Cookie.initOwned(
+        testing.allocator,
+        "last",
+        "v",
+        "lightpanda.io",
+        "/",
+        .{},
+    ), now, true));
 }
 
 test "Jar: forRequest" {
@@ -1223,6 +1419,61 @@ test "Cookie: parse all" {
     }, "http://localhost:8000/login", "app_session=123; Max-Age=7200; path=/; domain=localhost; httponly; samesite=lax");
 }
 
+test "Cookie: parse uses one owned allocation" {
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{
+        .fail_index = 1,
+        .resize_fail_index = 0,
+    });
+    {
+        var cookie = try Cookie.parse(
+            failing.allocator(),
+            "https://sub.lightpanda.io/cms/users",
+            "user-id=9000; Path=/cms; Domain=lightpanda.io; Expires=Fri, 17-Jul-2026 08:03:15 GMT",
+        );
+        defer cookie.deinit();
+
+        try testing.expectEqual(@as(usize, 1), failing.allocations);
+        try testing.expectEqual(@as(usize, 0), failing.deallocations);
+        const fields_len = cookie.name.len + cookie.value.len + cookie.domain.len + cookie.path.len;
+        try testing.expect(fields_len <= cookie.backing.len);
+        try testing.expectEqual(cookie.backing.len, failing.allocated_bytes - failing.freed_bytes);
+        const backing_start = @intFromPtr(cookie.backing.ptr);
+        const backing_end = backing_start + cookie.backing.len;
+        for ([_][]const u8{ cookie.name, cookie.value, cookie.domain, cookie.path }) |field| {
+            const field_start = @intFromPtr(field.ptr);
+            try testing.expect(field_start >= backing_start);
+            try testing.expect(field_start + field.len <= backing_end);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), failing.deallocations);
+    try testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+
+    var cleanup = std.testing.FailingAllocator.init(testing.allocator, .{});
+    try testing.expectError(
+        error.InvalidDomain,
+        Cookie.parse(cleanup.allocator(), "https://lightpanda.io/", "a=b; Domain=example.com"),
+    );
+    try testing.expectEqual(cleanup.allocations, cleanup.deallocations);
+    try testing.expectEqual(cleanup.allocated_bytes, cleanup.freed_bytes);
+}
+
+test "Cookie: parsed fields outlive inputs" {
+    const url = try testing.allocator.dupeZ(u8, "https://sub.lightpanda.io/cms/users");
+    defer testing.allocator.free(url);
+    const header = try testing.allocator.dupe(u8, "user-id=9000; Path=/cms; Domain=lightpanda.io");
+    defer testing.allocator.free(header);
+
+    var cookie = try Cookie.parse(testing.allocator, url, header);
+    defer cookie.deinit();
+    @memset(url, 'x');
+    @memset(header, 'x');
+
+    try testing.expectEqual("user-id", cookie.name);
+    try testing.expectEqual("9000", cookie.value);
+    try testing.expectEqual("/cms", cookie.path);
+    try testing.expectEqual(".lightpanda.io", cookie.domain);
+}
+
 test "Cookie: parse domain" {
     try expectAttribute(.{ .domain = "lightpanda.io" }, "http://lightpanda.io/", "b");
     try expectAttribute(.{ .domain = "dev.lightpanda.io" }, "http://dev.lightpanda.io/", "b");
@@ -1314,7 +1565,8 @@ fn expectError(expected: anyerror, url: ?[:0]const u8, set_cookie: []const u8) !
 
 test "Cookie: appliesTo with empty domain" {
     const cookie = Cookie{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .allocator = undefined,
+        .backing = &.{},
         .name = "test",
         .value = "value",
         .domain = "",
@@ -1334,7 +1586,8 @@ test "Cookie: appliesTo with empty domain" {
 
 test "Cookie: matchesHost is case-insensitive" {
     const exact = Cookie{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .allocator = undefined,
+        .backing = &.{},
         .name = "n",
         .value = "v",
         .domain = "example.com",
@@ -1347,7 +1600,8 @@ test "Cookie: matchesHost is case-insensitive" {
     try testing.expectEqual(false, exact.matchesHost("other.com"));
 
     const subdomain = Cookie{
-        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .allocator = undefined,
+        .backing = &.{},
         .name = "n",
         .value = "v",
         .domain = ".example.com",

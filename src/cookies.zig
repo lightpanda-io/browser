@@ -55,26 +55,19 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
 
     var loaded: usize = 0;
     for (json_cookies) |jc| {
-        var cookie_arena = std.heap.ArenaAllocator.init(jar.allocator);
-        errdefer cookie_arena.deinit();
-
-        const a = cookie_arena.allocator();
-        const name = try a.dupe(u8, jc.name);
-        const value = try a.dupe(u8, jc.value);
-        const domain = try a.dupe(u8, jc.domain);
-        const cookie_path = if (jc.path) |p| try a.dupe(u8, p) else "/";
-
-        const cookie = Cookie{
-            .arena = cookie_arena,
-            .name = name,
-            .value = value,
-            .domain = domain,
-            .path = cookie_path,
-            .expires = jc.expires,
-            .secure = jc.secure orelse false,
-            .http_only = jc.httpOnly orelse false,
-            .same_site = parseJsonSameSite(jc.sameSite),
-        };
+        const cookie = try Cookie.initOwned(
+            jar.allocator,
+            jc.name,
+            jc.value,
+            jc.domain,
+            jc.path orelse "/",
+            .{
+                .expires = jc.expires,
+                .secure = jc.secure orelse false,
+                .http_only = jc.httpOnly orelse false,
+                .same_site = parseJsonSameSite(jc.sameSite),
+            },
+        );
 
         jar.add(cookie, now, true) catch |err| {
             log.warn(.app, "invalid cookie", .{ .name = jc.name, .err = err });
