@@ -22,11 +22,10 @@ const builtin = @import("builtin");
 const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
 
-// Keeps the bundled C libraries out of liblightpanda's export table so a host
-// linking its own curl/zlib/... cannot be interposed. The ELF build hides them
-// with src/lightpanda.map, but Mach-O has no version-script equivalent, so the
-// symbols have to be hidden at compile time. Unconditional: the modules are
-// shared with the executable, which exports nothing either way.
+// A host linking its own curl/zlib/... must not bind to liblightpanda's
+// bundled copies. ELF hides them via src/lightpanda.map; Mach-O has no
+// version-script equivalent, so they are hidden at compile time.
+// Unconditional: the executable exports nothing either way.
 const hide_symbols = "-fvisibility=hidden";
 
 const Build = blk: {
@@ -251,9 +250,8 @@ pub fn build(b: *Build) !void {
             shared_lib.version_script = b.path("src/lightpanda.map");
             shared_lib.linker_allow_shlib_undefined = false;
             const install_so = b.addInstallArtifact(shared_lib, .{});
-            // Symbol hiding is load-bearing: a host's own OpenSSL/curl/sqlite
-            // must not collide with the bundled copies. Gate the install on
-            // the check so an installed library is always a checked one.
+            // Gate the install on the export check so an installed library
+            // is always a checked one (see hide_symbols for why).
             const Query = struct { nm: []const u8, awk: []const u8 };
             const leak_query: ?Query = switch (target.result.os.tag) {
                 // The version script keeps everything but lp_* local, so
@@ -262,10 +260,9 @@ pub fn build(b: *Build) !void {
                     .nm = "nm -D",
                     .awk = "$2 == \"T\" && $3 !~ /^lp_/ { print $3 }",
                 },
-                // Mach-O has no version script, so the bundled C libraries are
-                // hidden at compile time instead (see hide_symbols). V8's own
-                // C++ symbols stay exported, so only the C libraries — the ones
-                // include/lightpanda.h promises — can be asserted absent.
+                // V8's own C++ symbols stay exported on Mach-O, so only the
+                // bundled C libraries — the ones include/lightpanda.h
+                // promises absent — can be asserted.
                 .macos => .{
                     .nm = "nm -gU",
                     .awk = "$2 == \"T\" && $3 ~ /^_(AES|ASN1|BIO|Brotli|EVP|OPENSSL|RSA|SSL|X509|adler32|crc32|curl|deflate|inflate|nghttp2|sqlite3)/ { print $3 }",
