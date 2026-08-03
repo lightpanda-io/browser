@@ -3472,6 +3472,30 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
     try testing.expectEqual(null, client.url_blocklist);
 }
 
+test "HttpClient: adblock verdicts apply per request hostname" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    client.adblocker = try AdBlocker.init(testing.allocator);
+    defer if (client.adblocker) |*blocker| blocker.deinit();
+    var list: std.Io.Reader = .fixed(
+        \\||ads.example.com^
+        \\@@||good.ads.example.com^
+    );
+    _ = try client.adblocker.?.parse(&list);
+
+    try testing.expect(client.isHostAdblocked("https://ads.example.com/pixel.gif", false));
+    // Hostnames are matched case-insensitively and without the port.
+    try testing.expect(client.isHostAdblocked("https://SUB.ADS.EXAMPLE.COM:8443/x", false));
+    try testing.expect(!client.isHostAdblocked("https://good.ads.example.com/app.js", false));
+    try testing.expect(!client.isHostAdblocked("https://example.com/", false));
+    // Internal transfers (robots.txt, ...) are never adblocked.
+    try testing.expect(!client.isHostAdblocked("https://ads.example.com/", true));
+}
+
 test "HttpClient: URL blocking exempts internal transfers" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();

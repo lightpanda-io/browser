@@ -1006,6 +1006,18 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     return config;
 }
 
+test "Config: adblockLists splits comma-separated paths" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .adblock_lists = "easylist.txt,easyprivacy.txt",
+    } });
+    defer config.deinit(std.testing.allocator);
+
+    var paths = config.adblockLists().?;
+    try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
+    try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
+    try std.testing.expectEqual(null, paths.next());
+}
+
 test "Config: blockedUrlPatterns splits comma-separated patterns" {
     var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
         .block_urls = "*doubleclick*,*://*/*.png",
