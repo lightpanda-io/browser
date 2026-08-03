@@ -43,6 +43,9 @@ _meta_key: bool,
 _location: u32,
 _repeat: bool,
 _is_composing: bool,
+// CDP rawKeyDown and keyDown-with-text run keydown defaults separately
+// from text insertion.
+_skip_text_insertion: bool = false,
 // Legacy KeyboardEventInit values, reported as-is by synthetic events.
 _char_code_init: u32 = 0,
 _key_code_init: u32 = 0,

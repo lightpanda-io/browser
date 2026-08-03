@@ -19,8 +19,28 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 const Frame = @import("../../browser/Frame.zig");
+const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
 
 const dom_button = Frame.user_input.mouse_button;
+
+const KeyEventParams = struct {
+    type: Type,
+    modifiers: u4 = 0,
+    text: []const u8 = "",
+    code: ?[]const u8 = null,
+    key: []const u8 = "",
+    autoRepeat: bool = false,
+    isKeypad: bool = false,
+    location: u32 = 0,
+    // Many optional parameters are not implemented yet, see documentation URL.
+
+    const Type = enum {
+        keyDown,
+        keyUp,
+        rawKeyDown,
+        char,
+    };
+};
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -38,45 +58,56 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchKeyEvent
 fn dispatchKeyEvent(cmd: *CDP.Command) !void {
-    const params = (try cmd.params(struct {
-        type: Type,
-        key: []const u8 = "",
-        code: ?[]const u8 = null,
-        modifiers: u4 = 0,
-        // Many optional parameters are not implemented yet, see documentation url.
+    const params = (try cmd.params(KeyEventParams)) orelse return error.InvalidParams;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const location: u32 = if (params.isKeypad) 3 else params.location;
 
-        const Type = enum {
-            keyDown,
-            keyUp,
-            rawKeyDown,
-            char,
-        };
-    })) orelse return error.InvalidParams;
-
-    try cmd.sendResult(null, .{});
-
-    // rawKeyDown is a Chrome-internal event type not used for JS dispatch
-    if (params.type == .rawKeyDown) return;
-
-    const bc = cmd.browser_context orelse return;
-    const frame = bc.mainFrame() orelse return;
-
-    const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
-    const keyboard_event = try KeyboardEvent.initTrusted(switch (params.type) {
-        .keyDown => comptime .wrap("keydown"),
+    const default_allowed = try dispatchDOMKeyEvent(frame, &params, switch (params.type) {
+        .keyDown, .rawKeyDown => comptime .wrap("keydown"),
         .keyUp => comptime .wrap("keyup"),
         .char => comptime .wrap("keypress"),
-        .rawKeyDown => unreachable,
-    }, .{
+    }, location, params.type == .keyDown or params.type == .rawKeyDown);
+
+    if (default_allowed and params.text.len > 0) {
+        const insert = switch (params.type) {
+            .keyDown => try dispatchDOMKeyEvent(
+                frame,
+                &params,
+                comptime .wrap("keypress"),
+                location,
+                false,
+            ),
+            .char => true,
+            .keyUp, .rawKeyDown => false,
+        };
+        if (insert) {
+            try Frame.user_input.insertText(frame, params.text);
+        }
+    }
+
+    try cmd.sendResult(null, .{});
+}
+
+fn dispatchDOMKeyEvent(
+    frame: *Frame,
+    params: *const KeyEventParams,
+    typ: lp.String,
+    location: u32,
+    skip_text_insertion: bool,
+) !bool {
+    const keyboard_event = try KeyboardEvent.initTrusted(typ, .{
         .key = params.key,
         .code = params.code,
+        .location = location,
+        .repeat = params.autoRepeat,
         .altKey = params.modifiers & 1 == 1,
         .ctrlKey = params.modifiers & 2 == 2,
         .metaKey = params.modifiers & 4 == 4,
         .shiftKey = params.modifiers & 8 == 8,
     }, frame);
-    try Frame.user_input.triggerKeyboard(frame, keyboard_event);
-    // result already sent
+    keyboard_event._skip_text_insertion = skip_text_insertion;
+    return Frame.user_input.triggerKeyboard(frame, keyboard_event);
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
@@ -318,6 +349,243 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
 
     const result = try ls.local.compileAndRun("window.downButton === 2 && window.ctxButton === 2 && window.dbl === true", null);
     try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchKeyEvent text sequence and cancellation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<input id="target">';
+        \\const target = document.getElementById('target');
+        \\window.keyEvents = [];
+        \\window.blockEvent = '';
+        \\function record(e) {
+        \\  window.keyEvents.push({
+        \\    type: e.type, key: e.key, code: e.code,
+        \\    repeat: e.repeat, location: e.location,
+        \\    alt: e.altKey, ctrl: e.ctrlKey,
+        \\    meta: e.metaKey, shift: e.shiftKey,
+        \\    data: e.data
+        \\  });
+        \\  if (window.blockEvent === e.type) e.preventDefault();
+        \\}
+        \\target.addEventListener('keydown', record);
+        \\target.addEventListener('keypress', record);
+        \\target.addEventListener('keyup', record);
+        \\target.addEventListener('input', record);
+        \\target.focus();
+    , null);
+
+    // Explicit text controls insertion; key/code remain the DOM event metadata.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{
+            .type = "keyDown",
+            .key = "a",
+            .code = "KeyA",
+            .text = "Ω",
+            .modifiers = 9,
+            .autoRepeat = true,
+            .location = 2,
+        },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\target.value === 'Ω' &&
+        \\window.keyEvents.map(e => e.type).join(',') ===
+        \\  'keydown,keypress,input' &&
+        \\window.keyEvents[2].data === 'Ω' &&
+        \\window.keyEvents.slice(0, 2).every(e =>
+        \\  e.key === 'a' && e.code === 'KeyA' &&
+        \\  e.repeat === true && e.location === 2 &&
+        \\  e.alt === true && e.ctrl === false &&
+        \\  e.meta === false && e.shift === true)
+    , null)).isTrue());
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(null, .{ .id = 1, .index = 0 });
+
+    // Canceling keydown suppresses both keypress and insertion.
+    _ = try ls.local.compileAndRun(
+        \\target.value = '';
+        \\window.keyEvents = [];
+        \\window.blockEvent = 'keydown';
+    , null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "b", .text = "B" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        "target.value === '' && window.keyEvents.map(e => e.type).join(',') === 'keydown'",
+        null,
+    )).isTrue());
+
+    // Canceling keypress suppresses insertion but preserves both key events.
+    _ = try ls.local.compileAndRun(
+        \\window.keyEvents = [];
+        \\window.blockEvent = 'keypress';
+    , null);
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "c", .text = "C" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\target.value === '' &&
+        \\window.keyEvents.map(e => e.type).join(',') === 'keydown,keypress'
+    , null)).isTrue());
+
+    // char is already a keypress and inserts its text exactly once.
+    _ = try ls.local.compileAndRun(
+        \\window.keyEvents = [];
+        \\window.blockEvent = '';
+    , null);
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "char", .key = "d", .code = "KeyD", .text = "Δ" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\target.value === 'Δ' &&
+        \\window.keyEvents.map(e => e.type).join(',') === 'keypress,input' &&
+        \\window.keyEvents[1].data === 'Δ'
+    , null)).isTrue());
+
+    _ = try ls.local.compileAndRun(
+        \\target.value = '';
+        \\window.keyEvents = [];
+        \\window.blockEvent = 'keypress';
+    , null);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "char", .key = "e", .text = "E" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        "target.value === '' && window.keyEvents.map(e => e.type).join(',') === 'keypress'",
+        null,
+    )).isTrue());
+}
+
+test "cdp.input: dispatchKeyEvent rawKeyDown preserves defaults without text" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML =
+        \\  '<form id="form"><input id="target"></form><input id="next">';
+        \\const target = document.getElementById('target');
+        \\window.keyEvents = [];
+        \\window.inputEvents = 0;
+        \\window.submitEvents = 0;
+        \\target.addEventListener('keydown', e => {
+        \\  window.keyEvents.push({
+        \\    key: e.key, code: e.code, repeat: e.repeat,
+        \\    location: e.location, alt: e.altKey, shift: e.shiftKey
+        \\  });
+        \\});
+        \\target.addEventListener('input', () => { window.inputEvents++; });
+        \\document.getElementById('form').addEventListener('submit', e => {
+        \\  e.preventDefault();
+        \\  window.submitEvents++;
+        \\});
+        \\target.focus();
+    , null);
+
+    // rawKeyDown surfaces keydown metadata but ignores text, including when a
+    // caller supplies it. isKeypad maps to DOM_KEY_LOCATION_NUMPAD.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{
+            .type = "rawKeyDown",
+            .key = "1",
+            .code = "Numpad1",
+            .text = "ignored",
+            .modifiers = 9,
+            .autoRepeat = true,
+            .isKeypad = true,
+            .location = 2,
+        },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\target.value === '' && window.inputEvents === 0 &&
+        \\window.keyEvents.length === 1 &&
+        \\window.keyEvents[0].key === '1' &&
+        \\window.keyEvents[0].code === 'Numpad1' &&
+        \\window.keyEvents[0].repeat === true &&
+        \\window.keyEvents[0].location === 3 &&
+        \\window.keyEvents[0].alt === true &&
+        \\window.keyEvents[0].shift === true
+    , null)).isTrue());
+
+    // Non-text defaults still run: Enter submits once and Tab moves focus.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "rawKeyDown", .key = "Enter", .code = "Enter" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        "window.submitEvents === 1 && target.value === ''",
+        null,
+    )).isTrue());
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "rawKeyDown", .key = "Tab", .code = "Tab" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        "document.activeElement.id === 'next' && target.value === ''",
+        null,
+    )).isTrue());
+}
+
+test "cdp.input: dispatchKeyEvent reports a missing browser context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .text = "a" },
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 1 });
 }
 
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {

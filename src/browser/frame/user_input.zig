@@ -410,7 +410,7 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
     }
 }
 
-pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
+pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !bool {
     const event = keyboard_event.asEvent();
     // Dispatch to the effective active element. When nothing is explicitly
     // focused this resolves to <body> (matching `document.activeElement`), so
@@ -418,7 +418,7 @@ pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
     // navigation on Tab — can run.
     const element = frame.window._document.getActiveElement() orelse {
         event.deinit(frame._page);
-        return;
+        return false;
     };
 
     if (comptime lp.IS_DEBUG) {
@@ -429,7 +429,10 @@ pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
             .type = frame._type,
         });
     }
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
     try frame._event_manager.dispatch(element.asEventTarget(), event);
+    return !event.getDefaultPrevented();
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
@@ -457,13 +460,16 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         }
 
         // Handle printable characters
-        if (key.isPrintable()) {
+        if (key.isPrintable() and !keyboard_event._skip_text_insertion) {
             try input.innerInsert(key.asString(), frame);
         }
         return;
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
+        if (keyboard_event._skip_text_insertion) {
+            return;
+        }
         // zig fmt: off
         const append =
             if (key == .Enter) "\n"
