@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const Regex = @import("Regex.zig");
 const Config = @import("Config.zig");
 const Watchdog = @import("Watchdog.zig");
-const crash_handler = @import("crash_handler.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
 const Snapshot = @import("browser/js/Snapshot.zig");
@@ -127,7 +126,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    crash_handler.config_disables_reports = config.telemetryDisabled();
     app.telemetry = try Telemetry.init(app);
     errdefer app.telemetry.deinit(allocator);
 

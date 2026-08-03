@@ -23,7 +23,6 @@ const lp = @import("lightpanda");
 const cli = @import("cli.zig");
 const string = @import("string.zig");
 const dump = @import("browser/dump.zig");
-const telemetry = @import("telemetry/telemetry.zig");
 const Mime = @import("browser/Mime.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
@@ -544,9 +543,7 @@ pub const Commands = cli.Builder(.{
         // programmatically; it is not typeable on the command line.
         .name = "embed",
         .hidden = true,
-        .options = .{
-            .{ .name = "enable_telemetry", .type = bool },
-        },
+        .options = .{},
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{
@@ -616,14 +613,6 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
     if (modeNeedsHttp(self.mode)) {
         self.http_headers.deinit(allocator);
     }
-}
-
-pub fn telemetryDisabled(self: *const Config) bool {
-    if (telemetry.isDisabled()) return true;
-    return switch (self.mode) {
-        .embed => |opts| !opts.enable_telemetry,
-        else => false,
-    };
 }
 
 pub fn interactive(self: *const Config) bool {

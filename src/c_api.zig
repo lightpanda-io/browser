@@ -71,7 +71,6 @@ const InitOpts = extern struct {
     http_cache_dir_len: usize,
     http_timeout_ms: u32,
     watchdog_ms: i32,
-    enable_telemetry: bool,
 };
 
 // Mirrored in include/lightpanda.h (lp_fetch_opts). Formats and wait
@@ -165,7 +164,6 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
 
     var mode: @FieldType(lp.Config.Mode, "embed") = .{};
     if (opts_) |opts| {
-        mode.enable_telemetry = opts.enable_telemetry;
         if (opts.user_agent) |ua| {
             const span = ua[0..opts.user_agent_len];
             lp.Config.validateUserAgent(span) catch return error.InvalidParams;
@@ -683,7 +681,6 @@ test "c_api: lifecycle" {
         .http_cache_dir_len = 0,
         .http_timeout_ms = 0,
         .watchdog_ms = 0,
-        .enable_telemetry = false,
     };
     try testing.expectEqual(.invalid_params, lp_init(&bad_opts, &browser));
 
