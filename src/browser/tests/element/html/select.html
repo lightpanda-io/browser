@@ -168,6 +168,43 @@
   }
 </script>
 
+<script id="value_and_selectedIndex_dirtyness">
+  {
+    const sel = document.createElement('select')
+    sel.multiple = true
+    sel.innerHTML = '<option value="same">A</option><option value="same">B</option><option value="other">C</option>'
+    const opts = sel.options
+
+    // value selects and dirties only the first matching option.
+    sel.value = 'same'
+    testing.expectEqual(true, opts[0].selected)
+    testing.expectEqual(false, opts[1].selected)
+    testing.expectEqual(false, opts[2].selected)
+    opts[1].setAttribute('selected', '')
+    testing.expectEqual(true, opts[1].selected)
+
+    // selectedIndex deselects every other option, even in a multiple select,
+    // and dirties only the selected option.
+    sel.selectedIndex = 2
+    testing.expectEqual(false, opts[0].selected)
+    testing.expectEqual(false, opts[1].selected)
+    testing.expectEqual(true, opts[2].selected)
+    opts[0].setAttribute('selected', '')
+    opts[1].removeAttribute('selected')
+    opts[2].removeAttribute('selected')
+    testing.expectEqual(false, opts[0].selected)
+    testing.expectEqual(false, opts[1].selected)
+    testing.expectEqual(true, opts[2].selected)
+
+    const unmatched = document.createElement('select')
+    unmatched.innerHTML = '<option value="a">A</option><option value="b">B</option>'
+    unmatched.value = 'missing'
+    testing.expectEqual(-1, unmatched.selectedIndex)
+    testing.expectEqual(false, unmatched.options[0].selected)
+    testing.expectEqual(false, unmatched.options[1].selected)
+  }
+</script>
+
 <script id="options_collection">
   {
     const sel = $('#select1')

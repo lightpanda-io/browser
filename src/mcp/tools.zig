@@ -1358,11 +1358,231 @@ test "MCP - press Enter on form input triggers submit (lowercase alias)" {
 
     const press_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"selector\":\"#q\",\"key\":\"enter\"}}}");
     try router.handleMessage(server, aa, press_msg);
+    try expectSuccessfulPress(out.written());
     out.clearRetainingCapacity();
 
-    const evaluate_msg = try aa.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"evaluate\",\"arguments\":{\"script\":\"window.submitted === true && window.submittedValue === 'hello'\"}}}");
-    try router.handleMessage(server, aa, evaluate_msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "true") != null);
+    const frame = server.active_session.session.currentFrame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const result = try ls.local.compileAndRun(
+        \\window.submitted === true &&
+        \\window.submittedValue === 'hello' &&
+        \\enterResults.default.clicks === 1 &&
+        \\enterResults.default.submits === 1 &&
+        \\enterResults.default.clickTrusted === true &&
+        \\enterResults.default.focusDuringClick === true &&
+        \\enterResults.default.focusDuringSubmit === true &&
+        \\enterResults.default.submitter === 'default-submit' &&
+        \\JSON.stringify(enterResults.default.order) === '["keydown","click","submit","keyup"]'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+test "MCP - press Enter follows form default actions exactly once" {
+    const aa = testing.arena_allocator;
+    var out: std.Io.Writer.Allocating = .init(aa);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_press_form.html", &out.writer);
+    defer server.deinit();
+
+    const selectors = [_][]const u8{
+        "#prevented",
+        "#notes",
+        "#prevented-notes",
+        "#readonly-notes",
+        "#checkbox",
+        "#radio",
+        "#file",
+        "#submit-input",
+        "#input-button",
+        "#input-reset",
+        "#input-image",
+        "#submit-button",
+        "#button-button",
+        "#button-reset",
+        "#button-default",
+        "#button-empty",
+        "#button-uppercase",
+        "#button-invalid",
+        "#canceled-button",
+        "#dirty-reset-trigger",
+        "#canceled-reset-trigger",
+        "#single",
+        "#two-a",
+    };
+    for (selectors, 1..) |selector, id| {
+        try testPressEnter(server, aa, id, selector);
+        try expectSuccessfulPress(out.written());
+        out.clearRetainingCapacity();
+    }
+
+    // With no selector/backendNodeId, press targets the active element left by
+    // the previous explicit press (#two-a), rather than the Document.
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"press","arguments":{"key":"Enter"}}}
+    );
+    try expectSuccessfulPress(out.written());
+    out.clearRetainingCapacity();
+
+    {
+        const frame = server.active_session.session.currentFrame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun("document.getElementById('two-a').remove()", null);
+    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"press","arguments":{"key":"Enter"}}}
+    );
+    try expectSuccessfulPress(out.written());
+    out.clearRetainingCapacity();
+
+    {
+        const frame = server.active_session.session.currentFrame().?;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.compileAndRun(
+            \\document.getElementById('notes').focus();
+            \\document.getElementById('notes').style.display = 'none';
+        , null);
+    }
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"press","arguments":{"key":"Enter"}}}
+    );
+    try expectSuccessfulPress(out.written());
+    out.clearRetainingCapacity();
+
+    for ([_][]const u8{ "#disabled-notes", "#disabled-input", "#disabled-button", "#hidden-input", "#plain-div" }, 102..) |selector, id| {
+        try testPressEnter(server, aa, id, selector);
+        try expectFailedPress(out.written());
+        out.clearRetainingCapacity();
+    }
+
+    const frame = server.active_session.session.currentFrame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const result = try ls.local.compileAndRun(
+        \\(() => {
+        \\  const r = window.enterResults;
+        \\  const c = r.activation.controls;
+        \\  const click = '[true,true,true,true,0]';
+        \\  const activated = (id, order) =>
+        \\    c[id].clicks === 1 &&
+        \\    JSON.stringify(c[id].click) === click &&
+        \\    JSON.stringify(c[id].order) === JSON.stringify(order);
+        \\  const notActivated = id =>
+        \\    c[id].clicks === 0 &&
+        \\    c[id].click === null &&
+        \\    JSON.stringify(c[id].order) === '["keydown","keyup"]';
+        \\
+        \\  document.getElementById('direct-reset-form').reset();
+        \\  const untrusted = {key: 'Enter', bubbles: true, cancelable: true, composed: true};
+        \\  document.getElementById('untrusted-text').dispatchEvent(new KeyboardEvent('keydown', untrusted));
+        \\  document.getElementById('untrusted-textarea').dispatchEvent(new KeyboardEvent('keydown', untrusted));
+        \\  document.getElementById('untrusted-button').dispatchEvent(new KeyboardEvent('keydown', untrusted));
+        \\
+        \\  return r.prevented.clicks === 0 &&
+        \\    r.prevented.submits === 0 &&
+        \\    JSON.stringify(r.prevented.order) === '["keydown","keyup"]' &&
+        \\    document.getElementById('notes').value === 'line\n' &&
+        \\    JSON.stringify(r.textarea.events) ===
+        \\      '[["beforeinput","insertLineBreak",null,true,true,true,true],["input","insertLineBreak",null,true,false,true,true]]' &&
+        \\    document.getElementById('prevented-notes').value === 'blocked' &&
+        \\    r.textarea.preventedBeforeInputs === 1 &&
+        \\    r.textarea.preventedInputs === 0 &&
+        \\    document.getElementById('readonly-notes').value === 'readonly' &&
+        \\    document.getElementById('readonly-notes').readOnly === true &&
+        \\    document.getElementById('readonly-notes').hasAttribute('readonly') &&
+        \\    document.getElementById('disabled-notes').value === 'disabled' &&
+        \\    r.textarea.readonlyBeforeInputs === 0 &&
+        \\    r.textarea.readonlyInputs === 0 &&
+        \\    r.textarea.disabledBeforeInputs === 0 &&
+        \\    r.textarea.disabledInputs === 0 &&
+        \\    r.textarea.submits === 0 &&
+        \\    r.nontext.submits === 0 &&
+        \\    r.nontext.clicks.checkbox === 0 &&
+        \\    r.nontext.clicks.radio === 0 &&
+        \\    r.nontext.clicks.file === 0 &&
+        \\    document.getElementById('checkbox').checked === false &&
+        \\    document.getElementById('radio').checked === false &&
+        \\    activated('submit-input', ['keydown','click','submit','keyup']) &&
+        \\    activated('input-button', ['keydown','click','keyup']) &&
+        \\    activated('input-reset', ['keydown','click','reset','keyup']) &&
+        \\    activated('input-image', ['keydown','click','submit','keyup']) &&
+        \\    activated('submit-button', ['keydown','click','submit','keyup']) &&
+        \\    activated('button-button', ['keydown','click','keyup']) &&
+        \\    activated('button-reset', ['keydown','click','reset','keyup']) &&
+        \\    activated('button-default', ['keydown','click','submit','keyup']) &&
+        \\    activated('button-empty', ['keydown','click','submit','keyup']) &&
+        \\    activated('button-uppercase', ['keydown','click','keyup']) &&
+        \\    activated('button-invalid', ['keydown','click','submit','keyup']) &&
+        \\    c['disabled-input'].clicks === 0 &&
+        \\    c['disabled-input'].order.length === 0 &&
+        \\    c['disabled-button'].clicks === 0 &&
+        \\    c['disabled-button'].order.length === 0 &&
+        \\    r.unfocusable.events === 0 &&
+        \\    r.bodyTargetedKeydowns === 2 &&
+        \\    notActivated('canceled-button') &&
+        \\    r.activation.submits === 6 &&
+        \\    r.activation.resets === 2 &&
+        \\    JSON.stringify(r.activation.submitters) ===
+        \\      '["submit-input","input-image","submit-button","button-default","button-empty","button-invalid"]' &&
+        \\    document.getElementById('button-default').type === 'submit' &&
+        \\    document.getElementById('button-empty').type === 'submit' &&
+        \\    document.getElementById('button-uppercase').type === 'button' &&
+        \\    document.getElementById('button-invalid').type === 'submit' &&
+        \\    activated('dirty-reset-trigger', ['keydown','click','reset','keyup']) &&
+        \\    r.reset.events === 1 &&
+        \\    r.reset.trusted === true &&
+        \\    r.reset.bubbles === true &&
+        \\    r.reset.cancelable === true &&
+        \\    r.reset.inputEvents === 0 &&
+        \\    r.reset.changeEvents === 0 &&
+        \\    document.getElementById('reset-text').value === 'changed default' &&
+        \\    document.getElementById('reset-text').selectionStart === 0 &&
+        \\    document.getElementById('reset-text').selectionEnd === 0 &&
+        \\    document.getElementById('reset-check').checked === true &&
+        \\    document.getElementById('reset-check').indeterminate === false &&
+        \\    document.getElementById('reset-radio-a').checked === false &&
+        \\    document.getElementById('reset-radio-b').checked === true &&
+        \\    document.getElementById('reset-file').files.length === 0 &&
+        \\    document.getElementById('reset-textarea').value === 'changed area' &&
+        \\    document.getElementById('reset-textarea').selectionStart === 0 &&
+        \\    document.getElementById('reset-textarea').selectionEnd === 0 &&
+        \\    document.getElementById('reset-select').selectedIndex === 0 &&
+        \\    document.getElementById('reset-select').options[0].selected === true &&
+        \\    document.getElementById('reset-select').options[1].selected === false &&
+        \\    document.getElementById('reset-text').validationMessage === 'keep' &&
+        \\    document.getElementById('reset-textarea').validationMessage === 'keep' &&
+        \\    document.getElementById('reset-select').validationMessage === 'keep' &&
+        \\    activated('canceled-reset-trigger', ['keydown','click','reset','keyup']) &&
+        \\    r.canceledReset.events === 1 &&
+        \\    r.canceledReset.trusted === true &&
+        \\    document.getElementById('canceled-reset-text').value === 'dirty' &&
+        \\    r.directReset.events === 1 &&
+        \\    r.directReset.trusted === true &&
+        \\    r.directReset.bubbles === true &&
+        \\    r.directReset.cancelable === true &&
+        \\    document.getElementById('direct-reset-text').value === 'default' &&
+        \\    document.getElementById('direct-reset-text').selectionStart === 0 &&
+        \\    document.getElementById('direct-reset-textarea').value === 'default area' &&
+        \\    document.getElementById('direct-reset-textarea').selectionStart === 0 &&
+        \\    document.getElementById('direct-reset-select').selectedIndex === 1 &&
+        \\    document.getElementById('untrusted-text').value === '' &&
+        \\    document.getElementById('untrusted-textarea').value === 'line' &&
+        \\    r.untrusted.clicks === 0 &&
+        \\    r.untrusted.submits === 0 &&
+        \\    r.single.submits === 1 &&
+        \\    r.single.submitterIsNull === true &&
+        \\    r.two.submits === 0 &&
+        \\    r.two.keydowns === 2;
+        \\})()
+    , null);
+    try testing.expect(result.isTrue());
 }
 
 test "MCP - getCookies: defaults to current page, url filter, all flag" {
@@ -1482,6 +1702,29 @@ test "MCP - sessions: new, list, attach isolation, close" {
     );
     try testing.expect(std.mem.indexOf(u8, out.written(), "closed session a") != null);
     try testing.expect(!server.sessions.contains("a"));
+}
+
+fn testPressEnter(server: *Server, allocator: std.mem.Allocator, id: usize, selector: []const u8) !void {
+    const id_string = try std.fmt.allocPrint(allocator, "{d}", .{id});
+    const msg = try std.mem.concat(allocator, u8, &.{
+        "{\"jsonrpc\":\"2.0\",\"id\":",
+        id_string,
+        ",\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"selector\":\"",
+        selector,
+        "\",\"key\":\"Enter\"}}}",
+    });
+    try router.handleMessage(server, allocator, msg);
+}
+
+fn expectSuccessfulPress(output: []const u8) !void {
+    try testing.expect(std.mem.indexOf(u8, output, "Pressed key") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"isError\":true") == null);
+}
+
+fn expectFailedPress(output: []const u8) !void {
+    try testing.expect(std.mem.indexOf(u8, output, "Pressed key") == null);
+    try testing.expect(std.mem.indexOf(u8, output, "\"error\":") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "InternalError") != null);
 }
 
 fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {

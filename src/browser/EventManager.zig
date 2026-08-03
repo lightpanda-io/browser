@@ -208,9 +208,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // Per spec, only a MouseEvent "click" is an activation event, and
             // the activation target is the nearest inclusive ancestor with
             // activation behavior (ancestors only for bubbling events).
-            if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
+            if (event.is(@import("webapi/event/MouseEvent.zig"))) |mouse_event| {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
-                    Frame.user_input.handleClick(frame, activation_target) catch |err| {
+                    Frame.user_input.handleClick(frame, activation_target, mouse_event._should_focus_activation) catch |err| {
                         log.warn(.event, "frame.click", .{ .err = err });
                     };
                 }

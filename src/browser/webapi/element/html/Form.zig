@@ -22,6 +22,7 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Event = @import("../../Event.zig");
 const HtmlElement = @import("../Html.zig");
 const collections = @import("../../collections.zig");
 
@@ -42,6 +43,7 @@ _firing_submission_events: bool = false,
 // Prevents submission of the form while we're building the entry list for the
 // form. You can imagine an formdata = () => form.submit() endless loop.
 _constructing_entry_list: bool = false,
+_locked_for_reset: bool = false,
 
 pub fn asHtmlElement(self: *Form) *HtmlElement {
     return self._proto;
@@ -175,6 +177,37 @@ pub fn submit(self: *Form, frame: *Frame) !void {
     return frame.submitForm(null, self, .{ .fire_event = false });
 }
 
+pub fn reset(self: *Form, frame: *Frame) !void {
+    if (self._locked_for_reset) return;
+    self._locked_for_reset = true;
+    defer self._locked_for_reset = false;
+
+    const event = try Event.initTrusted(comptime .wrap("reset"), .{
+        .bubbles = true,
+        .cancelable = true,
+    }, frame._page);
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
+
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    if (event._prevent_default) return;
+
+    var controls = self.iterator(frame);
+    while (controls.next()) |control| {
+        if (control.is(Input)) |input| {
+            if (input.getForm(frame) != self) continue;
+            try input.reset(frame);
+        } else if (control.is(TextArea)) |textarea| {
+            if (textarea.getForm(frame) != self) continue;
+            textarea.reset();
+        } else if (control.is(Select)) |select| {
+            if (select.getForm(frame) != self) continue;
+            select.reset();
+        }
+    }
+    frame.domChanged();
+}
+
 /// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
 /// Like submit(), but fires the submit event and validates the form.
 pub fn requestSubmit(self: *Form, submitter: ?*Element, frame: *Frame) !void {
@@ -261,6 +294,7 @@ pub const JsApi = struct {
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
+    pub const reset = bridge.function(Form.reset, .{});
     pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
     pub const checkValidity = bridge.function(Form.checkValidity, .{});
     pub const reportValidity = bridge.function(Form.reportValidity, .{});

@@ -66,6 +66,7 @@ _related_target: ?*EventTarget = null,
 _screen_x: f64,
 _screen_y: f64,
 _shift_key: bool,
+_should_focus_activation: bool = true,
 
 pub const MouseEventOptions = struct {
     screenX: f64 = 0.0,

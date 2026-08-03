@@ -64,6 +64,10 @@ fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u
     try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
 }
 
+fn isSubmitButton(element: *Element) bool {
+    return Element.Html.Form.isSubmitButton(element);
+}
+
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
     if (comptime lp.IS_DEBUG) {
@@ -322,7 +326,7 @@ const JavascriptUrlTask = struct {
     }
 };
 
-pub fn handleClick(frame: *Frame, target: *Node) !void {
+pub fn handleClick(frame: *Frame, target: *Node, should_focus: bool) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
     const html_element = element.is(Element.Html) orelse return;
@@ -364,7 +368,7 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             }, .{ .anchor = target_frame });
         },
         .input => |input| {
-            try element.focus(frame);
+            if (should_focus) try element.focus(frame);
             // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
             // image button submits its form. The form-data set already gets the
             // submitter's coordinate fields appended via FormData.collectForm
@@ -372,11 +376,16 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             if (input._input_type == .submit or input._input_type == .image) {
                 return frame.submitForm(element, input.getForm(frame), .{});
             }
+            if (input._input_type == .reset) {
+                if (input.getForm(frame)) |form| return form.reset(frame);
+            }
         },
         .button => |button| {
-            try element.focus(frame);
-            if (std.mem.eql(u8, button.getType(), "submit")) {
-                return frame.submitForm(element, button.getForm(frame), .{});
+            if (should_focus) try element.focus(frame);
+            switch (button.getTypeEnum()) {
+                .submit => return frame.submitForm(element, button.getForm(frame), .{}),
+                .reset => if (button.getForm(frame)) |form| return form.reset(frame),
+                .button => {},
             }
         },
         .select, .textarea => try element.focus(frame),
@@ -432,8 +441,52 @@ pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
     try frame._event_manager.dispatch(element.asEventTarget(), event);
 }
 
+fn activateButton(frame: *Frame, button: *Element) !void {
+    if (button.isDisabled()) {
+        return;
+    }
+    const event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .button = mouse_button.main,
+        .detail = 0,
+    }, frame);
+    event._should_focus_activation = false;
+    return frame._event_manager.dispatch(button.asEventTarget(), event.asEvent());
+}
+
+fn blocksImplicitSubmission(input: *Element.Html.Input) bool {
+    return switch (input._input_type) {
+        .text, .search, .tel, .url, .email, .password, .date, .month, .week, .time, .@"datetime-local", .number => true,
+        else => false,
+    };
+}
+
+fn implicitlySubmitInput(frame: *Frame, input: *Element.Html.Input) !void {
+    const form = input.getForm(frame) orelse return;
+
+    var controls = form.iterator(frame);
+    var blocking_fields: usize = 0;
+    while (controls.next()) |control| {
+        if (isSubmitButton(control)) {
+            return activateButton(frame, control);
+        }
+        if (control.is(Element.Html.Input)) |candidate| {
+            if (blocksImplicitSubmission(candidate)) {
+                blocking_fields += 1;
+            }
+        }
+    }
+
+    if (blocking_fields <= 1) {
+        return form.requestSubmit(null, frame);
+    }
+}
+
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     const keyboard_event = event.is(KeyboardEvent) orelse return;
+    if (!event.getIsTrusted()) return;
     const key = keyboard_event.getKey();
 
     if (key == .Dead) {
@@ -447,7 +500,13 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
 
     if (target.is(Element.Html.Input)) |input| {
         if (key == .Enter) {
-            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+            if (input._input_type == .button or input._input_type == .reset or input._input_type == .submit or input._input_type == .image) {
+                return activateButton(frame, input.asElement());
+            }
+            if (blocksImplicitSubmission(input)) {
+                return implicitlySubmitInput(frame, input);
+            }
+            return;
         }
 
         // Don't handle text input for radio/checkbox
@@ -463,7 +522,17 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return;
     }
 
+    if (target.is(Element.Html.Button)) |button| {
+        if (key == .Enter) {
+            return activateButton(frame, button.asElement());
+        }
+        return;
+    }
+
     if (target.is(Element.Html.TextArea)) |textarea| {
+        if (textarea.getDisabled() or textarea.getReadonly()) {
+            return;
+        }
         // zig fmt: off
         const append =
             if (key == .Enter) "\n"

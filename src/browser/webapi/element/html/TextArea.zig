@@ -66,6 +66,22 @@ fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
+fn dispatchBeforeInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8, frame: *Frame) !bool {
+    const input_event = try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .data = data,
+        .inputType = input_type,
+    }, frame);
+    const event = input_event.asEvent();
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
+
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
+    return event.getDefaultPrevented();
+}
+
 pub fn asElement(self: *TextArea) *Element {
     return self._proto.asElement();
 }
@@ -86,6 +102,13 @@ pub fn getValue(self: *const TextArea) []const u8 {
 pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     const owned = try frame.arena.dupe(u8, value);
     self._value = owned;
+}
+
+pub fn reset(self: *TextArea) void {
+    self._value = null;
+    self._selection_start = 0;
+    self._selection_end = 0;
+    self._selection_direction = .none;
 }
 
 pub fn getDefaultValue(self: *const TextArea) []const u8 {
@@ -121,6 +144,18 @@ pub fn setDisabled(self: *TextArea, disabled: bool, frame: *Frame) !void {
         try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
         try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
+    }
+}
+
+pub fn getReadonly(self: *const TextArea) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("readonly")) != null;
+}
+
+pub fn setReadonly(self: *TextArea, readonly: bool, frame: *Frame) !void {
+    if (readonly) {
+        try self.asElement().setAttributeSafe(comptime .wrap("readonly"), .wrap(""), frame);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("readonly"), frame);
     }
 }
 
@@ -191,6 +226,10 @@ fn howSelected(self: *const TextArea) HowSelected {
 
 pub fn innerInsert(self: *TextArea, str: []const u8, frame: *Frame) !void {
     const arena = frame.arena;
+    const is_line_break = std.mem.eql(u8, str, "\n");
+    const input_type = if (is_line_break) "insertLineBreak" else "insertText";
+    const data: ?[]const u8 = if (is_line_break) null else str;
+    if (try self.dispatchBeforeInputEvent(data, input_type, frame)) return;
 
     switch (self.howSelected()) {
         .full => {
@@ -228,7 +267,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, frame: *Frame) !void {
             try self.setValue(new_value, frame);
         },
     }
-    try self.dispatchInputEvent(str, "insertText", frame);
+    try self.dispatchInputEvent(data, input_type, frame);
 }
 
 pub fn getSelectionDirection(self: *const TextArea) []const u8 {
@@ -409,6 +448,7 @@ pub const JsApi = struct {
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
     pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{ .ce_reactions = true });
+    pub const readOnly = bridge.accessor(TextArea.getReadonly, TextArea.setReadonly, .{ .ce_reactions = true });
     pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{ .ce_reactions = true });
     pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{ .ce_reactions = true });
     pub const maxLength = bridge.accessor(TextArea.getMaxLength, TextArea.setMaxLength, .{ .ce_reactions = true });

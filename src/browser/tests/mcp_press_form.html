@@ -1,9 +1,350 @@
 <!DOCTYPE html>
 <html>
 <body>
-    <form id="f" onsubmit="window.submitted = true; window.submittedValue = document.getElementById('q').value; event.preventDefault();">
+    <form id="f">
         <input id="q" type="text" name="q">
-        <input type="submit" value="Go">
+        <button id="default-submit" type="submit">Go</button>
     </form>
+
+    <form id="prevent-form">
+        <input id="prevented" type="text">
+        <button id="prevent-submit" type="submit">Prevented</button>
+    </form>
+
+    <form id="textarea-form">
+        <textarea id="notes">line</textarea>
+        <textarea id="prevented-notes">blocked</textarea>
+        <textarea id="readonly-notes" readonly>readonly</textarea>
+        <textarea id="disabled-notes" disabled>disabled</textarea>
+        <button id="textarea-submit" type="submit">Notes</button>
+    </form>
+
+    <form id="nontext-form">
+        <input id="checkbox" type="checkbox">
+        <input id="radio" type="radio">
+        <input id="file" type="file">
+        <button id="nontext-submit" type="submit">Non-text</button>
+    </form>
+
+    <form id="activation-form">
+        <input id="submit-input" type="submit" value="Input submit">
+        <input id="input-button" type="button" value="Input button">
+        <input id="input-reset" type="reset" value="Input reset">
+        <input id="input-image" type="image" alt="Input image">
+        <button id="submit-button" type="submit">Button submit</button>
+        <button id="button-button" type="button">Button</button>
+        <button id="button-reset" type="reset">Button reset</button>
+        <button id="button-default">Button default</button>
+        <button id="button-empty" type="">Button empty</button>
+        <button id="button-uppercase" type="BUTTON">Button uppercase</button>
+        <button id="button-invalid" type="Auto">Button invalid</button>
+        <input id="disabled-input" type="button" disabled value="Disabled input">
+        <button id="disabled-button" type="button" disabled>Disabled button</button>
+        <input id="hidden-input" type="hidden" tabindex="0">
+        <div id="plain-div">Plain div</div>
+        <button id="canceled-button" type="button">Canceled button</button>
+    </form>
+
+    <form id="dirty-reset-form">
+        <input id="reset-text" value="default">
+        <input id="reset-check" type="checkbox" checked>
+        <input id="reset-radio-a" type="radio" name="reset-radio" checked>
+        <input id="reset-radio-b" type="radio" name="reset-radio" checked>
+        <input id="reset-file" type="file">
+        <textarea id="reset-textarea">default area</textarea>
+        <select id="reset-select">
+            <option value="first">First</option>
+            <option value="second" selected>Second</option>
+        </select>
+        <button id="dirty-reset-trigger" type="reset">Reset dirty form</button>
+    </form>
+
+    <form id="canceled-reset-form">
+        <input id="canceled-reset-text" value="default">
+        <button id="canceled-reset-trigger" type="reset">Cancel reset</button>
+    </form>
+
+    <form id="direct-reset-form">
+        <input id="direct-reset-text" value="default">
+        <textarea id="direct-reset-textarea">default area</textarea>
+        <select id="direct-reset-select">
+            <option value="first">First</option>
+            <option value="second" selected>Second</option>
+        </select>
+    </form>
+
+    <form id="untrusted-form">
+        <input id="untrusted-text">
+        <textarea id="untrusted-textarea">line</textarea>
+        <button id="untrusted-button" type="button">Untrusted</button>
+    </form>
+
+    <form id="single-form">
+        <input id="single" type="text">
+    </form>
+
+    <form id="two-form">
+        <input id="two-a" type="text">
+        <input id="two-b" type="email">
+    </form>
+
+    <script>
+        window.submitted = false;
+        window.enterResults = {
+            default: {
+                clicks: 0,
+                submits: 0,
+                clickTrusted: false,
+                focusDuringClick: false,
+                focusDuringSubmit: false,
+                submitter: null,
+                order: []
+            },
+            prevented: {clicks: 0, submits: 0, order: []},
+            textarea: {
+                submits: 0,
+                events: [],
+                preventedBeforeInputs: 0,
+                preventedInputs: 0,
+                readonlyBeforeInputs: 0,
+                readonlyInputs: 0,
+                disabledBeforeInputs: 0,
+                disabledInputs: 0
+            },
+            nontext: {clicks: {checkbox: 0, radio: 0, file: 0}, submits: 0},
+            activation: {controls: {}, submits: 0, resets: 0, submitters: []},
+            reset: {events: 0, trusted: false, bubbles: false, cancelable: false, inputEvents: 0, changeEvents: 0},
+            canceledReset: {events: 0, trusted: false},
+            directReset: {events: 0, trusted: false, bubbles: false, cancelable: false},
+            untrusted: {clicks: 0, submits: 0},
+            unfocusable: {events: 0},
+            bodyTargetedKeydowns: 0,
+            single: {submits: 0, submitterIsNull: false},
+            two: {submits: 0, keydowns: 0}
+        };
+
+        const q = document.getElementById('q');
+        q.addEventListener('keydown', event => {
+            if (event.key === 'Enter') enterResults.default.order.push(event.isTrusted ? 'keydown' : 'keydown-untrusted');
+        });
+        q.addEventListener('keyup', event => {
+            if (event.key === 'Enter') enterResults.default.order.push(event.isTrusted ? 'keyup' : 'keyup-untrusted');
+        });
+        document.getElementById('default-submit').addEventListener('click', event => {
+            enterResults.default.clicks++;
+            enterResults.default.clickTrusted = event.isTrusted;
+            enterResults.default.focusDuringClick = document.activeElement === q;
+            enterResults.default.order.push(event.isTrusted ? 'click' : 'click-untrusted');
+        });
+        document.getElementById('f').addEventListener('submit', event => {
+            window.submitted = true;
+            window.submittedValue = q.value;
+            enterResults.default.submits++;
+            enterResults.default.focusDuringSubmit = document.activeElement === q;
+            enterResults.default.submitter = event.submitter && event.submitter.id;
+            enterResults.default.order.push(event.isTrusted ? 'submit' : 'submit-untrusted');
+            event.preventDefault();
+        });
+
+        const prevented = document.getElementById('prevented');
+        prevented.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            enterResults.prevented.order.push('keydown');
+            event.preventDefault();
+        });
+        prevented.addEventListener('keyup', event => {
+            if (event.key === 'Enter') enterResults.prevented.order.push('keyup');
+        });
+        document.getElementById('prevent-submit').addEventListener('click', () => enterResults.prevented.clicks++);
+        document.getElementById('prevent-form').addEventListener('submit', event => {
+            enterResults.prevented.submits++;
+            event.preventDefault();
+        });
+
+        const notes = document.getElementById('notes');
+        notes.addEventListener('beforeinput', event => {
+            enterResults.textarea.events.push([
+                event.type,
+                event.inputType,
+                event.data,
+                event.isTrusted,
+                event.cancelable,
+                event.bubbles,
+                event.composed
+            ]);
+        });
+        notes.addEventListener('input', event => {
+            enterResults.textarea.events.push([
+                event.type,
+                event.inputType,
+                event.data,
+                event.isTrusted,
+                event.cancelable,
+                event.bubbles,
+                event.composed
+            ]);
+        });
+        const preventedNotes = document.getElementById('prevented-notes');
+        preventedNotes.addEventListener('beforeinput', event => {
+            enterResults.textarea.preventedBeforeInputs++;
+            event.preventDefault();
+        });
+        preventedNotes.addEventListener('input', () => enterResults.textarea.preventedInputs++);
+        const readonlyNotes = document.getElementById('readonly-notes');
+        readonlyNotes.readOnly = false;
+        readonlyNotes.readOnly = true;
+        readonlyNotes.addEventListener('beforeinput', () => enterResults.textarea.readonlyBeforeInputs++);
+        readonlyNotes.addEventListener('input', () => enterResults.textarea.readonlyInputs++);
+        const disabledNotes = document.getElementById('disabled-notes');
+        disabledNotes.addEventListener('beforeinput', () => enterResults.textarea.disabledBeforeInputs++);
+        disabledNotes.addEventListener('input', () => enterResults.textarea.disabledInputs++);
+        document.getElementById('textarea-form').addEventListener('submit', event => {
+            enterResults.textarea.submits++;
+            event.preventDefault();
+        });
+
+        for (const id of ['checkbox', 'radio', 'file']) {
+            document.getElementById(id).addEventListener('click', () => enterResults.nontext.clicks[id]++);
+        }
+        document.getElementById('nontext-form').addEventListener('submit', event => {
+            enterResults.nontext.submits++;
+            event.preventDefault();
+        });
+
+        const activationIds = [
+            'submit-input',
+            'input-button',
+            'input-reset',
+            'input-image',
+            'submit-button',
+            'button-button',
+            'button-reset',
+            'button-default',
+            'button-empty',
+            'button-uppercase',
+            'button-invalid',
+            'disabled-input',
+            'disabled-button',
+            'canceled-button',
+            'dirty-reset-trigger',
+            'canceled-reset-trigger'
+        ];
+        let currentActivation = null;
+        for (const id of activationIds) {
+            const state = enterResults.activation.controls[id] = {clicks: 0, order: [], click: null};
+            const element = document.getElementById(id);
+            element.addEventListener('keydown', event => {
+                if (event.key !== 'Enter') return;
+                state.order.push('keydown');
+                if (id === 'canceled-button') event.preventDefault();
+            });
+            element.addEventListener('keyup', event => {
+                if (event.key === 'Enter') state.order.push('keyup');
+            });
+            element.addEventListener('click', event => {
+                currentActivation = id;
+                state.clicks++;
+                state.click = [event.isTrusted, event.bubbles, event.composed, event.cancelable, event.detail];
+                state.order.push('click');
+            });
+        }
+        document.getElementById('hidden-input').addEventListener('keydown', () => enterResults.unfocusable.events++);
+        document.getElementById('hidden-input').addEventListener('keyup', () => enterResults.unfocusable.events++);
+        document.getElementById('plain-div').addEventListener('keydown', () => enterResults.unfocusable.events++);
+        document.getElementById('plain-div').addEventListener('keyup', () => enterResults.unfocusable.events++);
+        document.body.addEventListener('keydown', event => {
+            if (event.target === document.body) enterResults.bodyTargetedKeydowns++;
+        });
+
+        document.getElementById('activation-form').addEventListener('submit', event => {
+            enterResults.activation.submits++;
+            enterResults.activation.submitters.push(event.submitter && event.submitter.id);
+            enterResults.activation.controls[event.submitter.id].order.push('submit');
+            event.preventDefault();
+        });
+        document.getElementById('activation-form').addEventListener('reset', event => {
+            enterResults.activation.resets++;
+            enterResults.activation.controls[currentActivation].order.push('reset');
+        });
+
+        const resetText = document.getElementById('reset-text');
+        const resetCheck = document.getElementById('reset-check');
+        const resetRadioA = document.getElementById('reset-radio-a');
+        const resetRadioB = document.getElementById('reset-radio-b');
+        const resetTextarea = document.getElementById('reset-textarea');
+        const resetSelect = document.getElementById('reset-select');
+        const resetFile = document.getElementById('reset-file');
+        for (const control of [resetText, resetCheck, resetRadioA, resetRadioB, resetTextarea, resetSelect, resetFile]) {
+            control.addEventListener('input', () => enterResults.reset.inputEvents++);
+            control.addEventListener('change', () => enterResults.reset.changeEvents++);
+        }
+        document.getElementById('dirty-reset-form').addEventListener('reset', event => {
+            enterResults.reset.events++;
+            enterResults.reset.trusted = event.isTrusted;
+            enterResults.reset.bubbles = event.bubbles;
+            enterResults.reset.cancelable = event.cancelable;
+            enterResults.activation.controls[currentActivation].order.push('reset');
+        });
+        resetText.value = 'dirty';
+        resetText.setSelectionRange(1, 3);
+        resetText.setCustomValidity('keep');
+        resetText.defaultValue = 'changed default';
+        resetCheck.checked = false;
+        resetCheck.indeterminate = true;
+        resetRadioA.checked = true;
+        resetTextarea.value = 'dirty area';
+        resetTextarea.setSelectionRange(1, 4);
+        resetTextarea.setCustomValidity('keep');
+        resetTextarea.defaultValue = 'changed area';
+        resetSelect.selectedIndex = 1;
+        resetSelect.options[0].setAttribute('selected', '');
+        resetSelect.options[1].removeAttribute('selected');
+        resetSelect.setCustomValidity('keep');
+
+        const canceledResetText = document.getElementById('canceled-reset-text');
+        canceledResetText.value = 'dirty';
+        document.getElementById('canceled-reset-form').addEventListener('reset', event => {
+            enterResults.canceledReset.events++;
+            enterResults.canceledReset.trusted = event.isTrusted;
+            enterResults.activation.controls[currentActivation].order.push('reset');
+            event.preventDefault();
+        });
+
+        const directResetText = document.getElementById('direct-reset-text');
+        const directResetTextarea = document.getElementById('direct-reset-textarea');
+        const directResetSelect = document.getElementById('direct-reset-select');
+        directResetText.value = 'dirty';
+        directResetText.setSelectionRange(1, 3);
+        directResetTextarea.value = 'dirty area';
+        directResetTextarea.setSelectionRange(1, 4);
+        directResetSelect.selectedIndex = 0;
+        document.getElementById('direct-reset-form').addEventListener('reset', event => {
+            enterResults.directReset.events++;
+            enterResults.directReset.trusted = event.isTrusted;
+            enterResults.directReset.bubbles = event.bubbles;
+            enterResults.directReset.cancelable = event.cancelable;
+            document.getElementById('direct-reset-form').reset();
+        });
+
+        document.getElementById('untrusted-button').addEventListener('click', () => enterResults.untrusted.clicks++);
+        document.getElementById('untrusted-form').addEventListener('submit', event => {
+            enterResults.untrusted.submits++;
+            event.preventDefault();
+        });
+
+        document.getElementById('single-form').addEventListener('submit', event => {
+            enterResults.single.submits++;
+            enterResults.single.submitterIsNull = event.submitter === null;
+            event.preventDefault();
+        });
+        const twoA = document.getElementById('two-a');
+        twoA.addEventListener('keydown', event => {
+            if (event.key === 'Enter') enterResults.two.keydowns++;
+        });
+        document.getElementById('two-form').addEventListener('submit', event => {
+            enterResults.two.submits++;
+            event.preventDefault();
+        });
+    </script>
 </body>
 </html>

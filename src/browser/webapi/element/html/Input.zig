@@ -84,6 +84,7 @@ _proto: *HtmlElement,
 _default_value: ?[]const u8 = null,
 _default_checked: bool = false,
 _value: ?[]const u8 = null,
+_value_dirty: bool = false,
 _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
@@ -158,13 +159,14 @@ pub fn getRedactedValue(self: *const Input) []const u8 {
 }
 
 pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
-    // File inputs: setting to empty string is a no-op, anything else throws
+    // File inputs may only be cleared from script.
     if (self._input_type == .file) {
-        if (value.len == 0) return;
+        if (value.len == 0) return self.clearFiles(frame);
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._value = try self.sanitizeValue(true, value, frame);
+    self._value_dirty = true;
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
@@ -293,6 +295,41 @@ pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
 }
 
+fn clearFiles(self: *Input, frame: *Frame) void {
+    const fl = self._files orelse return;
+    for (fl._files) |file| {
+        file._proto.releaseRef(frame._page);
+    }
+    fl._files = &.{};
+}
+
+pub fn reset(self: *Input, frame: *Frame) !void {
+    const reset_value = try self.defaultCurrentValue(frame);
+    self._value_dirty = false;
+    self._value = reset_value;
+
+    self._checked = self._default_checked;
+    if (self._checked and self._input_type == .radio) {
+        self.uncheckRadioGroup(frame);
+    }
+    self._checked_dirty = false;
+    self._indeterminate = false;
+    self.clearFiles(frame);
+    self._selection_start = 0;
+    self._selection_end = 0;
+    self._selection_direction = .none;
+}
+
+fn defaultCurrentValue(self: *Input, frame: *Frame) !?[]const u8 {
+    if (self._default_value) |value| {
+        return try self.sanitizeValue(false, value, frame);
+    }
+    return switch (self._input_type) {
+        .checkbox, .radio, .file => null,
+        else => try self.sanitizeValue(false, "", frame),
+    };
+}
+
 /// JS-binding wrapper for the `value` getter: for type=file, return the spec
 /// "C:\\fakepath\\<name>" string; otherwise delegate to plain getValue().
 pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
@@ -409,9 +446,8 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
 }
 
 pub fn suffersTooLong(self: *const Input) bool {
-    // Per spec, only the dirty value flag triggers tooLong / tooShort. We treat
-    // the presence of an explicit _value (vs. attribute-derived _default_value)
-    // as an approximation of dirty.
+    // The presence of an explicit current value is the existing approximation
+    // of the dirty-value constraint-validation behavior.
     const value = self._value orelse return false;
     const max = self.getMaxLength();
     if (max < 0) return false;
@@ -1500,7 +1536,12 @@ pub const Build = struct {
                     }
                 }
             },
-            .value => self._default_value = try frame.arena.dupe(u8, value.str()),
+            .value => {
+                self._default_value = try frame.arena.dupe(u8, value.str());
+                if (!self._value_dirty) {
+                    self._value = try self.defaultCurrentValue(frame);
+                }
+            },
             .checked => {
                 self._default_checked = true;
                 // Only update checked state if it hasn't been manually modified
@@ -1515,12 +1556,17 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
             .type => self._input_type = .text,
-            .value => self._default_value = null,
+            .value => {
+                self._default_value = null;
+                if (!self._value_dirty) {
+                    self._value = try self.defaultCurrentValue(frame);
+                }
+            },
             .checked => {
                 self._default_checked = false;
                 // Only update checked state if it hasn't been manually modified
@@ -1538,6 +1584,7 @@ pub const Build = struct {
 
         // Copy runtime state from source to clone
         clone._value = source._value;
+        clone._value_dirty = source._value_dirty;
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
         clone._selection_direction = source._selection_direction;

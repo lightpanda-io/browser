@@ -36,6 +36,7 @@ _proto: *HtmlElement,
 _value: ?[]const u8 = null,
 _selected: bool = false,
 _default_selected: bool = false,
+_selected_dirty: bool = false,
 _disabled: bool = false,
 
 pub fn asElement(self: *Option) *Element {
@@ -82,6 +83,7 @@ pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     // TODO: When setting selected=true, may need to unselect other options
     // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
+    self._selected_dirty = true;
     frame.domChanged();
 }
 
@@ -168,7 +170,7 @@ pub const Build = struct {
             .value => self._value = element.getAttributeSafe(comptime .wrap("value")),
             .selected => {
                 self._default_selected = true;
-                self._selected = true;
+                if (!self._selected_dirty) self._selected = true;
             },
         }
     }
@@ -180,7 +182,7 @@ pub const Build = struct {
             .value => self._value = null,
             .selected => {
                 self._default_selected = false;
-                self._selected = false;
+                if (!self._selected_dirty) self._selected = false;
             },
         }
     }

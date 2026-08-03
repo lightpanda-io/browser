@@ -583,7 +583,7 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
                     \\    "selector": { "type": "string", "description": "Optional CSS selector of the element to target. Preferred over backendNodeId." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided." }
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the active element when neither selector nor backendNodeId is provided." }
                     \\  },
                     \\  "required": ["key"]
                     \\}

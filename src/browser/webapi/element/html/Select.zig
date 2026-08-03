@@ -121,12 +121,17 @@ pub fn getValue(self: *Select, frame: *Frame) []const u8 {
 }
 
 pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
-    // Find option with matching value and select it
-    // Note: This updates the current state (_selected), not the default state (attribute)
-    // Setting value always deselects all others, even for multiple selects
+    self._selected_index_set = true;
+
+    var matched = false;
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        option._selected = std.mem.eql(u8, option.getValue(frame), value);
+        const selected = !matched and std.mem.eql(u8, option.getValue(frame), value);
+        option._selected = selected;
+        if (selected) {
+            option._selected_dirty = true;
+            matched = true;
+        }
     }
 }
 
@@ -153,19 +158,41 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
     // Mark that selectedIndex has been explicitly set
     self._selected_index_set = true;
 
-    // Select option at given index
-    // Note: This updates the current state (_selected), not the default state (attribute)
-    const is_multiple = self.getMultiple();
     var current_index: i32 = 0;
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        if (current_index == index) {
-            option._selected = true;
-        } else if (!is_multiple) {
-            // Only deselect others if not multiple
-            option._selected = false;
+        const selected = current_index == index;
+        option._selected = selected;
+        if (selected) {
+            option._selected_dirty = true;
         }
         current_index += 1;
+    }
+}
+
+pub fn reset(self: *Select) void {
+    self._selected_index_set = false;
+
+    var last_selected: ?*Option = null;
+    var first_enabled: ?*Option = null;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        option._selected = option._default_selected;
+        option._selected_dirty = false;
+        if (!option.asElement().isDisabled() and first_enabled == null) {
+            first_enabled = option;
+        }
+        if (option._selected) {
+            if (!self.getMultiple()) {
+                if (last_selected) |previous| previous._selected = false;
+            }
+            last_selected = option;
+        }
+    }
+
+    const size = self.getSize();
+    if (!self.getMultiple() and last_selected == null and (size == 0 or size == 1)) {
+        if (first_enabled) |option| option._selected = true;
     }
 }
 

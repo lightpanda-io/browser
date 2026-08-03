@@ -38,6 +38,19 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
+fn canFocusForPress(el: *Element, frame: *Frame) bool {
+    if (!el.asNode().isConnected() or el.isDisabled() or !el.checkVisibilityCached(null, frame)) return false;
+    if (el.getTag() == .input and el.as(Element.Html.Input)._input_type == .hidden) return false;
+    if (el.getAttributeSafe(comptime .wrap("tabindex")) != null) return true;
+
+    return switch (el.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => true,
+        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
+}
+
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
@@ -80,11 +93,28 @@ pub fn hover(node: *DOMNode, frame: *Frame) !void {
 }
 
 pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
-    const target_el: ?*Element = if (node) |n|
-        (n.is(Element) orelse return error.InvalidNodeType)
-    else
-        null;
-    const target = if (target_el) |el| el.asEventTarget() else frame.document.asNode().asEventTarget();
+    const target_el = if (node) |n| blk: {
+        const el = n.is(Element) orelse return error.InvalidNodeType;
+        if (!canFocusForPress(el, frame)) return error.ActionFailed;
+        el.focus(frame) catch |err| {
+            lp.log.err(.app, "press focus failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+        if (frame.window._document.getActiveElement() != el) {
+            lp.log.err(.app, "press target could not be focused", .{});
+            return error.ActionFailed;
+        }
+        break :blk el;
+    } else blk: {
+        const document = frame.window._document;
+        if (document._active_element) |active| {
+            if (!canFocusForPress(active, frame)) {
+                document._active_element = null;
+            }
+        }
+        break :blk document.getActiveElement() orelse return error.ActionFailed;
+    };
+    const target = target_el.asEventTarget();
     const canonical = canonicalKey(key);
 
     const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
@@ -98,14 +128,6 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };
-
-    if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
-        if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
-            // Don't skip keyup on a submit-listener throw — UIs that gate
-            // state on keyup (e.g. clearing a "submitting" flag) would hang.
-            lp.log.warn(.app, "implicit form submit failed", .{ .err = err });
-        };
-    }
 
     const keyup_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keyup"), .{
         .bubbles = true,
@@ -145,28 +167,6 @@ fn canonicalKey(key: []const u8) []const u8 {
         if (std.ascii.eqlIgnoreCase(key, a.in)) return a.out;
     }
     return key;
-}
-
-fn implicitFormSubmit(el: *Element, frame: *Frame) !void {
-    const Input = Element.Html.Input;
-    const Button = Element.Html.Button;
-
-    if (el.is(Input)) |input| {
-        const form = input.getForm(frame) orelse return;
-        const submitter: ?*Element = switch (input._input_type) {
-            .submit, .image => el,
-            // Non-text controls (checkbox, radio, file, ...) don't trigger
-            // implicit submission; only the text-like family does.
-            .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => null,
-            else => return,
-        };
-        return form.requestSubmit(submitter, frame);
-    }
-    if (el.is(Button)) |button| {
-        if (!std.ascii.eqlIgnoreCase(button.getType(), "submit")) return;
-        const form = button.getForm(frame) orelse return;
-        return form.requestSubmit(el, frame);
-    }
 }
 
 pub fn selectOption(node: *DOMNode, value: []const u8, frame: *Frame) !void {

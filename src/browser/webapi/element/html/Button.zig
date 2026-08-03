@@ -34,6 +34,18 @@ const Button = @This();
 
 pub const Proto = HtmlElement;
 
+pub const Type = enum {
+    submit,
+    reset,
+    button,
+
+    pub fn fromString(value: []const u8) Type {
+        if (std.ascii.eqlIgnoreCase(value, "reset")) return .reset;
+        if (std.ascii.eqlIgnoreCase(value, "button")) return .button;
+        return .submit;
+    }
+};
+
 _proto: *HtmlElement,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
@@ -70,7 +82,12 @@ pub fn setName(self: *Button, name: []const u8, frame: *Frame) !void {
 }
 
 pub fn getType(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "submit";
+    return @tagName(self.getTypeEnum());
+}
+
+pub fn getTypeEnum(self: *const Button) Type {
+    const value = self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+    return Type.fromString(value);
 }
 
 pub fn setType(self: *Button, typ: []const u8, frame: *Frame) !void {

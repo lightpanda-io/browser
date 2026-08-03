@@ -83,7 +83,7 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
     // https://developer.mozilla.org/en-US/docs/Web/API/Element/input_event
     const rootevt = event._proto._proto;
     rootevt._bubbles = true;
-    rootevt._cancelable = false;
+    rootevt._cancelable = opts.cancelable;
     rootevt._composed = true;
 
     // Hold a ref on the DataTransfer (when present) for this event's lifetime;

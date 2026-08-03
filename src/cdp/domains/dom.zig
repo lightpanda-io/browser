@@ -932,6 +932,15 @@ test "cdp.dom: setFileInputFiles exposes files to JS" {
         \\window.__evts.join(',') === 'input:false:true:upload,change:false:true:upload'
     , null);
     try testing.expect(result.isTrue());
+
+    // Reset clears the selected files without firing another input/change pair.
+    const reset_result = try ls.local.compileAndRun(
+        \\document.getElementById('upload-form').reset();
+        \\f.files.length === 0 &&
+        \\f.value === '' &&
+        \\window.__evts.join(',') === 'input:false:true:upload,change:false:true:upload'
+    , null);
+    try testing.expect(reset_result.isTrue());
 }
 
 test "cdp.dom: setFileInputFiles rejects non-input node" {
