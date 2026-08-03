@@ -23,12 +23,18 @@ const Env = @import("browser/js/Env.zig");
 
 const log = lp.log;
 
-// How often the checker thread scans the entries.
+// How often the checker thread scans ordinary liveness heartbeats. Explicit
+// execution deadlines shorten this wait and wake the thread when armed.
 const CHECK_INTERVAL_NS = 1 * std.time.ns_per_s;
+// The condition wait uses the awake clock while command deadlines use boot
+// time (which includes suspend). Rescan active finite deadlines at least once
+// per second so a resume observes an expired boot-time deadline promptly.
+const MAX_DEADLINE_WAIT_NS = std.time.ns_per_s;
 
 const Watchdog = @This();
 
-// null == disabled: no thread, register/unregister no-op.
+// null disables ordinary stall detection. WebDriver explicitly enables the
+// thread before creating a browser so per-command deadlines remain available.
 timeout_ms: ?u32,
 shutdown: bool = false,
 thread: ?std.Thread = null,
@@ -41,6 +47,9 @@ pub const Entry = struct {
     env: *Env,
     heartbeat: *Heartbeat,
     fired: bool = false,
+    execution_active: std.atomic.Value(bool) = .init(false),
+    execution_deadline_ns: std.atomic.Value(u64) = .init(0),
+    execution_deadline_fired: std.atomic.Value(bool) = .init(false),
     registered: bool = false,
     node: std.DoublyLinkedList.Node = .{},
 };
@@ -62,17 +71,21 @@ pub fn deinit(self: *Watchdog) void {
 
 // Call once the Watchdog is at its final address (init returns by value).
 pub fn start(self: *Watchdog) !void {
-    if (self.timeout_ms == null) {
-        return;
-    }
+    if (self.timeout_ms == null) return;
+    self.thread = try std.Thread.spawn(.{}, run, .{self});
+}
+
+/// WebDriver calls this before creating its first browser. This preserves the
+/// thread-free `--watchdog-ms=0` behavior for every other mode.
+pub fn enableExecutionDeadlines(self: *Watchdog) !void {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+    if (self.thread != null) return;
     self.thread = try std.Thread.spawn(.{}, run, .{self});
 }
 
 pub fn register(self: *Watchdog, entry: *Entry) void {
-    if (self.timeout_ms == null) {
-        return;
-    }
-
+    if (self.thread == null) return;
     {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
@@ -89,27 +102,84 @@ pub fn unregister(self: *Watchdog, entry: *Entry) void {
     {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
+        entry.execution_active.store(false, .release);
+        entry.execution_deadline_ns.store(0, .release);
+        entry.execution_deadline_fired.store(false, .release);
         self.entries.remove(&entry.node);
+        self.cond.signal(lp.io);
     }
     entry.registered = false;
 }
 
-fn run(self: *Watchdog) void {
-    const timeout_ms: u64 = self.timeout_ms.?;
+pub fn armExecutionDeadline(self: *Watchdog, entry: *Entry, timeout_ms: ?u64) void {
+    std.debug.assert(self.thread != null);
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
 
+    entry.execution_active.store(true, .release);
+    entry.execution_deadline_fired.store(false, .release);
+    entry.fired = false;
+    entry.heartbeat.touch();
+    const deadline = if (timeout_ms) |timeout|
+        @as(u64, @intCast(std.Io.Timestamp.now(lp.io, .boot).toNanoseconds())) +| timeout *| std.time.ns_per_ms
+    else
+        0;
+    entry.execution_deadline_ns.store(deadline, .release);
+    self.cond.signal(lp.io);
+}
+
+pub fn executionDeadlineFired(_: *const Watchdog, entry: *const Entry) bool {
+    return entry.execution_deadline_fired.load(.acquire);
+}
+
+pub fn disarmExecutionDeadline(self: *Watchdog, entry: *Entry) bool {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    entry.execution_active.store(false, .release);
+    entry.execution_deadline_ns.store(0, .release);
+    const fired = entry.execution_deadline_fired.swap(false, .acq_rel);
+    entry.fired = false;
+    entry.heartbeat.touch();
+    self.cond.signal(lp.io);
+    return fired;
+}
+
+fn run(self: *Watchdog) void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
     while (true) {
-        lp.timedWait(&self.cond, &self.mutex, CHECK_INTERVAL_NS) catch {};
         if (self.shutdown) {
             return;
         }
 
-        const now = lp.datetime.milliTimestamp(.boot);
+        const now: u64 = @intCast(std.Io.Timestamp.now(lp.io, .boot).toNanoseconds());
+        const now_ms = lp.datetime.milliTimestamp(.boot);
+        var next_wait_ns: ?u64 = if (self.timeout_ms != null) CHECK_INTERVAL_NS else null;
         var node = self.entries.first;
         while (node) |n| : (node = n.next) {
             const entry: *Entry = @fieldParentPtr("node", n);
+            if (entry.execution_active.load(.acquire)) {
+                const execution_deadline = entry.execution_deadline_ns.load(.acquire);
+                if (!entry.execution_deadline_fired.load(.acquire)) {
+                    if (execution_deadline != 0 and now >= execution_deadline) {
+                        entry.execution_deadline_fired.store(true, .release);
+                        entry.env.requestExecutionDeadlineTerminate();
+                    } else if (execution_deadline != 0) {
+                        const remaining_ns = execution_deadline - now;
+                        next_wait_ns = if (next_wait_ns) |current|
+                            @min(current, remaining_ns)
+                        else
+                            remaining_ns;
+                    }
+                }
+                // An explicit command deadline supersedes the generic stall
+                // limit, including a null (infinite) WebDriver timeout.
+                continue;
+            }
+
+            const timeout_ms: u64 = self.timeout_ms orelse continue;
             const heartbeat = entry.heartbeat;
 
             if (heartbeat.wait_depth.load(.acquire) > 0) {
@@ -124,7 +194,7 @@ fn run(self: *Watchdog) void {
                 continue;
             }
 
-            const stalled_ms = now -| last;
+            const stalled_ms = now_ms -| last;
             if (stalled_ms < timeout_ms) {
                 entry.fired = false;
                 continue;
@@ -135,6 +205,15 @@ fn run(self: *Watchdog) void {
                 log.err(.app, "watchdog stall", .{ .stalled_ms = stalled_ms });
                 entry.env.requestTerminate();
             }
+        }
+        const wait_ns: ?u64 = if (next_wait_ns) |ns|
+            @min(@max(ns, 1), MAX_DEADLINE_WAIT_NS)
+        else
+            null;
+        if (wait_ns) |timeout_ns| {
+            lp.timedWait(&self.cond, &self.mutex, timeout_ns) catch {};
+        } else {
+            self.cond.waitUncancelable(lp.io, &self.mutex);
         }
     }
 }
@@ -175,3 +254,13 @@ pub const Heartbeat = struct {
         _ = self.wait_depth.fetchSub(1, .release);
     }
 };
+
+test "Watchdog: disabled mode stays thread-free unless deadlines are enabled" {
+    var disabled = Watchdog.init(null);
+    try disabled.start();
+    defer disabled.deinit();
+    try std.testing.expect(disabled.thread == null);
+
+    try disabled.enableExecutionDeadlines();
+    try std.testing.expect(disabled.thread != null);
+}

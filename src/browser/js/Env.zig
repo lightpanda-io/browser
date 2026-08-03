@@ -102,6 +102,12 @@ terminate_mutex: std.Io.Mutex = .init,
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
 
+// The caller that owns the outstanding termination request. A deadline may
+// only cancel its own request: a heap limit, shutdown, or ordinary
+// cancellation must remain terminating when a command deadline unwinds.
+terminate_owner: std.atomic.Value(u8) = .init(@intFromEnum(TerminateOwner.none)),
+terminate_owner_mutex: std.Io.Mutex = .init,
+
 pub const InitOpts = struct {
     with_inspector: bool = false,
 };
@@ -558,6 +564,10 @@ pub fn terminatePending(self: *const Env) bool {
 pub fn terminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
+    self.terminate_owner_mutex.lockUncancelable(lp.io);
+    defer self.terminate_owner_mutex.unlock(lp.io);
+    self.terminate_owner.store(@intFromEnum(TerminateOwner.generic), .release);
+    self.terminate_requested.store(true, .release);
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
@@ -602,6 +612,30 @@ fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) 
 
 // Called from the network thread, caused v8 to eventually call terminateInterrupt
 pub fn requestTerminate(self: *Env) void {
+    self.requestTerminateOwned(.generic);
+}
+
+/// Request termination for one bounded command. Only
+/// `cancelExecutionDeadlineTerminate` may clear this request; generic
+/// termination wins if it races with the deadline.
+pub fn requestExecutionDeadlineTerminate(self: *Env) void {
+    self.requestTerminateOwned(.execution_deadline);
+}
+
+const TerminateOwner = enum(u8) {
+    none,
+    generic,
+    execution_deadline,
+};
+
+fn requestTerminateOwned(self: *Env, owner: TerminateOwner) void {
+    self.terminate_owner_mutex.lockUncancelable(lp.io);
+    defer self.terminate_owner_mutex.unlock(lp.io);
+
+    if (owner == .execution_deadline and self.terminate_owner.load(.acquire) != @intFromEnum(TerminateOwner.none)) {
+        return;
+    }
+    self.terminate_owner.store(@intFromEnum(owner), .release);
     self.terminate_requested.store(true, .release);
     v8.v8__Isolate__RequestInterrupt(self.isolate.handle, terminateInterrupt, self);
 }
@@ -621,8 +655,27 @@ fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
 pub fn cancelTerminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
+    self.terminate_owner_mutex.lockUncancelable(lp.io);
+    defer self.terminate_owner_mutex.unlock(lp.io);
     self.terminate_requested.store(false, .release);
+    self.terminate_owner.store(@intFromEnum(TerminateOwner.none), .release);
     v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
+}
+
+/// Clear an execution deadline only when it still owns the request. Returns
+/// false when another subsystem requested termination after the deadline.
+pub fn cancelExecutionDeadlineTerminate(self: *Env) bool {
+    self.terminate_mutex.lockUncancelable(lp.io);
+    defer self.terminate_mutex.unlock(lp.io);
+    self.terminate_owner_mutex.lockUncancelable(lp.io);
+    defer self.terminate_owner_mutex.unlock(lp.io);
+    if (self.terminate_owner.load(.acquire) != @intFromEnum(TerminateOwner.execution_deadline)) {
+        return false;
+    }
+    self.terminate_requested.store(false, .release);
+    self.terminate_owner.store(@intFromEnum(TerminateOwner.none), .release);
+    v8.v8__Isolate__CancelTerminateExecution(self.isolate.handle);
+    return true;
 }
 
 /// Like `runMicrotasks`, but for the isolate-default queue used by contexts

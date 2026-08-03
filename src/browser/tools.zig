@@ -1397,6 +1397,43 @@ fn runEval(arena: std.mem.Allocator, page: *lp.Frame, script: [:0]const u8, fall
     return .{ .text = text };
 }
 
+fn commandDeadlineReached(
+    browser: *const lp.Browser,
+    timer: std.Io.Timestamp,
+    timeout_ms: ?u64,
+) bool {
+    const timeout = timeout_ms orelse return false;
+    if (browser.executionDeadlineFired()) return true;
+    const elapsed_ns = timer.untilNow(lp.io, .boot).toNanoseconds();
+    const timeout_ns: i96 = @as(i96, @intCast(timeout)) * std.time.ns_per_ms;
+    return elapsed_ns >= timeout_ns;
+}
+
+fn commandDeadlineBudget(timer: std.Io.Timestamp, timeout_ms: ?u64, max_ms: u32) u32 {
+    const timeout = timeout_ms orelse return max_ms;
+    const elapsed_ns = timer.untilNow(lp.io, .boot).toNanoseconds();
+    const timeout_ns: i96 = @as(i96, @intCast(timeout)) * std.time.ns_per_ms;
+    const remaining_ns = @max(timeout_ns - elapsed_ns, 0);
+    const remaining_ms = @divFloor(remaining_ns + std.time.ns_per_ms - 1, std.time.ns_per_ms);
+    return @intCast(@min(@max(remaining_ms, 1), @as(i96, max_ms)));
+}
+
+fn finishCommandDeadline(
+    browser: *lp.Browser,
+    timer: std.Io.Timestamp,
+    timeout_ms: ?u64,
+    armed: *bool,
+) bool {
+    if (!armed.*) return false;
+    armed.* = false;
+    const fired = browser.disarmExecutionDeadline();
+    if (fired) _ = browser.env.cancelExecutionDeadlineTerminate();
+    const timeout = timeout_ms orelse return fired;
+    const elapsed_ns = timer.untilNow(lp.io, .boot).toNanoseconds();
+    const timeout_ns: i96 = @as(i96, @intCast(timeout)) * std.time.ns_per_ms;
+    return fired or elapsed_ns >= timeout_ns;
+}
+
 /// Objects/arrays serialize as JSON so `return obj` prints data, not
 /// `[object Object]`; errors and primitives keep their string form.
 fn evalResultText(arena: std.mem.Allocator, value: lp.js.Value) ![]u8 {
@@ -1943,6 +1980,7 @@ pub const StartedGoto = struct {
 /// right after createPage but navigate can change/null it, so callers re-fetch.
 fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHandle {
     const page = session.createPage() catch return ToolError.NavigationFailed;
+    errdefer page.close();
     _ = page.frame().?.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
@@ -1992,6 +2030,111 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     const frame = page.frame() orelse return ToolError.NavigationFailed;
     if (frame._last_navigate_error != null) return ToolError.NavigationFailed;
     return result;
+}
+
+/// Navigate to a literal URL without MCP's `$LP_*` argument substitution.
+/// `until = null` implements WebDriver's `pageLoadStrategy: "none"`.
+pub fn gotoLiteral(
+    session: *lp.Session,
+    registry: *CDPNode.Registry,
+    url: [:0]const u8,
+    timeout_ms: ?u64,
+    until: ?lp.Config.WaitUntil,
+) ToolError!lp.Session.Runner.WaitResult {
+    const existing_page = session.primaryPage();
+    const page = existing_page orelse session.createPage() catch return ToolError.NavigationFailed;
+    errdefer if (existing_page == null) page.close();
+
+    const frame = page.frame() orelse return ToolError.FrameNotLoaded;
+    const url_arena = session.getArena(.small, "tools.gotoLiteral") catch return ToolError.OutOfMemory;
+    defer url_arena.release();
+    const resolved_url = lp.URL.resolve(url_arena.allocator(), "", url, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return ToolError.OutOfMemory,
+        error.TypeError => return ToolError.InvalidParams,
+    };
+
+    const wait_until = until;
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
+    var deadline_armed = false;
+    if (wait_until != null) {
+        session.browser.armExecutionDeadline(timeout_ms);
+        deadline_armed = true;
+    }
+    defer if (deadline_armed) {
+        if (session.browser.disarmExecutionDeadline()) {
+            _ = session.browser.env.cancelExecutionDeadlineTerminate();
+        }
+    };
+
+    // A WebDriver navigation replaces the document in the current top-level
+    // browsing context. Keep its frame id, history, and session storage alive,
+    // while invalidating document-scoped node references.
+    registry.reset();
+    const navigate_opts: lp.Frame.NavigateOpts = .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    };
+    const replaces_current_document = frame._load_state != .waiting;
+    const navigation = if (!replaces_current_document)
+        frame.navigate(resolved_url, navigate_opts)
+    else
+        session.initiateRootNavigation(frame._frame_id, resolved_url, navigate_opts);
+    navigation catch {
+        if (finishCommandDeadline(session.browser, timer, timeout_ms, &deadline_armed)) {
+            return abortPendingNavigation(session, page.frame_id);
+        }
+        return ToolError.NavigationFailed;
+    };
+
+    const required_state = wait_until orelse return .completed;
+    if (commandDeadlineReached(session.browser, timer, timeout_ms)) {
+        _ = finishCommandDeadline(session.browser, timer, timeout_ms, &deadline_armed);
+        return abortPendingNavigation(session, page.frame_id);
+    }
+
+    var runner = session.runner(.{});
+    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = required_state };
+    var conditions = [_]lp.Session.Runner.WaitCondition{condition};
+    const max_wait_chunk_ms: u32 = 1000;
+    const result = while (true) {
+        if (commandDeadlineReached(session.browser, timer, timeout_ms)) {
+            break abortPendingNavigation(session, page.frame_id);
+        }
+        if (session.browser.env.terminatePending()) {
+            if (finishCommandDeadline(session.browser, timer, timeout_ms, &deadline_armed)) {
+                return abortPendingNavigation(session, page.frame_id);
+            }
+            return ToolError.Cancelled;
+        }
+
+        const budget = commandDeadlineBudget(timer, timeout_ms, max_wait_chunk_ms);
+
+        const wait_result = runner.waitResult(budget, &conditions) catch |err| {
+            if (finishCommandDeadline(session.browser, timer, timeout_ms, &deadline_armed)) {
+                return abortPendingNavigation(session, page.frame_id);
+            }
+            return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+        };
+        if (wait_result == .completed) break @as(lp.Session.Runner.WaitResult, .completed);
+    };
+
+    if (finishCommandDeadline(session.browser, timer, timeout_ms, &deadline_armed)) {
+        return abortPendingNavigation(session, page.frame_id);
+    }
+    const navigated_frame = page.frame() orelse return ToolError.NavigationFailed;
+    if (navigated_frame._last_navigate_error != null) return ToolError.NavigationFailed;
+    // A replacement that failed before receiving headers is discarded by the
+    // frame callback, restoring the old document. It must not look like a
+    // successful navigation merely because that old page is already loaded.
+    if (replaces_current_document and navigated_frame == frame) return ToolError.NavigationFailed;
+    return result;
+}
+
+fn abortPendingNavigation(session: *lp.Session, frame_id: u32) lp.Session.Runner.WaitResult {
+    if (session.livePage(frame_id)) |live| {
+        if (session.replacementOf(live)) |pending| session.discardPendingPage(pending);
+    }
+    return .timeout;
 }
 
 fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {

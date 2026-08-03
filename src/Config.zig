@@ -318,6 +318,7 @@ const Commands = cli.Builder(.{
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
             .{ .name = "disable_metrics", .type = bool },
+            .{ .name = "webdriver", .type = bool },
         },
         .shared_options = CommonOptions,
     },
@@ -503,7 +504,13 @@ pub fn v8MaxHeapMb(self: *const Config) ?u32 {
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
+        .serve => |opts| if (opts.webdriver)
+            // A null CURLOPT_PROXY consults ambient proxy environment vars.
+            // The explicit empty value disables that lookup for WebDriver.
+            ""
+        else
+            opts.http_proxy,
+        inline .fetch, .mcp, .agent => |opts| opts.http_proxy,
         .version => null,
         else => unreachable,
     };

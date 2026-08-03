@@ -43,6 +43,10 @@ const Browser = @This();
 env: js.Env,
 app: *App,
 session: ?Session,
+// Set only for sessions created through the W3C WebDriver endpoint. The
+// Navigator getter reads this at call time, so ordinary CDP/MCP sessions keep
+// the standards-required false value.
+webdriver_active: bool = false,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
@@ -151,6 +155,18 @@ pub fn deinit(self: *Browser) void {
     self.clearPermissions();
     self.permissions.deinit(allocator);
     self.selector_cache.deinit();
+}
+
+pub fn armExecutionDeadline(self: *Browser, timeout_ms: ?u64) void {
+    self.app.watchdog.armExecutionDeadline(&self.watchdog_entry, timeout_ms);
+}
+
+pub fn executionDeadlineFired(self: *const Browser) bool {
+    return self.app.watchdog.executionDeadlineFired(&self.watchdog_entry);
+}
+
+pub fn disarmExecutionDeadline(self: *Browser) bool {
+    return self.app.watchdog.disarmExecutionDeadline(&self.watchdog_entry);
 }
 
 // Set (or overwrite) the stored state for a permission. The name is duped into

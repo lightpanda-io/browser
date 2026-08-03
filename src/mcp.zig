@@ -7,5 +7,7 @@ pub const Server = @import("mcp/Server.zig");
 pub const HttpServer = @import("mcp/HttpServer.zig");
 
 test {
+    // Pull private WebDriver router tests into the root suite.
+    _ = @import("mcp/webdriver.zig");
     std.testing.refAllDecls(@This());
 }

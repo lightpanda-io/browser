@@ -94,8 +94,8 @@ pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
 }
 
-pub fn getWebdriver(_: *const Navigator) bool {
-    return false;
+pub fn getWebdriver(_: *const Navigator, exec: *const Execution) bool {
+    return exec.session.browser.webdriver_active;
 }
 
 // Default to false: per https://w3c.github.io/gpc/#javascript-property the
@@ -241,7 +241,7 @@ pub const JsApi = struct {
     pub const maxTouchPoints = bridge.accessor(Navigator.getMaxTouchPoints, null, .{});
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
-    pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{ .exposed = .window });
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 

@@ -9,7 +9,7 @@
     \\  help        displays this message
     \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
     \\  run         runs a saved script (no LLM), then exits
-    \\  serve       starts a WebSocket CDP server
+    \\  serve       starts a CDP or WebDriver server
     \\  version     displays the version of {0s}
     \\
     \\Use "{0s} help <command>" for more information about a command.
@@ -17,7 +17,7 @@
     .serve =
     \\usage: {0s} serve [OPTIONS] [COMMON_OPTIONS]
     \\
-    \\Starts a WebSocket CDP server.
+    \\Starts a WebSocket CDP server, or a W3C WebDriver server with --webdriver.
     \\
     \\options:
     \\  --advertise-host <HOST>
@@ -46,8 +46,13 @@
     \\          Host of the CDP server.
     \\          Defaults to "127.0.0.1".
     \\  --port <INT>
-    \\          Port of the CDP server.
+    \\          Port of the CDP or WebDriver server.
     \\          Defaults to 9222.
+    \\  --webdriver
+    \\          Serve the W3C WebDriver HTTP endpoint instead of CDP. WebDriver
+    \\          accepts one active session and requires a loopback --host,
+    \\          direct networking, and TLS host verification.
+    \\          Defaults to false.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
