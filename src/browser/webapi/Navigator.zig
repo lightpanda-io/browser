@@ -42,8 +42,16 @@ pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
     return exec.session.browser.http_client.getUserAgent();
 }
 
-pub fn getLanguages(_: *const Navigator) [2][]const u8 {
-    return .{ "en-US", "en" };
+pub fn getLanguages(_: *const Navigator, exec: *const Execution) !js.Value {
+    const local = exec.js.local.?;
+    if (exec.js.navigator_languages) |languages| {
+        return languages.local(local);
+    }
+
+    const languages = try local.zigValueToJs([2][]const u8{ "en-US", "en" }, .{});
+    const frozen = try local.freeze(languages);
+    exec.js.navigator_languages = try frozen.persist();
+    return frozen;
 }
 
 pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
@@ -58,8 +66,19 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
     return "Mozilla";
 }
 
-pub fn getAppVersion(_: *const Navigator) []const u8 {
-    return "1.0";
+pub fn getAppVersion(self: *const Navigator, exec: *const Execution) ![]const u8 {
+    const user_agent = getUserAgent(self, exec);
+    const prefix = "Mozilla/";
+    if (!std.mem.startsWith(u8, user_agent, "Mozilla/5.0 (")) {
+        return "";
+    }
+
+    const trail = user_agent[prefix.len..];
+    if (std.mem.startsWith(u8, trail, "5.0 (Windows")) {
+        return "5.0 (Windows)";
+    }
+    const separator = std.mem.indexOfScalar(u8, trail, ';') orelse return trail;
+    return std.mem.concat(exec.js.local.?.call_arena, u8, &.{ trail[0..separator], ")" });
 }
 
 pub fn getLanguage(_: *const Navigator) []const u8 {

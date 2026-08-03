@@ -791,7 +791,7 @@ pub const WaitUntil = enum {
 pub const HttpHeaders = struct {
     const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
 
-    const Brand = struct {
+    pub const Brand = struct {
         brand: [:0]const u8,
         version: [:0]const u8,
     };
@@ -800,7 +800,14 @@ pub const HttpHeaders = struct {
     /// HTTP header and navigator.userAgentData.brands derive from this
     /// list, so the two sides cannot drift.
     pub const brands = [_]Brand{
+        .{ .brand = "Not/A)Brand", .version = "8" },
         .{ .brand = "Lightpanda", .version = "1" },
+    };
+
+    /// Full versions returned for the UA-CH fullVersionList hint.
+    pub const full_brands = [_]Brand{
+        .{ .brand = "Not/A)Brand", .version = "8.0.0.0" },
+        .{ .brand = "Lightpanda", .version = "1.0.0.0" },
     };
 
     pub const sec_ch_ua: [:0]const u8 = blk: {

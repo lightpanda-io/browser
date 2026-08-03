@@ -114,6 +114,15 @@ call_depth: usize = 0,
 // context.localScope
 local: ?*const js.Local = null,
 
+// Captured before page scripts run, so web content cannot replace the
+// intrinsic used to create Web IDL FrozenArray values.
+object_freeze: ?js.Function.Global = null,
+
+// Per-realm FrozenArray caches required by Navigator and NavigatorUAData.
+navigator_brands: ?js.Value.Global = null,
+navigator_full_brands: ?js.Value.Global = null,
+navigator_languages: ?js.Value.Global = null,
+
 origin: *Origin,
 
 // Identity tracking for this context. For main world contexts, this points to
@@ -216,6 +225,23 @@ pub fn deinit(self: *Context) void {
 
     // this can release objects
     self.scheduler.deinit();
+
+    if (self.navigator_brands) |brands| {
+        brands.deinit();
+        self.navigator_brands = null;
+    }
+    if (self.navigator_full_brands) |brands| {
+        brands.deinit();
+        self.navigator_full_brands = null;
+    }
+    if (self.navigator_languages) |languages| {
+        languages.deinit();
+        self.navigator_languages = null;
+    }
+    if (self.object_freeze) |freeze| {
+        freeze.deinit();
+        self.object_freeze = null;
+    }
 
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);

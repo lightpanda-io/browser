@@ -1,13 +1,28 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<script id=navigator_frozen_arrays_use_captured_intrinsic>
+  const originalFreeze = Object.freeze;
+  Object.freeze = () => { throw new Error('page replacement must not run'); };
+  try {
+    const capturedLanguages = navigator.languages;
+    const capturedBrands = navigator.userAgentData.brands;
+    const highEntropyPromise = navigator.userAgentData.getHighEntropyValues(['fullVersionList']);
+    testing.expectTrue(Object.isFrozen(capturedLanguages));
+    testing.expectTrue(Object.isFrozen(capturedBrands));
+    testing.expectTrue(highEntropyPromise instanceof Promise);
+  } finally {
+    Object.freeze = originalFreeze;
+  }
+</script>
+
 <script id=navigator>
   // Navigator should be accessible from window
   testing.expectEqual(navigator, window.navigator);
   testing.expectEqual(true, navigator.userAgent.length > 0);
   testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
   testing.expectEqual('Netscape', navigator.appName);
-  testing.expectEqual('1.0', navigator.appVersion);
+  testing.expectEqual('', navigator.appVersion);
   testing.expectEqual(true, navigator.platform.length > 0);
 
   // Platform should be one of the known values
@@ -18,6 +33,8 @@
   testing.expectEqual(2, navigator.languages.length);
   testing.expectEqual('en-US', navigator.languages[0]);
   testing.expectEqual('en', navigator.languages[1]);
+  testing.expectTrue(navigator.languages === navigator.languages);
+  testing.expectTrue(Object.isFrozen(navigator.languages));
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
@@ -109,17 +126,20 @@
   const validUAPlatforms = ['macOS', 'Windows', 'Linux', 'FreeBSD', 'Unknown'];
   testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
 
-  testing.expectEqual(1, navigator.userAgentData.brands.length);
-  testing.expectEqual({brand: 'Lightpanda', version: "1"}, navigator.userAgentData.brands[0]);
+  testing.expectEqual(2, navigator.userAgentData.brands.length);
+  testing.expectEqual({brand: 'Not/A)Brand', version: "8"}, navigator.userAgentData.brands[0]);
+  testing.expectEqual({brand: 'Lightpanda', version: "1"}, navigator.userAgentData.brands[1]);
 
   // Same instance returned on repeated access
   testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
+  testing.expectEqual(true, navigator.userAgentData.brands === navigator.userAgentData.brands);
+  testing.expectTrue(Object.isFrozen(navigator.userAgentData.brands));
 
   const json = navigator.userAgentData.toJSON();
   testing.expectEqual(false, json.mobile);
   testing.expectEqual(navigator.userAgentData.platform, json.platform);
   testing.expectEqual(true, Array.isArray(json.brands));
-  testing.expectEqual('Lightpanda', json.brands[0].brand);
+  testing.expectEqual('Lightpanda', json.brands[1].brand);
 </script>
 
 <script id=userAgentData_highEntropy type=module>
@@ -128,18 +148,49 @@
     const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList']);
     testing.expectTrue(p instanceof Promise);
     const v = await p;
+    const repeated = await navigator.userAgentData.getHighEntropyValues(['fullVersionList']);
     state.resolve();
 
     await state.done(() => {
       testing.expectEqual(false, v.mobile);
       testing.expectEqual(navigator.userAgentData.platform, v.platform);
       testing.expectEqual(true, Array.isArray(v.brands));
+      testing.expectEqual(true, typeof v.architecture === 'string');
+      testing.expectEqual(true, typeof v.platformVersion === 'string');
       testing.expectEqual(true, Array.isArray(v.fullVersionList));
-      testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
+      testing.expectTrue(Object.isFrozen(v.brands));
+      testing.expectTrue(Object.isFrozen(v.fullVersionList));
+      testing.expectTrue(v.brands === navigator.userAgentData.brands);
+      testing.expectTrue(v.fullVersionList === repeated.fullVersionList);
+      testing.expectEqual('Lightpanda', v.fullVersionList[1].brand);
+      testing.expectEqual('1.0.0.0', v.fullVersionList[1].version);
+      testing.expectEqual(false, 'bitness' in v);
+      testing.expectEqual(false, 'model' in v);
+      testing.expectEqual(false, 'uaFullVersion' in v);
+      testing.expectEqual(false, 'wow64' in v);
+      testing.expectEqual(false, 'formFactors' in v);
+    });
+  }
+</script>
+
+<script id=userAgentData_highEntropy_formFactors type=module>
+  {
+    const state = await testing.async();
+    const v = await navigator.userAgentData.getHighEntropyValues([
+      'formFactors',
+      'uaFullVersion',
+      'wow64',
+    ]);
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(true, Array.isArray(v.formFactors));
+      testing.expectEqual('Desktop', v.formFactors[0]);
       testing.expectEqual('1.0.0.0', v.uaFullVersion);
       testing.expectEqual(false, v.wow64);
-      testing.expectEqual(true, Array.isArray(v.formFactor));
-      testing.expectEqual('Desktop', v.formFactor[0]);
+      testing.expectEqual(false, 'architecture' in v);
+      testing.expectEqual(false, 'fullVersionList' in v);
+      testing.expectEqual(false, 'platformVersion' in v);
     });
   }
 </script>
@@ -150,4 +201,3 @@
   // rather than a stub that always rejects.
   testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
-

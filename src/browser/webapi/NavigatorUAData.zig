@@ -16,34 +16,30 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const builtin = @import("builtin");
 
 const Config = @import("../../Config.zig");
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
 
-const NavigatorUAData = @This();
-
 _pad: bool = false,
 
-const Brand = struct {
-    brand: []const u8,
-    version: []const u8,
-};
+const Brand = Config.HttpHeaders.Brand;
 
-pub fn getBrands(_: *const NavigatorUAData) []const Brand {
-    return brandList();
+pub fn getBrands(_: *const @This(), exec: *const Execution) !js.Value {
+    return frozenBrandList(exec, false);
 }
 
-pub fn getMobile(_: *const NavigatorUAData) bool {
+pub fn getMobile(_: *const @This()) bool {
     return false;
 }
 
-pub fn getPlatform(_: *const NavigatorUAData) []const u8 {
+pub fn getPlatform(_: *const @This()) []const u8 {
     return uaPlatform();
 }
 
-pub fn toJSON(_: *const NavigatorUAData) struct {
+pub fn toJSON(_: *const @This()) struct {
     brands: []const Brand,
     mobile: bool,
     platform: []const u8,
@@ -55,39 +51,56 @@ pub fn toJSON(_: *const NavigatorUAData) struct {
     };
 }
 
-pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, exec: *const Execution) !js.Promise {
-    // This should always return `brands` + `mobile` + `platform` and then whatever
-    // "hints" field is requested (assuming the browser has permission), but it's
-    // also valid to just return everything.
+pub fn getHighEntropyValues(_: *const @This(), hints: []const []const u8, exec: *const Execution) !js.Promise {
+    const local = exec.js.local.?;
+    const values = local.newObject();
+    _ = try values.set("brands", try frozenBrandList(exec, false), .{});
+    _ = try values.set("mobile", false, .{});
+    _ = try values.set("platform", uaPlatform(), .{});
 
-    _ = hints;
+    for (hints) |hint| {
+        if (std.mem.eql(u8, hint, "architecture")) {
+            _ = try values.set("architecture", uaArchitecture(), .{});
+        } else if (std.mem.eql(u8, hint, "bitness")) {
+            _ = try values.set("bitness", uaBitness(), .{});
+        } else if (std.mem.eql(u8, hint, "formFactors")) {
+            _ = try values.set("formFactors", [_][]const u8{"Desktop"}, .{});
+        } else if (std.mem.eql(u8, hint, "fullVersionList")) {
+            _ = try values.set("fullVersionList", try frozenBrandList(exec, true), .{});
+        } else if (std.mem.eql(u8, hint, "model")) {
+            _ = try values.set("model", "", .{});
+        } else if (std.mem.eql(u8, hint, "platformVersion")) {
+            _ = try values.set("platformVersion", "", .{});
+        } else if (std.mem.eql(u8, hint, "uaFullVersion")) {
+            _ = try values.set("uaFullVersion", "1.0.0.0", .{});
+        } else if (std.mem.eql(u8, hint, "wow64")) {
+            _ = try values.set("wow64", false, .{});
+        }
+    }
 
-    return exec.js.local.?.resolvePromise(.{
-        .brands = brandList(),
-        .mobile = false,
-        .platform = uaPlatform(),
-        .architecture = uaArchitecture(),
-        .bitness = uaBitness(),
-        .model = "",
-        .platformVersion = "",
-        .uaFullVersion = "1.0.0.0",
-        .fullVersionList = brandList(),
-        .wow64 = false,
-        .formFactor = [_][]const u8{"Desktop"},
-    });
+    return local.resolvePromise(values);
 }
 
 fn brandList() []const Brand {
-    const out = comptime blk: {
-        const src = &Config.HttpHeaders.brands;
-        var arr: [src.len]Brand = undefined;
-        for (src, 0..) |b, i| {
-            arr[i] = .{ .brand = b.brand, .version = b.version };
-        }
-        const final = arr;
-        break :blk final;
-    };
-    return &out;
+    return &Config.HttpHeaders.brands;
+}
+
+fn fullBrandList() []const Brand {
+    return &Config.HttpHeaders.full_brands;
+}
+
+fn frozenBrandList(exec: *const Execution, full: bool) !js.Value {
+    const context = exec.js;
+    const local = context.local.?;
+    const cache = if (full) &context.navigator_full_brands else &context.navigator_brands;
+    if (cache.*) |brands| {
+        return brands.local(local);
+    }
+
+    const source = if (full) fullBrandList() else brandList();
+    const frozen = try local.freeze(try local.zigValueToJs(source, .{}));
+    cache.* = try frozen.persist();
+    return frozen;
 }
 
 fn uaPlatform() []const u8 {
@@ -115,8 +128,10 @@ fn uaBitness() []const u8 {
     };
 }
 
+const Self = @This();
+
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(NavigatorUAData);
+    pub const bridge = js.Bridge(Self);
 
     pub const Meta = struct {
         pub const name = "NavigatorUAData";
@@ -125,9 +140,13 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const brands = bridge.accessor(NavigatorUAData.getBrands, null, .{});
-    pub const mobile = bridge.accessor(NavigatorUAData.getMobile, null, .{});
-    pub const platform = bridge.accessor(NavigatorUAData.getPlatform, null, .{});
-    pub const toJSON = bridge.function(NavigatorUAData.toJSON, .{});
-    pub const getHighEntropyValues = bridge.function(NavigatorUAData.getHighEntropyValues, .{});
+    pub const brands = bridge.accessor(getBrands, null, .{});
+    pub const mobile = bridge.accessor(getMobile, null, .{});
+    pub const platform = bridge.accessor(getPlatform, null, .{});
+    pub const toJSON = bridge.function(toJSONFn, .{});
+    pub const getHighEntropyValues = bridge.function(getHighEntropyValuesFn, .{});
 };
+
+// Aliases avoid JsApi field names shadowing the free functions.
+const toJSONFn = toJSON;
+const getHighEntropyValuesFn = getHighEntropyValues;

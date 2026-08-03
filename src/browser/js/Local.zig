@@ -83,6 +83,11 @@ pub fn newObject(self: *const Local) js.Object {
     };
 }
 
+pub fn freeze(self: *const Local, value: anytype) !js.Value {
+    const freeze_function = self.ctx.object_freeze orelse return error.JsException;
+    return freeze_function.local(self).call(js.Value, .{value});
+}
+
 pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
     const handle = v8.v8__Date__New(self.handle, time_ms) orelse return error.JsException;
     return .{ .local = self, .handle = handle };

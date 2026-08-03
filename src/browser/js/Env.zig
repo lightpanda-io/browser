@@ -252,6 +252,11 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const T = @TypeOf(global);
     const is_frame = T == *Frame;
 
+    if (self.contexts.items.len >= MAX_CONTEXTS) {
+        return error.TooManyContexts;
+    }
+    try self.contexts.ensureUnusedCapacity(self.allocator, 1);
+
     const context_arena = try self.app.arena_pool.acquire(.medium, params.debug_name);
     errdefer context_arena.release();
 
@@ -288,6 +293,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // Create the v8::Context and wrap it in a v8::Global
     var context_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, v8_context, &context_global);
+    errdefer v8.v8__Global__Reset(&context_global);
 
     // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
@@ -358,6 +364,17 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
         ._scheduler = &context.scheduler,
     };
 
+    {
+        var ls: js.Local.Scope = undefined;
+        context.localScope(&ls);
+        defer ls.deinit();
+
+        const object_constructor = (try ls.local.getGlobal().get("Object")).toObject();
+        const freeze = try object_constructor.getFunction("freeze") orelse return error.JsException;
+        context.object_freeze = try freeze.persist();
+    }
+    errdefer if (context.object_freeze) |freeze| freeze.deinit();
+
     // Register in the identity map. Multiple contexts can be created for the
     // same global (via CDP), so we only register the first one.
     const identity_ptr = if (comptime is_frame) @intFromPtr(global.window) else switch (global._type) {
@@ -374,10 +391,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // a v8 context, we can get our context out
     v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
 
-    if (self.contexts.items.len >= MAX_CONTEXTS) {
-        return error.TooManyContexts;
-    }
-    try self.contexts.append(self.allocator, context);
+    self.contexts.appendAssumeCapacity(context);
 
     return context;
 }
