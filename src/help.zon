@@ -8,6 +8,7 @@
     \\  fetch       fetches the specified URL
     \\  help        displays this message
     \\  mcp         starts an MCP (Model Context Protocol) server (stdio or HTTP)
+    \\  render      starts a one-shot DOM render server
     \\  run         runs a saved script (no LLM), then exits
     \\  serve       starts a WebSocket CDP server
     \\  version     displays the version of {0s}
@@ -124,6 +125,45 @@
     \\  --with-frames
     \\          Includes the contents of iframes.
     \\          Defaults to false.
+    ,
+    .render =
+    \\usage: {0s} render [OPTIONS] [COMMON_OPTIONS]
+    \\
+    \\Starts a one-shot DOM render server. Lightpanda executes page JavaScript
+    \\and returns an HTML snapshot; the attached browser renders that snapshot.
+    \\The sandboxed preview supports same-frame form submissions. New-window
+    \\and top-level form targets stay blocked.
+    \\
+    \\Endpoints:
+    \\  POST /v1/render                JSON request, HTML snapshot response
+    \\  GET  /lightpanda-renderer.js   browser ESM library
+    \\  GET  /healthz                  liveness check
+    \\
+    \\options:
+    \\  --allow-private-networks
+    \\          Allow render targets on loopback and private/internal networks.
+    \\          By default these targets are blocked after DNS resolution.
+    \\  --auth-token <TOKEN>
+    \\          Bearer token required by POST /v1/render. Must be at least 16
+    \\          bytes. Required when --cors-origin is configured.
+    \\  --client-timeout-ms <INT>
+    \\          Maximum client socket read or write time. Defaults to 30000.
+    \\  --cors-origin <ORIGIN>
+    \\          Exact browser origin allowed to call the render service, or *.
+    \\          Enabling CORS also requires --auth-token.
+    \\  --host <HOST>
+    \\          Loopback address to bind. Defaults to "127.0.0.1".
+    \\  --max-connections <INT>
+    \\          Maximum simultaneous HTTP connections. Defaults to 8.
+    \\  --max-request-size <INT>
+    \\          Maximum JSON request size. Defaults to 16384 (16 KiB).
+    \\  --max-response-size <INT>
+    \\          Maximum HTML snapshot size. Defaults to 16777216 (16 MiB).
+    \\  --max-wait-ms <INT>
+    \\          Maximum total queue and render time for one request. Defaults
+    \\          to 30000.
+    \\  --port <INT>
+    \\          HTTP port. Defaults to 9223.
     ,
     .mcp =
     \\usage: {0s} mcp [OPTIONS] [COMMON_OPTIONS]

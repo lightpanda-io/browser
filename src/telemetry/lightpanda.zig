@@ -80,6 +80,7 @@ pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode
         .mode = switch (run_mode) {
             .fetch => "F",
             .serve => "S",
+            .render => "CR",
             .agent => if (interactive == false) "AR" else "A",
             .run => "R",
             .mcp => "M",

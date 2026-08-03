@@ -49,6 +49,7 @@ pub const tools = @import("browser/tools.zig");
 pub const HttpClient = @import("network/HttpClient.zig");
 
 pub const mcp = @import("mcp.zig");
+pub const render = @import("render.zig");
 pub const Agent = @import("agent/Agent.zig");
 pub const Command = @import("script/command.zig").Command;
 pub const Recorder = @import("script/Recorder.zig");

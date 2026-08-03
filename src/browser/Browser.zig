@@ -197,6 +197,9 @@ pub fn closeSession(self: *Browser) void {
         session.deinit();
         self.session = null;
     }
+    // A long-lived Browser can sit between short sessions (for example, the
+    // render server worker). No page work can be running after closeSession.
+    self.http_client.heartbeat.disarm();
     self.flushArenaMemory();
 }
 

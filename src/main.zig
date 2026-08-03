@@ -199,6 +199,26 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
             var worker_thread = try std.Thread.spawn(.{}, fetchThread, .{ app, &ft, urls, fetch_opts });
             worker_thread.join();
         },
+        .render => |opts| {
+            log.debug(.app, "startup", .{
+                .mode = "render",
+                .snapshot = app.snapshot.fromEmbedded(),
+            });
+            const address = std.Io.net.IpAddress.parse(opts.host, opts.port) catch |err| {
+                log.fatal(.app, "invalid render server address", .{
+                    .err = err,
+                    .host = opts.host,
+                    .port = opts.port,
+                });
+                return err;
+            };
+            const server = try lp.render.HttpServer.init(allocator, app);
+            defer server.deinit();
+            server.run(address) catch |err| {
+                log.fatal(.app, "client render server error", .{ .err = err });
+                return err;
+            };
+        },
         .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
 

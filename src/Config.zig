@@ -355,6 +355,22 @@ const Commands = cli.Builder(.{
         .shared_options = CommonOptions,
     },
     .{
+        .name = "render",
+        .options = .{
+            .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
+            .{ .name = "port", .type = u16, .default = 9223 },
+            .{ .name = "auth_token", .type = ?[]const u8 },
+            .{ .name = "cors_origin", .type = ?[]const u8 },
+            .{ .name = "max_connections", .type = ?u16 },
+            .{ .name = "max_request_size", .type = ?usize },
+            .{ .name = "max_response_size", .type = ?usize },
+            .{ .name = "max_wait_ms", .type = ?u32 },
+            .{ .name = "client_timeout_ms", .type = ?u32 },
+            .{ .name = "allow_private_networks", .type = bool },
+        },
+        .shared_options = CommonOptions,
+    },
+    .{
         .name = "mcp",
         .options = .{
             .{ .name = "port", .type = ?u16 },
@@ -434,7 +450,7 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
 pub fn interactive(self: *const Config) bool {
     return switch (self.mode) {
         .fetch => false,
-        .serve, .mcp => true,
+        .serve, .render, .mcp => true,
         .agent => |opts| opts.script_file == null,
         else => unreachable,
     };
@@ -442,7 +458,7 @@ pub fn interactive(self: *const Config) bool {
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| !opts.insecure_disable_tls_host_verification,
         // `version --check` talks to the release endpoint; always verify.
         .version => true,
         else => unreachable,
@@ -451,28 +467,28 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.obey_robots,
         else => unreachable,
     };
 }
 
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_subframes,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.disable_subframes,
         else => unreachable,
     };
 }
 
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.disable_workers,
         else => unreachable,
     };
 }
 
 pub fn watchdogMs(self: *const Config) ?u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| {
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| {
             const ms = opts.watchdog_ms orelse 30000;
             return if (ms == 0) null else ms;
         },
@@ -482,28 +498,28 @@ pub fn watchdogMs(self: *const Config) ?u32 {
 
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.enable_external_stylesheets,
         else => unreachable,
     };
 }
 
 pub fn v8Flags(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_flags_unsafe,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.v8_flags_unsafe,
         else => unreachable,
     };
 }
 
 pub fn v8MaxHeapMb(self: *const Config) ?u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.v8_max_heap_mb,
         else => unreachable,
     };
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_proxy,
         .version => null,
         else => unreachable,
     };
@@ -511,28 +527,28 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.proxy_bearer_token,
         else => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
         else => unreachable,
     };
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_connect_timeout orelse 0,
         .version => 0,
         else => unreachable,
     };
@@ -540,7 +556,7 @@ pub fn httpConnectTimeout(self: *const Config) u31 {
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_timeout orelse 5000,
         .version => 5000,
         else => unreachable,
     };
@@ -552,6 +568,7 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
+        .render => |opts| opts.http_max_response_size orelse 16 * 1024 * 1024,
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
         else => unreachable,
     };
@@ -559,7 +576,7 @@ pub fn httpMaxResponseSize(self: *const Config) ?usize {
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
         else => unreachable,
     };
 }
@@ -571,7 +588,7 @@ pub fn logLevel(self: *const Config) ?log.Level {
             .low, .medium => .err,
             .high => null,
         },
-        inline .serve, .fetch, .mcp => |opts| opts.log_level,
+        inline .serve, .fetch, .render, .mcp => |opts| opts.log_level,
         else => unreachable,
     };
 }
@@ -601,49 +618,49 @@ fn stderrIsTty() bool {
 
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_format,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.log_format,
         else => unreachable,
     };
 }
 
 pub fn logFilterScopes(self: *const Config) std.ArrayList(log.FilterRule) {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_filter_scopes,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.log_filter_scopes,
         else => unreachable,
     };
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.user_agent_suffix,
         else => null,
     };
 }
 
 pub fn userAgent(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.user_agent,
         else => null,
     };
 }
 
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.http_cache_dir,
         else => null,
     };
 }
 
 pub fn cookieFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.cookie,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.cookie,
         else => null,
     };
 }
 
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
+        inline .fetch, .render, .mcp, .agent => |opts| opts.cookie_jar,
         else => null,
     };
 }
@@ -651,6 +668,7 @@ pub fn cookieJarFile(self: *const Config) ?[]const u8 {
 pub fn port(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.port,
+        .render => |opts| opts.port,
         .mcp => |opts| opts.cdp_port orelse 0,
         else => unreachable,
     };
@@ -659,6 +677,7 @@ pub fn port(self: *const Config) u16 {
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
         .serve => |opts| opts.advertise_host orelse opts.host,
+        .render => |opts| opts.host,
         .mcp => "127.0.0.1",
         else => unreachable,
     };
@@ -666,7 +685,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| WebBotAuthConfig{
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| WebBotAuthConfig{
             .key_file = opts.web_bot_auth_key_file orelse return null,
             .keyid = opts.web_bot_auth_keyid orelse return null,
             .domain = opts.web_bot_auth_domain orelse return null,
@@ -677,6 +696,7 @@ pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
 
 pub fn blockPrivateNetworks(self: *const Config) bool {
     return switch (self.mode) {
+        .render => |opts| opts.block_private_networks or !opts.allow_private_networks,
         inline .serve, .fetch, .mcp, .agent => |opts| opts.block_private_networks,
         else => unreachable,
     };
@@ -684,14 +704,14 @@ pub fn blockPrivateNetworks(self: *const Config) bool {
 
 pub fn blockCidrs(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_cidrs,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.block_cidrs,
         else => unreachable,
     };
 }
 
 pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
     const patterns = switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.block_urls,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.block_urls,
         else => unreachable,
     } orelse return null;
     return std.mem.splitScalar(u8, patterns, ',');
@@ -700,6 +720,7 @@ pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scala
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
+        .render => |opts| @max(opts.max_connections orelse 8, 1),
         .mcp => 16,
         .fetch, .agent => 0,
         else => unreachable,
@@ -709,7 +730,50 @@ pub fn maxConnections(self: *const Config) u16 {
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
+        .render => 64,
         .mcp => 128,
+        else => unreachable,
+    };
+}
+
+pub fn renderCorsOrigin(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        .render => |opts| opts.cors_origin,
+        else => null,
+    };
+}
+
+pub fn renderAuthToken(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        .render => |opts| opts.auth_token,
+        else => null,
+    };
+}
+
+pub fn renderMaxRequestSize(self: *const Config) usize {
+    return switch (self.mode) {
+        .render => |opts| opts.max_request_size orelse 16 * 1024,
+        else => unreachable,
+    };
+}
+
+pub fn renderMaxResponseSize(self: *const Config) usize {
+    return switch (self.mode) {
+        .render => |opts| opts.max_response_size orelse 16 * 1024 * 1024,
+        else => unreachable,
+    };
+}
+
+pub fn renderMaxWaitMs(self: *const Config) u32 {
+    return switch (self.mode) {
+        .render => |opts| @max(opts.max_wait_ms orelse 30_000, 1),
+        else => unreachable,
+    };
+}
+
+pub fn renderClientTimeoutMs(self: *const Config) u32 {
+    return switch (self.mode) {
+        .render => |opts| @max(opts.client_timeout_ms orelse 30_000, 1),
         else => unreachable,
     };
 }
@@ -744,14 +808,14 @@ pub fn cdpMaxHTTPMessageSize(self: *const Config) u14 {
 
 pub fn storageEngine(self: *const Config) ?Storage.EngineType {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_engine,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.storage_engine,
         else => unreachable,
     };
 }
 
 pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.storage_sqlite_path,
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| opts.storage_sqlite_path,
         else => unreachable,
     };
 }
@@ -760,7 +824,7 @@ pub fn storageSqlitePath(self: *const Config) ?[:0]const u8 {
 /// if any was loaded during argument parsing. The caller takes ownership.
 pub fn customCertStore(self: *const Config) ?*crypto.X509_STORE {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| {
+        inline .serve, .fetch, .render, .mcp, .agent => |opts| {
             const store = opts.cert.store orelse return null;
             // Validators guarantee a created store loaded something.
             lp.assert(opts.cert.count > 0, "empty custom cert store", .{});
@@ -877,7 +941,7 @@ pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: Ru
             , .{Help.general});
             break :text try std.fmt.allocPrint(allocator, template, .{exec_name});
         },
-        inline .fetch, .serve, .mcp, .agent, .run => |tag| text: {
+        inline .fetch, .render, .serve, .mcp, .agent, .run => |tag| text: {
             const template = comptimePrint(
                 \\{s}
                 \\
@@ -993,6 +1057,23 @@ test "Config: blockedUrlPatterns splits comma-separated patterns" {
     try std.testing.expectEqualStrings("*doubleclick*", patterns.next().?);
     try std.testing.expectEqualStrings("*://*/*.png", patterns.next().?);
     try std.testing.expectEqual(null, patterns.next());
+}
+
+test "Config: render defaults bound network resources" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .render = .{} });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expect(config.blockPrivateNetworks());
+    try std.testing.expectEqual(@as(?usize, 16 * 1024 * 1024), config.httpMaxResponseSize());
+}
+
+test "Config: render can opt into private network targets" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .render = .{
+        .allow_private_networks = true,
+    } });
+    defer config.deinit(std.testing.allocator);
+
+    try std.testing.expect(!config.blockPrivateNetworks());
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {

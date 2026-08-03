@@ -63,9 +63,24 @@ pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Fra
         }
 
         if (opts.with_base) {
-            const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
+            const parent = if (html_doc.getHead()) |head|
+                head.asNode()
+            else blk: {
+                const document_element = html_doc.asDocument().getDocumentElement() orelse {
+                    const html = try doc.createElement("html", null, frame);
+                    _ = try doc.asNode().appendChild(html.asNode(), frame);
+                    break :blk html.asNode();
+                };
+                const head = try doc.createElement("head", null, frame);
+                _ = try document_element.asNode().insertBefore(
+                    head.asNode(),
+                    document_element.asNode().firstChild(),
+                    frame,
+                );
+                break :blk head.asNode();
+            };
             const base = try doc.createElement("base", null, frame);
-            try base.setAttributeSafe(comptime .wrap("base"), .wrap(frame.base()), frame);
+            try base.setAttributeSafe(comptime .wrap("href"), .wrap(frame.base()), frame);
             _ = try parent.insertBefore(base.asNode(), parent.firstChild(), frame);
         }
     }
@@ -258,7 +273,7 @@ fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Fram
 fn isVoidElement(el: *const Node.Element) bool {
     return switch (el._type) {
         .html => |html| switch (html._type) {
-            .br, .hr, .img, .input, .link, .meta => true,
+            .base, .br, .hr, .img, .input, .link, .meta => true,
             else => false,
         },
         .svg => false,
@@ -401,8 +416,26 @@ test "dump: default dumps the whole document" {
 test "dump: with_base injects a <base> element" {
     try expectDump(.{ .with_base = true },
         \\<!DOCTYPE html>
-        \\<html><head><base base="http://127.0.0.1:9582/src/browser/tests/dump.html"></base><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+        \\<html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump.html"><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: with_base synthesizes a head after the doctype" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const html_doc = doc.is(Node.Document.HTMLDocument).?;
+    const head = html_doc.getHead().?;
+    _ = try head.asNode().parentNode().?.removeChild(head.asNode(), frame);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try root(doc, .{ .with_base = true }, &aw.writer, frame);
+    try testing.expectString(
+        \\<!DOCTYPE html>
+        \\<html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump.html"></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+    , aw.written());
 }
 
 test "dump: strip.js removes script and noscript" {
