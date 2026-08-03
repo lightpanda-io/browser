@@ -343,6 +343,9 @@ fn createSession(handle: *BrowserHandle) !*SessionHandle {
 /// and memory. The handle is invalid afterwards.
 pub export fn lp_session_close(entry_: ?*SessionHandle) void {
     const entry = entry_ orelse return;
+    // After lp_shutdown every session is already destroyed; a stale handle
+    // must be inert, not a use-after-free.
+    if (app_state != .live) return;
     const sessions = &entry.owner.sessions;
     for (sessions.items, 0..) |session, i| {
         if (session == entry) {
@@ -417,6 +420,7 @@ fn sentinelText(aw: *std.Io.Writer.Allocating) error{OutOfMemory}![:0]const u8 {
 /// already waits for its own completion.
 pub export fn lp_session_pump(entry_: ?*SessionHandle) u32 {
     const entry = entry_ orelse return 0;
+    if (app_state != .live) return 0;
     entry.ts.enterIsolate();
     defer entry.ts.exitIsolate();
     return entry.ts.session.idleSlice();
@@ -433,6 +437,7 @@ pub export fn lp_session_set_cancel_hook(
     ctx: ?*anyopaque,
 ) void {
     const entry = entry_ orelse return;
+    if (app_state != .live) return;
     entry.cancel = if (cb) |f| .{ .cb = f, .ctx = ctx } else null;
 }
 
@@ -664,4 +669,9 @@ test "c_api: lifecycle" {
 
     // Terminal: V8 cannot be re-initialized after dispose.
     try testing.expectEqual(.misuse, lp_init(null, &second));
+
+    // Stale handles are inert after shutdown — no deref, no crash.
+    try testing.expectEqual(0, lp_session_pump(session));
+    lp_session_close(session);
+    lp_session_set_cancel_hook(session, null, null);
 }
