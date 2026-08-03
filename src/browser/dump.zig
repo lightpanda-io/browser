@@ -26,6 +26,9 @@ const IFrame = @import("webapi/element/html/IFrame.zig");
 const Anchor = @import("webapi/element/html/Anchor.zig");
 const Button = @import("webapi/element/html/Button.zig");
 const Input = @import("webapi/element/html/Input.zig");
+const TextArea = @import("webapi/element/html/TextArea.zig");
+const Select = @import("webapi/element/html/Select.zig");
+const Option = @import("webapi/element/html/Option.zig");
 
 pub const DumpError = error{ WriteFailed, OutOfMemory, TargetLimit };
 
@@ -61,13 +64,19 @@ pub const Opts = struct {
 pub const LiveTargets = struct {
     pub const max_elements = 65_535;
 
-    elements: *std.ArrayListUnmanaged(*Node.Element),
+    pub const Kind = enum { activate, value };
+    pub const Target = struct {
+        element: *Node.Element,
+        kind: Kind,
+    };
+
+    elements: *std.ArrayListUnmanaged(Target),
     allocator: std.mem.Allocator,
     listener_targets: interactive.ListenerTargetMap = .{},
 
-    fn add(self: *LiveTargets, element: *Node.Element) !usize {
+    fn add(self: *LiveTargets, element: *Node.Element, kind: Kind) !usize {
         if (self.elements.items.len >= max_elements) return error.TargetLimit;
-        try self.elements.append(self.allocator, element);
+        try self.elements.append(self.allocator, .{ .element = element, .kind = kind });
         return self.elements.items.len - 1;
     }
 };
@@ -132,7 +141,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 }
             }
 
-            try formatElement(el, opts, writer, frame);
+            const live_kind = try formatElement(el, opts, writer, frame);
 
             if (opts.with_base and isDocumentHead(el, frame)) {
                 try writeBase(frame, writer);
@@ -140,6 +149,14 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 try writer.writeAll("<head>");
                 try writeBase(frame, writer);
                 try writer.writeAll("</head>");
+            }
+
+            if (live_kind == .value) {
+                if (el.is(TextArea)) |textarea| {
+                    try writeEscapedText(textarea.getValue(), writer);
+                    try writer.writeAll("</textarea>");
+                    return;
+                }
             }
 
             if (opts.shadow == .rendered) {
@@ -249,6 +266,32 @@ pub fn isLiveTarget(
     return isLiveScriptTarget(el, frame, listener_targets);
 }
 
+pub fn isLiveValueTarget(el: *Node.Element) bool {
+    if (el.isDisabled()) return false;
+    return switch (el.getTag()) {
+        .input => if (el.is(Input)) |input|
+            !input.getReadonly() and switch (input._input_type) {
+                .text, .search, .url, .tel, .email => true,
+                else => false,
+            }
+        else
+            false,
+        .textarea => el.getAttributeSafe(comptime .wrap("readonly")) == null,
+        .select => if (el.is(Select)) |select| !select.getMultiple() else false,
+        else => false,
+    };
+}
+
+pub fn liveTargetKind(
+    el: *Node.Element,
+    frame: *Frame,
+    listener_targets: interactive.ListenerTargetMap,
+) error{OutOfMemory}!?LiveTargets.Kind {
+    if (isLiveValueTarget(el)) return .value;
+    if (try isLiveTarget(el, frame, listener_targets)) return .activate;
+    return null;
+}
+
 fn isLiveScriptTarget(
     el: *Node.Element,
     frame: *Frame,
@@ -326,32 +369,70 @@ fn isLiveAnchor(el: *Node.Element, anchor: *Anchor) bool {
         std.ascii.eqlIgnoreCase(target, "_top");
 }
 
-fn formatElement(el: *Node.Element, opts: Opts, writer: *std.Io.Writer, frame: *Frame) DumpError!void {
+fn formatElement(
+    el: *Node.Element,
+    opts: Opts,
+    writer: *std.Io.Writer,
+    frame: *Frame,
+) DumpError!?LiveTargets.Kind {
     try writer.writeByte('<');
     try writer.writeAll(el.getTagNameDump());
 
+    const live_kind = if (opts.live_targets) |targets|
+        try liveTargetKind(el, frame, targets.listener_targets)
+    else
+        null;
     const live_checkable = if (opts.live_targets != null) liveCheckable(el) else null;
+    const live_input = if (live_kind == .value) el.is(Input) else null;
+    const strip_live_password_value = if (opts.live_targets != null)
+        if (el.is(Input)) |input| input._input_type == .password else false
+    else
+        false;
+    const live_option_selected = if (opts.live_targets != null) currentLiveOptionSelected(el) else null;
     for (el.attributeEntries()) |*attr| {
-        if (opts.live_targets != null and std.ascii.eqlIgnoreCase(attr.name(), "data-lp-live-target")) {
+        if (opts.live_targets != null and
+            (std.ascii.eqlIgnoreCase(attr.name(), "data-lp-live-target") or
+                std.ascii.eqlIgnoreCase(attr.name(), "data-lp-live-kind")))
+        {
             continue;
         }
         if (live_checkable != null and std.ascii.eqlIgnoreCase(attr.name(), "checked")) {
             continue;
         }
+        if ((live_input != null or strip_live_password_value) and
+            std.ascii.eqlIgnoreCase(attr.name(), "value")) continue;
+        if (live_option_selected != null and std.ascii.eqlIgnoreCase(attr.name(), "selected")) continue;
         try writer.writeByte(' ');
         try attr.format(writer);
     }
     if (live_checkable) |input| {
         if (input.getChecked()) try writer.writeAll(" checked");
     }
+    if (live_input) |input| {
+        try writer.writeAll(" value=\"");
+        try writeEscapedAttributeValue(input.getValue(), writer);
+        try writer.writeByte('"');
+    }
+    if (live_option_selected == true) try writer.writeAll(" selected");
 
-    if (opts.live_targets) |targets| {
-        if (try isLiveTarget(el, frame, targets.listener_targets)) {
-            const id = try targets.add(el);
-            try writer.print(" data-lp-live-target=\"{d}\"", .{id});
-        }
+    if (live_kind) |kind| {
+        const targets = opts.live_targets.?;
+        const id = try targets.add(el, kind);
+        try writer.print(" data-lp-live-target=\"{d}\" data-lp-live-kind=\"{s}\"", .{ id, @tagName(kind) });
     }
     try writer.writeByte('>');
+    return live_kind;
+}
+
+fn currentLiveOptionSelected(el: *Node.Element) ?bool {
+    const option = el.is(Option) orelse return null;
+    const parent = el.asNode().parentElement() orelse return null;
+    const select_el = if (parent.is(Node.Element.Html.OptGroup) != null)
+        parent.asNode().parentElement() orelse return null
+    else
+        parent;
+    if (!isLiveValueTarget(select_el)) return null;
+    return option.getSelected();
 }
 
 fn isDocumentHead(el: *Node.Element, frame: *Frame) bool {
@@ -665,7 +746,7 @@ test "dump: live targets replace author markers without mutating the DOM" {
     try invalid_inline.setAttributeSafe(comptime .wrap("onclick"), .wrap(")"), frame);
     _ = try body.asNode().appendChild(invalid_inline.asNode(), frame);
 
-    var elements: std.ArrayListUnmanaged(*Node.Element) = .empty;
+    var elements: std.ArrayListUnmanaged(LiveTargets.Target) = .empty;
     defer elements.deinit(testing.allocator);
     var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
     const dom_version = frame._page.dom_version;
@@ -674,12 +755,12 @@ test "dump: live targets replace author markers without mutating the DOM" {
     defer aw.deinit();
     try root(doc, .{ .live_targets = &targets }, &aw.writer, frame);
 
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "<a href=\"/next\" data-lp-live-target=\"0\">") != null);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "<button data-lp-live-target=\"1\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<a href=\"/next\" data-lp-live-target=\"0\" data-lp-live-kind=\"activate\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<button data-lp-live-target=\"1\" data-lp-live-kind=\"activate\">") != null);
     try testing.expect(std.mem.indexOf(u8, aw.written(), "<div onclick=\")\"></div>") != null);
     try testing.expectEqual(@as(usize, 2), elements.items.len);
-    try testing.expectEqual(anchor, elements.items[0]);
-    try testing.expectEqual(button, elements.items[1]);
+    try testing.expectEqual(anchor, elements.items[0].element);
+    try testing.expectEqual(button, elements.items[1].element);
     try testing.expect(!try isLiveTarget(blank, frame, .{}));
     try testing.expect(!try isLiveTarget(download, frame, .{}));
     try testing.expect(!try isLiveTarget(named, frame, .{}));
@@ -730,7 +811,7 @@ test "dump: live checkables serialize current checked state" {
     const select = try doc.createElement("select", null, frame);
     _ = try body.asNode().appendChild(select.asNode(), frame);
 
-    var elements: std.ArrayListUnmanaged(*Node.Element) = .empty;
+    var elements: std.ArrayListUnmanaged(LiveTargets.Target) = .empty;
     defer elements.deinit(testing.allocator);
     var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
 
@@ -738,9 +819,10 @@ test "dump: live checkables serialize current checked state" {
     defer aw.deinit();
     try root(doc, .{ .live_targets = &targets }, &aw.writer, frame);
 
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"checkbox\" type=\"checkbox\" data-lp-live-target=\"0\">") != null);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"radio\" type=\"radio\" checked data-lp-live-target=\"1\">") != null);
-    try testing.expectEqualSlices(*Node.Element, &.{ checkbox, radio }, elements.items);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"checkbox\" type=\"checkbox\" data-lp-live-target=\"0\" data-lp-live-kind=\"activate\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"radio\" type=\"radio\" checked data-lp-live-target=\"1\" data-lp-live-kind=\"activate\">") != null);
+    try testing.expectEqual(checkbox, elements.items[0].element);
+    try testing.expectEqual(radio, elements.items[1].element);
     try testing.expect(!try isLiveTarget(disabled, frame, .{}));
     try testing.expect(!try isLiveTarget(text, frame, .{}));
     try testing.expect(!try isLiveTarget(file, frame, .{}));
@@ -748,6 +830,56 @@ test "dump: live checkables serialize current checked state" {
     try testing.expect(!try isLiveTarget(select, frame, .{}));
     try testing.expect(checkbox.hasAttributeSafe(comptime .wrap("checked")));
     try testing.expect(!radio.hasAttributeSafe(comptime .wrap("checked")));
+}
+
+test "dump: live value targets serialize current state without mutating defaults" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const body = doc.is(Node.Document.HTMLDocument).?.getBody().?;
+    try Frame.parse.htmlAsChildren(frame, body.asNode(),
+        \\<input id="live-input" value="author">
+        \\<input id="live-password" type="password" value="author-password">
+        \\<textarea id="live-textarea">author</textarea>
+        \\<select id="live-select">
+        \\  <option id="live-option-one" value="one" selected>one</option>
+        \\  <option id="live-option-two" value="two&amp;">two</option>
+        \\</select>
+    );
+
+    const input_el = doc.getElementById("live-input", frame).?;
+    const password_el = doc.getElementById("live-password", frame).?;
+    const textarea_el = doc.getElementById("live-textarea", frame).?;
+    const select_el = doc.getElementById("live-select", frame).?;
+    const option_two_el = doc.getElementById("live-option-two", frame).?;
+    try input_el.is(Input).?.setValue("now&\"<", frame);
+    try password_el.is(Input).?.setValue("current-password", frame);
+    try textarea_el.is(TextArea).?.setValue("now&<", frame);
+    try select_el.is(Select).?.setValue("two&", frame);
+    const dom_version = frame._page.dom_version;
+
+    var elements: std.ArrayListUnmanaged(LiveTargets.Target) = .empty;
+    defer elements.deinit(testing.allocator);
+    var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try root(doc, .{ .live_targets = &targets }, &aw.writer, frame);
+
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"live-input\" value=\"now&amp;&quot;&lt;\" data-lp-live-target=\"0\" data-lp-live-kind=\"value\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"live-password\" type=\"password\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "author-password") == null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "current-password") == null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<textarea id=\"live-textarea\" data-lp-live-target=\"1\" data-lp-live-kind=\"value\">now&amp;&lt;</textarea>") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<select id=\"live-select\" data-lp-live-target=\"2\" data-lp-live-kind=\"value\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<option id=\"live-option-two\" value=\"two&amp;\" selected>two</option>") != null);
+    try testing.expectString("author", input_el.getAttributeSafe(comptime .wrap("value")).?);
+    try testing.expectString("author-password", password_el.getAttributeSafe(comptime .wrap("value")).?);
+    try testing.expectString("current-password", password_el.is(Input).?.getValue());
+    try testing.expectString("author", textarea_el.asNode().getTextContentAlloc(frame.call_arena) catch unreachable);
+    try testing.expect(!option_two_el.hasAttributeSafe(comptime .wrap("selected")));
+    try testing.expectEqual(dom_version, frame._page.dom_version);
 }
 
 test "dump: live snapshots strip meta refresh without mutating the DOM" {

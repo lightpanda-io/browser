@@ -124,6 +124,7 @@ export class LightpandaRenderer extends EventTarget {
   #liveClose = null;
   #liveActivation = false;
   #liveClickHandler;
+  #liveChangeHandler;
 
   constructor(target, options = {}) {
     super();
@@ -153,6 +154,7 @@ export class LightpandaRenderer extends EventTarget {
     }
     this.iframe = iframe;
     this.#liveClickHandler = (event) => this.#activateFromClick(event);
+    this.#liveChangeHandler = (event) => this.#setValueFromChange(event);
     this.#setLiveMode(false);
 
     if (options.replace === false) this.#target.append(iframe);
@@ -345,9 +347,17 @@ export class LightpandaRenderer extends EventTarget {
       throw new Error("Lightpanda cannot access the live snapshot document");
     }
     snapshot.addEventListener("click", this.#liveClickHandler);
+    snapshot.addEventListener("change", this.#liveChangeHandler);
+  }
+
+  #setLiveInteractionBusy(busy) {
+    this.iframe.inert = busy;
+    const root = this.iframe.contentDocument?.documentElement;
+    if (root) root.inert = busy;
   }
 
   #activateFromClick(event) {
+    if (event.target?.closest?.('[data-lp-live-kind="value"]')) return;
     const target = event.target?.closest?.("[data-lp-live-target]");
     if (!target || !this.#live) return;
     const index = Number(target.getAttribute("data-lp-live-target"));
@@ -360,6 +370,7 @@ export class LightpandaRenderer extends EventTarget {
     if (this.#liveActivation || this.#liveClose) return;
 
     this.#liveActivation = true;
+    this.#setLiveInteractionBusy(true);
     void this.#activate(index)
       .catch((error) => {
         if (error?.name !== "AbortError") {
@@ -369,6 +380,34 @@ export class LightpandaRenderer extends EventTarget {
       })
       .finally(() => {
         this.#liveActivation = false;
+        this.#setLiveInteractionBusy(false);
+      });
+  }
+
+  #setValueFromChange(event) {
+    const target = event.target?.closest?.('[data-lp-live-kind="value"]');
+    if (!target || !this.#live || this.#liveActivation || this.#liveClose) return;
+    const rawIndex = target.getAttribute("data-lp-live-target");
+    if (rawIndex === null) return;
+    const index = Number(rawIndex);
+    if (!Number.isSafeInteger(index) || index < 0 || typeof target.value !== "string") return;
+    const selectedIndex =
+      Number.isSafeInteger(target.selectedIndex) && target.selectedIndex >= 0
+        ? target.selectedIndex
+        : null;
+
+    this.#liveActivation = true;
+    this.#setLiveInteractionBusy(true);
+    void this.#setValue(index, target.value, selectedIndex)
+      .catch((error) => {
+        if (error?.name !== "AbortError") {
+          void this.#closeLive().catch(() => {});
+          this.dispatchEvent(new CustomEvent("liveerror", { detail: error }));
+        }
+      })
+      .finally(() => {
+        this.#liveActivation = false;
+        this.#setLiveInteractionBusy(false);
       });
   }
 
@@ -402,6 +441,43 @@ export class LightpandaRenderer extends EventTarget {
         controller.signal,
         () => sequence === this.#sequence,
       );
+      if (sequence !== this.#sequence) throw aborted(controller.signal);
+      this.#live = { ...live, ...metadata };
+      this.#bindLiveClicks();
+      this.dispatchEvent(new CustomEvent("live", { detail: { url: live.url, version: metadata.version, target } }));
+    } finally {
+      if (this.#controller === controller) this.#controller = null;
+    }
+  }
+
+  async #setValue(target, value, selectedIndex) {
+    const live = this.#live;
+    if (!live) return;
+    const sequence = ++this.#sequence;
+    this.#controller?.abort();
+    const controller = new AbortController();
+    this.#controller = controller;
+
+    try {
+      const request = {
+        op: "set_value",
+        session: live.session,
+        version: live.version,
+        target,
+        value,
+        wait_ms: live.options.waitMs,
+      };
+      if (selectedIndex !== null) request.selected_index = selectedIndex;
+      const response = await this.#postLive(request, controller.signal);
+      if (!response.ok) {
+        const detail = await readResponseText(response, 512).catch((error) => error.message);
+        throw new Error(`Lightpanda live value update failed (${response.status}): ${detail}`);
+      }
+
+      const metadata = liveHeaders(response);
+      const html = await readResponseText(response, this.#maxResponseBytes);
+      if (sequence !== this.#sequence) throw aborted(controller.signal);
+      await waitForFrame(this.iframe, html, controller.signal, () => sequence === this.#sequence);
       if (sequence !== this.#sequence) throw aborted(controller.signal);
       this.#live = { ...live, ...metadata };
       this.#bindLiveClicks();

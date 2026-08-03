@@ -6,10 +6,17 @@
 <input id="radio-a" type="radio" name="choice" checked>
 <input id="radio-b" type="radio" name="choice">
 <input id="disabled" type="checkbox" disabled>
-<input id="text">
+<input id="text" value="input-before">
 <input id="file" type="file">
 <input id="submit" type="submit">
-<select id="select"><option>one</option></select>
+<select id="select"><option id="option-one" value="one" selected>one</option><option id="option-two-a" value="two">two-a</option><option id="option-two-b" value="two">two-b</option></select>
+<textarea id="textarea">textarea-before</textarea>
+<input id="focus-invalidated" value="focus-before">
+<input id="password" type="password" value="secret">
+<input id="readonly" value="readonly" readonly>
+<textarea id="readonly-textarea" readonly>readonly</textarea>
+<select id="multiple-select" multiple><option selected>one</option></select>
+<div id="editable" contenteditable>editable</div>
 <p id="status">before</p>
 <div id="listener-update">listener</div>
 <div id="inline-update" onclick="document.getElementById('status').textContent = 'inline'">inline</div>
@@ -58,6 +65,20 @@ document.getElementById("removed-listener").addEventListener("click", removedLis
 document.getElementById("removed-listener").removeEventListener("click", removedListener);
 document.getElementById("non-click-listener").addEventListener("mouseover", () => {});
 document.getElementById("uppercase-listener").addEventListener("CLICK", () => {});
+for (const id of ["text", "textarea", "select"]) {
+    const control = document.getElementById(id);
+    control.addEventListener("input", () => control.setAttribute("data-events", "input"));
+    control.addEventListener("change", () => {
+        control.setAttribute("data-events", `${control.getAttribute("data-events")},change`);
+        if (id === "text" && control.value === "navigate") {
+            location.href = "/src/browser/tests/mcp_nav.html";
+        }
+    });
+}
+document.getElementById("focus-invalidated").addEventListener("focus", (event) => {
+    event.currentTarget.readOnly = true;
+});
+document.getElementById("password").value = "current-secret";
 </script>
 </body>
 </html>

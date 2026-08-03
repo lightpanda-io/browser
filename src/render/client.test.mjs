@@ -7,6 +7,7 @@ let supportCredentialless = true;
 class FakeElement extends EventTarget {
   attributes = new Map();
   style = {};
+  value = "";
 
   setAttribute(name, value) {
     this.attributes.set(name, value);
@@ -28,12 +29,19 @@ class FakeElement extends EventTarget {
     if (selector === "[data-lp-live-target]" && this.getAttribute("data-lp-live-target") !== null) {
       return this;
     }
+    if (
+      selector === '[data-lp-live-kind="value"]'
+      && this.getAttribute("data-lp-live-kind") === "value"
+    ) {
+      return this;
+    }
     return this.parent?.closest(selector) ?? null;
   }
 }
 
 class FakeDocument {
   listeners = new Map();
+  documentElement = new FakeElement();
 
   addEventListener(type, listener) {
     this.listeners.set(type, listener);
@@ -54,6 +62,14 @@ class FakeDocument {
     };
     this.listeners.get("click")?.(event);
     return event;
+  }
+
+  dispatchChange(target) {
+    this.listeners.get("change")?.({ target });
+  }
+
+  dispatchInput(target) {
+    this.listeners.get("input")?.({ target });
   }
 }
 
@@ -345,7 +361,7 @@ const { attachLightpandaRenderer } = await import(
     const request = JSON.parse(options.body);
     requests.push({ endpoint, request, authorization: options.headers.authorization });
     if (request.op === "open") {
-      return new Response('<a href="/next" data-lp-live-target="0">Next</a>', {
+      return new Response('<a href="/next" data-lp-live-target="0" data-lp-live-kind="activate">Next</a>', {
         headers: {
           "x-lightpanda-live-session": "0123456789abcdef0123456789abcdef",
           "x-lightpanda-live-version": "1",
@@ -353,7 +369,7 @@ const { attachLightpandaRenderer } = await import(
       });
     }
     if (request.op === "activate") {
-      return new Response('<button data-lp-live-target="0">Updated</button>', {
+      return new Response('<button data-lp-live-target="0" data-lp-live-kind="activate">Updated</button>', {
         headers: {
           "x-lightpanda-live-session": "0123456789abcdef0123456789abcdef",
           "x-lightpanda-live-version": "2",
@@ -387,6 +403,7 @@ const { attachLightpandaRenderer } = await import(
 
   const target = new FakeElement();
   target.setAttribute("data-lp-live-target", "0");
+  target.setAttribute("data-lp-live-kind", "activate");
   const modified = renderer.iframe.contentDocument.dispatchClick(target, { ctrlKey: true });
   assert.equal(modified.prevented, false);
   assert.equal(modified.stopped, false);
@@ -417,6 +434,118 @@ const { attachLightpandaRenderer } = await import(
     op: "close",
     session: "0123456789abcdef0123456789abcdef",
   });
+}
+
+{
+  autoLoadFrames = true;
+  const requests = [];
+  let finishSetValue;
+  fetchImpl = async (_endpoint, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    if (request.op === "open") {
+      return new Response(
+        '<select data-lp-live-target="4" data-lp-live-kind="value"><option>before</option></select>',
+        {
+          headers: {
+            "x-lightpanda-live-session": "11223344556677889900aabbccddeeff",
+            "x-lightpanda-live-version": "1",
+          },
+        },
+      );
+    }
+    if (request.op === "set_value") {
+      return new Promise((resolve) => {
+        finishSetValue = () => resolve(new Response(
+          '<select data-lp-live-target="4" data-lp-live-kind="value"><option>after</option></select>',
+          {
+            headers: {
+              "x-lightpanda-live-session": "11223344556677889900aabbccddeeff",
+              "x-lightpanda-live-version": "2",
+            },
+          },
+        ));
+      });
+    }
+    assert.equal(request.op, "close");
+    return new Response(null, { status: 204 });
+  };
+
+  const renderer = attachLightpandaRenderer(new FakeElement());
+  await renderer.open("https://source.example/live-values", { waitMs: 1234 });
+  const snapshot = renderer.iframe.contentDocument;
+  const target = new FakeElement();
+  target.setAttribute("data-lp-live-target", "4");
+  target.setAttribute("data-lp-live-kind", "value");
+  target.value = "after";
+  target.selectedIndex = 2;
+
+  const click = snapshot.dispatchClick(target);
+  assert.equal(click.prevented, false);
+  assert.equal(click.stopped, false);
+  const nestedTarget = new FakeElement();
+  nestedTarget.parent = target;
+  nestedTarget.setAttribute("data-lp-live-target", "7");
+  nestedTarget.setAttribute("data-lp-live-kind", "activate");
+  const nestedClick = snapshot.dispatchClick(nestedTarget);
+  assert.equal(nestedClick.prevented, false);
+  assert.equal(nestedClick.stopped, false);
+  snapshot.dispatchInput(target);
+  assert.equal(requests.length, 1);
+
+  snapshot.dispatchChange(target);
+  await waitUntil(() => finishSetValue);
+  assert.equal(renderer.iframe.inert, true);
+  assert.equal(snapshot.documentElement.inert, true);
+  snapshot.dispatchChange(target);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], {
+    op: "set_value",
+    session: "11223344556677889900aabbccddeeff",
+    version: 1,
+    target: 4,
+    value: "after",
+    wait_ms: 1234,
+    selected_index: 2,
+  });
+
+  finishSetValue();
+  await waitUntil(() => />after</.test(renderer.iframe.snapshot));
+  await waitUntil(() => renderer.iframe.inert === false);
+  assert.equal(renderer.iframe.contentDocument.documentElement.inert, false);
+  renderer.destroy();
+  await waitUntil(() => requests.length === 3);
+}
+
+{
+  autoLoadFrames = true;
+  const operations = [];
+  fetchImpl = async (_endpoint, options) => {
+    const request = JSON.parse(options.body);
+    operations.push(request.op);
+    if (request.op === "open") {
+      return new Response('<input data-lp-live-target="1" data-lp-live-kind="value">', {
+        headers: {
+          "x-lightpanda-live-session": "22334455667788990011aabbccddeeff",
+          "x-lightpanda-live-version": "1",
+        },
+      });
+    }
+    if (request.op === "set_value") return new Response("failed", { status: 500 });
+    assert.equal(request.op, "close");
+    return new Response(null, { status: 204 });
+  };
+
+  const renderer = attachLightpandaRenderer(new FakeElement());
+  await renderer.open("https://source.example/live-value-failure");
+  const target = new FakeElement();
+  target.setAttribute("data-lp-live-target", "1");
+  target.setAttribute("data-lp-live-kind", "value");
+  target.value = "failed";
+  renderer.iframe.contentDocument.dispatchChange(target);
+  await waitUntil(() => operations.includes("close"));
+  await waitUntil(() => renderer.iframe.inert === false);
+  assert.equal(renderer.iframe.contentDocument.documentElement.inert, false);
 }
 
 {

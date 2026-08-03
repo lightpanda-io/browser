@@ -36,6 +36,7 @@ const Result = enum {
     timeout,
     navigation_failed,
     response_too_large,
+    value_too_large,
     not_found,
     conflict,
     live_active,
@@ -50,6 +51,7 @@ const Result = enum {
             .timeout => .gateway_timeout,
             .navigation_failed => .bad_gateway,
             .response_too_large => .payload_too_large,
+            .value_too_large => .payload_too_large,
             .not_found => .not_found,
             .conflict => .conflict,
             .live_active => .conflict,
@@ -66,6 +68,7 @@ const Result = enum {
             .timeout => "{\"error\":\"render deadline exceeded\"}\n",
             .navigation_failed => "{\"error\":\"page navigation failed\"}\n",
             .response_too_large => "{\"error\":\"render snapshot too large\"}\n",
+            .value_too_large => "{\"error\":\"live value too large\"}\n",
             .not_found => "{\"error\":\"live session not found\"}\n",
             .conflict => "{\"error\":\"live snapshot is stale\"}\n",
             .live_active => "{\"error\":\"live session is active\"}\n",
@@ -512,11 +515,13 @@ const RenderRequest = struct {
 };
 
 const LiveRequest = struct {
-    op: enum { open, activate, close },
+    op: enum { open, activate, set_value, close },
     url: ?[]const u8 = null,
     session: ?[]const u8 = null,
     version: ?u64 = null,
     target: ?u64 = null,
+    value: ?[]const u8 = null,
+    selected_index: ?u32 = null,
     wait_ms: u32 = 5_000,
     width: u32 = 1280,
     height: u32 = 720,
@@ -638,6 +643,41 @@ fn processLive(live: *LiveSession, arena: std.mem.Allocator, job: *Job) void {
             };
             setLiveSnapshotHeaders(job, live);
         },
+        .set_value => {
+            const session = request.session orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const version = request.version orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const target64 = request.target orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const value = request.value orelse {
+                job.result = .bad_request;
+                return;
+            };
+            const target = std.math.cast(usize, target64) orelse {
+                job.result = .unsupported;
+                return;
+            };
+            live.setValue(
+                session,
+                version,
+                target,
+                value,
+                request.selected_index,
+                @min(request.wait_ms, job.max_wait_ms),
+                &job.out.writer,
+            ) catch |err| {
+                job.result = mapLiveError(err);
+                return;
+            };
+            setLiveSnapshotHeaders(job, live);
+        },
         .close => {
             const session = request.session orelse {
                 job.result = .bad_request;
@@ -674,6 +714,7 @@ fn mapLiveError(err: anyerror) Result {
         error.UnsupportedTarget => .unsupported,
         error.Timeout => .timeout,
         error.WriteFailed, error.TargetLimit => .response_too_large,
+        error.ValueLimit => .value_too_large,
         error.TypeError, error.InvalidURL => .bad_request,
         error.OutOfMemory => .internal_error,
         else => .navigation_failed,
@@ -1122,6 +1163,19 @@ test "render server: live operations carry a versioned activation" {
     try std.testing.expectEqual(@as(u64, 7), activate.version.?);
     try std.testing.expectEqual(@as(u64, 3), activate.target.?);
 
+    const set_value = try std.json.parseFromSliceLeaky(
+        LiveRequest,
+        arena.allocator(),
+        "{\"op\":\"set_value\",\"session\":\"0123456789abcdef0123456789abcdef\",\"version\":8,\"target\":4,\"value\":\"updated\",\"selected_index\":2,\"wait_ms\":1234}",
+        .{},
+    );
+    try std.testing.expect(set_value.op == .set_value);
+    try std.testing.expectEqual(@as(u64, 8), set_value.version.?);
+    try std.testing.expectEqual(@as(u64, 4), set_value.target.?);
+    try std.testing.expectEqualStrings("updated", set_value.value.?);
+    try std.testing.expectEqual(@as(u32, 2), set_value.selected_index.?);
+    try std.testing.expectEqual(@as(u32, 1234), set_value.wait_ms);
+
     const close = try std.json.parseFromSliceLeaky(
         LiveRequest,
         arena.allocator(),
@@ -1140,6 +1194,10 @@ test "render server: live errors and one-shot conflicts are explicit" {
     try std.testing.expectEqual(Result.not_found, mapLiveError(error.InvalidSession));
     try std.testing.expectEqual(Result.unsupported, mapLiveError(error.UnsupportedTarget));
     try std.testing.expectEqual(Result.response_too_large, mapLiveError(error.TargetLimit));
+    try std.testing.expectEqualStrings("{\"error\":\"render snapshot too large\"}\n", Result.response_too_large.body());
+    try std.testing.expectEqual(Result.value_too_large, mapLiveError(error.ValueLimit));
+    try std.testing.expectEqual(std.http.Status.payload_too_large, mapLiveError(error.ValueLimit).status());
+    try std.testing.expectEqualStrings("{\"error\":\"live value too large\"}\n", mapLiveError(error.ValueLimit).body());
 }
 
 test "render server: cancelled live work releases the worker session" {

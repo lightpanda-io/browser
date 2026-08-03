@@ -135,11 +135,13 @@
     \\submissions. New-window and top-level form targets stay blocked.
     \\
     \\POST /v1/live keeps one worker-owned page for up to five idle minutes.
-    \\The renderer library's open() method sends explicit open, activate, and
-    \\close operations. Live snapshots expose anchors, non-form buttons, enabled
-    \\checkbox/radio inputs, and usable elements with direct click handlers as
-    \\server-side semantic clicks; scripts and form submissions stay disabled in
-    \\the preview. A live session owns the sole worker until close or its
+    \\The renderer library's open() method sends explicit open, activate,
+    \\set_value, and close operations. Live snapshots expose anchors, non-form
+    \\buttons, enabled checkbox/radio inputs, and usable elements with direct
+    \\click handlers as server-side semantic clicks. Enabled editable text
+    \\controls and single selects send bounded value updates on change; scripts
+    \\and form submissions stay disabled in the preview. A live session owns the
+    \\sole worker until close or its
     \\five-minute idle expiry; /v1/render returns 409 while it is active.
     \\
     \\Endpoints:

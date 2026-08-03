@@ -173,6 +173,10 @@ pub fn selectOption(node: *DOMNode, value: []const u8, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
     const select = el.is(Element.Html.Select) orelse return error.InvalidNodeType;
 
+    el.focus(frame) catch |err| {
+        lp.log.err(.app, "select focus failed", .{ .err = err });
+    };
+
     select.setValue(value, frame) catch |err| {
         lp.log.err(.app, "select setValue failed", .{ .err = err });
         return error.ActionFailed;
@@ -216,6 +220,12 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
         lp.log.err(.app, "fill focus failed", .{ .err = err });
     };
 
+    try fillWithoutFocus(node, text, frame);
+}
+
+pub fn fillWithoutFocus(node: *DOMNode, text: []const u8, frame: *Frame) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+
     if (el.is(Element.Html.Input)) |input| {
         input.setValue(text, frame) catch |err| {
             lp.log.err(.app, "fill input failed", .{ .err = err });
@@ -234,6 +244,24 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
     } else {
         return error.InvalidNodeType;
     }
+
+    try dispatchInputAndChangeEvents(el, frame);
+}
+
+pub fn selectOptionAtIndexWithoutFocus(
+    node: *DOMNode,
+    selected_index: u32,
+    frame: *Frame,
+) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+    const select = el.is(Element.Html.Select) orelse return error.InvalidNodeType;
+    const index = std.math.cast(i32, selected_index) orelse return error.InvalidNodeType;
+
+    select.setSelectedIndex(index) catch |err| {
+        lp.log.err(.app, "select setSelectedIndex failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+    if (select.getSelectedIndex() != index) return error.InvalidNodeType;
 
     try dispatchInputAndChangeEvents(el, frame);
 }
