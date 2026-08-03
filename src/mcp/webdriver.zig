@@ -768,6 +768,10 @@ fn elementReference(session: *Server.Session, element: *Element) !ElementReferen
 }
 
 fn resolveElement(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !?*Element {
+    const frame = primaryFrame(session) orelse {
+        _ = try sendError(out, .not_found, "no such window", "Current browsing context has no document");
+        return null;
+    };
     const node_id = parseElementId(session, id) orelse {
         _ = try sendError(out, .not_found, "no such element", "Unknown element reference");
         return null;
@@ -782,10 +786,6 @@ fn resolveElement(session: *Server.Session, id: []const u8, out: *std.Io.Writer)
     };
     const element = node.dom.is(Element) orelse {
         _ = try sendError(out, .not_found, "stale element reference", "Element reference no longer identifies an element");
-        return null;
-    };
-    const frame = primaryFrame(session) orelse {
-        _ = try sendError(out, .not_found, "no such window", "Current browsing context has no document");
         return null;
     };
     const element_node = element.asNode();
@@ -1001,6 +1001,8 @@ fn navigate(
     var parsed = std.json.parseFromSlice(Params, arena, body, .{ .ignore_unknown_fields = true }) catch
         return sendError(out, .bad_request, "invalid argument", "Navigate To requires a URL string");
     defer parsed.deinit();
+    _ = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
     if (!lp.URL.canParse(parsed.value.url, null)) {
         return sendError(out, .bad_request, "invalid argument", "Navigate To requires an absolute URL");
     }
@@ -1519,6 +1521,80 @@ test "WebDriver: protocol session validates capabilities and preserves navigatio
     try testing.expectError(error.WriteFailed, handle(server, request_allocator, .POST, "/session", "{\"capabilities\":{\"alwaysMatch\":{}}}", &failure_writer));
     try testing.expect(server.webdriverReady());
     try testing.expectEqual(@as(usize, 0), server.sessions.count());
+}
+
+test "WebDriver: pageless sessions return no such window" {
+    const testing = @import("../testing.zig");
+
+    var placeholder: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer placeholder.deinit();
+    const server = try Server.initWebDriver(testing.allocator, testing.test_app, &placeholder.writer);
+    defer server.deinit();
+    server.enableIsolateParking();
+
+    var request_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer request_arena.deinit();
+    const request_allocator = request_arena.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    const session_id = "11111111-1111-4111-8111-111111111111";
+    const session = try server.createWebDriverSession(session_id, .load, 300_000, 30_000, 0);
+    const navigate_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/url", .{session_id});
+    defer testing.allocator.free(navigate_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,<p>element</p>\"}", &out.writer),
+    );
+
+    var known_element_buffer: [48]u8 = undefined;
+    const known_element_id = blk: {
+        server.enterIsolate(session);
+        defer server.exitIsolate(session);
+
+        const page = session.session.primaryPage().?;
+        const element = primaryFrame(session).?.document.getDocumentElement().?;
+        const reference = try elementReference(session, element);
+        const id = try std.fmt.bufPrint(&known_element_buffer, "{s}-{d}", .{ reference.session_id, reference.node_id });
+        page.close();
+        try testing.expect(session.session.primaryPage() == null);
+        break :blk id;
+    };
+    try testing.expect(server.getWebDriverSession(session_id) == session);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .not_found,
+        try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"relative\"}", &out.writer),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+    try testing.expectEqual(@as(usize, 0), session.session.pages.items.len);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .not_found,
+        try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,should-not-open\"}", &out.writer),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+    try testing.expectEqual(@as(usize, 0), session.session.pages.items.len);
+
+    var unknown_element_buffer: [48]u8 = undefined;
+    const unknown_element_id = try std.fmt.bufPrint(&unknown_element_buffer, "{s}-999999", .{session_id});
+    const element_ids = [_][]const u8{ known_element_id, unknown_element_id, "malformed" };
+    for (element_ids) |element_id| {
+        const enabled_path = try std.fmt.allocPrint(
+            testing.allocator,
+            "/session/{s}/element/{s}/enabled",
+            .{ session_id, element_id },
+        );
+        defer testing.allocator.free(enabled_path);
+
+        out.clearRetainingCapacity();
+        try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, enabled_path, "", &out.writer));
+        try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+    }
 }
 
 fn testFindWebDriverElement(
