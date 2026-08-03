@@ -890,6 +890,7 @@ pub const ErrorReason = enum {
     too_large,
     aborted,
     robots_blocked,
+    adblock_blocked,
     other,
 };
 
@@ -917,6 +918,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         error.SyncWaitInterrupted,
         => .aborted,
         error.RobotsBlocked => .robots_blocked,
+        error.AdblockBlocked => .adblock_blocked,
         else => .other,
     };
 }

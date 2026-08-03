@@ -35,6 +35,7 @@ const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
 pub const BlockPattern = UrlBlocklist.Pattern;
+const AdBlocker = @import("../adblock/AdBlocker.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -186,6 +187,8 @@ obey_robots: bool,
 
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
+/// Hostname dictionaries built from `--adblock-lists` filter files.
+adblocker: ?AdBlocker,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
@@ -208,6 +211,20 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
     }
     errdefer if (url_blocklist) |*blocklist| blocklist.deinit();
 
+    var adblocker: ?AdBlocker = null;
+    errdefer if (adblocker) |*blocker| blocker.deinit();
+    if (network.config.adblockLists()) |initial_paths| {
+        var it = initial_paths;
+        while (it.next()) |path| {
+            if (path.len == 0) continue;
+            if (adblocker == null) adblocker = try AdBlocker.init(allocator);
+            loadAdblockList(allocator, &adblocker.?, path) catch |err| {
+                log.err(.http, "adblock list load failed", .{ .path = path, .err = err });
+                return err;
+            };
+        }
+    }
+
     self.* = Client{
         .handles = handles,
         .network = network,
@@ -225,6 +242,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .obey_robots = network.config.obeyRobots(),
         .robots = .{ .allocator = allocator, .network = network },
         .url_blocklist = url_blocklist,
+        .adblocker = adblocker,
         .arena_pool = &network.app.arena_pool,
     };
 }
@@ -254,6 +272,7 @@ pub fn deinit(self: *Client) void {
     }
 
     self.clearUrlBlocklist();
+    if (self.adblocker) |*blocker| blocker.deinit();
     self.robots.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
@@ -385,6 +404,38 @@ fn isUrlBlocked(self: *const Client, url: []const u8, internal: bool) bool {
     if (internal) return false;
     const blocklist = self.url_blocklist orelse return false;
     return blocklist.isBlocked(url);
+}
+
+fn loadAdblockList(allocator: Allocator, blocker: *AdBlocker, path: []const u8) !void {
+    const text = try std.Io.Dir.cwd().readFileAllocOptions(
+        lp.io,
+        path,
+        allocator,
+        .limited(64 * 1024 * 1024),
+        .of(u8),
+        null,
+    );
+    defer allocator.free(text);
+
+    var reader: std.Io.Reader = .fixed(text);
+    const stats = try blocker.parse(&reader);
+    log.info(.http, "adblock list loaded", .{
+        .path = path,
+        .filters = stats.network,
+        .invalid = stats.invalid,
+    });
+}
+
+fn isHostAdblocked(self: *const Client, url: [:0]const u8, internal: bool) bool {
+    if (internal) return false;
+    const blocker: *const AdBlocker = if (self.adblocker) |*b| b else return false;
+    const host = URL.getHostname(url);
+    if (host.len == 0 or host.len > 253) return false;
+    // The trie expects normalized (lowercase) hostnames; URLs aren't
+    // guaranteed to arrive that way.
+    var buf: [253]u8 = undefined;
+    const hostname = std.ascii.lowerString(&buf, host);
+    return blocker.matchHostname(hostname) == .blocked;
 }
 
 pub fn newHeaders(self: *const Client) !http.Headers {
@@ -864,6 +915,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                 log.warn(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
+            }
+            if (self.isHostAdblocked(transfer.req.url, transfer.req.internal)) {
+                log.info(.http, "adblock blocked", .{ .url = transfer.req.url });
+                return transfer.failAsync(error.AdblockBlocked);
             }
             if (try self.cacheLookup(transfer)) {
                 // response came from the cache, we're done
@@ -3256,6 +3311,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.obey_robots = false;
     client.robots = .{ .allocator = testing.allocator, .network = undefined };
     client.url_blocklist = null;
+    client.adblocker = null;
 }
 
 test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
