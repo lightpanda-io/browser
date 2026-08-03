@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
+const interactive = @import("interactive.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
@@ -62,6 +63,7 @@ pub const LiveTargets = struct {
 
     elements: *std.ArrayListUnmanaged(*Node.Element),
     allocator: std.mem.Allocator,
+    listener_targets: interactive.ListenerTargetMap = .{},
 
     fn add(self: *LiveTargets, element: *Node.Element) !usize {
         if (self.elements.items.len >= max_elements) return error.TargetLimit;
@@ -226,8 +228,12 @@ pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame
     }
 }
 
-pub fn isLiveTarget(el: *Node.Element, frame: *Frame) bool {
-    return switch (el.getTag()) {
+pub fn isLiveTarget(
+    el: *Node.Element,
+    frame: *Frame,
+    listener_targets: interactive.ListenerTargetMap,
+) error{OutOfMemory}!bool {
+    const legacy_target = switch (el.getTag()) {
         .anchor => if (el.is(Anchor)) |anchor|
             isLiveAnchor(el, anchor)
         else
@@ -237,6 +243,66 @@ pub fn isLiveTarget(el: *Node.Element, frame: *Frame) bool {
         else
             false,
         .input => liveCheckable(el) != null and !el.isDisabled(),
+        else => false,
+    };
+    if (legacy_target) return true;
+    return isLiveScriptTarget(el, frame, listener_targets);
+}
+
+fn isLiveScriptTarget(
+    el: *Node.Element,
+    frame: *Frame,
+    listener_targets: interactive.ListenerTargetMap,
+) error{OutOfMemory}!bool {
+    const has_click = interactive.hasListenerType(el.asEventTarget(), listener_targets, "click") or
+        try hasInlineClickHandler(el, frame);
+    return has_click and
+        !el.isDisabled() and
+        !hasUnsafeDefaultAction(el, frame) and
+        interactive.isVisibleForInteraction(el, frame) and
+        !el.hasPointerEventsNone(null, frame);
+}
+
+fn hasInlineClickHandler(el: *Node.Element, frame: *Frame) error{OutOfMemory}!bool {
+    const html_el = el.is(Node.Element.Html) orelse return false;
+    const handler = html_el.getAttributeFunction(.onclick, frame) catch |err| switch (err) {
+        error.CompilationError => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return handler != null;
+}
+
+fn hasUnsafeDefaultAction(el: *Node.Element, frame: *Frame) bool {
+    const activation_node = Frame.user_input.findClickActivationTarget(el.asNode(), true) orelse return false;
+    const activation_el = activation_node.is(Node.Element) orelse return false;
+    return hasUnsafeActivationTarget(activation_el, frame);
+}
+
+fn hasUnsafeActivationTarget(el: *Node.Element, frame: *Frame) bool {
+    return switch (el.getTag()) {
+        .anchor => if (el.is(Anchor)) |anchor|
+            !isLiveAnchor(el, anchor)
+        else
+            false,
+        .button => if (el.is(Button)) |button|
+            std.mem.eql(u8, button.getType(), "submit") and button.getForm(frame) != null
+        else
+            false,
+        .input => if (el.is(Input)) |input|
+            switch (input._input_type) {
+                .submit, .image => input.getForm(frame) != null,
+                .file => true,
+                else => false,
+            }
+        else
+            false,
+        .label => if (el.is(Node.Element.Html.Label)) |label|
+            if (label.getControl(frame)) |control|
+                hasUnsafeActivationTarget(control, frame)
+            else
+                false
+        else
+            false,
         else => false,
     };
 }
@@ -280,7 +346,7 @@ fn formatElement(el: *Node.Element, opts: Opts, writer: *std.Io.Writer, frame: *
     }
 
     if (opts.live_targets) |targets| {
-        if (isLiveTarget(el, frame)) {
+        if (try isLiveTarget(el, frame, targets.listener_targets)) {
             const id = try targets.add(el);
             try writer.print(" data-lp-live-target=\"{d}\"", .{id});
         }
@@ -595,6 +661,10 @@ test "dump: live targets replace author markers without mutating the DOM" {
     try file.setAttributeSafe(comptime .wrap("type"), .wrap("file"), frame);
     _ = try body.asNode().appendChild(file.asNode(), frame);
 
+    const invalid_inline = try doc.createElement("div", null, frame);
+    try invalid_inline.setAttributeSafe(comptime .wrap("onclick"), .wrap(")"), frame);
+    _ = try body.asNode().appendChild(invalid_inline.asNode(), frame);
+
     var elements: std.ArrayListUnmanaged(*Node.Element) = .empty;
     defer elements.deinit(testing.allocator);
     var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
@@ -606,16 +676,17 @@ test "dump: live targets replace author markers without mutating the DOM" {
 
     try testing.expect(std.mem.indexOf(u8, aw.written(), "<a href=\"/next\" data-lp-live-target=\"0\">") != null);
     try testing.expect(std.mem.indexOf(u8, aw.written(), "<button data-lp-live-target=\"1\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<div onclick=\")\"></div>") != null);
     try testing.expectEqual(@as(usize, 2), elements.items.len);
     try testing.expectEqual(anchor, elements.items[0]);
     try testing.expectEqual(button, elements.items[1]);
-    try testing.expect(!isLiveTarget(blank, frame));
-    try testing.expect(!isLiveTarget(download, frame));
-    try testing.expect(!isLiveTarget(named, frame));
-    try testing.expect(!isLiveTarget(empty, frame));
-    try testing.expect(!isLiveTarget(disabled, frame));
-    try testing.expect(!isLiveTarget(associated, frame));
-    try testing.expect(!isLiveTarget(file, frame));
+    try testing.expect(!try isLiveTarget(blank, frame, .{}));
+    try testing.expect(!try isLiveTarget(download, frame, .{}));
+    try testing.expect(!try isLiveTarget(named, frame, .{}));
+    try testing.expect(!try isLiveTarget(empty, frame, .{}));
+    try testing.expect(!try isLiveTarget(disabled, frame, .{}));
+    try testing.expect(!try isLiveTarget(associated, frame, .{}));
+    try testing.expect(!try isLiveTarget(file, frame, .{}));
     try testing.expectEqual(dom_version, frame._page.dom_version);
 }
 
@@ -670,11 +741,11 @@ test "dump: live checkables serialize current checked state" {
     try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"checkbox\" type=\"checkbox\" data-lp-live-target=\"0\">") != null);
     try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"radio\" type=\"radio\" checked data-lp-live-target=\"1\">") != null);
     try testing.expectEqualSlices(*Node.Element, &.{ checkbox, radio }, elements.items);
-    try testing.expect(!isLiveTarget(disabled, frame));
-    try testing.expect(!isLiveTarget(text, frame));
-    try testing.expect(!isLiveTarget(file, frame));
-    try testing.expect(!isLiveTarget(submit, frame));
-    try testing.expect(!isLiveTarget(select, frame));
+    try testing.expect(!try isLiveTarget(disabled, frame, .{}));
+    try testing.expect(!try isLiveTarget(text, frame, .{}));
+    try testing.expect(!try isLiveTarget(file, frame, .{}));
+    try testing.expect(!try isLiveTarget(submit, frame, .{}));
+    try testing.expect(!try isLiveTarget(select, frame, .{}));
     try testing.expect(checkbox.hasAttributeSafe(comptime .wrap("checked")));
     try testing.expect(!radio.hasAttributeSafe(comptime .wrap("checked")));
 }

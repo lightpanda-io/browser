@@ -271,6 +271,18 @@ pub fn buildListenerTargetMap(frame: *Frame, arena: Allocator) !ListenerTargetMa
     return map;
 }
 
+pub fn hasListenerType(target: *EventTarget, listener_targets: ListenerTargetMap, event_type: []const u8) bool {
+    const types = listener_targets.get(@intFromPtr(target)) orelse return false;
+    for (types.items) |typ| {
+        if (std.mem.eql(u8, typ, event_type)) return true;
+    }
+    return false;
+}
+
+pub fn isVisibleForInteraction(el: *Element, frame: *Frame) bool {
+    return !frame._style_manager.isHidden(el, null, .{ .check_visibility = true });
+}
+
 pub fn classifyInteractivity(
     frame: *Frame,
     el: *Element,

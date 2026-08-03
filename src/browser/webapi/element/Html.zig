@@ -518,13 +518,16 @@ pub fn getAttributeFunction(
     }
 
     const attr = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse return null;
-    const function = frame.js.stringToPersistedFunction(attr, &.{"event"}, &.{}) catch |err| {
-        // Not a valid expression; log this to find out if its something we should be supporting.
-        log.warn(.js, "Html.getAttributeFunction", .{
-            .expression = attr,
-            .err = err,
-        });
-        return null;
+    const function = frame.js.stringToPersistedFunction(attr, &.{"event"}, &.{}) catch |err| switch (err) {
+        error.CompilationError => {
+            // Not a valid expression; log this to find out if its something we should be supporting.
+            log.warn(.js, "Html.getAttributeFunction", .{
+                .expression = attr,
+                .err = err,
+            });
+            return null;
+        },
+        else => return err,
     };
 
     try self.setAttributeListener(listener_type, function, frame);

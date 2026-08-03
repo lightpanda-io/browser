@@ -11,10 +11,53 @@
 <input id="submit" type="submit">
 <select id="select"><option>one</option></select>
 <p id="status">before</p>
+<div id="listener-update">listener</div>
+<div id="inline-update" onclick="document.getElementById('status').textContent = 'inline'">inline</div>
+<a id="inline-anchor" onclick="document.getElementById('status').textContent = 'anchor'">anchor</a>
+<form id="script-form">
+    <button id="form-script-button" type="button" onclick="document.getElementById('status').textContent = 'button'">button</button>
+    <button id="submit-script-button" type="submit"><span id="submit-script-child" onclick="document.getElementById('status').textContent = 'submit child'">submit child</span></button>
+    <input id="label-submit-control" type="submit">
+    <label id="label-submit-script" for="label-submit-control" onclick="document.getElementById('status').textContent = 'label submit'">label submit</label>
+</form>
+<input id="input-script-button" type="button" onclick="document.getElementById('status').textContent = 'input'">
+<input id="file-script" type="file" onclick="document.getElementById('status').textContent = 'file'">
+<div id="delegated-update">delegated</div>
+<button id="disabled-script" disabled onclick="document.getElementById('status').textContent = 'disabled'">disabled script</button>
+<div id="blocked-script" style="pointer-events: none" onclick="document.getElementById('status').textContent = 'blocked'">blocked</div>
+<div id="hidden-listener" hidden>hidden</div>
+<div id="visibility-hidden" style="visibility: hidden" onclick="document.getElementById('status').textContent = 'visibility'">visibility hidden</div>
+<div style="visibility: hidden">
+    <div id="visibility-hidden-ancestor" onclick="document.getElementById('status').textContent = 'visibility ancestor'">visibility hidden ancestor</div>
+</div>
+<div style="display: none">
+    <div id="display-hidden-ancestor" onclick="document.getElementById('status').textContent = 'display ancestor'">display hidden ancestor</div>
+</div>
+<div id="removed-listener">removed</div>
+<div id="non-click-listener">non-click</div>
+<div id="uppercase-listener">uppercase</div>
 <script>
 document.getElementById("update").addEventListener("click", () => {
     document.getElementById("status").textContent = "after";
 });
+const liveListener = () => {
+    document.getElementById("status").textContent = "listener";
+};
+document.getElementById("listener-update").addEventListener("click", liveListener);
+window.removeLiveListener = () => {
+    document.getElementById("listener-update").removeEventListener("click", liveListener);
+};
+document.getElementById("hidden-listener").addEventListener("click", () => {});
+document.addEventListener("click", (event) => {
+    if (event.target.id === "delegated-update") {
+        document.getElementById("status").textContent = "delegated";
+    }
+});
+const removedListener = () => {};
+document.getElementById("removed-listener").addEventListener("click", removedListener);
+document.getElementById("removed-listener").removeEventListener("click", removedListener);
+document.getElementById("non-click-listener").addEventListener("mouseover", () => {});
+document.getElementById("uppercase-listener").addEventListener("CLICK", () => {});
 </script>
 </body>
 </html>

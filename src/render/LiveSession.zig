@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const js = @import("../browser/js/js.zig");
 const Node = @import("../browser/webapi/Node.zig");
 
 const LiveSession = @This();
@@ -132,7 +133,20 @@ pub fn activate(
         self.close();
         return error.StaleSnapshot;
     };
-    if (!target.asNode().isConnected() or !lp.dump.isLiveTarget(target, frame)) {
+    const target_arena = frame.getArena(.small, "render-live-targets") catch |err| {
+        self.close();
+        return err;
+    };
+    defer target_arena.release();
+    const listener_targets = lp.interactive.buildListenerTargetMap(frame, target_arena.allocator()) catch |err| {
+        self.close();
+        return err;
+    };
+    const valid_target = lp.dump.isLiveTarget(target, frame, listener_targets) catch |err| {
+        self.close();
+        return err;
+    };
+    if (!target.asNode().isConnected() or !valid_target) {
         self.close();
         return error.StaleSnapshot;
     }
@@ -184,12 +198,15 @@ pub fn close(self: *LiveSession) void {
 fn snapshot(self: *LiveSession, writer: *std.Io.Writer) !void {
     const page = self.page orelse return error.FrameNotLoaded;
     const frame = page.frame() orelse return error.FrameNotLoaded;
+    const target_arena = try frame.getArena(.small, "render-live-targets");
+    defer target_arena.release();
     self.targets.clearRetainingCapacity();
     errdefer self.targets.clearRetainingCapacity();
 
     var targets: lp.dump.LiveTargets = .{
         .elements = &self.targets,
         .allocator = self.allocator,
+        .listener_targets = try lp.interactive.buildListenerTargetMap(frame, target_arena.allocator()),
     };
     try lp.dump.root(frame.window._document, .{
         .with_base = true,
@@ -252,13 +269,31 @@ fn liveSessionRoundTrip() !void {
     try live.open(.{ .url = button_url, .width = 640, .height = 480, .wait_ms = 2_000 }, &opened.writer);
     try testing.expect(live.isActive());
     try testing.expectEqual(@as(u64, 1), live.version);
-    try testing.expectEqual(@as(usize, 4), live.targets.items.len);
+    try testing.expectEqual(@as(usize, 9), live.targets.items.len);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"toggle\" type=\"checkbox\" checked data-lp-live-target=\"1\">") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"disabled\" type=\"checkbox\" disabled>") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"text\">") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"file\" type=\"file\">") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"submit\" type=\"submit\">") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<select id=\"select\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"4\">listener</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"5\">inline</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"6\">anchor</a>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"7\">button</button>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"8\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<span id=\"submit-script-child\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<label id=\"label-submit-script\" for=\"label-submit-control\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"file-script\" type=\"file\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"delegated-update\">delegated</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<button id=\"disabled-script\" disabled onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"blocked-script\" style=\"pointer-events: none\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"hidden-listener\" hidden>hidden</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"visibility-hidden\" style=\"visibility: hidden\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"visibility-hidden-ancestor\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"display-hidden-ancestor\" onclick=") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"removed-listener\">removed</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"non-click-listener\">non-click</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<div id=\"uppercase-listener\">uppercase</div>") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), ">before<") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<script") == null);
 
@@ -268,7 +303,7 @@ fn liveSessionRoundTrip() !void {
     try live.activate(token[0..], live.version, 1, 2_000, &activated.writer);
     try testing.expectEqual(@as(u64, 2), live.version);
     try testing.expect(std.mem.indexOf(u8, activated.written(), "<input id=\"toggle\" type=\"checkbox\" data-lp-live-target=\"1\">") != null);
-    try testing.expectEqual(@as(usize, 4), live.targets.items.len);
+    try testing.expectEqual(@as(usize, 9), live.targets.items.len);
 
     activated.clearRetainingCapacity();
     try live.activate(token[0..], live.version, 3, 2_000, &activated.writer);
@@ -280,9 +315,49 @@ fn liveSessionRoundTrip() !void {
     try live.activate(token[0..], live.version, 0, 2_000, &activated.writer);
     try testing.expectEqual(@as(u64, 4), live.version);
     try testing.expect(std.mem.indexOf(u8, activated.written(), ">after<") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 4, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 5), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), ">listener<") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 5, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 6), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), ">inline<") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 6, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 7), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), ">anchor<") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 7, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 8), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), ">button<") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 8, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 9), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), ">input<") != null);
     try live.closeForToken(token[0..]);
     try testing.expect(!live.isActive());
     try testing.expectEqual(@as(usize, 0), live.targets.capacity);
+
+    activated.clearRetainingCapacity();
+    try live.open(.{ .url = button_url, .width = 640, .height = 480, .wait_ms = 2_000 }, &activated.writer);
+    const stale_token = live.tokenText();
+    const stale_frame = live.page.?.frame().?;
+    const stale_dom_version = stale_frame._page.dom_version;
+    {
+        var ls: js.Local.Scope = undefined;
+        stale_frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("window.removeLiveListener()", null);
+    }
+    try testing.expectEqual(stale_dom_version, stale_frame._page.dom_version);
+    try testing.expectError(error.StaleSnapshot, live.activate(stale_token[0..], live.version, 4, 2_000, &opened.writer));
+    try testing.expect(!live.isActive());
 
     var reopened: std.Io.Writer.Allocating = .init(testing.test_app.allocator);
     defer reopened.deinit();
