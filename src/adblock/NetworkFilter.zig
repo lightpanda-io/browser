@@ -296,7 +296,7 @@ fn stripInlineComment(line: []const u8) []const u8 {
     var i: usize = 1;
     while (i < line.len) : (i += 1) {
         if (line[i] == '#' and std.ascii.isWhitespace(line[i - 1])) {
-            return std.mem.trimRight(u8, line[0..i], &std.ascii.whitespace);
+            return std.mem.trimEnd(u8, line[0..i], &std.ascii.whitespace);
         }
     }
     return line;
