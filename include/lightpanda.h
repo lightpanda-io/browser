@@ -173,6 +173,14 @@ uint32_t lp_session_pump(lp_session *session);
 void lp_session_set_cancel_hook(lp_session *session,
                                 bool (*cb)(void *), void *ctx);
 
+/* Diagnostic for the most recent failing call on this session (lp_call) or
+ * browser (lp_fetch, lp_session_new): an error name such as "Timeout" or
+ * "CertificateError", more specific than the lp_status code. Empty when the
+ * last call succeeded; NULL for a NULL handle or after lp_shutdown. len may
+ * be NULL. Static — do not free. */
+const char *lp_last_error(lp_session *session, size_t *len);
+const char *lp_browser_last_error(lp_browser *browser, size_t *len);
+
 /* JSON array of every tool lp_call accepts:
  * [{"name", "description", "inputSchema"}, ...]. Static — do not free. */
 const char *lp_tools_json(void);
