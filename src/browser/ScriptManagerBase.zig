@@ -73,12 +73,6 @@ pub const Owner = union(enum) {
         };
     }
 
-    pub fn addHeaders(self: Owner, headers: *HttpClient.Headers) !void {
-        return switch (self) {
-            inline else => |g| g.headersForRequest(headers),
-        };
-    }
-
     pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
         return switch (self) {
             inline else => |g| g.makeRequest(req),
@@ -177,12 +171,6 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-pub fn getHeaders(self: *ScriptManagerBase) !http.Headers {
-    var headers = try self.client.newHeaders();
-    try self.owner.addHeaders(&headers);
-    return headers;
-}
-
 fn acquireArena(self: *ScriptManagerBase, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.owner.session().getArena(size_or_bucket, debug);
 }
@@ -276,7 +264,6 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .method = .GET,
         .frame_id = owner.frameId(),
         .loader_id = owner.loaderId(),
-        .headers = try self.getHeaders(),
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),
         .resource_type = .script,
@@ -471,7 +458,6 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .method = .GET,
         .frame_id = owner.frameId(),
         .loader_id = owner.loaderId(),
-        .headers = try self.getHeaders(),
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),

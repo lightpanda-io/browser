@@ -264,17 +264,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
     }
 
     if (params.headers) |headers| {
-        request.headers.deinit();
-
-        var buf: std.ArrayList(u8) = .empty;
-        var new_headers = try bc.cdp.browser.http_client.newHeaders();
-        for (headers) |hdr| {
-            defer buf.clearRetainingCapacity();
-            try buf.print(cmd.arena, "{s}: {s}", .{ hdr.name, hdr.value });
-            try buf.append(cmd.arena, 0);
-            try new_headers.add(buf.items[0 .. buf.items.len - 1 :0]);
-        }
-        request.headers = new_headers;
+        try transfer.replaceRequestHeaders(headers);
     }
 
     if (params.postData) |b| {

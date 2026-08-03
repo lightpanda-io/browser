@@ -84,9 +84,9 @@ pub fn getPinnedArena(self: *const Execution, size_or_bucket: anytype, debug: []
     return self.page.getPinnedArena(size_or_bucket, debug);
 }
 
-pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {
+pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer) !void {
     return switch (self.js.global) {
-        inline else => |g| g.headersForRequest(headers),
+        inline else => |g| g.headersForRequest(transfer),
     };
 }
 

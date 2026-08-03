@@ -20,7 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const crypto = @import("../sys/libcrypto.zig");
 
-const Http = @import("../network/http.zig");
+const ArenaPool = @import("../ArenaPool.zig");
+const Transfer = @import("HttpClient.zig").Transfer;
 
 const WebBotAuth = @This();
 
@@ -90,28 +91,26 @@ pub fn fromConfig(allocator: std.mem.Allocator, config: *const Config) !WebBotAu
 
 pub fn signRequest(
     self: *const WebBotAuth,
-    allocator: std.mem.Allocator,
-    headers: *Http.Headers,
+    transfer: *Transfer,
     authority: []const u8,
 ) !void {
+    const arena = transfer.arena.allocator();
     const now = lp.datetime.timestamp(.real);
     const expires = now + 60;
 
     // build the signature-input value (without the sig1= label)
     const sig_input_value = try std.fmt.allocPrint(
-        allocator,
+        arena,
         "(\"@authority\" \"signature-agent\");created={d};expires={d};keyid=\"{s}\";alg=\"ed25519\";tag=\"web-bot-auth\"",
         .{ now, expires, self.keyid },
     );
-    defer allocator.free(sig_input_value);
 
     // build the canonical string to sign
     const canonical = try std.fmt.allocPrint(
-        allocator,
+        arena,
         "\"@authority\": {s}\n\"signature-agent\": \"{s}\"\n\"@signature-params\": {s}",
         .{ authority, self.directory_url, sig_input_value },
     );
-    defer allocator.free(canonical);
 
     // sign it
     var sig: [64]u8 = undefined;
@@ -119,38 +118,12 @@ pub fn signRequest(
 
     // base64 encode
     const encoded_len = std.base64.standard.Encoder.calcSize(sig.len);
-    const encoded = try allocator.alloc(u8, encoded_len);
-    defer allocator.free(encoded);
+    const encoded = try arena.alloc(u8, encoded_len);
     _ = std.base64.standard.Encoder.encode(encoded, &sig);
 
-    // build the 3 headers and add them
-    const sig_agent = try std.fmt.allocPrintSentinel(
-        allocator,
-        "Signature-Agent: \"{s}\"",
-        .{self.directory_url},
-        0,
-    );
-    defer allocator.free(sig_agent);
-
-    const sig_input = try std.fmt.allocPrintSentinel(
-        allocator,
-        "Signature-Input: sig1={s}",
-        .{sig_input_value},
-        0,
-    );
-    defer allocator.free(sig_input);
-
-    const signature = try std.fmt.allocPrintSentinel(
-        allocator,
-        "Signature: sig1=:{s}:",
-        .{encoded},
-        0,
-    );
-    defer allocator.free(signature);
-
-    try headers.add(sig_agent);
-    try headers.add(sig_input);
-    try headers.add(signature);
+    try transfer.addHeader("Signature-Agent", try std.fmt.allocPrint(arena, "\"{s}\"", .{self.directory_url}), .{});
+    try transfer.addHeader("Signature-Input", try std.fmt.allocPrint(arena, "sig1={s}", .{sig_input_value}), .{});
+    try transfer.addHeader("Signature", try std.fmt.allocPrint(arena, "sig1=:{s}:", .{encoded}), .{});
 }
 
 pub fn deinit(self: WebBotAuth, allocator: std.mem.Allocator) void {
@@ -260,26 +233,41 @@ test "signRequest: adds headers with correct names" {
     };
     defer auth.deinit(allocator);
 
-    var headers = try Http.Headers.init("User-Agent: Test-Agent");
-    defer headers.deinit();
+    var pool = ArenaPool.init(allocator, .{});
+    defer pool.deinit();
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
 
-    try auth.signRequest(allocator, &headers, "example.com");
+    var transfer = Transfer{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "https://example.com/",
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .document,
+            .notification = undefined,
+            .shutdown_callback = @import("HttpClient.zig").noopShutdown,
+        },
+        .client = undefined,
+        .id = 1,
+        .start_time = 0,
+    };
 
-    var it = headers.iterator();
-    var found_sig_agent = false;
-    var found_sig_input = false;
-    var found_signature = false;
-    var count: usize = 0;
+    try auth.signRequest(&transfer, "example.com");
 
-    while (it.next()) |h| {
-        count += 1;
-        if (std.ascii.eqlIgnoreCase(h.name, "Signature-Agent")) found_sig_agent = true;
-        if (std.ascii.eqlIgnoreCase(h.name, "Signature-Input")) found_sig_input = true;
-        if (std.ascii.eqlIgnoreCase(h.name, "Signature")) found_signature = true;
-    }
-
-    try std.testing.expect(count >= 3);
-    try std.testing.expect(found_sig_agent);
-    try std.testing.expect(found_sig_input);
-    try std.testing.expect(found_signature);
+    const headers = transfer.req_headers.items;
+    try std.testing.expectEqual(3, headers.len);
+    try std.testing.expectEqualStrings("Signature-Agent", headers[0].name);
+    try std.testing.expectEqualStrings(
+        "\"https://example.com/.well-known/http-message-signatures-directory\"",
+        headers[0].value,
+    );
+    try std.testing.expectEqualStrings("Signature-Input", headers[1].name);
+    try std.testing.expect(std.mem.startsWith(u8, headers[1].value, "sig1=(\"@authority\" \"signature-agent\")"));
+    try std.testing.expectEqualStrings("Signature", headers[2].name);
+    try std.testing.expect(std.mem.startsWith(u8, headers[2].value, "sig1=:"));
 }
