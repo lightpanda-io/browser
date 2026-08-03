@@ -68,6 +68,7 @@ const Command = enum {
     find_elements,
     find_element_from_element,
     find_elements_from_element,
+    get_active_element,
     get_element_tag_name,
     get_element_attribute,
     is_element_selected,
@@ -137,6 +138,7 @@ pub fn handle(
         .find_elements => findElements(server, session, arena, body, null, out),
         .find_element_from_element => findElement(server, session, arena, body, route.element_id.?, out),
         .find_elements_from_element => findElements(server, session, arena, body, route.element_id.?, out),
+        .get_active_element => getActiveElement(session, out),
         .get_element_tag_name => getElementTagName(session, route.element_id.?, out),
         .get_element_attribute => getElementAttribute(session, arena, route.element_id.?, route.attribute_name.?, out),
         .is_element_selected => isElementSelected(session, route.element_id.?, out),
@@ -1043,6 +1045,14 @@ fn getPageSource(session: *Server.Session, out: *std.Io.Writer) !std.http.Status
     return sendValue(out, PageSource{ .frame = frame });
 }
 
+fn getActiveElement(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    const element = frame.document.getActiveElement() orelse
+        return sendError(out, .not_found, "no such element", "Current document has no active element");
+    return sendValue(out, try elementReference(session, element));
+}
+
 fn getWindowHandle(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
     const page = session.session.primaryPage() orelse
         return sendError(out, .not_found, "no such window", "Current browsing context has no document");
@@ -1175,6 +1185,10 @@ fn matchRoute(path: []const u8) ?Route {
         .command = .find_elements,
         .session_id = session_id,
     };
+    if (std.mem.eql(u8, suffix, "/element/active")) return .{
+        .command = .get_active_element,
+        .session_id = session_id,
+    };
     if (matchElementRoute(session_id, suffix)) |route| return route;
     return null;
 }
@@ -1230,6 +1244,7 @@ fn commandMethod(command: Command) std.http.Method {
         .get_window_handle,
         .get_window_handles,
         .get_timeouts,
+        .get_active_element,
         .get_element_tag_name,
         .get_element_attribute,
         .is_element_selected,
@@ -1289,6 +1304,7 @@ test "WebDriver: routes use URL paths and distinguish methods" {
     try std.testing.expectEqual(Command.get_window_handles, commandForMethod(matchRoute("/session/id/window/handles").?, .GET).?);
     try std.testing.expectEqual(Command.find_element, commandForMethod(matchRoute("/session/id/element").?, .POST).?);
     try std.testing.expectEqual(Command.find_elements, commandForMethod(matchRoute("/session/id/elements").?, .POST).?);
+    try std.testing.expectEqual(Command.get_active_element, commandForMethod(matchRoute("/session/id/element/active").?, .GET).?);
     const child_route = matchRoute("/session/id/element/ref/element").?;
     try std.testing.expectEqualStrings("ref", child_route.element_id.?);
     try std.testing.expectEqual(Command.find_element_from_element, commandForMethod(child_route, .POST).?);
@@ -1580,6 +1596,12 @@ test "WebDriver: pageless sessions return no such window" {
     try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
     try testing.expectEqual(@as(usize, 0), session.session.pages.items.len);
 
+    const active_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/element/active", .{session_id});
+    defer testing.allocator.free(active_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, active_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+
     var unknown_element_buffer: [48]u8 = undefined;
     const unknown_element_id = try std.fmt.bufPrint(&unknown_element_buffer, "{s}-999999", .{session_id});
     const element_ids = [_][]const u8{ known_element_id, unknown_element_id, "malformed" };
@@ -1620,6 +1642,24 @@ fn testFindWebDriverElement(
 
     out.clearRetainingCapacity();
     try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, path, body, &out.writer));
+    var response = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer response.deinit();
+    const reference = response.value.object.get("value").?.object.get(element_key).?.string;
+    return testing.allocator.dupe(u8, reference);
+}
+
+fn testGetActiveWebDriverElement(
+    server: *Server,
+    request_allocator: Allocator,
+    session_id: []const u8,
+    out: *std.Io.Writer.Allocating,
+) ![]u8 {
+    const testing = @import("../testing.zig");
+    const path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/element/active", .{session_id});
+    defer testing.allocator.free(path);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, path, "", &out.writer));
     var response = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
     defer response.deinit();
     const reference = response.value.object.get("value").?.object.get(element_key).?.string;
@@ -1710,6 +1750,26 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
 
     out.clearRetainingCapacity();
     try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, navigate_path, navigate_body, &out.writer));
+
+    const default_active_id = try testGetActiveWebDriverElement(server, request_allocator, session_id, &out);
+    defer testing.allocator.free(default_active_id);
+    const body_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "body", &out);
+    defer testing.allocator.free(body_id);
+    try std.testing.expectEqualStrings(body_id, default_active_id);
+
+    const active = server.getWebDriverSession(session_id).?;
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = primaryFrame(active).?;
+        const input = frame.document.getElementById("unchecked", frame).?;
+        try input.focus(frame);
+    }
+    const focused_active_id = try testGetActiveWebDriverElement(server, request_allocator, session_id, &out);
+    defer testing.allocator.free(focused_active_id);
+    const unchecked_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#unchecked", &out);
+    defer testing.allocator.free(unchecked_id);
+    try std.testing.expectEqualStrings(unchecked_id, focused_active_id);
 
     const parent_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#parent", &out);
     defer testing.allocator.free(parent_id);
@@ -1832,8 +1892,6 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
     try expectWebDriverElementValue(server, request_allocator, session_id, checked_id, "/selected", &out, true);
     try expectWebDriverElementValue(server, request_allocator, session_id, checked_id, "/enabled", &out, false);
 
-    const unchecked_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#unchecked", &out);
-    defer testing.allocator.free(unchecked_id);
     try expectWebDriverElementValue(server, request_allocator, session_id, unchecked_id, "/selected", &out, false);
     try expectWebDriverElementValue(server, request_allocator, session_id, unchecked_id, "/attribute/alpha", &out, "true");
 
@@ -1914,7 +1972,6 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
     );
     try testing.expectJson(.{ .value = .{ .@"error" = "invalid selector" } }, out.writer.buffered());
 
-    const active = server.getWebDriverSession(session_id).?;
     {
         server.enterIsolate(active);
         defer server.exitIsolate(active);
