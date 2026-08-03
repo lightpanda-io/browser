@@ -157,6 +157,13 @@
   testing.expectEqual('1969-12-31', date.value);
   date.valueAsNumber = 0;
   testing.expectEqual('1970-01-01', date.value);
+  date.valueAsNumber = 86399999.6;
+  testing.expectEqual('1970-01-01', date.value);
+  date.valueAsNumber = -0.1;
+  testing.expectEqual('1969-12-31', date.value);
+  date.value = '4294967297-01-01';
+  testing.expectEqual('', date.value);
+  testing.expectTrue(Number.isNaN(date.valueAsNumber));
   date.valueAsNumber = NaN;
   testing.expectEqual('', date.value);
   testing.expectError('TypeError', () => { date.valueAsNumber = Infinity; });

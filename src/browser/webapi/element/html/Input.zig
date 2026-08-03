@@ -1151,8 +1151,7 @@ fn dateFromValueAsNumber(arena: std.mem.Allocator, value: f64) ![]const u8 {
     // outside it cannot produce a valid date string and reset to empty.
     if (@abs(value) > maximum_time_value) return "";
 
-    const milliseconds = @round(value);
-    const days: i64 = @intFromFloat(@floor(milliseconds / milliseconds_per_day));
+    const days: i64 = @intFromFloat(@floor(value / milliseconds_per_day));
     const date = civilFromDays(days);
     if (date.year < 1) return "";
     const year: u64 = @intCast(date.year);
@@ -1726,13 +1725,13 @@ test "date valueAsNumber conversion" {
     defer testing.allocator.free(epoch);
     try testing.expectEqual("1970-01-01", epoch);
 
-    const rounded_before_epoch = try dateFromValueAsNumber(testing.allocator, -0.1);
-    defer testing.allocator.free(rounded_before_epoch);
-    try testing.expectEqual("1970-01-01", rounded_before_epoch);
+    const fractional_before_epoch = try dateFromValueAsNumber(testing.allocator, -0.1);
+    defer testing.allocator.free(fractional_before_epoch);
+    try testing.expectEqual("1969-12-31", fractional_before_epoch);
 
-    const rounded_next_day = try dateFromValueAsNumber(testing.allocator, 86_399_999.6);
-    defer testing.allocator.free(rounded_next_day);
-    try testing.expectEqual("1970-01-02", rounded_next_day);
+    const fractional_end_of_day = try dateFromValueAsNumber(testing.allocator, 86_399_999.6);
+    defer testing.allocator.free(fractional_end_of_day);
+    try testing.expectEqual("1970-01-01", fractional_end_of_day);
 }
 
 test "isValidMonth" {
@@ -1806,6 +1805,8 @@ test "parseAllDigits" {
     try testing.expectEqual(@as(?u32, 0), parseAllDigits("0"));
     try testing.expectEqual(@as(?u32, 123), parseAllDigits("123"));
     try testing.expectEqual(@as(?u32, 2024), parseAllDigits("2024"));
+    try testing.expectEqual(@as(?u32, std.math.maxInt(u32)), parseAllDigits("4294967295"));
+    try testing.expectEqual(@as(?u32, null), parseAllDigits("4294967297"));
     try testing.expectEqual(@as(?u32, null), parseAllDigits(""));
     try testing.expectEqual(@as(?u32, null), parseAllDigits("12a"));
     try testing.expectEqual(@as(?u32, null), parseAllDigits("abc"));
