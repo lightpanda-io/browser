@@ -22,7 +22,6 @@
 //! arena for its own result data so multiple evaluations don't grow
 //! the AST arena.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
@@ -38,24 +37,22 @@ const xpath = struct {
     const Evaluator = @import("../xpath/Evaluator.zig");
 };
 
-const Allocator = std.mem.Allocator;
-
 const XPathExpression = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _expr: *const xpath.Ast.Expr,
 
 pub fn init(expression: []const u8, frame: *Frame) !*XPathExpression {
     const arena = try frame.getArena(.tiny, "XPathExpression");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     // The AST borrows string slices from its input (literals, names,
     // var refs, function names). `expression` is materialized in the JS
     // call_arena and is reclaimed when the top-level call returns, so
     // dupe into our long-lived arena before parsing.
     const owned = try arena.dupe(u8, expression);
-    const expr = try xpath.Parser.parse(arena, owned);
+    const expr = try xpath.Parser.parse(arena.allocator(), owned);
     const xe = try arena.create(XPathExpression);
     xe.* = .{ ._arena = arena, ._expr = expr };
     return xe;
@@ -74,14 +71,14 @@ pub fn evaluate(
     _ = result;
 
     const arena = try frame.getArena(.medium, "XPathResult");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
-    const eval_result = try xpath.Evaluator.evaluate(arena, self._expr, context_node, frame);
+    const eval_result = try xpath.Evaluator.evaluate(arena.allocator(), self._expr, context_node, frame);
     return XPathResult.fromResult(arena, requested_type orelse XPathResult.ANY_TYPE, eval_result);
 }
 
-pub fn deinit(self: *XPathExpression, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *XPathExpression, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *XPathExpression) void {

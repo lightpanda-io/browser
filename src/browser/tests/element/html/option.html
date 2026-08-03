@@ -23,6 +23,23 @@
   testing.expectEqual('changed', $('#opt1').value)
 </script>
 
+<script id="value_set_attribute">
+  {
+    const option = document.createElement('option')
+
+    // short values are stored inline in the String passed to our
+    // attributeChange hook, long ones are heap-backed
+    option.setAttribute('value', 'ab')
+    testing.expectEqual('ab', option.value)
+
+    option.setAttribute('value', 'a-long-attribute-value')
+    testing.expectEqual('a-long-attribute-value', option.value)
+
+    option.removeAttribute('value')
+    testing.expectEqual('', option.value)
+  }
+</script>
+
 <script id="text">
   testing.expectEqual('Text 1', $('#opt1').text)
   testing.expectEqual('Text 2', $('#opt2').text)

@@ -51,8 +51,8 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*DragEvent 
 
 fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*DragEvent {
     const arena = try frame.getArena(.medium, "DragEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = _opts orelse Options{};
 

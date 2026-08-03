@@ -93,7 +93,7 @@ pub fn get(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReques
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena.allocator(), query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -116,7 +116,7 @@ pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
         return error.ReadOnlyError;
     }
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena.allocator(), query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_delete = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -160,7 +160,7 @@ pub fn count(self: *IDBObjectStore, query: ?js.Value, exec: *Execution) !*IDBReq
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveQuery(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(txn._arena.allocator(), query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_count = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -189,7 +189,7 @@ pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const args = try IDBKeyRange.resolveGetAllOptions(txn._arena, options, exec);
+    const args = try IDBKeyRange.resolveGetAllOptions(txn._arena.allocator(), options, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = .record } }, exec);
 }
@@ -198,7 +198,7 @@ fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mod
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const args = try IDBKeyRange.resolveGetAll(txn._arena, query_or_options, count_, exec);
+    const args = try IDBKeyRange.resolveGetAll(txn._arena.allocator(), query_or_options, count_, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = mode } }, exec);
 }
@@ -241,7 +241,7 @@ pub fn getKey(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBReq
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
-    const bounds = try IDBKeyRange.resolveKey(txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveKey(txn._arena.allocator(), query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_get_key = .{ .store = self, .bounds = bounds } }, exec);
 }
@@ -259,13 +259,13 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena, query, exec);
+    const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, true, exec);
 }
 
@@ -319,7 +319,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
             }
             if (try Key.extractKeyPath(exec.js.local.?, value, kp)) |extracted| {
                 break :blk .{ .explicit = .{
-                    .encoded = try Key.encodeValue(txn._arena, extracted),
+                    .encoded = try Key.encodeValue(txn._arena.allocator(), extracted),
                     .bump = if (self._auto_increment and extracted.isNumber()) try extracted.toF64() else null,
                 } };
             }
@@ -338,7 +338,7 @@ fn write(self: *IDBObjectStore, value: js.Value, key_arg: ?js.Value, kind: Write
         // Out-of-line keys.
         if (key_arg) |k| {
             break :blk .{ .explicit = .{
-                .encoded = try Key.encodeValue(txn._arena, k),
+                .encoded = try Key.encodeValue(txn._arena.allocator(), k),
                 .bump = if (self._auto_increment and k.isNumber()) try k.toF64() else null,
             } };
         }
@@ -498,12 +498,12 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
         return error.InvalidAccessError;
     }
 
-    const owned_key_path = try Key.dupeKeyPath(txn._arena, key_path);
+    const owned_key_path = try Key.dupeKeyPath(txn._arena.allocator(), key_path);
 
     try self._engine.savepoint();
     errdefer self._engine.rollbackSavepoint();
 
-    const index_id = self._engine.createIndexRow(txn._arena, self._store_id, name, owned_key_path, opts.unique, opts.multiEntry) catch |err| switch (err) {
+    const index_id = self._engine.createIndexRow(txn._arena.allocator(), self._store_id, name, owned_key_path, opts.unique, opts.multiEntry) catch |err| switch (err) {
         error.Constraint => return error.ConstraintError, // duplicate index name
         else => return err,
     };
@@ -533,7 +533,7 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
     }, owned_name);
     idb_index._created = true;
     try self._engine.releaseSavepoint();
-    try self._indexes.append(txn._arena, idb_index);
+    try self._indexes.append(txn._arena.allocator(), idb_index);
     return idb_index;
 }
 
@@ -569,18 +569,18 @@ pub fn index(self: *IDBObjectStore, name: []const u8, _: *Execution) !*IDBIndex 
     }
 
     const txn = self._txn;
-    const info = (try self._engine.indexInfo(txn._arena, self._store_id, name)) orelse return error.NotFound;
+    const info = (try self._engine.indexInfo(txn._arena.allocator(), self._store_id, name)) orelse return error.NotFound;
     const owned_name = try txn.dupe(name);
     const idx = try IDBIndex.init(self, info, owned_name);
-    try self._indexes.append(txn._arena, idx);
+    try self._indexes.append(txn._arena.allocator(), idx);
     return idx;
 }
 
 pub fn getIndexNames(self: *IDBObjectStore, exec: *Execution) !*DOMStringList {
     const arena = try exec.getArena(.small, "IDB.getIndexNames");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
-    const names = try self._engine.indexNames(arena, self._store_id);
+    const names = try self._engine.indexNames(arena.allocator(), self._store_id);
     const list = try arena.create(DOMStringList);
     list.* = .{ ._items = names, ._arena = arena };
     return list;

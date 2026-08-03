@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("../../browser/js/js.zig");
 const CDP = @import("../CDP.zig");
@@ -60,7 +59,7 @@ fn disable(cmd: *CDP.Command) !void {
 
 fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
     // save script in file at debug mode
-    if (builtin.mode == .Debug) {
+    if (lp.IS_DEBUG) {
         try logInspector(cmd, action);
     }
 
@@ -169,8 +168,7 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
 const testing = @import("../testing.zig");
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {
-    const filter: testing.LogFilter = .init(&.{.js});
-    defer filter.deinit();
+    testing.silenceLog(&.{.js});
 
     // Wire types per the CDP protocol: console.log -> "log",
     // console.warn -> "warning" (not "warn"), console.info -> "info",

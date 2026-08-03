@@ -41,8 +41,8 @@ const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEven
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEvent {
     const arena = try page.getArena(.tiny, "PromiseRejectionEvent");
-    errdefer page.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = opts_ orelse Options{};
     const event = try page.factory.event(

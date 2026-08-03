@@ -40,7 +40,7 @@ const FormData = @This();
 
 _rc: lp.RC,
 
-_arena: Allocator,
+_arena: *lp.Arena,
 _entries: std.ArrayList(Entry),
 
 pub const Entry = struct {
@@ -77,7 +77,7 @@ pub const Entry = struct {
 
 pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormData {
     const arena = try exec.getArena(.small, "FormData");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const form_data = try arena.create(FormData);
     form_data.* = .{
@@ -101,7 +101,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
     form._constructing_entry_list = true;
     defer form._constructing_entry_list = false;
 
-    form_data._entries = try collectForm(arena, form, submitter, frame);
+    form_data._entries = try collectForm(arena.allocator(), form, submitter, frame);
 
     // Hold a reference on each entry's File for the FormData's lifetime; released
     // in deinit.
@@ -126,7 +126,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
 // application/x-www-form-urlencoded body back into a FormData.
 pub fn initFromUrlEncoded(bytes: []const u8, exec: *const Execution) !*FormData {
     const arena = try exec.getArena(.small, "FormData");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const form_data = try arena.create(FormData);
     form_data.* = .{
@@ -142,7 +142,7 @@ pub fn initFromUrlEncoded(bytes: []const u8, exec: *const Execution) !*FormData 
 // body back into a FormData. `boundary` is the Content-Type boundary param.
 pub fn initFromMultipart(bytes: []const u8, boundary: []const u8, exec: *const Execution) !*FormData {
     const arena = try exec.getArena(.small, "FormData");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const form_data = try arena.create(FormData);
     form_data.* = .{
@@ -158,7 +158,7 @@ pub fn initFromMultipart(bytes: []const u8, boundary: []const u8, exec: *const E
         else => {},
     };
 
-    try form_data.parseMultipart(exec.page, bytes, boundary);
+    try form_data.parseMultipart(bytes, boundary, exec);
     return form_data;
 }
 
@@ -170,7 +170,7 @@ pub fn deinit(self: *FormData, page: *Page) void {
         }
     }
     // Frees the entry list and this FormData itself; do not touch self afterwards.
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *FormData, page: *Page) void {
@@ -226,7 +226,7 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
             if (filename) |n| {
                 // A supplied filename means a new File over the same bytes rather
                 // than a rename of the caller's object.
-                break :blk .{ .file = try fileFrom(blob, n, exec.page) };
+                break :blk .{ .file = try fileFrom(blob, n, exec) };
             }
 
             if (blob._type == .file) {
@@ -236,13 +236,13 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
             }
 
             // A Blob that is not a File becomes a File named "blob".
-            break :blk .{ .file = try fileFrom(blob, "blob", exec.page) };
+            break :blk .{ .file = try fileFrom(blob, "blob", exec) };
         },
-        .bytes => |b| .{ .string = try String.init(self._arena, b, .{}) },
+        .bytes => |b| .{ .string = try String.init(self._arena.allocator(), b, .{}) },
     };
 
-    try self._entries.append(self._arena, .{
-        .name = try String.init(self._arena, name, .{}),
+    try self._entries.append(self._arena.allocator(), .{
+        .name = try String.init(self._arena.allocator(), name, .{}),
         .value = entry_value,
     });
 }
@@ -250,11 +250,12 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
 // Mirrors File.init — a Blob and File sharing one reference-counted arena —
 // but over bytes we already hold rather than JS parts. Returned at refcount 1:
 // the entry owns that reference and deleteByName releases it.
-fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
-    const arena = try page.getArena(source._slice.len + source._mime.len + 256, "Blob");
-    errdefer page.releaseArena(arena);
 
-    const file = try Factory.chainedWithAllocator(arena, .{
+fn fileFrom(source: *Blob, name: []const u8, exec: *Execution) !*File {
+    const arena = try exec.getArena(source._slice.len + source._mime.len + 256, "Blob");
+    errdefer arena.release();
+
+    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
         try Blob.buildValueFromBytes(arena, source._slice, source._mime),
         File{
             ._proto = undefined,
@@ -268,9 +269,9 @@ fn fileFrom(source: *Blob, name: []const u8, page: *Page) !*File {
 }
 
 pub fn appendText(self: *FormData, name: []const u8, value: []const u8) !void {
-    try self._entries.append(self._arena, .{
-        .name = try String.init(self._arena, name, .{}),
-        .value = .{ .string = try String.init(self._arena, value, .{}) },
+    try self._entries.append(self._arena.allocator(), .{
+        .name = try String.init(self._arena.allocator(), name, .{}),
+        .value = .{ .string = try String.init(self._arena.allocator(), value, .{}) },
     });
 }
 
@@ -444,11 +445,11 @@ pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
         }
         if (std.mem.indexOfScalar(u8, pair, '=')) |idx| {
             try self.appendText(
-                try urlDecode(self._arena, pair[0..idx]),
-                try urlDecode(self._arena, pair[idx + 1 ..]),
+                try urlDecode(self._arena.allocator(), pair[0..idx]),
+                try urlDecode(self._arena.allocator(), pair[idx + 1 ..]),
             );
         } else {
-            const key = try urlDecode(self._arena, pair);
+            const key = try urlDecode(self._arena.allocator(), pair);
             // Insert with empty value.
             try self.appendText(key, "");
         }
@@ -528,7 +529,7 @@ fn urlDecode(arena: Allocator, raw: []const u8) ![]const u8 {
 // preamble, CRLF line breaks). Parts carrying a filename become File
 // entries — the FormData holds a ref on each, released in deinit — and the
 // rest become string entries.
-fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []const u8) !void {
+fn parseMultipart(self: *FormData, bytes: []const u8, boundary: []const u8, exec: *const Execution) !void {
     // The body must open with the dash-boundary: "--" boundary.
     if (!std.mem.startsWith(u8, bytes, "--") or !std.mem.startsWith(u8, bytes[2..], boundary)) {
         return error.InvalidFormData;
@@ -605,7 +606,7 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
         }
 
         const parsed = disposition orelse return error.InvalidFormData;
-        const name = try decodeMultipartName(self._arena, parsed.name orelse return error.InvalidFormData);
+        const name = try decodeMultipartName(self._arena.allocator(), parsed.name orelse return error.InvalidFormData);
 
         const content_end = indexOfBoundary(cursor.remaining(), boundary) orelse return error.InvalidFormData;
         const content = cursor.remaining()[0..content_end];
@@ -613,20 +614,20 @@ fn parseMultipart(self: *FormData, page: *Page, bytes: []const u8, boundary: []c
 
         // Got a file.
         if (parsed.filename) |filename| {
-            const blob = try Blob.initFromBytes(content, content_type, page);
-            errdefer blob.deinit(page);
+            const blob = try Blob.initFromBytes(content, content_type, exec);
+            errdefer blob.deinit(exec.page);
 
             const file = try blob._arena.create(File);
             file.* = .{
                 ._proto = blob,
-                ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena, filename)),
+                ._name = try blob._arena.dupe(u8, try decodeMultipartName(self._arena.allocator(), filename)),
                 ._last_modified = @intCast(lp.datetime.milliTimestamp(.real)),
             };
             blob._type = .{ .file = file };
 
             file.acquireRef();
-            try self._entries.append(self._arena, .{
-                .name = try String.init(self._arena, name, .{}),
+            try self._entries.append(self._arena.allocator(), .{
+                .name = try String.init(self._arena.allocator(), name, .{}),
                 .value = .{ .file = file },
             });
         } else {
@@ -875,10 +876,12 @@ test "WebApi: FormData" {
 
 test "FormData: multipart write" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd.appendText("name", "John");
@@ -904,10 +907,12 @@ test "FormData: multipart write" {
 
 test "FormData: multipart escapes name CR/LF/quote" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd.appendText("a\"b\r\nc", "v");
@@ -929,10 +934,12 @@ test "FormData: multipart escapes name CR/LF/quote" {
 
 test "FormData: multipart empty body" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
 
@@ -947,7 +954,7 @@ test "FormData: multipart empty body" {
 
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
     const blob_arena = try page.getArena(body.len + mime.len + 256, "Blob");
-    const file = try Factory.chainedWithAllocator(blob_arena, .{
+    const file = try Factory.chainedWithAllocator(blob_arena.allocator(), .{
         try Blob.buildValueFromBytes(blob_arena, body, mime),
         File{
             ._proto = undefined,
@@ -962,6 +969,8 @@ fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []con
 
 test "FormData: multipart with file" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -970,7 +979,7 @@ test "FormData: multipart with file" {
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd.appendText("field", "value");
@@ -1000,6 +1009,8 @@ test "FormData: multipart with file" {
 
 test "FormData: multipart with empty file defaults to octet-stream" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1008,7 +1019,7 @@ test "FormData: multipart with empty file defaults to octet-stream" {
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd._entries.append(allocator, .{
@@ -1034,6 +1045,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
 
 test "FormData: multipart escapes file name and filename" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1042,7 +1055,7 @@ test "FormData: multipart escapes file name and filename" {
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd._entries.append(allocator, .{
@@ -1068,6 +1081,8 @@ test "FormData: multipart escapes file name and filename" {
 
 test "FormData: file entry collapses to filename in urlencode" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1076,7 +1091,7 @@ test "FormData: file entry collapses to filename in urlencode" {
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd._entries.append(allocator, .{
@@ -1091,10 +1106,12 @@ test "FormData: file entry collapses to filename in urlencode" {
 
 test "FormData: multipart no_file (unselected file input)" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd._entries.append(allocator, .{
@@ -1120,10 +1137,12 @@ test "FormData: multipart no_file (unselected file input)" {
 
 test "FormData: no_file entry collapses to empty in urlencode" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd._entries.append(allocator, .{
@@ -1138,10 +1157,12 @@ test "FormData: no_file entry collapses to empty in urlencode" {
 
 test "FormData: plaintext write" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd.appendText("name", "John");
@@ -1164,10 +1185,12 @@ test "FormData: plaintext write" {
 
 test "FormData: plaintext empty body" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
 
@@ -1178,11 +1201,12 @@ test "FormData: plaintext empty body" {
 }
 
 test "FormData: urlencoded parse" {
-    const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try fd.parseUrlEncoded("a=1&b=hello+world&c=%26%3D&no_value&&bad=100%zz");
@@ -1197,11 +1221,12 @@ test "FormData: urlencoded parse" {
 }
 
 test "FormData: urlencoded parse exercises the vectorized guard" {
-    const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     // Values longer than any SIMD vector length, with the lone special
@@ -1217,16 +1242,17 @@ test "FormData: urlencoded parse exercises the vectorized guard" {
 }
 
 test "FormData: multipart parse" {
-    const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, "--BOUNDARY\r\n" ++
+    try fd.parseMultipart("--BOUNDARY\r\n" ++
         "Content-Disposition: form-data; name=\"name\"\r\n\r\n" ++
         "John\r\n" ++
         "--BOUNDARY\r\n" ++
@@ -1235,7 +1261,7 @@ test "FormData: multipart parse" {
         "--BOUNDARY\r\n" ++
         "Content-Disposition: form-data; name=\"tricky\"\r\n\r\n" ++
         "a\r\n--BOUNDARYx b\r\n" ++
-        "--BOUNDARY--\r\n", "BOUNDARY");
+        "--BOUNDARY--\r\n", "BOUNDARY", &frame.js.execution);
 
     try testing.expectEqual(3, fd._entries.items.len);
     try testing.expectString("John", fd.get(.wrap("name")).?);
@@ -1247,23 +1273,24 @@ test "FormData: multipart parse" {
 }
 
 test "FormData: multipart parse with file" {
-    const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, "--B\r\n" ++
+    try fd.parseMultipart("--B\r\n" ++
         "Content-Disposition: form-data; name=\"upload\"; filename=\"hello.txt\"\r\n" ++
         "Content-Type: text/plain\r\n\r\n" ++
         "hello\r\n" ++
         "--B\r\n" ++
         "Content-Disposition: form-data; name=\"raw\"; filename=\"raw.bin\"\r\n\r\n" ++
         "bytes\r\n" ++
-        "--B--\r\n", "B");
+        "--B--\r\n", "B", &frame.js.execution);
     defer for (fd._entries.items) |entry| switch (entry.value) {
         .file => |file| file.releaseRef(frame._page),
         else => {},
@@ -1285,7 +1312,8 @@ test "FormData: multipart parse with file" {
 }
 
 test "FormData: multipart parse rejects malformed bodies" {
-    const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1300,21 +1328,23 @@ test "FormData: multipart parse rejects malformed bodies" {
     for (cases) |case| {
         var fd = FormData{
             ._rc = .{},
-            ._arena = allocator,
+            ._arena = arena,
             ._entries = .empty,
         };
-        try testing.expectError(error.InvalidFormData, fd.parseMultipart(frame._page, case, "B"));
+        try testing.expectError(error.InvalidFormData, fd.parseMultipart(case, "B", &frame.js.execution));
     }
 }
 
 test "FormData: multipart round-trip" {
     const allocator = testing.arena_allocator;
+    const arena = try testing.test_app.arena_pool.acquire(.small, "FormData test");
+    defer arena.release();
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
     var src = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
     try src.appendText("username", "alice");
@@ -1332,10 +1362,10 @@ test "FormData: multipart round-trip" {
 
     var fd = FormData{
         ._rc = .{},
-        ._arena = allocator,
+        ._arena = arena,
         ._entries = .empty,
     };
-    try fd.parseMultipart(frame._page, buf.written(), "BOUNDARY");
+    try fd.parseMultipart(buf.written(), "BOUNDARY", &frame.js.execution);
 
     try testing.expectEqual(4, fd._entries.items.len);
     try testing.expectString("username", fd._entries.items[0].name.str());

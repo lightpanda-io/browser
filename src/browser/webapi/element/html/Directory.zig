@@ -11,7 +11,7 @@ pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Directory) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Directory) *Node {
     return self.asElement().asNode();

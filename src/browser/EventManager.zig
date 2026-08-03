@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
 const Frame = @import("Frame.zig");
@@ -37,8 +36,6 @@ const Allocator = std.mem.Allocator;
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
 pub const Listener = EventManagerBase.Listener;
-
-const IS_DEBUG = builtin.mode == .Debug;
 
 pub const EventManager = @This();
 
@@ -81,7 +78,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     // Increment event count for Event Timing API
     self.frame.window._performance._event_counts.increment(event._type_string.str());
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
 

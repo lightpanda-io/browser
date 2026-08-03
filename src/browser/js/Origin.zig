@@ -24,18 +24,17 @@
 // separately via js.Identity - Session has the main world Identity, and
 // IsolatedWorlds have their own Identity instances.
 
-const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("js.zig");
 
 const App = @import("../../App.zig");
 
 const v8 = js.v8;
-const Allocator = std.mem.Allocator;
 
 const Origin = @This();
 
 rc: usize = 1,
-arena: Allocator,
+arena: *lp.Arena,
 
 // The key, e.g. lightpanda.io:443
 key: []const u8,
@@ -46,7 +45,7 @@ security_token: v8.Global,
 
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     const arena = try app.arena_pool.acquire(.tiny, "Origin");
-    errdefer app.arena_pool.release(arena);
+    errdefer arena.release();
 
     var hs: js.HandleScope = undefined;
     hs.init(isolate);
@@ -67,7 +66,7 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     return self;
 }
 
-pub fn deinit(self: *Origin, app: *App) void {
+pub fn deinit(self: *Origin, _: *App) void {
     v8.v8__Global__Reset(&self.security_token);
-    app.arena_pool.release(self.arena);
+    self.arena.release();
 }

@@ -18,17 +18,17 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
-
-const global_event_handlers = @import("../global_event_handlers.zig");
-const GlobalEventHandler = global_event_handlers.Handler;
+const Factory = @import("../../Factory.zig");
 
 const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
-const popover = @import("popover.zig");
+const global_event_handlers = @import("../global_event_handlers.zig");
 
+const popover = @import("popover.zig");
 pub const Anchor = @import("html/Anchor.zig");
 pub const Area = @import("html/Area.zig");
 pub const Base = @import("html/Base.zig");
@@ -99,14 +99,14 @@ pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
 const log = lp.log;
-const IS_DEBUG = @import("builtin").mode == .Debug;
+const GlobalEventHandler = global_event_handlers.Handler;
 
 const HtmlElement = @This();
 
 pub const Proto = Element;
 
 _type: Type,
-_proto: *Element,
+_proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 
 // Special constructor for custom elements (autonomous, `extends HTMLElement`).
 // Two paths:
@@ -216,11 +216,11 @@ pub fn is(self: *HtmlElement, comptime T: type) ?*T {
 }
 
 pub fn asElement(self: *HtmlElement) *Element {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn asNode(self: *HtmlElement) *Node {
-    return self._proto.asNode();
+    return self.asElement().asNode();
 }
 
 pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
@@ -541,7 +541,7 @@ fn setAttributeListener(
     listener_callback: ?js.Function.Global,
     frame: *Frame,
 ) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.event, "Html.setAttributeListener", .{
             .type = std.meta.activeTag(self._type),
             .listener_type = listener_type,

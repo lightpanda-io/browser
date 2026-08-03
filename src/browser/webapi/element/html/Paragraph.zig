@@ -27,7 +27,7 @@ pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Paragraph) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Paragraph) *Node {
     return self.asElement().asNode();

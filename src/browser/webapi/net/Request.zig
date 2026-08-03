@@ -34,7 +34,6 @@ const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
 
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 const Request = @This();
 
@@ -43,7 +42,7 @@ _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
-_arena: Allocator,
+_arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
 _redirect: Redirect,
@@ -93,11 +92,11 @@ const Cache = enum {
 };
 
 pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
-    const arena = try exec.getArena(.medium, "Request");
-    errdefer exec.releaseArena(arena);
+    const arena = try exec.getPinnedArena(.medium, "Request");
+    errdefer arena.release();
 
     const url = switch (input) {
-        .url => |u| try URL.resolve(arena, exec.base(), u, .{ .encoding = exec.charset.* }),
+        .url => |u| try URL.resolve(arena.allocator(), exec.base(), u, .{ .encoding = exec.charset.* }),
         .request => |r| try arena.dupeZ(u8, r._url),
     };
 
@@ -124,7 +123,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     };
 
     const body = if (opts.body) |b| blk: {
-        const extracted = try b.extract(arena);
+        const extracted = try b.extract(arena.allocator());
         // Per Fetch §6.5 step 11, the default Content-Type only applies if
         // the user has not already set one via the headers init dict.
         if (extracted.content_type) |ct| {
@@ -161,11 +160,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._body = body,
         ._signal = signal,
     };
+    arena.report();
     return self;
 }
 
-pub fn deinit(self: *Request, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Request, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *Request, page: *Page) void {
@@ -260,7 +260,7 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
-    const b = try Blob.initFromBytes(body, content_type, exec.page);
+    const b = try Blob.initFromBytes(body, content_type, exec);
     return local.resolvePromise(b);
 }
 
@@ -344,8 +344,8 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    const arena = try exec.getArena(if (self._body) |b| b.len else 512, "Request.clone");
-    errdefer exec.releaseArena(arena);
+    const arena = try exec.getPinnedArena(if (self._body) |b| b.len else 512, "Request.clone");
+    errdefer arena.release();
 
     const request = try arena.create(Request);
     request.* = .{
@@ -359,6 +359,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
     };
+    arena.report();
     return request;
 }
 

@@ -360,8 +360,6 @@ fn isSpecialUrl(url: []const u8) bool {
 
 const testing = @import("../testing.zig");
 test "ImportMap: exact match" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": { "moment": "/node_modules/moment/index.js" } }
     , "https://example.com/app/index.html");
@@ -371,8 +369,6 @@ test "ImportMap: exact match" {
 }
 
 test "ImportMap: trailing slash prefix match" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": { "moment/": "/node_modules/moment/src/" } }
     , "https://example.com/app/index.html");
@@ -382,8 +378,6 @@ test "ImportMap: trailing slash prefix match" {
 }
 
 test "ImportMap: specificity — longest match wins" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": {
         \\  "a": "/1",
@@ -413,8 +407,6 @@ test "ImportMap: specificity — longest match wins" {
 }
 
 test "ImportMap: scopes — most specific scope wins" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{
         \\  "imports": { "a": "/a-1.mjs", "b": "/b-1.mjs", "d": "/d-1.mjs" },
@@ -444,8 +436,6 @@ test "ImportMap: scopes — most specific scope wins" {
 }
 
 test "ImportMap: bare specifier with no match returns null" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": { "moment": "/m.js" } }
     , "https://example.com/app/index.html");
@@ -455,8 +445,6 @@ test "ImportMap: bare specifier with no match returns null" {
 }
 
 test "ImportMap: URL-like specifier falls back to itself" {
-    defer testing.reset();
-
     const im: ImportMap = .empty;
 
     const r = try testResolve(&im, "https://example.com/app.mjs", "./foo.js");
@@ -464,8 +452,6 @@ test "ImportMap: URL-like specifier falls back to itself" {
 }
 
 test "ImportMap: null entry throws (no fallback)" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": { "blocked": null } }
     , "https://example.com/app/index.html");
@@ -474,8 +460,6 @@ test "ImportMap: null entry throws (no fallback)" {
 }
 
 test "ImportMap: backtracking out of prefix throws" {
-    defer testing.reset();
-
     const im = try testParse(
         \\{ "imports": { "moment/": "/node_modules/moment/src/" } }
     , "https://example.com/app/index.html");
@@ -484,7 +468,6 @@ test "ImportMap: backtracking out of prefix throws" {
 }
 
 test "ImportMap: merge — first-wins on imports, new keys added" {
-    defer testing.reset();
     const base: [:0]const u8 = "https://example.com/app/index.html";
 
     var im = try testParse(
@@ -504,7 +487,6 @@ test "ImportMap: merge — first-wins on imports, new keys added" {
 }
 
 test "ImportMap: merge — same-prefix scopes merge their imports" {
-    defer testing.reset();
     const base: [:0]const u8 = "https://example.com/app/index.html";
 
     var im = try testParse(

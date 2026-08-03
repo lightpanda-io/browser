@@ -34,7 +34,7 @@ pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Body) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Body) *Node {
     return self.asElement().asNode();

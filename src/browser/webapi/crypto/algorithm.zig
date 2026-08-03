@@ -26,12 +26,13 @@ const CryptoKey = @import("../CryptoKey.zig");
 pub const Init = union(enum) {
     /// For RSASSA-PKCS1-v1_5, RSA-PSS, or RSA-OAEP: pass an RsaHashedKeyGenParams object.
     rsa_hashed_key_gen: RsaHashedKeyGen,
+    /// Must be before `hmac_key_gen`, since we need to ignore this param even
+    /// if it has a 'hash' property, and if it's after, we'll match that instead.
+    ec_key_gen: EcKeyGen,
     /// For HMAC: pass an HmacKeyGenParams object.
     hmac_key_gen: HmacKeyGen,
     /// For AES variants: pass an AesKeyGenParams object.
     aes_key_gen: AesKeyGen,
-    /// For ECDSA / ECDH: pass an EcKeyGenParams object.
-    ec_key_gen: EcKeyGen,
 
     /// don't use []const u8 here, we don't want non-strings coerced. Let those
     /// fall to the invalid case

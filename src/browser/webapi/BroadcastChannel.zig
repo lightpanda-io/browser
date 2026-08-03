@@ -174,12 +174,12 @@ const PostMessageCallback = struct {
         // (never realloc) and teardown is deferred to the next tick, so walking
         // each channel list live during dispatch is safe.
         const arena = try page.getArena(.tiny, "BroadcastChannel.postMessage");
-        defer page.releaseArena(arena);
+        defer arena.release();
 
         // Opaque origins have no string form and are unique per execution, so
         // the sender is the only same-origin context
         const executions = if (origin) |o|
-            try page.executionsForOrigin(arena, o)
+            try page.executionsForOrigin(arena.allocator(), o)
         else
             (&self.exec)[0..1];
 

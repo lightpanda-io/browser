@@ -29,7 +29,7 @@ const String = lp.String;
 const Angle = @This();
 
 _rc: lp.RC = .{},
-_arena: std.mem.Allocator,
+_arena: *lp.Arena,
 _value: f64 = 0,
 _unit: Unit = .unspecified,
 _element: ?*Element = null,
@@ -47,14 +47,14 @@ const Unit = enum(u16) {
 
 pub fn detached(frame: *Frame) !*Angle {
     const arena = try frame._page.getArena(.tiny, "SVGAngle");
-    errdefer frame._page.releaseArena(arena);
+    errdefer arena.release();
     const self = try arena.create(Angle);
     self.* = .{ ._arena = arena };
     return self;
 }
 
-pub fn deinit(self: *Angle, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Angle, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *Angle) void {

@@ -810,8 +810,6 @@ fn trimRight(s: []const u8) []const u8 {
 
 const testing = @import("../testing.zig");
 test "Mime: invalid" {
-    defer testing.reset();
-
     const invalids = [_][]const u8{
         "",
         "text",
@@ -828,7 +826,6 @@ test "Mime: invalid" {
 }
 
 test "Mime: malformed parameters are ignored" {
-    defer testing.reset();
 
     // These should all parse successfully as text/html with malformed params ignored
     const valid_with_malformed_params = [_][]const u8{
@@ -851,8 +848,6 @@ test "Mime: malformed parameters are ignored" {
 }
 
 test "Mime: parse common" {
-    defer testing.reset();
-
     try expect(.{ .content_type = .{ .text_xml = {} } }, "text/xml");
     try expect(.{ .content_type = .{ .text_html = {} } }, "text/html");
     try expect(.{ .content_type = .{ .text_plain = {} } }, "text/plain");
@@ -888,8 +883,6 @@ test "Mime: parse common" {
 }
 
 test "Mime: parse uncommon" {
-    defer testing.reset();
-
     const text_csv = Expectation{
         .content_type = .{ .other = {} },
     };
@@ -902,8 +895,6 @@ test "Mime: parse uncommon" {
 }
 
 test "Mime: parse charset" {
-    defer testing.reset();
-
     try expect(.{
         .content_type = .{ .text_xml = {} },
         .charset = "utf-8",
@@ -936,7 +927,6 @@ test "Mime: parse charset" {
 }
 
 test "Mime: parse charset (WHATWG parameter semantics)" {
-    defer testing.reset();
 
     // First charset wins (not last).
     try expect(.{ .content_type = .{ .text_html = {} }, .charset = "gbk" }, "text/html;charset=gbk;charset=utf-8");
@@ -959,8 +949,6 @@ test "Mime: parse charset (WHATWG parameter semantics)" {
 }
 
 test "Mime: isHTML" {
-    defer testing.reset();
-
     const assert = struct {
         fn assert(expected: bool, input: []const u8) !void {
             const mutable_input = try testing.arena_allocator.dupe(u8, input);
@@ -977,8 +965,6 @@ test "Mime: isHTML" {
 }
 
 test "Mime: isXML" {
-    defer testing.reset();
-
     const assert = struct {
         fn assert(expected: bool, input: []const u8) !void {
             const mutable_input = try testing.arena_allocator.dupe(u8, input);
@@ -1105,7 +1091,6 @@ fn expect(expected: Expectation, input: []const u8) !void {
 }
 
 test "Mime: serialize" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     const expectSerialize = struct {

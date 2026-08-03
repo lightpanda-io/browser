@@ -26,7 +26,6 @@ const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const ReadableStreamDefaultController = @This();
 
@@ -88,7 +87,7 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
         .value = .fromChunk(chunk),
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = exec.url.* });
             std.debug.assert(exec.js.local != null);
@@ -123,7 +122,7 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
         .value = .{ .js_value = persisted },
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = exec.url.* });
             std.debug.assert(exec.js.local != null);
@@ -151,7 +150,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
     };
 
     const exec = self._execution;
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = exec.url.* });
             std.debug.assert(exec.js.local != null);

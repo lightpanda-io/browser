@@ -12,10 +12,10 @@ pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *Source) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Source) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Source) *Node {
     return self.asElement().asNode();

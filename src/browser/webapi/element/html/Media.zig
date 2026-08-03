@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Factory = @import("../../../Factory.zig");
 const HtmlElement = @import("../Html.zig");
 const Event = @import("../../Event.zig");
 pub const Audio = @import("Audio.zig");
@@ -54,7 +56,7 @@ pub const Type = union(enum) {
 };
 
 _type: Type,
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _paused: bool = true,
 _current_time: f64 = 0,
 _volume: f64 = 1.0,
@@ -65,10 +67,10 @@ _network_state: NetworkState = .NETWORK_EMPTY,
 _error: ?*MediaError = null,
 
 pub fn asElement(self: *Media) *Element {
-    return self._proto._proto;
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Media) *const Element {
-    return self._proto._proto;
+    return Factory.protoOf(@constCast(self)).asElement();
 }
 pub fn asNode(self: *Media) *Node {
     return self.asElement().asNode();

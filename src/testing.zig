@@ -1042,24 +1042,37 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     unreachable;
 }
 
-/// LogFilter provides a scoped way to suppress specific log categories during tests.
-/// This is useful for tests that trigger expected errors or warnings.
-pub const LogFilter = struct {
-    old_filter: [log.num_scopes]bool,
+/// Declares the log lines a test expects to emit: one entry per line, so
+/// `&.{ .js, .js, .http }` covers two `js` lines and one `http` line.
+pub const expectLog = log.expectLog;
 
-    /// Sets the log filter to suppress the specified scope(s).
-    /// Returns a LogFilter that should be deinitialized to restore previous filters.
-    pub fn init(comptime scopes: []const log.Scope) LogFilter {
-        comptime std.debug.assert(@TypeOf(scopes) == []const log.Scope);
-        const old_filter = log.opts.scope_enabled;
-        inline for (scopes) |scope| {
-            log.opts.scope_enabled[@intFromEnum(scope)] = false;
+/// Suppresses every line from `scopes` for the rest of the test.
+pub fn silenceLog(comptime scopes: []const log.Scope) void {
+    inline for (scopes) |scope| {
+        log.opts.scope_enabled[@intFromEnum(scope)] = false;
+    }
+}
+
+test "tests:afterEach" {
+    defer reset();
+    const unmet = log.resetTestState();
+    if (@import("root").hasSubfilter()) {
+        // only part of the test ran, so expectations about what it logs
+        // don't hold.
+        return;
+    }
+
+    var failed = false;
+    for (unmet, 0..) |count, i| {
+        if (count == 0) {
+            continue;
         }
-        return .{ .old_filter = old_filter };
+        failed = true;
+        const scope: log.Scope = @enumFromInt(i);
+        std.debug.print("expected {d} more {s} log line(s)\n", .{ count, @tagName(scope) });
     }
 
-    /// Restores the log filters to their previous state.
-    pub fn deinit(self: LogFilter) void {
-        log.opts.scope_enabled = self.old_filter;
+    if (failed) {
+        return error.UnmetLogExpectation;
     }
-};
+}

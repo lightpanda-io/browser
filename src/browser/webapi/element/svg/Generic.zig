@@ -30,7 +30,7 @@ _proto: *Svg,
 _tag: Element.Tag,
 
 pub fn asElement(self: *Generic) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Generic) *Node {
     return self.asElement().asNode();

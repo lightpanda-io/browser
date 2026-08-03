@@ -28,7 +28,6 @@ const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -40,7 +39,7 @@ pub fn registerTypes() []const type {
 const IntersectionObserver = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _callback: js.Function.Global,
 _observing: std.ArrayList(*Element) = .empty,
 _root: ?*Element = null,
@@ -67,7 +66,7 @@ pub const ObserverInit = struct {
 
 pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame) !*IntersectionObserver {
     const arena = try frame.getArena(.small, "IntersectionObserver");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const opts = options orelse ObserverInit{};
     const root_margin = if (opts.rootMargin) |rm| try arena.dupe(u8, rm) else "0px";
@@ -113,7 +112,7 @@ pub fn deinit(self: *IntersectionObserver, page: *Page) void {
         // FinalizerCallback. We 100% own them.
         entry.deinit(page);
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *IntersectionObserver, page: *Page) void {
@@ -132,12 +131,12 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
         }
     }
 
-    try self._observing.append(self._arena, target);
+    try self._observing.append(self._arena.allocator(), target);
     if (self._observing.items.len == 1) {
         try Frame.observers.registerIntersectionObserver(frame, self);
     }
 
-    try self._tracked.put(self._arena, target, {});
+    try self._tracked.put(self._arena.allocator(), target, {});
 
     // Check intersection for this new target and schedule delivery
     try self.checkIntersection(target, frame);
@@ -266,7 +265,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
     // document to fake a position (O(node count)) — so it only runs here.
     const data = try self.calculateIntersection(target, has_parent, frame);
     const arena = try frame.getArena(.tiny, "IntersectionObserverEntry");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const entry = try arena.create(IntersectionObserverEntry);
     entry.* = .{
@@ -279,7 +278,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         ._bounding_client_rect = try DOMRect.create(data.bounding_client_rect, frame._factory),
         ._intersection_ratio = data.intersection_ratio,
     };
-    try self._pending_entries.append(self._arena, entry);
+    try self._pending_entries.append(self._arena.allocator(), entry);
     _ = self._tracked.removeByPtr(tracked.key_ptr);
 }
 
@@ -317,7 +316,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
 
 pub const IntersectionObserverEntry = struct {
     _rc: lp.RC = .{},
-    _arena: Allocator,
+    _arena: *lp.Arena,
     _time: f64,
     _target: *Element,
     _bounding_client_rect: *DOMRect,
@@ -326,8 +325,8 @@ pub const IntersectionObserverEntry = struct {
     _intersection_ratio: f64,
     _is_intersecting: bool,
 
-    pub fn deinit(self: *IntersectionObserverEntry, page: *Page) void {
-        page.releaseArena(self._arena);
+    pub fn deinit(self: *IntersectionObserverEntry, _: *Page) void {
+        self._arena.release();
     }
 
     pub fn releaseRef(self: *IntersectionObserverEntry, page: *Page) void {

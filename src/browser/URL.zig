@@ -692,8 +692,6 @@ test "URL: isCompleteHTTPUrl" {
 }
 
 test "URL: resolve regression (#1093)" {
-    defer testing.reset();
-
     const Case = struct {
         base: [:0]const u8,
         path: [:0]const u8,
@@ -715,8 +713,6 @@ test "URL: resolve regression (#1093)" {
 }
 
 test "URL: resolve" {
-    defer testing.reset();
-
     const Case = struct {
         base: [:0]const u8,
         path: [:0]const u8,
@@ -961,8 +957,6 @@ test "URL: resolve" {
 }
 
 test "URL: resolve strips tab and newline from input" {
-    defer testing.reset();
-
     const Case = struct {
         base: [:0]const u8,
         path: [:0]const u8,
@@ -994,7 +988,6 @@ test "URL: resolve strips tab and newline from input" {
 }
 
 test "URL: resolve validates ASCII punycode (xn--) labels" {
-    defer testing.reset();
 
     // Valid punycode is left untouched.
     const ok = try resolve(testing.arena_allocator, "https://example.com/", "https://xn--rksmrgs-5wao1o.se/x", .{});
@@ -1006,8 +999,6 @@ test "URL: resolve validates ASCII punycode (xn--) labels" {
 }
 
 test "URL: resolve with encoding" {
-    defer testing.reset();
-
     const Case = struct {
         base: [:0]const u8,
         path: [:0]const u8,
@@ -1176,7 +1167,6 @@ test "URL: resolve with encoding" {
 }
 
 test "URL: eqlDocument" {
-    defer testing.reset();
     {
         const url = "https://lightpanda.io/about";
         try testing.expectEqual(true, eqlDocument(url, url));
@@ -1244,7 +1234,6 @@ test "URL: eqlDocument" {
 }
 
 test "URL: concatQueryString" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     {
@@ -1274,7 +1263,6 @@ test "URL: concatQueryString" {
 }
 
 test "URL: getRobotsUrl" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     {
@@ -1302,7 +1290,6 @@ test "URL: getRobotsUrl" {
 }
 
 test "URL: unescape" {
-    defer testing.reset();
     const arena = testing.arena_allocator;
 
     {
@@ -1437,8 +1424,6 @@ test "URL: setPathname percent-encodes" {
 }
 
 test "URL: getOrigin" {
-    defer testing.reset();
-
     const Case = struct {
         url: [:0]const u8,
         expected: ?[]const u8,
@@ -1680,8 +1665,6 @@ test "URL: resolve path scheme" {
 }
 
 test "URL: resolveNavigation defaults a schemeless host to http (curl-like)" {
-    defer testing.reset();
-
     const Case = struct {
         url: [:0]const u8,
         expected: [:0]const u8,

@@ -21,6 +21,8 @@ const std = @import("std");
 pub const log = @import("log.zig");
 pub const datetime = @import("datetime.zig");
 pub const App = @import("App.zig");
+pub const Arena = @import("Arena.zig");
+pub const ArenaPool = @import("ArenaPool.zig");
 pub const Network = @import("network/Network.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
@@ -61,6 +63,9 @@ pub const core_dump = @import("core_dump.zig");
 pub const Updater = @import("Updater.zig");
 
 pub var metrics = @import("Metrics.zig"){};
+
+pub const IS_TEST = @import("builtin").is_test;
+pub const IS_DEBUG = @import("builtin").mode == .Debug;
 
 /// Process-wide Io instance for blocking syscalls (fs, net, time, futex).
 /// Single-threaded-init only disables Io.async/Io.concurrent task spawning;
@@ -283,7 +288,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     // One page per url. `PageHandle.frame()` always re-resolves the live frame,
     // so the handles stay valid across navigate / wait. The Runner's wait paths
     // already operate over every live page in the session.
-    var pages: std.ArrayList(Session.PageHandle) = try .initCapacity(session.arena, urls.len);
+    var pages: std.ArrayList(Session.PageHandle) = try .initCapacity(session.arena.allocator(), urls.len);
     for (urls) |url| {
         const page = try session.createPage();
         const frame = page.frame().?;

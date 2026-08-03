@@ -47,7 +47,7 @@ pub fn registerTypes() []const type {
     };
 }
 
-_arena: Allocator,
+_arena: *lp.Arena,
 // Refcounted so the GC weak-finalizer (or page teardown) releases the pooled
 // arena exactly once; mirrors Blob's lifecycle.
 _rc: lp.RC = .{},
@@ -61,7 +61,7 @@ _effect_allowed: []const u8 = "uninitialized",
 
 pub fn init(frame: *Frame) !*DataTransfer {
     const arena = try frame.getArena(.medium, "DataTransfer");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const fl = try frame._factory.create(FileList{});
     try frame.trackFileList(fl);
@@ -77,8 +77,8 @@ pub fn init(frame: *Frame) !*DataTransfer {
     return self;
 }
 
-pub fn deinit(self: *DataTransfer, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *DataTransfer, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *DataTransfer) void {
@@ -112,7 +112,7 @@ pub fn getData(self: *const DataTransfer, format: []const u8, frame: *Frame) ![]
 }
 
 pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void {
-    const norm = try normalizeFormat(self._arena, format);
+    const norm = try normalizeFormat(self._arena.allocator(), format);
     const owned_data = try self._arena.dupe(u8, data);
     for (self._items.items) |it| {
         if (it._kind == .string and std.mem.eql(u8, it._type, norm)) {
@@ -122,7 +122,7 @@ pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void 
     }
     const it = try self._arena.create(DataTransferItem);
     it.* = .{ ._data_transfer = self, ._kind = .string, ._type = norm, ._payload = .{ .string = owned_data } };
-    try self._items.append(self._arena, it);
+    try self._items.append(self._arena.allocator(), it);
 }
 
 pub fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
@@ -158,11 +158,11 @@ pub fn addItem(self: *DataTransfer, data: js.Value, type_: ?[]const u8, frame: *
         return try self.addFileItem(file, frame);
     } else |_| {}
 
-    const owned_data = try data.toStringSliceWithAlloc(self._arena);
-    const norm = try normalizeFormat(self._arena, type_ orelse "");
+    const owned_data = try data.toStringSliceWithAlloc(self._arena.allocator());
+    const norm = try normalizeFormat(self._arena.allocator(), type_ orelse "");
     const it = try self._arena.create(DataTransferItem);
     it.* = .{ ._data_transfer = self, ._kind = .string, ._type = norm, ._payload = .{ .string = owned_data } };
-    try self._items.append(self._arena, it);
+    try self._items.append(self._arena.allocator(), it);
     return it;
 }
 
@@ -170,7 +170,7 @@ fn addFileItem(self: *DataTransfer, file: *File, frame: *Frame) !*DataTransferIt
     file._proto.acquireRef();
     const it = try self._arena.create(DataTransferItem);
     it.* = .{ ._data_transfer = self, ._kind = .file, ._type = file._proto.getType(), ._payload = .{ .file = file } };
-    try self._items.append(self._arena, it);
+    try self._items.append(self._arena.allocator(), it);
     try self.rebuildFiles(frame);
     return it;
 }

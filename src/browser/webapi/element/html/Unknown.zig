@@ -33,7 +33,7 @@ _proto: *HtmlElement,
 _tag_name: String,
 
 pub fn asElement(self: *Unknown) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Unknown) *Node {
     return self.asElement().asNode();

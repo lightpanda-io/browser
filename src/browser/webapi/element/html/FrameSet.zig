@@ -16,7 +16,7 @@ pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 
 pub fn asElement(self: *FrameSet) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *FrameSet) *Node {
     return self.asElement().asNode();

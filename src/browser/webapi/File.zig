@@ -42,26 +42,25 @@ pub fn init(
     parts_: ?[]const js.Value,
     name: []const u8,
     opts_: ?InitOptions,
-    page: *Page,
+    exec: *js.Execution,
 ) !*File {
     const opts = opts_ orelse InitOptions{};
-    const session = page.session;
-    const arena = try session.getArena(.large, "Blob");
-    errdefer session.releaseArena(arena);
+    const blob = try Blob.buildValue(parts_, .{
+        .type = opts.type,
+        .endings = opts.endings,
+    }, exec);
 
-    const file = try Factory.chainedWithAllocator(arena, .{
-        try Blob.buildValue(arena, parts_, .{
-            .type = opts.type,
-            .endings = opts.endings,
-        }),
+    const file = try Factory.chainedWithAllocator(blob._arena.allocator(), .{
+        blob,
         File{
             ._proto = undefined,
-            ._name = try arena.dupe(u8, name),
+            ._name = try blob._arena.dupe(u8, name),
             ._last_modified = opts.lastModified orelse @intCast(lp.datetime.milliTimestamp(.real)),
         },
     });
     file._proto._type = .{ .file = file };
 
+    blob._arena.report();
     return file;
 }
 
@@ -89,10 +88,10 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
     const name = try reader.readBytes();
     const last_modified = try reader.readUint64();
 
-    const arena = try page.getArena(data.len + mime.len + name.len + 256, "Blob.clone");
-    errdefer page.releaseArena(arena);
+    const arena = try page.getPinnedArena(data.len + mime.len + name.len + 256, "Blob.clone");
+    errdefer arena.release();
 
-    const file = try Factory.chainedWithAllocator(arena, .{
+    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
         Blob{
             ._rc = .{},
             ._arena = arena,
@@ -108,6 +107,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
         },
     });
     file._proto._type = .{ .file = file };
+    arena.report();
     return file;
 }
 

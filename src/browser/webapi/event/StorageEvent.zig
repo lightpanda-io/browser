@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -25,7 +24,6 @@ const Frame = @import("../../Frame.zig");
 const Event = @import("../Event.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 // https://html.spec.whatwg.org/multipage/webstorage.html#the-storageevent-interface
 const StorageEvent = @This();
@@ -49,18 +47,18 @@ const Options = Event.inheritOptions(StorageEvent, StorageEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*StorageEvent {
     const arena = try frame.getArena(.tiny, "StorageEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, _opts, false, frame);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*StorageEvent {
     const arena = try frame.getArena(.tiny, "StorageEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*StorageEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*StorageEvent {
     const opts = _opts orelse Options{};
 
     const event = try frame._factory.event(
@@ -121,7 +119,7 @@ pub fn initStorageEvent(
 
     const arena = event._arena;
     event._initialized = true;
-    event._type_string = try String.init(arena, typ, .{});
+    event._type_string = try String.init(arena.allocator(), typ, .{});
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     self._key = if (key) |k| try arena.dupe(u8, k) else null;

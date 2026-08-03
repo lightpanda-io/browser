@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Event = @import("Event.zig");
+const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const DOMException = @import("DOMException.zig");
 const ModelContextTool = @import("ModelContext.zig").Tool;
@@ -36,6 +37,9 @@ pub const Proto = EventTarget;
 const Dependend = union(enum) {
     signal: *AbortSignal,
     model_context_tool: *ModelContextTool,
+    // Handled by the owning signal's markAborted (which runs for dependent
+    // signals too, unlike this union's markAborted).
+    scheduler_task: *Scheduler.Task,
 
     // Returns false if the dependent was already aborted, in which case no
     // abort event must be dispatched for it.
@@ -50,24 +54,31 @@ const Dependend = union(enum) {
                 try dep.markAborted(exec);
                 return true;
             },
+            .scheduler_task => return false,
         }
     }
 
     fn dispatchAbortEvent(self: Dependend, exec: *const Execution) !void {
         switch (self) {
             .signal => |dep| try dep.dispatchAbortEvent(exec),
-            .model_context_tool => {},
+            .model_context_tool, .scheduler_task => {},
         }
     }
 };
 
 _proto: *EventTarget,
+_type: Type = .generic,
 _aborted: bool = false,
 _is_dependent: bool = false,
 _reason: Reason = .undefined,
 _on_abort: ?js.Function.Global = null,
 _dependents: std.ArrayList(Dependend) = .empty,
 _source_signals: std.ArrayList(*AbortSignal) = .empty,
+
+pub const Type = union(enum) {
+    generic: void,
+    task_signal: *@import("TaskSignal.zig"),
+};
 
 pub fn init(exec: *const Execution) !*AbortSignal {
     return exec._factory.eventTarget(AbortSignal{
@@ -136,18 +147,23 @@ fn markAborted(self: *AbortSignal, reason_: ?Reason, exec: *const Execution) !vo
         dom.* = DOMException.fromError(error.AbortError).?;
         self._reason = .{ .dom = dom };
     }
+
+    // Unlike the loop in abort(), this runs for dependent signals too, so a
+    // task registered on an any() signal still gets rejected.
+    for (self._dependents.items) |dep| {
+        switch (dep) {
+            .scheduler_task => |task| task.onAbort(self._reason, exec),
+            else => {},
+        }
+    }
 }
 
 fn dispatchAbortEvent(self: *AbortSignal, exec: *const Execution) !void {
     const target = self.asEventTarget();
     const on_abort = self._on_abort;
-    switch (exec.js.global) {
-        inline else => |g| {
-            if (g._event_manager.hasDirectListeners(target, "abort", on_abort)) {
-                const event = try Event.initTrusted(comptime .wrap("abort"), .{}, g._page);
-                try g.dispatch(target, event, on_abort, .{ .context = "abort signal" });
-            }
-        },
+    if (exec.hasDirectListeners(target, "abort", on_abort)) {
+        const event = try Event.initTrusted(comptime .wrap("abort"), .{}, exec.page);
+        try exec.dispatch(target, event, on_abort, .{ .context = "abort signal" });
     }
 }
 
@@ -232,12 +248,22 @@ pub fn throwIfAborted(self: *const AbortSignal, exec: *const Execution) !ThrowIf
     return .undefined;
 }
 
-const Reason = union(enum) {
+pub const Reason = union(enum) {
     js_val: js.Value.Global,
     dom: *DOMException,
     string: []const u8,
     undefined: void,
 };
+
+// The reason as a JS value, e.g. to reject a promise with it.
+pub fn reasonJsValue(reason: Reason, local: *const js.Local) !js.Value {
+    return switch (reason) {
+        .dom => |dom| local.zigValueToJs(dom, .{}),
+        .string => |str| local.zigValueToJs(str, .{}),
+        .js_val => |global| local.toLocal(global),
+        .undefined => local.zigValueToJs(DOMException.fromError(error.AbortError).?, .{}),
+    };
+}
 
 const TimeoutCallback = struct {
     exec: *const Execution,

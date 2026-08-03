@@ -91,7 +91,7 @@ pub fn persist(self: Module) !Global {
     var ctx = self.local.ctx;
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    try ctx.global_modules.append(ctx.arena, global);
+    try ctx.global_modules.append(ctx.arena.allocator(), global);
     return .{ .handle = global };
 }
 

@@ -90,7 +90,11 @@ const Runner = struct {
 
         Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
+        var after_each: ?std.builtin.TestFn = null;
         for (builtin.test_functions) |t| {
+            if (isAfterEach(t)) {
+                after_each = t;
+            }
             if (isSetup(t)) {
                 t.func() catch |err| {
                     Printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
@@ -104,7 +108,7 @@ const Runner = struct {
         const webapi_html_test_mode = self.env.filter == null and self.env.subfilter != null;
 
         for (builtin.test_functions) |t| {
-            if (isSetup(t) or isTeardown(t)) {
+            if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
                 continue;
             }
 
@@ -145,7 +149,16 @@ const Runner = struct {
 
             current_test = friendly_name;
             std.testing.allocator_instance = .{};
-            const result = t.func();
+            var result = t.func();
+            if (after_each) |ae| {
+                // always runs, so that it can reset state, but it can only
+                // turn a passing test into a failing one.
+                ae.func() catch |err| {
+                    if (result) |_| {
+                        result = err;
+                    } else |_| {}
+                };
+            }
             current_test = null;
 
             if (webapi_html_test_mode and self.subtests.items.len == 0) {
@@ -255,6 +268,12 @@ const Runner = struct {
         std.process.exit(if (fail == 0) 0 else 1);
     }
 };
+
+// When only part of a test runs, expectations about what the whole test logs
+// can't be enforced.
+pub fn hasSubfilter() bool {
+    return RUNNER.env.subfilter != null;
+}
 
 pub fn shouldRun(name: []const u8) bool {
     const sf = RUNNER.env.subfilter orelse return true;
@@ -384,7 +403,7 @@ const Env = struct {
             .filter = filter,
             .subfilter = subfilter,
             .metrics = readEnvBool(map, "METRICS", false),
-            .verbose = readEnvBool(map, "TEST_VERBOSE", true),
+            .verbose = readEnvBool(map, "TEST_VERBOSE", false),
             .fail_first = readEnvBool(map, "TEST_FAIL_FIRST", false),
         };
     }
@@ -442,6 +461,10 @@ fn isSetup(t: std.builtin.TestFn) bool {
 
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
+}
+
+fn isAfterEach(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:afterEach");
 }
 
 pub const TrackingAllocator = struct {

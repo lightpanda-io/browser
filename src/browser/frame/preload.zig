@@ -38,9 +38,9 @@ pub fn scriptHint(frame: *Frame, element: ?*Element.Html, href: []const u8) bool
     }
 
     const arena = frame.getArena(.small, "preload.scriptHint") catch return false;
-    defer frame.releaseArena(arena);
+    defer arena.release();
 
-    const resolved = URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch return false;
+    const resolved = URL.resolve(arena.allocator(), frame.base(), href, .{ .encoding = frame.charset }) catch return false;
     if (!isRemoteScheme(resolved)) {
         return false;
     }
@@ -79,9 +79,9 @@ pub fn prescan(frame: *Frame, html: []const u8) void {
         return;
     }
     const arena = frame.getArena(.small, "preload.prescan") catch return;
-    defer frame.releaseArena(arena);
+    defer arena.release();
 
-    var scan = Prescan{ .frame = frame, .base = frame.base(), .arena = arena };
+    var scan = Prescan{ .frame = frame, .base = frame.base(), .arena = arena.allocator() };
     Parser.prescan(html, frame.charset, &scan, Prescan.callback);
 }
 
@@ -155,8 +155,6 @@ fn hasNonRemoteScheme(href: []const u8) bool {
 const testing = @import("../../testing.zig");
 
 test "preload: prescan" {
-    defer testing.reset();
-
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();
     const frame = page.frame().?;

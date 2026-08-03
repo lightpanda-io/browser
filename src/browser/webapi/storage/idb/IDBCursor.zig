@@ -144,7 +144,7 @@ fn _init(store: *IDBObjectStore, txn: *IDBTransaction, index_id: ?i64, source: S
         self.* = cursor_value;
         public = try local.zigValueToJs(self, .{});
     } else {
-        const with_value = try Factory.chainedWithAllocator(txn._arena, .{
+        const with_value = try Factory.chainedWithAllocator(txn._arena.allocator(), .{
             cursor_value,
             IDBCursorWithValue{ ._proto = undefined },
         });
@@ -189,7 +189,7 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
     if (key_arg) |k| {
         // Key conversion (DataError) must run before the got-value flag is
         // cleared, so a failing continue() leaves the cursor re-iterable.
-        const encoded = try Key.encodeValue(self._txn._arena, k);
+        const encoded = try Key.encodeValue(self._txn._arena.allocator(), k);
         // The target must move past the current key in the iteration direction.
         const order = std.mem.order(u8, encoded, self._key.?);
         if (if (self._direction.reverse()) order != .lt else order != .gt) {
@@ -212,8 +212,8 @@ pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: 
 
     const reverse = self._direction.reverse();
     // Key conversion (DataError) precedes clearing the got-value flag; see continue().
-    const key = try Key.encodeValue(self._txn._arena, key_arg);
-    const primary_key = try Key.encodeValue(self._txn._arena, primary_key_arg);
+    const key = try Key.encodeValue(self._txn._arena.allocator(), key_arg);
+    const primary_key = try Key.encodeValue(self._txn._arena.allocator(), primary_key_arg);
 
     // The (key, primaryKey) pair must move past the current position.
     const ok = switch (std.mem.order(u8, key, self._key.?)) {
@@ -364,16 +364,16 @@ fn position(self: *IDBCursor, key: []const u8, primary_key: []const u8, value: ?
     self.invalidateValue();
 
     self._key_buf.clearRetainingCapacity();
-    try self._key_buf.appendSlice(arena, key);
+    try self._key_buf.appendSlice(arena.allocator(), key);
     self._key = self._key_buf.items;
 
     self._pk_buf.clearRetainingCapacity();
-    try self._pk_buf.appendSlice(arena, primary_key);
+    try self._pk_buf.appendSlice(arena.allocator(), primary_key);
     self._primary_key = self._pk_buf.items;
 
     if (value) |v| {
         self._val_buf.clearRetainingCapacity();
-        try self._val_buf.appendSlice(arena, v);
+        try self._val_buf.appendSlice(arena.allocator(), v);
         self._value = self._val_buf.items;
     } else {
         self._value = null;

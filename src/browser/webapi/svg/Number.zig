@@ -26,19 +26,19 @@ const Page = @import("../../Page.zig");
 const Number = @This();
 
 _rc: lp.RC = .{},
-_arena: std.mem.Allocator,
+_arena: *lp.Arena,
 _value: f32 = 0,
 
 pub fn detached(frame: *Frame) !*Number {
     const arena = try frame._page.getArena(.tiny, "SVGNumber");
-    errdefer frame._page.releaseArena(arena);
+    errdefer arena.release();
     const self = try arena.create(Number);
     self.* = .{ ._arena = arena };
     return self;
 }
 
-pub fn deinit(self: *Number, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Number, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *Number) void {

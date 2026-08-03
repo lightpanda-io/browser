@@ -33,7 +33,6 @@ const DOMRect = @import("DOMRect.zig");
 const Factory = @import("../Factory.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -46,7 +45,7 @@ pub fn registerTypes() []const type {
 const ResizeObserver = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _callback: js.Function.Global,
 _observations: std.ArrayList(Observation) = .empty,
 
@@ -63,7 +62,7 @@ const Options = struct {
 
 pub fn init(callback: js.Function.Global, frame: *Frame) !*ResizeObserver {
     const arena = try frame.getArena(.small, "ResizeObserver");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
 
     const self = try arena.create(ResizeObserver);
     self.* = .{
@@ -73,9 +72,9 @@ pub fn init(callback: js.Function.Global, frame: *Frame) !*ResizeObserver {
     return self;
 }
 
-pub fn deinit(self: *ResizeObserver, page: *Page) void {
+pub fn deinit(self: *ResizeObserver, _: *Page) void {
     self._callback.release();
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn acquireRef(self: *ResizeObserver) void {
@@ -95,7 +94,7 @@ pub fn observe(self: *ResizeObserver, target: *Element, options_: ?Options, fram
         }
     }
 
-    try self._observations.append(self._arena, .{ .target = target });
+    try self._observations.append(self._arena.allocator(), .{ .target = target });
     if (self._observations.items.len == 1) {
         try Frame.observers.registerResizeObserver(frame, self);
     }

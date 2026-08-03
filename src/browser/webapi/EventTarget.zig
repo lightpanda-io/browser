@@ -290,8 +290,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: EventTarget" {
-    const filter: testing.LogFilter = .init(&.{ .js, .event });
-    defer filter.deinit();
+    testing.silenceLog(&.{ .js, .event });
 
     // we create thousands of these per frame. Nothing should bloat it.
     try testing.expectEqual(16, @sizeOf(EventTarget));

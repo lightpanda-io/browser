@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const Inbox = @import("../Inbox.zig");
 const ArenaPool = @import("../ArenaPool.zig");
@@ -39,7 +38,6 @@ pub const BlockPattern = UrlBlocklist.Pattern;
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Method = http.Method;
 pub const Header = http.Header;
@@ -235,7 +233,7 @@ pub fn deinit(self: *Client) void {
     self.abort();
     self.processGraveyard();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         lp.assert(
             self.dispatch_count == 0,
             "dispatch_count must be 0",
@@ -259,7 +257,7 @@ pub fn deinit(self: *Client) void {
     self.robots.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
-    self.inbox.deinit(self.arena_pool);
+    self.inbox.deinit();
 }
 
 // Look up a live transfer by its id. Returns null if the transfer has been
@@ -421,7 +419,7 @@ pub fn abort(self: *Client) void {
     // catch the regression rather than silently leaking on next use.
     // ws_dispatch_queue drains through owner teardown (abortOwner -> kill),
     // which precedes Client.deinit.
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.pending_queue.first == null);
         std.debug.assert(self.dispatch_queue.first == null);
@@ -440,7 +438,7 @@ fn processGraveyard(self: *Client) void {
     while (self.graveyard.popFirst()) |node| {
         const transfer: *Transfer = @fieldParentPtr("_node", node);
         const arena = transfer.arena;
-        self.arena_pool.release(arena);
+        arena.release();
     }
 }
 
@@ -458,7 +456,7 @@ pub fn abortOwner(self: *Client, owner: *Owner) void {
         const ws: *WebSocket = @fieldParentPtr("_owner_node", node);
         ws.kill();
     }
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(owner.websockets.first == null);
     }
 }
@@ -547,7 +545,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         var owned = req;
         errdefer {
             owned.headers.deinit();
-            self.arena_pool.release(arena);
+            arena.release();
         }
 
         if (owned.headers.headers == null) {
@@ -682,7 +680,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     // dispatch CDP commands
     try self.drainInbox(mode);
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (waited == false) {
             // we're about to tell our caller not to call us again without it
             // doing some work (e.g. running tasks). Let's assert that we were
@@ -708,7 +706,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
 // over.
 fn dispatchCompleted(self: *Client, mode: DrainMode) bool {
     if (mode == .all) {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             // .all never inside a syncRequest, so nothing can be gating requests.
             std.debug.assert(self.blocking_requests.count() == 0);
         }
@@ -836,7 +834,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
         .start => {
             if (self.network.web_bot_auth) |wba| {
                 const authority = URL.getHost(transfer.req.url);
-                try wba.signRequest(transfer.arena, &transfer.req.headers, authority);
+                try wba.signRequest(transfer.arena.allocator(), &transfer.req.headers, authority);
             }
 
             if (self.serve_mode) {
@@ -854,7 +852,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                     // / abortParked.
                     self.intercepted += 1;
                     transfer.park(.intercept_request);
-                    if (comptime IS_DEBUG) {
+                    if (comptime lp.IS_DEBUG) {
                         log.debug(.http, "wait for interception", .{ .intercepted = self.intercepted });
                     }
                     return;
@@ -923,9 +921,9 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
 
     const arena = transfer.arena;
     var iter = req.headers.iterator();
-    const req_headers = try iter.collect(arena);
+    const req_headers = try iter.collect(arena.allocator());
 
-    const cached = cache.get(arena, .{
+    const cached = cache.get(arena.allocator(), .{
         .url = req.url,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers.items,
@@ -957,10 +955,10 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         .last_modified = cached.metadata.last_modified,
     });
     if (cached.metadata.etag) |etag| {
-        try req.headers.add(try std.fmt.allocPrintSentinel(arena, "If-None-Match: {s}", .{etag}, 0));
+        try req.headers.add(try std.fmt.allocPrintSentinel(arena.allocator(), "If-None-Match: {s}", .{etag}, 0));
     }
     if (cached.metadata.last_modified) |lm| {
-        try req.headers.add(try std.fmt.allocPrintSentinel(arena, "If-Modified-Since: {s}", .{lm}, 0));
+        try req.headers.add(try std.fmt.allocPrintSentinel(arena.allocator(), "If-Modified-Since: {s}", .{lm}, 0));
     }
     transfer._cache_intent = .{ .revalidate = cached };
     return false;
@@ -982,7 +980,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     const stale = transfer._cache_intent.revalidate;
     transfer._cache_intent = .none;
 
-    cache.renew(transfer.arena, .{
+    cache.renew(transfer.arena.allocator(), .{
         .url = transfer._cache_key,
         .timestamp = lp.datetime.timestamp(.real),
         .headers = transfer.res.headers,
@@ -1021,7 +1019,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 
     const vary = findHeader(headers, "vary");
     const maybe_cm = Cache.tryCache(
-        arena,
+        arena.allocator(),
         lp.datetime.timestamp(.real),
         transfer._cache_key,
         rh.status,
@@ -1051,7 +1049,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
                         .name = arena.dupe(u8, hdr.name) catch return,
                         .value = arena.dupe(u8, hdr.value) catch return,
                     };
-                    vary_headers.append(arena, owned) catch return;
+                    vary_headers.append(arena.allocator(), owned) catch return;
                 }
             }
         }
@@ -1060,7 +1058,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     metadata.headers = headers;
     metadata.vary_headers = vary_headers.items;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .metadata = metadata });
     }
     cache.put(metadata, transfer.res.buffer.items) catch |err| {
@@ -1069,7 +1067,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
 }
 
 const SyncContext = struct {
-    allocator: Allocator,
+    client: *Client,
     completion: union(enum) {
         in_progress: void,
         done: void,
@@ -1080,19 +1078,35 @@ const SyncContext = struct {
     status: u16 = 0,
     body: std.ArrayList(u8),
 
+    // Acquired on the first byte we have to buffer, so a bodyless response
+    // never takes one. Ownership moves to the SyncResponse.
+    arena: ?*lp.Arena = null,
+
     fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacity(self.allocator, cl);
+            try self.body.ensureTotalCapacity(try self.bodyAllocator(cl), cl);
         }
         return .proceed;
     }
 
+    fn bodyAllocator(self: *SyncContext, content_length: ?usize) !Allocator {
+        if (self.arena) |arena| {
+            return arena.allocator();
+        }
+        const arena = if (content_length) |cl|
+            try self.client.arena_pool.acquire(cl, "syncRequest.body")
+        else
+            try self.client.arena_pool.acquire(.large, "syncRequest.body");
+        self.arena = arena;
+        return arena.allocator();
+    }
+
     fn dataCallback(transfer: *Transfer, data: []const u8) anyerror!void {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
-        try self.body.appendSlice(self.allocator, data);
+        try self.body.appendSlice(try self.bodyAllocator(null), data);
     }
 
     fn doneCallback(ctx: *anyopaque) anyerror!void {
@@ -1111,7 +1125,8 @@ const SyncContext = struct {
     }
 };
 
-pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Owner) !SyncResponse {
+// Caller must deinit SyncResponse or otherwise take ownership of its optional arena
+pub fn syncRequest(self: *Client, req: Request, owner: *Owner) !SyncResponse {
     if (self.inbox.terminated) {
         // request() takes ownership of req.headers on every path; we return
         // before calling it, so free the curl_slist here to avoid leaking it.
@@ -1126,8 +1141,8 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         return error.SyncWaitInterrupted;
     }
 
-    var sync_ctx = SyncContext{ .allocator = allocator, .body = .empty };
-    errdefer sync_ctx.body.deinit(allocator);
+    var sync_ctx = SyncContext{ .client = self, .body = .empty };
+    errdefer if (sync_ctx.arena) |arena| arena.release();
 
     var r = req;
     r.sync = true;
@@ -1168,6 +1183,7 @@ pub fn syncRequest(self: *Client, allocator: Allocator, req: Request, owner: *Ow
         .done, .shutdown => return .{
             .status = sync_ctx.status,
             .body = sync_ctx.body,
+            .arena = sync_ctx.arena,
         },
         .err => |e| return e,
     }
@@ -1250,7 +1266,7 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
             .sync_wait => self.inbox.popIf(allowDuringSyncWait),
         } orelse return;
 
-        defer msg.deinit(self.arena_pool);
+        defer msg.deinit();
 
         switch (msg.payload) {
             .cdp => |*c| cdp.onMessage(c) catch |err| {
@@ -1429,7 +1445,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         );
         if (wait_for_interception) {
             self.intercepted += 1;
-            if (comptime IS_DEBUG) {
+            if (comptime lp.IS_DEBUG) {
                 log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
             }
 
@@ -1705,8 +1721,14 @@ pub const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
 
-    pub fn deinit(self: *SyncResponse, allocator: Allocator) void {
-        self.body.deinit(allocator);
+    // Owns `body`. Null when the response had nothing to buffer. Callers that
+    // keep `body` past this call take the arena instead of releasing it.
+    arena: ?*lp.Arena,
+
+    pub fn deinit(self: *SyncResponse) void {
+        if (self.arena) |arena| {
+            arena.release();
+        }
     }
 };
 
@@ -1714,7 +1736,7 @@ pub const SyncResponse = struct {
 // challenge. The auth retry goes straight back to the network — it already
 // passed the request-side pipeline on its first attempt.
 pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.http, "continue transfer", .{ .intercepted = self.intercepted });
     }
 
@@ -1729,7 +1751,7 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
 // gate, re-entering the pipeline at the step after interception. The CDP
 // command may have mutated req (url / method / headers / body) first.
 pub fn continueIntercepted(self: *Client, transfer: *Transfer) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         lp.assert(self.intercepted > 0, "Client.continueIntercepted", .{ .value = self.intercepted });
     }
 
@@ -1751,7 +1773,7 @@ pub fn fulfillIntercepted(
     headers: []const http.Header,
     body: ?[]const u8,
 ) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         lp.assert(self.intercepted > 0, "Client.fulfillIntercepted", .{ .value = self.intercepted });
     }
 
@@ -1873,7 +1895,7 @@ pub const Owner = struct {
 
 pub const Transfer = struct {
     id: u32 = 0,
-    arena: Allocator,
+    arena: *lp.Arena,
 
     owner: ?*Owner,
     owner_node: std.DoublyLinkedList.Node = .{},
@@ -2076,7 +2098,7 @@ pub const Transfer = struct {
         if (self._retired) {
             // transfer.deinit should be called once. But _retired and the graveyard
             // are a safety net born out of UAFs.
-            if (comptime IS_DEBUG) {
+            if (comptime lp.IS_DEBUG) {
                 lp.assert(false, "Transfer.deinit on retired transfer", .{ .id = self.id });
             }
             return;
@@ -2128,7 +2150,7 @@ pub const Transfer = struct {
             o.removeTransfer(self);
         }
 
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             // Any callback on a corpse is a bug — fail loudly instead of
             // silently running user code from a retired transfer.
             self.req.start_callback = null;
@@ -2284,7 +2306,7 @@ pub const Transfer = struct {
     // error_callback fires from the dispatcher, never from the caller's
     // stack.
     pub fn failAsync(self: *Transfer, err: anyerror) void {
-        self._events.append(self.arena, .{ .err = err }) catch {
+        self._events.append(self.arena.allocator(), .{ .err = err }) catch {
             // Can't buffer (OOM): failing inline beats losing the error.
             return self.abort(err);
         };
@@ -2298,7 +2320,7 @@ pub const Transfer = struct {
         if (self.state == .delivering) {
             return;
         }
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             lp.assert(
                 self.state == .created or self.state == .inflight,
                 "Transfer.scheduleDispatch",
@@ -2327,7 +2349,7 @@ pub const Transfer = struct {
         // http_status reflects the final response only. Internal requests
         // (robots.txt) are tracked by the robots_* metrics instead.
         if (self.res.stream.started) {
-            try self._events.append(self.arena, .done);
+            try self._events.append(self.arena.allocator(), .done);
             self.scheduleDispatch();
             return;
         }
@@ -2338,7 +2360,7 @@ pub const Transfer = struct {
             lp.metrics.http_response_size_bytes.observe(body.len);
         }
 
-        try self._events.ensureUnusedCapacity(self.arena, 4);
+        try self._events.ensureUnusedCapacity(self.arena.allocator(), 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
         if (body.len > 0) {
@@ -2435,7 +2457,7 @@ pub const Transfer = struct {
         self.res.header.?.url = (try arena.dupeZ(u8, std.mem.span(self.res.header.?.url))).ptr;
 
         var it = HeaderIterator{ .curl = .{ .conn = conn } };
-        const headers = try it.collect(arena);
+        const headers = try it.collect(arena.allocator());
         self.res.headers = headers.items;
 
         if (self.req.cookie_jar) |jar| {
@@ -2479,7 +2501,7 @@ pub const Transfer = struct {
         try conn.setHeaders(&header_list);
 
         // Add cookies from cookie jar.
-        if (try self.req.getCookieString(self.arena)) |cookies| {
+        if (try self.req.getCookieString(self.arena.allocator())) |cookies| {
             try conn.setCookies(@ptrCast(cookies.ptr));
         }
 
@@ -2517,7 +2539,7 @@ pub const Transfer = struct {
     }
 
     fn buildResponseHeader(self: *Transfer, conn: *const http.Connection) !void {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(self.res.header == null);
         }
 
@@ -2594,7 +2616,7 @@ pub const Transfer = struct {
                 break :blk "";
             }
 
-            const resolved = try URL.resolve(arena, base, location, .{});
+            const resolved = try URL.resolve(arena.allocator(), base, location, .{});
 
             // RFC 7231 §7.1.2: if the Location value has no fragment, the redirect
             // inherits the fragment from the URI used to generate the request.
@@ -2603,7 +2625,7 @@ pub const Transfer = struct {
             if (URL.getHash(resolved).len == 0) {
                 const original_hash = URL.getHash(transfer.req.url);
                 if (original_hash.len != 0) {
-                    break :blk try std.mem.joinZ(arena, "", &.{ resolved, original_hash });
+                    break :blk try std.mem.joinZ(arena.allocator(), "", &.{ resolved, original_hash });
                 }
             }
             break :blk resolved;
@@ -2664,7 +2686,7 @@ pub const Transfer = struct {
     // abort. We don't call self.releaseConn here b/c it has been done
     // before interception process.
     pub fn abortAuthChallenge(self: *Transfer) void {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         }
 
@@ -2674,7 +2696,7 @@ pub const Transfer = struct {
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 chunk at a time
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(chunk_count == 1);
         }
 
@@ -2705,7 +2727,7 @@ pub const Transfer = struct {
                     res.callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                res.buffer.ensureTotalCapacity(transfer.arena, cl) catch {};
+                res.buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
             }
         }
 
@@ -2739,7 +2761,7 @@ pub const Transfer = struct {
             return http.writefunc_error;
         }
 
-        res.buffer.appendSlice(transfer.arena, chunk) catch |err| {
+        res.buffer.appendSlice(transfer.arena.allocator(), chunk) catch |err| {
             res.callback_error = err;
             return http.writefunc_error;
         };
@@ -2756,16 +2778,16 @@ pub const Transfer = struct {
         if (res.stream.started == false) {
             // we haven't delivered the start/header events yet
             try self.materializeResponse(conn);
-            try self._events.ensureUnusedCapacity(self.arena, 3);
+            try self._events.ensureUnusedCapacity(self.arena.allocator(), 3);
             self._events.appendAssumeCapacity(.start);
             self._events.appendAssumeCapacity(.header);
             res.stream.started = true;
         }
         // append the data to whatever data we already have (but haven't delivered)
-        try res.buffer.appendSlice(self.arena, chunk);
+        try res.buffer.appendSlice(self.arena.allocator(), chunk);
         if (res.stream.data_queued == false) {
             res.stream.data_queued = true;
-            try self._events.append(self.arena, .stream_data);
+            try self._events.append(self.arena.allocator(), .stream_data);
         }
 
         switch (self.state) {
@@ -2773,7 +2795,7 @@ pub const Transfer = struct {
             // deliver() is mid-batch on this transfer; its loop consumes
             // events appended behind its cursor.
             .delivering => {},
-            else => if (comptime IS_DEBUG) {
+            else => if (comptime lp.IS_DEBUG) {
                 lp.assert(false, "Transfer.scheduleStreamDispatch", .{ .state = self.state });
             },
         }
@@ -3037,7 +3059,7 @@ const Synthetic = struct {
         var content_type: []const u8 = "";
 
         if (std.mem.startsWith(u8, url, "data:")) {
-            const parsed = try data_url.parse(arena, url);
+            const parsed = try data_url.parse(arena.allocator(), url);
             content_type = parsed.content_type;
             body = parsed.body;
         } else {
@@ -3085,32 +3107,38 @@ test "HttpClient: isFetchInterceptionMethod rejects unrelated methods" {
 }
 
 test "HttpClient: allowDuringSyncWait allows ping/close/disconnect" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
     var ping_msg = Inbox.Message{
-        .arena = testing.allocator,
+        .arena = test_arena,
         .payload = .{ .ping = "" },
     };
     try testing.expect(allowDuringSyncWait(&ping_msg));
 
     var close_msg = Inbox.Message{
-        .arena = testing.allocator,
+        .arena = test_arena,
         .payload = .close,
     };
     try testing.expect(allowDuringSyncWait(&close_msg));
 
     var disconnect_msg = Inbox.Message{
-        .arena = testing.allocator,
+        .arena = test_arena,
         .payload = .{ .disconnect = null },
     };
     try testing.expect(allowDuringSyncWait(&disconnect_msg));
 
     var disconnect_err_msg = Inbox.Message{
-        .arena = testing.allocator,
+        .arena = test_arena,
         .payload = .{ .disconnect = error.PeerClosed },
     };
     try testing.expect(allowDuringSyncWait(&disconnect_err_msg));
 }
 
 test "HttpClient: allowDuringSyncWait allows only Fetch interception CDP methods" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
     var raw_buf: [16]u8 = undefined;
 
     inline for ([_][]const u8{
@@ -3120,7 +3148,7 @@ test "HttpClient: allowDuringSyncWait allows only Fetch interception CDP methods
         "Fetch.continueWithAuth",
     }) |method| {
         var msg = Inbox.Message{
-            .arena = testing.allocator,
+            .arena = test_arena,
             .payload = .{ .cdp = .{
                 .raw = &raw_buf,
                 .input = .{ .method = method },
@@ -3131,6 +3159,9 @@ test "HttpClient: allowDuringSyncWait allows only Fetch interception CDP methods
 }
 
 test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
     var raw_buf: [16]u8 = undefined;
 
     inline for ([_][]const u8{
@@ -3142,7 +3173,7 @@ test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
         "",
     }) |method| {
         var msg = Inbox.Message{
-            .arena = testing.allocator,
+            .arena = test_arena,
             .payload = .{ .cdp = .{
                 .raw = &raw_buf,
                 .input = .{ .method = method },
@@ -3153,6 +3184,9 @@ test "HttpClient: allowDuringSyncWait denies non-Fetch CDP methods" {
 }
 
 test "HttpClient: isSyncWaitInterrupt matches teardown methods, close and disconnect" {
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
     var raw_buf: [16]u8 = undefined;
 
     inline for ([_][]const u8{
@@ -3161,7 +3195,7 @@ test "HttpClient: isSyncWaitInterrupt matches teardown methods, close and discon
         "Page.close",
     }) |method| {
         var msg = Inbox.Message{
-            .arena = testing.allocator,
+            .arena = test_arena,
             .payload = .{ .cdp = .{
                 .raw = &raw_buf,
                 .input = .{ .method = method },
@@ -3170,15 +3204,18 @@ test "HttpClient: isSyncWaitInterrupt matches teardown methods, close and discon
         try testing.expect(isSyncWaitInterrupt(&msg));
     }
 
-    var close_msg = Inbox.Message{ .arena = testing.allocator, .payload = .close };
+    var close_msg = Inbox.Message{ .arena = test_arena, .payload = .close };
     try testing.expect(isSyncWaitInterrupt(&close_msg));
 
-    var disconnect_msg = Inbox.Message{ .arena = testing.allocator, .payload = .{ .disconnect = null } };
+    var disconnect_msg = Inbox.Message{ .arena = test_arena, .payload = .{ .disconnect = null } };
     try testing.expect(isSyncWaitInterrupt(&disconnect_msg));
 }
 
 test "HttpClient: isSyncWaitInterrupt ignores ping and non-teardown CDP methods" {
-    var ping_msg = Inbox.Message{ .arena = testing.allocator, .payload = .{ .ping = "" } };
+    const test_arena = try testing.test_app.arena_pool.acquire(.tiny, "HttpClient test");
+    defer test_arena.release();
+
+    var ping_msg = Inbox.Message{ .arena = test_arena, .payload = .{ .ping = "" } };
     try testing.expect(!isSyncWaitInterrupt(&ping_msg));
 
     var raw_buf: [16]u8 = undefined;
@@ -3190,7 +3227,7 @@ test "HttpClient: isSyncWaitInterrupt ignores ping and non-teardown CDP methods"
         "",
     }) |method| {
         var msg = Inbox.Message{
-            .arena = testing.allocator,
+            .arena = test_arena,
             .payload = .{ .cdp = .{
                 .raw = &raw_buf,
                 .input = .{ .method = method },

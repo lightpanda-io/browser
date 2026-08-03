@@ -36,10 +36,10 @@ _proto: *HtmlElement,
 _cached: ?DrawingContext = null,
 
 pub fn asElement(self: *Canvas) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Canvas) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Canvas) *Node {
     return self.asElement().asNode();

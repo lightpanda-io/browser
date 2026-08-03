@@ -18,10 +18,8 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const log = lp.log;
-const IS_DEBUG = builtin.mode == .Debug;
 
 const Queue = std.PriorityQueue(Task, void, struct {
     fn compare(_: void, a: Task, b: Task) std.math.Order {
@@ -68,11 +66,12 @@ pub fn reset(self: *Scheduler) void {
 
 const AddOpts = struct {
     name: []const u8 = "",
+    front: bool = false, // run before any timed tasks, multi-fronts are FIFO amongst themselves
     low_priority: bool = false,
     finalizer: ?Finalizer = null,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts: AddOpts) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.scheduler, "scheduler.add", .{ .name = opts.name, .run_in_ms = run_in_ms, .low_priority = opts.low_priority });
     }
     var queue = if (opts.low_priority) &self.low_priority else &self.high_priority;
@@ -84,7 +83,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .sequence = seq,
         .name = opts.name,
         .finalizer = opts.finalizer,
-        .run_at = lp.datetime.milliTimestamp(.boot) + run_in_ms,
+        .run_at = if (opts.front) 0 else lp.datetime.milliTimestamp(.boot) + run_in_ms,
     });
 }
 
@@ -123,7 +122,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
             return;
         }
         var task = queue.pop().?;
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
         }
 
@@ -136,7 +135,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
 
         if (repeat_in_ms) |ms| {
             // Task cannot be repeated immediately, and they should know that
-            if (comptime IS_DEBUG) {
+            if (comptime lp.IS_DEBUG) {
                 std.debug.assert(ms != 0);
             }
             task.run_at = now + ms;

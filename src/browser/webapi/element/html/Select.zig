@@ -38,10 +38,10 @@ _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
 pub fn asElement(self: *Select) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Select) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Select) *Node {
     return self.asElement().asNode();

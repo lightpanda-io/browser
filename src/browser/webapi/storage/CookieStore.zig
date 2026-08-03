@@ -27,7 +27,6 @@ const Cookie = @import("Cookie.zig");
 const EventTarget = @import("../EventTarget.zig");
 const CookieChangeEvent = @import("../event/CookieChangeEvent.zig");
 
-const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 const String = lp.String;
 
@@ -100,7 +99,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
     // from the mutation site. We snapshot the notification fields onto a
     // small page arena that the scheduled callback releases after dispatch.
     const arena = try exec.getArena(.tiny, "CookieStore.change");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const cb = try arena.create(ChangeCallback);
     cb.* = .{
@@ -129,7 +128,7 @@ const ChangeCallback = struct {
     // The CookieStore could have been detached in the meantime, and so its
     // _exec pointer could have been reset.
     exec: *Execution,
-    arena: Allocator,
+    arena: *lp.Arena,
     kind: Notification.CookieChanged.Kind,
     name: []const u8,
     value: []const u8,
@@ -144,7 +143,7 @@ const ChangeCallback = struct {
     }
 
     fn releaseArena(self: *ChangeCallback) void {
-        self.exec.releaseArena(self.arena);
+        self.arena.release();
     }
 
     fn run(ctx: *anyopaque) !?u32 {

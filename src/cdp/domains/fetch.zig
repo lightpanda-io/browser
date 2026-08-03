@@ -333,7 +333,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
         // continueTransfer (which owns its failures).
         errdefer transfer.abortAuthChallenge();
         transfer.updateCredentials(try std.fmt.allocPrintSentinel(
-            transfer.arena,
+            transfer.arena.allocator(),
             "{s}:{s}",
             .{
                 params.authChallengeResponse.username,

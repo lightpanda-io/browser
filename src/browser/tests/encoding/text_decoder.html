@@ -49,6 +49,20 @@
   testing.expectEqual('♥', d3.decode(new Uint8Array([165]), { stream: true }));
 </script>
 
+<script id=stream_many>
+  // Each decode's output lives on the caller's call_arena, which resets under
+  // the decoder between calls. Reusing one decoder across many chunks must
+  // still return only the chunk just decoded.
+  let d5 = new TextDecoder();
+  let out = '';
+  for (let i = 0; i < 500; i++) {
+    out += d5.decode(new Uint8Array([104, 105]), { stream: true });
+  }
+  testing.expectEqual(1000, out.length);
+  testing.expectEqual('hihi', out.slice(0, 4));
+  testing.expectEqual('', d5.decode());
+</script>
+
 <script id=slice>
   const buf1 = new ArrayBuffer(7);
   const arr1 = new Uint8Array(buf1)

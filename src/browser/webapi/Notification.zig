@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
@@ -25,14 +24,13 @@ const Page = @import("../Page.zig");
 const EventTarget = @import("EventTarget.zig");
 
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 const Notification = @This();
 
 pub const Proto = EventTarget;
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _proto: *EventTarget,
 _title: []const u8,
 _body: []const u8 = "",
@@ -61,10 +59,10 @@ const Options = struct {
 
 pub fn init(title: []const u8, options_: ?Options, exec: *const Execution) !*Notification {
     const arena = try exec.getArena(.small, "Notification");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const options = options_ orelse Options{};
-    return exec._factory.eventTargetWithAllocator(arena, Notification{
+    return exec._factory.eventTargetWithAllocator(arena.allocator(), Notification{
         ._arena = arena,
         ._proto = undefined,
         ._title = try arena.dupe(u8, title),
@@ -81,8 +79,8 @@ pub fn init(title: []const u8, options_: ?Options, exec: *const Execution) !*Not
     });
 }
 
-pub fn deinit(self: *Notification, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Notification, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *Notification, page: *Page) void {

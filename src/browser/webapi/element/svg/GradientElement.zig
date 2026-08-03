@@ -16,11 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Factory = @import("../../../Factory.zig");
 
 const AnimatedEnumeration = @import("../../svg/AnimatedEnumeration.zig");
 const AnimatedString = @import("../../svg/AnimatedString.zig");
@@ -34,8 +36,8 @@ pub const RadialGradient = @import("RadialGradient.zig");
 const GradientElement = @This();
 
 pub const Proto = Svg;
-_proto: *Svg,
 _type: Type,
+_proto_canary: if (lp.IS_DEBUG) *Svg else void = undefined,
 
 pub const Type = union(enum) {
     linear: *LinearGradient,
@@ -54,7 +56,7 @@ pub fn is(self: *GradientElement, comptime T: type) ?*T {
 }
 
 pub fn asElement(self: *GradientElement) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *GradientElement) *Node {
     return self.asElement().asNode();
