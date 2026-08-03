@@ -320,6 +320,96 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: insertText uses UTF-16 selection offsets" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<input id="input"><textarea id="textarea"></textarea>';
+        \\const input = document.getElementById('input');
+        \\const textarea = document.getElementById('textarea');
+        \\window.editEvents = [];
+        \\for (const element of [input, textarea]) {
+        \\  element.addEventListener('input', event => {
+        \\    window.editEvents.push([element.id, event.data, event.inputType]);
+        \\  });
+        \\}
+        \\input.value = 'A👋B';
+        \\input.setSelectionRange(1, 3);
+        \\input.focus();
+    , null);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.insertText",
+        .params = .{ .text = "界" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\input.value === 'A界B' &&
+        \\input.selectionStart === 2 &&
+        \\input.selectionEnd === 2
+    , null)).isTrue());
+
+    _ = try ls.local.compileAndRun(
+        \\input.value = 'A👋B';
+        \\input.setSelectionRange(1, 1);
+        \\input.focus();
+    , null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.insertText",
+        .params = .{ .text = "界" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\input.value === 'A界👋B' &&
+        \\input.selectionStart === 2 &&
+        \\input.selectionEnd === 2
+    , null)).isTrue());
+
+    _ = try ls.local.compileAndRun(
+        \\textarea.value = 'A👋B';
+        \\textarea.setSelectionRange(1, 3);
+        \\textarea.focus();
+    , null);
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.insertText",
+        .params = .{ .text = "界" },
+    });
+    try testing.expect((try ls.local.compileAndRun(
+        \\textarea.value === 'A界B' &&
+        \\textarea.selectionStart === 2 &&
+        \\textarea.selectionEnd === 2 &&
+        \\JSON.stringify(window.editEvents) ===
+        \\  '[["input","界","insertText"],["input","界","insertText"],["textarea","界","insertText"]]'
+    , null)).isTrue());
+
+    try testing.expect((try ls.local.compileAndRun(
+        \\input.value = 'A👋B';
+        \\input.select();
+        \\textarea.value = 'A👋B';
+        \\textarea.select();
+        \\input.selectionStart === 0 && input.selectionEnd === 4 &&
+        \\textarea.selectionStart === 0 && textarea.selectionEnd === 4
+    , null)).isTrue());
+}
+
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
     var ctx = try testing.context();
     defer ctx.deinit();
