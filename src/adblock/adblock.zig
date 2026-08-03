@@ -130,7 +130,7 @@ pub const Parser = struct {
     /// occurrence wins; identical text later in the file is just a comment.
     fn parseMetadata(self: *Parser, arena: std.mem.Allocator, line: []const u8) std.mem.Allocator.Error!void {
         if (line.len == 0 or line[0] != '!') return;
-        const rest = std.mem.trimLeft(u8, line[1..], &std.ascii.whitespace);
+        const rest = std.mem.trimStart(u8, line[1..], &std.ascii.whitespace);
         const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return;
         const key = std.mem.trim(u8, rest[0..colon], &std.ascii.whitespace);
         const value = std.mem.trim(u8, rest[colon + 1 ..], &std.ascii.whitespace);
