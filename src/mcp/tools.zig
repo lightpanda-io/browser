@@ -4,6 +4,8 @@ const lp = @import("lightpanda");
 const js = lp.js;
 const browser_tools = lp.tools;
 const BrowserTool = browser_tools.Tool;
+const ScriptRuntime = lp.Runtime;
+const string = @import("../string.zig");
 
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
@@ -55,7 +57,59 @@ const session_id_schema = browser_tools.minify(
     \\}
 );
 
+const replay_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) of the saved script to replay." },
+    \\    "script": { "type": "string", "description": "Optional: script text to run instead of the file's contents - trial a candidate revision without writing it. `path` still names the run." }
+    \\  },
+    \\  "required": ["path"]
+    \\}
+);
+
+const heal_commit_schema = browser_tools.minify(
+    \\{
+    \\  "type": "object",
+    \\  "properties": {
+    \\    "path": { "type": "string", "description": "Relative path (no '..' segments) of the broken script; replaced atomically only on cure." },
+    \\    "script": { "type": "string", "description": "The full revised script. Keep $LP_* placeholders; never inline a resolved secret." },
+    \\    "failure": {
+    \\      "type": "object",
+    \\      "description": "The `failure` object from the replay report you are healing, echoed back verbatim.",
+    \\      "properties": {
+    \\        "kind": { "type": "string", "enum": ["threw", "empty", "dry_extracts"] },
+    \\        "detail": { "type": "string" },
+    \\        "dry_fields": { "type": "array", "items": { "type": "string" }, "description": "For dry_extracts: the fields that must come back with data (\"\" = a whole-array extract). Deleting an extract is not a cure." }
+    \\      },
+    \\      "required": ["kind"]
+    \\    }
+    \\  },
+    \\  "required": ["path", "script", "failure"]
+    \\}
+);
+
+/// Appended to the `initialize` instructions (`driver_guidance` is shared with
+/// the standalone agent, which has no replay/heal tools — keep this MCP-only).
+pub const script_lifecycle_note =
+    \\Script lifecycle: `save` a finished session as a script, `replay` it
+    \\any time for a token-free re-run, and when a replay reports it broken,
+    \\heal it — diagnose against the live session, then `heal_commit` a
+    \\revision (validated in a fresh session before it replaces the file).
+    \\
+;
+
 const extra_tools = [_]McpTool{
+    .{
+        .name = "replay",
+        .description = "Replay a saved Lightpanda agent script (see `save`) and return a JSON run report. `status` is \"ok\" (ran, output carries data), \"suspicious\" (ran clean but the output looks dry — judge whether that is breakage or the page genuinely has no such data right now, weighing any `// lp:baseline` comment in `source` as evidence of what the fields held at save time), or \"failed\" (the script threw). The script's `console.*` output and returned value arrive in `console` (the returned value is the final line). On suspicious/failed the report carries the script `source`, a `failure` object and `guidance` for the heal flow: diagnose against the live session, then call `heal_commit`. Pass `script` to trial a candidate revision without writing it. The replay drives this session — the current page, cookies and node ids are replaced; re-inspect (tree) before reusing node ids.",
+        .inputSchema = replay_schema,
+    },
+    .{
+        .name = "heal_commit",
+        .description = "Commit a healed script: the revised `script` is validated by replaying it in a fresh session, and only a validated cure replaces the file at `path` — the original is untouched otherwise. Echo back the `failure` object from the replay report you are healing; the cure check is deterministic: `threw` needs a clean run, `empty` needs the return value to carry data, `dry_extracts` needs every listed field to come back with data (deleting the extract is not a cure). The response is a JSON heal report; on `cured: false` its `failure` says what is still wrong — diagnose further and try again. Afterwards the session is the fresh validation session at the script's end state (all prior node ids are stale).\n\n" ++ lp.heal.heal_revision_prompt ++ "\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
+        .inputSchema = heal_commit_schema,
+    },
     .{
         .name = "save",
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
@@ -82,6 +136,8 @@ const all_tools = browser_tool_list ++ extra_tools;
 
 /// Tools that bypass the browser-tool dispatch and have their own handlers.
 const ExtraTool = enum {
+    replay,
+    heal_commit,
     save,
     session_new,
     session_list,
@@ -104,6 +160,8 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     if (std.meta.stringToEnum(ExtraTool, call_params.name)) |tool| {
         return switch (tool) {
+            .replay => handleReplay(server, arena, id, call_params.arguments),
+            .heal_commit => handleHealCommit(server, arena, id, call_params.arguments),
             .save => handleSave(server, arena, id, call_params.arguments),
             .session_new => handleSessionNew(server, arena, id, call_params.arguments),
             .session_list => handleSessionList(server, arena, id),
@@ -177,6 +235,185 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return sendErrorContent(server, id, "out of memory");
 
     try sendToolResultText(server, id, msg, false);
+}
+
+/// Bound `RunReport.source` — a script is human-scale, but a synthesized one
+/// with an embedded blob shouldn't balloon the report.
+const source_max_bytes = 64 * 1024;
+
+/// Caps captured `console.*` output so a chatty script can't balloon the
+/// report.
+const ConsoleCollector = struct {
+    arena: std.mem.Allocator,
+    lines: std.ArrayList(lp.heal.ConsoleLine) = .empty,
+    bytes: usize = 0,
+    truncated: bool = false,
+
+    const max_bytes = 16 * 1024;
+
+    fn sink(self: *ConsoleCollector) ScriptRuntime.ConsoleSink {
+        return .{ .context = @ptrCast(self), .write = write };
+    }
+
+    fn write(context: *anyopaque, method: ScriptRuntime.ConsoleMethod, line: []const u8) void {
+        const self: *ConsoleCollector = @ptrCast(@alignCast(context));
+        const remaining = max_bytes -| self.bytes;
+        if (remaining == 0) {
+            self.truncated = true;
+            return;
+        }
+        // Scrub any resolved LP_* secret a script may have printed.
+        const scrubbed = browser_tools.reverseSubstituteEnvVars(self.arena, line) catch {
+            self.truncated = true;
+            return;
+        };
+        if (scrubbed.len > remaining) self.truncated = true;
+        // A pass-through line aliases the runtime's per-call arena, which
+        // dies before the report is sent.
+        const text = self.arena.dupe(u8, string.capBytes(self.arena, scrubbed, remaining)) catch {
+            self.truncated = true;
+            return;
+        };
+        self.lines.append(self.arena, .{ .level = @tagName(method), .text = text }) catch {
+            self.truncated = true;
+            return;
+        };
+        self.bytes += text.len;
+    }
+};
+
+fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, source: []const u8, collector: *ConsoleCollector) !lp.heal.Classified {
+    const active = server.active_session;
+    const runtime = try ScriptRuntime.init(server.allocator, server.app, active.session, &active.node_registry);
+    defer runtime.deinit();
+    runtime.console_sink = collector.sink();
+    const result = try runtime.runSource(source, path);
+    return lp.heal.classifyRun(arena, result, source);
+}
+
+// `validation` (heal_commit) skips the guidance and the source scrub: the
+// client supplied the script already scrubbed and drives the flow itself.
+const ReportMode = enum { replay, validation };
+
+fn buildRunReport(
+    arena: std.mem.Allocator,
+    path: []const u8,
+    classified: lp.heal.Classified,
+    collector: *const ConsoleCollector,
+    mode: ReportMode,
+) error{OutOfMemory}!lp.heal.RunReport {
+    var report: lp.heal.RunReport = .{
+        .status = .ok,
+        .path = path,
+        .console = collector.lines.items,
+        .console_truncated = collector.truncated,
+    };
+    switch (classified) {
+        .script_error => |script_error| {
+            report.status = .failed;
+            report.failure = .{ .kind = script_error.kind, .detail = script_error.detail, .dry_fields = script_error.dry_fields };
+            report.source = try reportSource(arena, script_error.source, mode);
+            if (mode == .replay) report.guidance = lp.heal.replay_failed_guidance;
+        },
+        .facts => |facts| {
+            report.returned = facts.returned;
+            report.extracts = facts.extract_stats;
+            if (lp.heal.suspicionOf(arena, facts)) |suspicion| {
+                report.status = .suspicious;
+                report.failure = .{ .kind = suspicion.kind, .detail = suspicion.detail, .dry_fields = suspicion.dry_fields };
+                report.source = try reportSource(arena, facts.source, mode);
+                if (mode == .replay) report.guidance = lp.heal.replay_suspicious_guidance;
+            }
+        },
+    }
+    return report;
+}
+
+fn reportSource(arena: std.mem.Allocator, source: []const u8, mode: ReportMode) error{OutOfMemory}![]const u8 {
+    const scrubbed = switch (mode) {
+        .replay => try browser_tools.reverseSubstituteEnvVars(arena, source),
+        .validation => source,
+    };
+    return string.capBytes(arena, scrubbed, source_max_bytes);
+}
+
+fn sendReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, report: anytype) !void {
+    const json = std.json.Stringify.valueAlloc(arena, report, .{ .emit_null_optional_fields = false }) catch
+        return sendErrorContent(server, id, "out of memory");
+    try sendToolResultText(server, id, json, false);
+}
+
+fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Args = struct { path: []const u8, script: ?[]const u8 = null };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { path: string, script?: string }");
+    };
+    if (!browser_tools.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
+    const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(lp.heal.max_script_bytes)) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not read {s}: {s}", .{ args.path, @errorName(err) }) catch "could not read script";
+        return sendErrorContent(server, id, msg);
+    };
+
+    var collector: ConsoleCollector = .{ .arena = arena };
+    const classified = runClassified(server, arena, args.path, source, &collector) catch |err| switch (err) {
+        error.OutOfMemory => return sendErrorContent(server, id, "out of memory"),
+        error.RuntimeInitFailed, error.TooManyContexts => return sendErrorContent(server, id, "could not initialize the script runtime"),
+    };
+    // A failed script is still a successful replay: report it in-band, never
+    // as a tool error — the report is the answer.
+    const report = buildRunReport(arena, args.path, classified, &collector, .replay) catch
+        return sendErrorContent(server, id, "out of memory");
+    return sendReport(server, arena, id, report);
+}
+
+fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Args = struct { path: []const u8, script: []const u8, failure: lp.heal.WireFailure };
+    const args = browser_tools.parseArgs(Args, arena, arguments) catch {
+        return server.sendError(id, .InvalidParams, "expected { path: string, script: string, failure: { kind, detail?, dry_fields? } }");
+    };
+    if (!browser_tools.isPathSafe(args.path)) {
+        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    }
+    const first: lp.heal.ScriptError = .{ .kind = args.failure.kind, .detail = args.failure.detail, .source = "", .dry_fields = args.failure.dry_fields };
+    // The client never sees resolved secrets, but scrub as a safety net
+    // before running or persisting the candidate.
+    const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
+        return sendErrorContent(server, id, "out of memory");
+
+    // Validate in a fresh session so failure-state cookies and pages can't
+    // mask a still-broken script.
+    server.restartSession(server.active_session) catch |err| {
+        const msg = std.fmt.allocPrint(arena, "could not start a fresh session: {s}", .{@errorName(err)}) catch "could not start a fresh session";
+        return sendErrorContent(server, id, msg);
+    };
+
+    var collector: ConsoleCollector = .{ .arena = arena };
+    const classified = runClassified(server, arena, args.path, script, &collector) catch |err| switch (err) {
+        error.OutOfMemory => return sendErrorContent(server, id, "out of memory"),
+        error.RuntimeInitFailed, error.TooManyContexts => return sendErrorContent(server, id, "could not initialize the script runtime"),
+    };
+    const run = buildRunReport(arena, args.path, classified, &collector, .validation) catch
+        return sendErrorContent(server, id, "out of memory");
+
+    var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run };
+    switch (classified) {
+        .script_error => |script_error| report.failure = script_error.detail,
+        .facts => |facts| {
+            const residual = lp.heal.cureFailure(arena, first, facts) catch
+                return sendErrorContent(server, id, "out of memory");
+            if (residual) |failure| {
+                report.failure = failure;
+            } else {
+                report.cured = true;
+                const commit_failure: ?[]const u8 = lp.heal.commitValidated(arena, args.path, script, facts.extract_stats) catch
+                    "validated, but out of memory writing the revision";
+                if (commit_failure) |failure| report.failure = failure else report.committed = true;
+            }
+        },
+    }
+    return sendReport(server, arena, id, report);
 }
 
 /// The session tools require the HTTP transport's parked-isolate discipline:
@@ -915,6 +1152,214 @@ test "MCP - save writes the script to disk" {
 
     const written = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(4096));
     try std.testing.expectEqualStrings("const page = new Page();\nawait page.goto(\"https://example.com\");\n", written);
+}
+
+fn testToolText(arena: std.mem.Allocator, response: []const u8) ![]const u8 {
+    const root = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trim(u8, response, " \n"), .{});
+    return root.object.get("result").?.object.get("content").?.array.items[0].object.get("text").?.string;
+}
+
+fn testCall(server: *Server, out: *std.Io.Writer.Allocating, name: []const u8, arguments: anytype) ![]const u8 {
+    const arena = testing.arena_allocator;
+    const args_json = try std.json.Stringify.valueAlloc(arena, arguments, .{});
+    const msg = try std.fmt.allocPrint(arena,
+        \\{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{s}","arguments":{s}}}}}
+    , .{ name, args_json });
+    const start = out.written().len;
+    try router.handleMessage(server, arena, msg);
+    return testToolText(arena, out.written()[start..]);
+}
+
+fn testCallReport(server: *Server, out: *std.Io.Writer.Allocating, name: []const u8, arguments: anytype) !std.json.Value {
+    const text = try testCall(server, out, name, arguments);
+    return std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, text, .{});
+}
+
+const test_fixture_url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+
+test "MCP - replay rejects unsafe path" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"replay","arguments":{"path":"../evil.js"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
+}
+
+test "MCP - replay: inline clean run reports ok" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const report = try testCallReport(server, &out, "replay", .{ .path = "t.js", .script = "return [1];" });
+    try testing.expectString("ok", report.object.get("status").?.string);
+    try testing.expectString("data", report.object.get("returned").?.string);
+    try testing.expectEqual(null, report.object.get("failure"));
+    try testing.expectEqual(null, report.object.get("guidance"));
+}
+
+test "MCP - replay: throwing script reports failed with failure and guidance" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const report = try testCallReport(server, &out, "replay", .{ .path = "t.js", .script = "throw new Error(\"boom\");" });
+    try testing.expectString("failed", report.object.get("status").?.string);
+    const failure = report.object.get("failure").?.object;
+    try testing.expectString("threw", failure.get("kind").?.string);
+    try testing.expect(std.mem.indexOf(u8, failure.get("detail").?.string, "boom") != null);
+    try testing.expectString("throw new Error(\"boom\");", report.object.get("source").?.string);
+    try testing.expect(std.mem.indexOf(u8, report.object.get("guidance").?.string, "heal_commit") != null);
+}
+
+test "MCP - replay: empty return reports suspicious" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const report = try testCallReport(server, &out, "replay", .{ .path = "t.js", .script = "return [];" });
+    try testing.expectString("suspicious", report.object.get("status").?.string);
+    try testing.expectString("empty", report.object.get("returned").?.string);
+    try testing.expectString("empty", report.object.get("failure").?.object.get("kind").?.string);
+    try testing.expect(std.mem.indexOf(u8, report.object.get("guidance").?.string, "lp:baseline") != null);
+}
+
+test "MCP - replay: dry extract reports suspicious with dry_fields" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(test_fixture_url, &out.writer);
+    defer server.deinit();
+
+    const script =
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\return page.extract({ btn: ["#btn"], missing: [".no-such-thing"] });
+    ;
+    const report = try testCallReport(server, &out, "replay", .{ .path = "t.js", .script = script });
+    try testing.expectString("suspicious", report.object.get("status").?.string);
+    const failure = report.object.get("failure").?.object;
+    try testing.expectString("dry_extracts", failure.get("kind").?.string);
+    const dry = failure.get("dry_fields").?.array.items;
+    try testing.expectEqual(1, dry.len);
+    try testing.expectString("missing", dry[0].string);
+    try testing.expectEqual(2, report.object.get("extracts").?.array.items.len);
+}
+
+test "MCP - replay: console lines are captured in the report" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const report = try testCallReport(server, &out, "replay", .{ .path = "t.js", .script = "console.log(\"hello\", 42);\nreturn [1];" });
+    const console = report.object.get("console").?.array.items;
+    try testing.expectEqual(2, console.len);
+    try testing.expectString("log", console[0].object.get("level").?.string);
+    try testing.expectString("hello 42", console[0].object.get("text").?.string);
+    // The returned value is echoed as the final console line — how a replay
+    // hands its output to the client.
+    try testing.expectString("[1]", console[1].object.get("text").?.string);
+    try testing.expectEqual(false, report.object.get("console_truncated").?.bool);
+}
+
+test "MCP - heal_commit: uncured candidate leaves the file untouched" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-heal-uncured-test.js";
+    std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+
+    const report = try testCallReport(server, &out, "heal_commit", .{
+        .path = path,
+        .script = "return [];",
+        .failure = .{ .kind = "empty" },
+    });
+    try testing.expectEqual(false, report.object.get("cured").?.bool);
+    try testing.expectEqual(false, report.object.get("committed").?.bool);
+    try testing.expect(std.mem.indexOf(u8, report.object.get("failure").?.string, "no data") != null);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path, .{}));
+}
+
+test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-heal-cure-test.js";
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "return [];\n" });
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+
+    const revised =
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\return page.extract({ btn: ["#btn"] });
+    ;
+    const report = try testCallReport(server, &out, "heal_commit", .{
+        .path = path,
+        .script = revised,
+        .failure = .{ .kind = "empty" },
+    });
+    try testing.expectEqual(true, report.object.get("cured").?.bool);
+    try testing.expectEqual(true, report.object.get("committed").?.bool);
+    try testing.expectString("ok", report.object.get("run").?.object.get("status").?.string);
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.arena_allocator, .limited(4096));
+    try testing.expect(std.mem.startsWith(u8, written, "const page = new Page();"));
+    try testing.expect(std.mem.indexOf(u8, written, "// lp:baseline ") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "\"btn\":{\"calls\":1,\"nonempty\":1}") != null);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path ++ ".heal.js", .{}));
+}
+
+test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(test_fixture_url, &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-lifecycle-test.js";
+    std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+
+    const broken =
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\return page.extract({ btn: [".no-such-btn"] });
+    ;
+    const saved = try testCall(server, &out, "save", .{ .path = path, .script = broken });
+    try testing.expect(std.mem.indexOf(u8, saved, "saved") != null);
+
+    const run = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("suspicious", run.object.get("status").?.string);
+    const failure = run.object.get("failure").?;
+
+    // The test plays the client model: fix the selector, echo the failure back.
+    const revised =
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\return page.extract({ btn: ["#btn"] });
+    ;
+    const healed = try testCallReport(server, &out, "heal_commit", .{
+        .path = path,
+        .script = revised,
+        .failure = failure,
+    });
+    try testing.expectEqual(true, healed.object.get("cured").?.bool);
+    try testing.expectEqual(true, healed.object.get("committed").?.bool);
+
+    const rerun = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("ok", rerun.object.get("status").?.string);
+    try testing.expectString("data", rerun.object.get("returned").?.string);
 }
 
 test "MCP - tree rejects stale backendNodeId instead of dumping whole document" {

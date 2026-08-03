@@ -103,21 +103,29 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
     try entry.browser.init(self.app, .{}, null);
     errdefer entry.browser.deinit();
 
-    entry.session = try entry.browser.newSession(notification);
-    try entry.session.enableConsoleCapture();
-
-    // Only the default session is backed by the on-disk cookie file; named
-    // sessions start clean so agents stay isolated by default.
-    if (entry.isDefault()) {
-        if (self.app.config.cookieFile()) |cookie_path| {
-            lp.cookies.loadFromFile(entry.session, cookie_path);
-        }
-    }
+    try self.restartSession(entry);
 
     try self.sessions.put(self.allocator, owned_id, entry);
     // Browser.init left the isolate entered; park it (see park_isolates).
     self.exitIsolate(entry);
     return entry;
+}
+
+/// Point `entry` at a fresh browsing session — pages, cookies and node ids
+/// dropped. Bring-up for `createSession` and the reset heal validation
+/// requires. Only the default session is backed by the on-disk cookie file:
+/// named sessions stay isolated, and a restart discards the in-memory
+/// failure-state cookies for that clean baseline identity.
+pub fn restartSession(self: *Self, entry: *Session) !void {
+    entry.session = try entry.browser.newSession(entry.notification);
+    try entry.session.enableConsoleCapture();
+    // Node IDs are session-scoped; drop them with the session they point into.
+    entry.node_registry.reset();
+    if (entry.isDefault()) {
+        if (self.app.config.cookieFile()) |cookie_path| {
+            lp.cookies.loadFromFile(entry.session, cookie_path);
+        }
+    }
 }
 
 /// Switch to the multi-isolate discipline: park the default (which `Server.init`
@@ -220,7 +228,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.tools.driver_guidance,
+        .instructions = lp.tools.driver_guidance ++ tools.script_lifecycle_note,
     });
 }
 

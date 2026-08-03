@@ -165,6 +165,7 @@
     \\  {0s} agent --provider ollama --model qwen3.5:latest
     \\  {0s} agent --no-llm                       (basic slash-command-only REPL)
     \\  {0s} run script.js                        (replay a saved script; see `run`)
+    \\  {0s} agent script.js --heal               (run it; LLM repairs it on failure)
     \\  {0s} agent --task "..." --save out.js      (synthesize a replayable script)
     \\
     \\Arguments:
@@ -198,6 +199,12 @@
     \\          default (Mistral defaults to none, as its default model rejects
     \\          effort). In the REPL, use /effort to change it.
     \\          Allowed values: none, minimal, low, medium, high, xhigh.
+    \\  --heal
+    \\          When the positional script fails, diagnose the failure with the
+    \\          LLM against the live page, revise the script, and validate the
+    \\          revision by re-running it in a fresh session. The script file is
+    \\          overwritten only when the revised version passes. Requires the
+    \\          script positional and an LLM provider.
     \\  --list-models
     \\          Print the model IDs usable with `agent` for --provider, one per
     \\          line, sorted, and exit. Auto-detects the provider from env when
