@@ -701,14 +701,16 @@ pub fn isDisabled(self: *Element) bool {
         const ancestor = node.is(Element) orelse continue;
 
         if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+            var inside_first_legend = false;
             var child = ancestor.firstElementChild();
             while (child) |c| {
                 if (c.getTag() == .legend) {
-                    if (c.asNode().contains(element_node)) return false;
+                    inside_first_legend = c.asNode().contains(element_node);
                     break;
                 }
                 child = c.nextElementSibling();
             }
+            if (inside_first_legend) continue;
             return true;
         }
     }

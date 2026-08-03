@@ -29,9 +29,26 @@ pub const Session = struct {
     session: *lp.Session,
     notification: *lp.Notification,
     node_registry: CDPNode.Registry,
+    webdriver_elements: WebDriverElementRegistry,
 
     fn isDefault(self: *const Session) bool {
         return std.mem.eql(u8, self.id, default_session_id);
+    }
+};
+
+/// Tracks element IDs already returned to the WebDriver client. The CDP node
+/// registry owns live DOM pointers and clears them before document teardown;
+/// the monotonic high-water mark distinguishes a stale past reference from an
+/// unknown ID without retaining one entry per historical element.
+pub const WebDriverElementRegistry = struct {
+    last_issued: CDPNode.Id = 0,
+
+    pub fn register(self: *WebDriverElementRegistry, node_id: CDPNode.Id) void {
+        self.last_issued = @max(self.last_issued, node_id);
+    }
+
+    pub fn isIssued(self: *const WebDriverElementRegistry, node_id: CDPNode.Id) bool {
+        return node_id <= self.last_issued;
     }
 };
 
@@ -126,6 +143,7 @@ fn createSessionWithConsoleCapture(self: *Self, id: []const u8, capture_console:
         .session = undefined,
         .notification = notification,
         .node_registry = CDPNode.Registry.init(self.allocator),
+        .webdriver_elements = .{},
     };
     errdefer entry.node_registry.deinit();
 
@@ -188,6 +206,7 @@ fn destroySession(self: *Self, entry: *Session) void {
     // Re-enter so `Browser.deinit`'s `Env.deinit` exit stays balanced against
     // a parked isolate (and operates on the current one).
     self.enterIsolate(entry);
+    entry.notification.unregisterAll(entry);
     entry.node_registry.deinit();
     entry.browser.deinit();
     entry.notification.deinit();
@@ -233,6 +252,7 @@ pub fn createWebDriverSession(
         const removed = self.sessions.fetchRemove(id).?;
         self.destroySession(removed.value);
     }
+    try entry.notification.register(.frame_remove, entry, onWebDriverFrameRemove);
 
     self.enterIsolate(entry);
     defer self.exitIsolate(entry);
@@ -251,6 +271,11 @@ pub fn createWebDriverSession(
     self.webdriver_session = entry;
     self.webdriver_session_id = owned_id;
     return entry;
+}
+
+fn onWebDriverFrameRemove(ctx: *anyopaque, _: lp.Notification.FrameRemove) !void {
+    const entry: *Session = @ptrCast(@alignCast(ctx));
+    entry.node_registry.resetAndFree();
 }
 
 /// Return an existing W3C WebDriver session. This never creates a session for

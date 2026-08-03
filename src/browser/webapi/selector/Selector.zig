@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Node = @import("../Node.zig");
+const TreeWalker = @import("../TreeWalker.zig").Full;
 const Frame = @import("../../Frame.zig");
 const Browser = @import("../../Browser.zig");
 
@@ -115,8 +116,17 @@ pub const Cache = struct {
 
 fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
-    for (selectors) |selector| {
-        try List.collect(arena.allocator(), root, selector, &nodes, frame);
+    if (selectors.len == 1) {
+        try List.collect(arena.allocator(), root, selectors[0], &nodes, frame);
+    } else {
+        var walker = TreeWalker.init(root, .{});
+        _ = walker.next();
+        while (walker.next()) |node| {
+            const element = node.is(Node.Element) orelse continue;
+            if (matchesAny(selectors, element, root, frame)) {
+                try nodes.put(arena.allocator(), node, {});
+            }
+        }
     }
 
     const list = try arena.create(List);
@@ -144,6 +154,44 @@ pub fn querySelectorAll(root: *Node, input: []const u8, frame: *Frame) !*List {
     const arena = try frame.getArena(.small, "querySelectorAll");
     errdefer arena.release();
     return collectAll(arena, try cachedParse(frame._session.browser, input), root, frame);
+}
+
+/// Query with an already parsed selector. Protocol adapters use this to avoid
+/// retaining client-controlled selectors in the browser cache and to reuse one
+/// parse across polling attempts.
+pub fn queryAll(selectors: []const Selector, root: *Node, frame: *Frame) !*List {
+    const arena = try frame.getArena(.small, "queryAll");
+    errdefer arena.release();
+
+    var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+    var walker = TreeWalker.init(root, .{});
+    _ = walker.next();
+    while (walker.next()) |node| {
+        const element = node.is(Node.Element) orelse continue;
+        if (matchesAny(selectors, element, root, frame)) {
+            try nodes.put(arena.allocator(), node, {});
+        }
+    }
+
+    const list = try arena.create(List);
+    list.* = .{
+        ._arena = arena,
+        ._nodes = nodes.keys(),
+    };
+    return list;
+}
+
+/// Query descendants in tree order without ID anchoring. This is used for
+/// externally supplied selectors, where duplicate IDs and ancestors outside
+/// an element-scoped root must retain standard querySelector semantics.
+pub fn queryInTreeOrder(selectors: []const Selector, root: *Node, frame: *Frame) ?*Node.Element {
+    var walker = TreeWalker.init(root, .{});
+    _ = walker.next();
+    while (walker.next()) |node| {
+        const element = node.is(Node.Element) orelse continue;
+        if (matchesAny(selectors, element, root, frame)) return element;
+    }
+    return null;
 }
 
 pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
@@ -373,6 +421,16 @@ pub const Selector = struct {
 };
 
 pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.Element {
+    if (selectors.len > 1) {
+        var walker = TreeWalker.init(root, .{});
+        _ = walker.next();
+        while (walker.next()) |node| {
+            const element = node.is(Node.Element) orelse continue;
+            if (matchesAny(selectors, element, root, frame)) return element;
+        }
+        return null;
+    }
+
     for (selectors) |selector| {
         // Fast path: single compound with only an ID selector
         if (selector.segments.len == 0 and selector.first.parts.len == 1) {

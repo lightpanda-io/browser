@@ -918,39 +918,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     const session = target._session;
 
-    // Re-navigating to the exact current URL is only a reload when the URL
-    // has no fragment. With a fragment it's a fragment navigation per the
-    // HTML "navigate" steps (url equals the document's URL excluding
-    // fragments and url's fragment is non-null): no reload, and since the
-    // fragment didn't change, no hashchange and no new history entry either.
-    if (!opts.force and
-        opts.kind != .reload and
-        std.mem.eql(u8, target.url, resolved_url) and
-        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
-    {
-        arena.release();
-        return;
-    }
-
-    // Short-circuit only true fragment-only navigations (same path/query, different
-    // fragment). Identical URLs fall through and trigger a real reload.
-    const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
-    if (!opts.force and is_fragment_navigation) {
-        const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
-
-        const location = try Location.init(target.url, target);
-        location.acquireRef();
-        target.window._location.releaseRef(target._page);
-        target.window._location = location;
-
-        if (target.parent == null) {
-            try session.navigation.updateEntries(target.url, opts.kind, target, true);
-        }
-
-        try target.queueHashChange(old_url, target.url);
-
-        // don't defer this, the caller is responsible for freeing it on error
+    if (try target.navigateSameDocument(resolved_url, opts)) {
         arena.release();
         return;
     }
@@ -1004,6 +972,41 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     target._queued_navigation = qn;
     return session.scheduleNavigation(target);
+}
+
+/// Apply a fragment-only navigation without replacing the active document.
+/// Returns true when the URL was handled as a same-document navigation.
+pub fn navigateSameDocument(self: *Frame, resolved_url: [:0]const u8, opts: NavigateOpts) !bool {
+    if (opts.force) return false;
+
+    // Re-navigating to the exact current URL is only a reload when the URL
+    // has no fragment. With a fragment, no hashchange or history entry occurs.
+    if (opts.kind != .reload and
+        std.mem.eql(u8, self.url, resolved_url) and
+        std.mem.indexOfScalar(u8, resolved_url, '#') != null)
+    {
+        return true;
+    }
+
+    // Only a changed fragment with an otherwise-equal URL is same-document.
+    if (std.mem.eql(u8, self.url, resolved_url) or !URL.eqlDocument(self.url, resolved_url)) {
+        return false;
+    }
+
+    const old_url = self.url;
+    self.url = try self.arena.dupeZ(u8, resolved_url);
+
+    const location = try Location.init(self.url, self);
+    location.acquireRef();
+    self.window._location.releaseRef(self._page);
+    self.window._location = location;
+
+    if (self.parent == null) {
+        try self._session.navigation.updateEntries(self.url, opts.kind, self, true);
+    }
+
+    try self.queueHashChange(old_url, self.url);
+    return true;
 }
 
 // A script can have multiple competing navigation events, say it starts off

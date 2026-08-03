@@ -6,6 +6,12 @@ const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
 const cdp_id = @import("../cdp/id.zig");
+const Element = @import("../browser/webapi/Element.zig");
+const DOMNode = @import("../browser/webapi/Node.zig");
+const Input = @import("../browser/webapi/element/html/Input.zig");
+const Option = @import("../browser/webapi/element/html/Option.zig");
+const Select = @import("../browser/webapi/element/html/Select.zig");
+const Selector = @import("../browser/webapi/selector/Selector.zig");
 const Server = @import("Server.zig");
 const protocol = @import("protocol.zig");
 
@@ -58,12 +64,22 @@ const Command = enum {
     close_window,
     get_timeouts,
     set_timeouts,
+    find_element,
+    find_elements,
+    find_element_from_element,
+    find_elements_from_element,
+    get_element_tag_name,
+    get_element_attribute,
+    is_element_selected,
+    is_element_enabled,
 };
 
 const Route = struct {
     command: Command,
     alternate: ?Command = null,
     session_id: ?[]const u8 = null,
+    element_id: ?[]const u8 = null,
+    attribute_name: ?[]const u8 = null,
 };
 
 pub fn handle(
@@ -117,6 +133,14 @@ pub fn handle(
         .get_window_handles => getWindowHandles(session, out),
         .get_timeouts => getTimeouts(server, out),
         .set_timeouts => setTimeouts(server, arena, body, out),
+        .find_element => findElement(server, session, arena, body, null, out),
+        .find_elements => findElements(server, session, arena, body, null, out),
+        .find_element_from_element => findElement(server, session, arena, body, route.element_id.?, out),
+        .find_elements_from_element => findElements(server, session, arena, body, route.element_id.?, out),
+        .get_element_tag_name => getElementTagName(session, route.element_id.?, out),
+        .get_element_attribute => getElementAttribute(session, arena, route.element_id.?, route.attribute_name.?, out),
+        .is_element_selected => isElementSelected(session, route.element_id.?, out),
+        .is_element_enabled => isElementEnabled(session, route.element_id.?, out),
         else => unreachable,
     };
 }
@@ -543,6 +567,429 @@ fn platformName() []const u8 {
     };
 }
 
+const element_key = "element-6066-11e4-a52e-4f735466cecf";
+
+const ElementReference = struct {
+    session_id: []const u8,
+    node_id: u32,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        var buffer: [48]u8 = undefined;
+        const id = std.fmt.bufPrint(&buffer, "{s}-{d}", .{ self.session_id, self.node_id }) catch unreachable;
+        try jw.beginObject();
+        try jw.objectField(element_key);
+        try jw.write(id);
+        try jw.endObject();
+    }
+};
+
+const Locator = struct {
+    using: []const u8,
+    value: []const u8,
+};
+
+fn parseLocator(arena: Allocator, body: []const u8, out: *std.Io.Writer) !?Locator {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}) catch {
+        _ = try sendError(out, .bad_request, "invalid argument", "Locator parameters must contain string using and value fields");
+        return null;
+    };
+    if (parsed != .object) {
+        _ = try sendError(out, .bad_request, "invalid argument", "Locator parameters must contain string using and value fields");
+        return null;
+    }
+    const using = parsed.object.get("using") orelse {
+        _ = try sendError(out, .bad_request, "invalid argument", "Locator parameters must contain string using and value fields");
+        return null;
+    };
+    const value = parsed.object.get("value") orelse {
+        _ = try sendError(out, .bad_request, "invalid argument", "Locator parameters must contain string using and value fields");
+        return null;
+    };
+    if (using != .string or value != .string) {
+        _ = try sendError(out, .bad_request, "invalid argument", "Locator parameters must contain string using and value fields");
+        return null;
+    }
+    return .{ .using = using.string, .value = value.string };
+}
+
+fn findElement(
+    server: *Server,
+    session: *Server.Session,
+    arena: Allocator,
+    body: []const u8,
+    parent_id: ?[]const u8,
+    out: *std.Io.Writer,
+) !std.http.Status {
+    const locator = (try parseLocator(arena, body, out)) orelse return .bad_request;
+    const root = (try searchRoot(session, parent_id, out)) orelse return .not_found;
+    if (!std.mem.eql(u8, locator.using, "css selector")) {
+        return sendError(out, .bad_request, "invalid argument", "Only the css selector locator strategy is supported");
+    }
+    const selectors = parseCssSelectors(arena, locator.value) catch |err|
+        return sendSelectorError(out, err);
+    var wait = ImplicitWait.init(session, server.webdriverImplicitTimeout());
+    defer wait.deinit(session);
+
+    while (true) {
+        const frame = (try activeSearchFrame(session, root, out)) orelse return .not_found;
+        const element = Selector.queryInTreeOrder(selectors, root.node, frame);
+        if (element) |found| {
+            return sendValue(out, try elementReference(session, found));
+        }
+
+        if (wait.expired(session)) {
+            _ = wait.finish(session);
+            return sendError(out, .not_found, "no such element", "Unable to locate element");
+        }
+        if (session.browser.env.terminatePending()) {
+            if (wait.finish(session)) {
+                return sendError(out, .not_found, "no such element", "Unable to locate element");
+            }
+            return sendError(out, .internal_server_error, "unknown error", "Element lookup was cancelled");
+        }
+        waitForImplicitPoll(session, root.frame_id, wait.remaining()) catch |err| {
+            if (wait.finish(session)) {
+                return sendError(out, .not_found, "no such element", "Unable to locate element");
+            }
+            return sendError(out, .internal_server_error, "unknown error", @errorName(err));
+        };
+    }
+}
+
+fn findElements(
+    server: *Server,
+    session: *Server.Session,
+    arena: Allocator,
+    body: []const u8,
+    parent_id: ?[]const u8,
+    out: *std.Io.Writer,
+) !std.http.Status {
+    const locator = (try parseLocator(arena, body, out)) orelse return .bad_request;
+    const root = (try searchRoot(session, parent_id, out)) orelse return .not_found;
+    if (!std.mem.eql(u8, locator.using, "css selector")) {
+        return sendError(out, .bad_request, "invalid argument", "Only the css selector locator strategy is supported");
+    }
+    const selectors = parseCssSelectors(arena, locator.value) catch |err|
+        return sendSelectorError(out, err);
+    var wait = ImplicitWait.init(session, server.webdriverImplicitTimeout());
+    defer wait.deinit(session);
+
+    while (true) {
+        const frame = (try activeSearchFrame(session, root, out)) orelse return .not_found;
+        const elements = Selector.queryAll(selectors, root.node, frame) catch
+            return sendError(out, .internal_server_error, "unknown error", "Could not query elements");
+        const references: ?[]ElementReference = blk: {
+            defer elements.deinit(frame._page);
+            if (elements._nodes.len == 0) break :blk null;
+
+            const found = try arena.alloc(ElementReference, elements._nodes.len);
+            for (elements._nodes, found) |node, *reference| {
+                reference.* = try elementReference(session, node.is(Element).?);
+            }
+            break :blk found;
+        };
+        if (references) |found| return sendValue(out, found);
+
+        if (wait.expired(session)) {
+            _ = wait.finish(session);
+            return sendValue(out, [_]ElementReference{});
+        }
+        if (session.browser.env.terminatePending()) {
+            if (wait.finish(session)) return sendValue(out, [_]ElementReference{});
+            return sendError(out, .internal_server_error, "unknown error", "Element lookup was cancelled");
+        }
+        waitForImplicitPoll(session, root.frame_id, wait.remaining()) catch |err| {
+            if (wait.finish(session)) return sendValue(out, [_]ElementReference{});
+            return sendError(out, .internal_server_error, "unknown error", @errorName(err));
+        };
+    }
+}
+
+const SearchRoot = struct {
+    node: *DOMNode,
+    document_node: *DOMNode,
+    frame_id: u32,
+    from_element: bool,
+};
+
+fn searchRoot(session: *Server.Session, parent_id: ?[]const u8, out: *std.Io.Writer) !?SearchRoot {
+    const frame = primaryFrame(session) orelse {
+        _ = try sendError(out, .not_found, "no such window", "Current browsing context has no document");
+        return null;
+    };
+    if (parent_id == null and frame.document.getDocumentElement() == null) {
+        _ = try sendError(out, .not_found, "no such element", "Current document has no document element");
+        return null;
+    }
+    const node = if (parent_id) |id|
+        ((try resolveElement(session, id, out)) orelse return null).asNode()
+    else
+        frame.document.asNode();
+    return .{
+        .node = node,
+        .document_node = frame.document.asNode(),
+        .frame_id = frame._frame_id,
+        .from_element = parent_id != null,
+    };
+}
+
+fn parseCssSelectors(arena: Allocator, value: []const u8) ![]const Selector.Selector {
+    return Selector.parseLeaky(arena, value) catch |err| return Selector.mapErrorToDOM(err);
+}
+
+fn sendSelectorError(out: *std.Io.Writer, err: anyerror) !std.http.Status {
+    return switch (err) {
+        error.SyntaxError => sendError(out, .bad_request, "invalid selector", "Invalid CSS selector"),
+        error.OutOfMemory => sendError(out, .internal_server_error, "unknown error", "Could not parse selector"),
+        else => sendError(out, .internal_server_error, "unknown error", @errorName(err)),
+    };
+}
+
+fn activeSearchFrame(
+    session: *Server.Session,
+    root: SearchRoot,
+    out: *std.Io.Writer,
+) !?*lp.Frame {
+    const frame = primaryFrame(session) orelse {
+        _ = try sendError(out, .not_found, "no such window", "Current browsing context has no document");
+        return null;
+    };
+    if (frame.document.asNode() == root.document_node) return frame;
+
+    const code = if (root.from_element) "stale element reference" else "no such element";
+    _ = try sendError(out, .not_found, code, "Element search started in an inactive document");
+    return null;
+}
+
+fn elementReference(session: *Server.Session, element: *Element) !ElementReference {
+    const node = try session.node_registry.register(element.asNode());
+    session.webdriver_elements.register(node.id);
+    return .{ .session_id = session.id, .node_id = node.id };
+}
+
+fn resolveElement(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !?*Element {
+    const node_id = parseElementId(session, id) orelse {
+        _ = try sendError(out, .not_found, "no such element", "Unknown element reference");
+        return null;
+    };
+    if (!session.webdriver_elements.isIssued(node_id)) {
+        _ = try sendError(out, .not_found, "no such element", "Unknown element reference");
+        return null;
+    }
+    const node = session.node_registry.lookup_by_id.get(node_id) orelse {
+        _ = try sendError(out, .not_found, "stale element reference", "Element belongs to an inactive document");
+        return null;
+    };
+    const element = node.dom.is(Element) orelse {
+        _ = try sendError(out, .not_found, "stale element reference", "Element reference no longer identifies an element");
+        return null;
+    };
+    const frame = primaryFrame(session) orelse {
+        _ = try sendError(out, .not_found, "no such window", "Current browsing context has no document");
+        return null;
+    };
+    const element_node = element.asNode();
+    if (!element_node.isConnected() or element_node.ownerDocument(frame) != frame.document) {
+        _ = try sendError(out, .not_found, "stale element reference", "Element is no longer attached to the DOM");
+        return null;
+    }
+    return element;
+}
+
+fn parseElementId(session: *const Server.Session, id: []const u8) ?u32 {
+    if (id.len <= session.id.len + 1 or
+        !std.mem.startsWith(u8, id, session.id) or
+        id[session.id.len] != '-')
+    {
+        return null;
+    }
+    const suffix = id[session.id.len + 1 ..];
+    if (suffix[0] == '0') return null;
+    for (suffix) |byte| {
+        if (!std.ascii.isDigit(byte)) return null;
+    }
+    return std.fmt.parseUnsigned(u32, suffix, 10) catch null;
+}
+
+const ImplicitWait = struct {
+    timer: std.Io.Timestamp,
+    timeout_ms: ?u64,
+    deadline_armed: bool,
+
+    fn init(session: *Server.Session, timeout_ms: ?u64) ImplicitWait {
+        const deadline_armed = if (timeout_ms) |timeout| timeout > 0 else false;
+        if (deadline_armed) session.browser.armExecutionDeadline(timeout_ms);
+        return .{
+            .timer = .now(lp.io, .boot),
+            .timeout_ms = timeout_ms,
+            .deadline_armed = deadline_armed,
+        };
+    }
+
+    fn deinit(self: *ImplicitWait, session: *Server.Session) void {
+        if (!self.deadline_armed) return;
+        self.deadline_armed = false;
+        if (session.browser.disarmExecutionDeadline()) {
+            _ = session.browser.env.cancelExecutionDeadlineTerminate();
+        }
+    }
+
+    fn remaining(self: *const ImplicitWait) ?u64 {
+        const timeout = self.timeout_ms orelse return null;
+        const elapsed: u64 = @intCast(self.timer.untilNow(lp.io, .boot).toMilliseconds());
+        return timeout -| elapsed;
+    }
+
+    fn expired(self: *const ImplicitWait, session: *const Server.Session) bool {
+        if (session.browser.executionDeadlineFired()) return true;
+        return if (self.remaining()) |milliseconds| milliseconds == 0 else false;
+    }
+
+    fn finish(self: *ImplicitWait, session: *Server.Session) bool {
+        const elapsed = if (self.remaining()) |milliseconds| milliseconds == 0 else false;
+        if (!self.deadline_armed) return elapsed;
+        self.deadline_armed = false;
+        const fired = session.browser.disarmExecutionDeadline();
+        if (fired) _ = session.browser.env.cancelExecutionDeadlineTerminate();
+        return fired or elapsed;
+    }
+};
+
+fn waitForImplicitPoll(session: *Server.Session, frame_id: u32, remaining_ms: ?u64) !void {
+    const poll_ms: u32 = @intCast(@min(remaining_ms orelse 200, 200));
+    if (poll_ms == 0) return;
+
+    var runner = session.session.runner(.{});
+    switch (try runner.tickForFrame(frame_id, poll_ms, .{ .until = .done })) {
+        .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(poll_ms, 50))), .awake) catch {},
+        .ok => |recommended_sleep_ms| {
+            if (recommended_sleep_ms > 0) {
+                lp.io.sleep(.fromMilliseconds(@intCast(@min(recommended_sleep_ms, poll_ms))), .awake) catch {};
+            }
+        },
+    }
+}
+
+fn getElementTagName(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !std.http.Status {
+    const element = (try resolveElement(session, id, out)) orelse return .not_found;
+    return sendValue(out, element.getTagNameLower());
+}
+
+fn getElementAttribute(
+    session: *Server.Session,
+    arena: Allocator,
+    id: []const u8,
+    name: []const u8,
+    out: *std.Io.Writer,
+) !std.http.Status {
+    const element = (try resolveElement(session, id, out)) orelse return .not_found;
+    const decoded_name = try decodePathSegment(arena, name);
+    const html_namespace = "http://www.w3.org/1999/xhtml";
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    const is_html_document = switch (frame.document._type) {
+        .html => true,
+        else => false,
+    };
+    const is_html = is_html_document and if (element.getNamespaceURI()) |namespace|
+        std.mem.eql(u8, namespace, html_namespace)
+    else
+        false;
+    const lookup_name = if (is_html and containsAsciiUpper(decoded_name))
+        try std.ascii.allocLowerString(arena, decoded_name)
+    else
+        decoded_name;
+    const value = element.getAttributeSafe(.wrap(lookup_name)) orelse return sendValue(out, @as(?[]const u8, null));
+    return sendValue(out, if (is_html and isBooleanAttribute(decoded_name)) "true" else value);
+}
+
+fn decodePathSegment(arena: Allocator, value: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, value, '%') == null) return value;
+    const owned = try arena.dupe(u8, value);
+    return std.Uri.percentDecodeInPlace(owned);
+}
+
+fn containsAsciiUpper(value: []const u8) bool {
+    for (value) |byte| {
+        if (std.ascii.isUpper(byte)) return true;
+    }
+    return false;
+}
+
+fn isElementSelected(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !std.http.Status {
+    const element = (try resolveElement(session, id, out)) orelse return .not_found;
+    const selected = if (element.is(Input)) |input|
+        (std.mem.eql(u8, input.getType(), "checkbox") or
+            std.mem.eql(u8, input.getType(), "radio")) and input.getChecked()
+    else if (element.is(Option)) |option|
+        optionIsSelected(option)
+    else
+        false;
+    return sendValue(out, selected);
+}
+
+fn optionIsSelected(option: *Option) bool {
+    var parent = option.asNode()._parent;
+    while (parent) |node| : (parent = node._parent) {
+        const element = node.is(Element) orelse continue;
+        const select = element.is(Select) orelse continue;
+        if (select.getMultiple()) return option.getSelected();
+        return select.effectiveOption() == option;
+    }
+    return option.getSelected();
+}
+
+fn isElementEnabled(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !std.http.Status {
+    const element = (try resolveElement(session, id, out)) orelse return .not_found;
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    const is_xml = switch (frame.document._type) {
+        .xml => true,
+        else => false,
+    };
+    return sendValue(out, !is_xml and !isWebDriverDisabled(element));
+}
+
+fn isWebDriverDisabled(element: *Element) bool {
+    if (element.isDisabled()) return true;
+    if (element.getTag() != .option and element.getTag() != .optgroup) return false;
+
+    var parent = element.asNode()._parent;
+    while (parent) |node| : (parent = node._parent) {
+        const ancestor = node.is(Element) orelse continue;
+        if (ancestor.getTag() == .select) return ancestor.isDisabled();
+    }
+    return false;
+}
+
+fn isBooleanAttribute(name: []const u8) bool {
+    const attributes = [_][]const u8{
+        "allowfullscreen",                 "alpha",
+        "async",                           "autofocus",
+        "autoplay",                        "checked",
+        "compact",                         "controls",
+        "declare",                         "default",
+        "defer",                           "disabled",
+        "formnovalidate",                  "headingreset",
+        "hidden",                          "inert",
+        "ismap",                           "itemscope",
+        "loop",                            "multiple",
+        "muted",                           "nohref",
+        "nomodule",                        "noresize",
+        "noshade",                         "novalidate",
+        "nowrap",                          "open",
+        "playsinline",                     "readonly",
+        "required",                        "reversed",
+        "selected",                        "shadowrootclonable",
+        "shadowrootcustomelementregistry", "shadowrootdelegatesfocus",
+        "shadowrootserializable",
+    };
+    for (attributes) |attribute| {
+        if (std.ascii.eqlIgnoreCase(name, attribute)) return true;
+    }
+    return false;
+}
+
 fn navigate(
     server: *Server,
     session: *Server.Session,
@@ -560,7 +1007,6 @@ fn navigate(
 
     const result = lp.tools.gotoLiteral(
         session.session,
-        &session.node_registry,
         parsed.value.url,
         server.webdriverPageLoadTimeout(),
         server.webdriverPageLoadWait(),
@@ -719,7 +1165,50 @@ fn matchRoute(path: []const u8) ?Route {
         .alternate = .set_timeouts,
         .session_id = session_id,
     };
+    if (std.mem.eql(u8, suffix, "/element")) return .{
+        .command = .find_element,
+        .session_id = session_id,
+    };
+    if (std.mem.eql(u8, suffix, "/elements")) return .{
+        .command = .find_elements,
+        .session_id = session_id,
+    };
+    if (matchElementRoute(session_id, suffix)) |route| return route;
     return null;
+}
+
+fn matchElementRoute(session_id: []const u8, suffix: []const u8) ?Route {
+    const prefix = "/element/";
+    if (!std.mem.startsWith(u8, suffix, prefix)) return null;
+    const rest = suffix[prefix.len..];
+    const separator = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
+    if (separator == 0) return null;
+    const element_id = rest[0..separator];
+    const command_suffix = rest[separator..];
+
+    const command: Command, const attribute_name: ?[]const u8 = if (std.mem.eql(u8, command_suffix, "/element"))
+        .{ .find_element_from_element, null }
+    else if (std.mem.eql(u8, command_suffix, "/elements"))
+        .{ .find_elements_from_element, null }
+    else if (std.mem.eql(u8, command_suffix, "/name"))
+        .{ .get_element_tag_name, null }
+    else if (std.mem.eql(u8, command_suffix, "/selected"))
+        .{ .is_element_selected, null }
+    else if (std.mem.eql(u8, command_suffix, "/enabled"))
+        .{ .is_element_enabled, null }
+    else if (std.mem.startsWith(u8, command_suffix, "/attribute/") and
+        command_suffix.len > "/attribute/".len and
+        std.mem.indexOfScalar(u8, command_suffix["/attribute/".len..], '/') == null)
+        .{ .get_element_attribute, command_suffix["/attribute/".len..] }
+    else
+        return null;
+
+    return .{
+        .command = command,
+        .session_id = session_id,
+        .element_id = element_id,
+        .attribute_name = attribute_name,
+    };
 }
 
 fn commandForMethod(route: Route, method: std.http.Method) ?Command {
@@ -732,8 +1221,26 @@ fn commandForMethod(route: Route, method: std.http.Method) ?Command {
 
 fn commandMethod(command: Command) std.http.Method {
     return switch (command) {
-        .status, .current_url, .get_title, .get_page_source, .get_window_handle, .get_window_handles, .get_timeouts => .GET,
-        .new_session, .navigate, .set_timeouts => .POST,
+        .status,
+        .current_url,
+        .get_title,
+        .get_page_source,
+        .get_window_handle,
+        .get_window_handles,
+        .get_timeouts,
+        .get_element_tag_name,
+        .get_element_attribute,
+        .is_element_selected,
+        .is_element_enabled,
+        => .GET,
+        .new_session,
+        .navigate,
+        .set_timeouts,
+        .find_element,
+        .find_elements,
+        .find_element_from_element,
+        .find_elements_from_element,
+        => .POST,
         .delete_session, .close_window => .DELETE,
     };
 }
@@ -778,6 +1285,21 @@ test "WebDriver: routes use URL paths and distinguish methods" {
     try std.testing.expectEqual(Command.get_window_handle, commandForMethod(window_route, .GET).?);
     try std.testing.expectEqual(Command.close_window, commandForMethod(window_route, .DELETE).?);
     try std.testing.expectEqual(Command.get_window_handles, commandForMethod(matchRoute("/session/id/window/handles").?, .GET).?);
+    try std.testing.expectEqual(Command.find_element, commandForMethod(matchRoute("/session/id/element").?, .POST).?);
+    try std.testing.expectEqual(Command.find_elements, commandForMethod(matchRoute("/session/id/elements").?, .POST).?);
+    const child_route = matchRoute("/session/id/element/ref/element").?;
+    try std.testing.expectEqualStrings("ref", child_route.element_id.?);
+    try std.testing.expectEqual(Command.find_element_from_element, commandForMethod(child_route, .POST).?);
+    try std.testing.expectEqual(Command.find_elements_from_element, commandForMethod(matchRoute("/session/id/element/ref/elements").?, .POST).?);
+    try std.testing.expectEqual(Command.get_element_tag_name, commandForMethod(matchRoute("/session/id/element/ref/name").?, .GET).?);
+    const attribute_route = matchRoute("/session/id/element/ref/attribute/data-kind").?;
+    try std.testing.expectEqualStrings("data-kind", attribute_route.attribute_name.?);
+    try std.testing.expectEqual(Command.get_element_attribute, commandForMethod(attribute_route, .GET).?);
+    try std.testing.expectEqual(Command.is_element_selected, commandForMethod(matchRoute("/session/id/element/ref/selected").?, .GET).?);
+    try std.testing.expectEqual(Command.is_element_enabled, commandForMethod(matchRoute("/session/id/element/ref/enabled").?, .GET).?);
+    try std.testing.expect(matchRoute("/session/id/element/ref/attribute/") == null);
+    try std.testing.expect(matchRoute("/session/id/element/ref/attribute/data/kind") == null);
+    try std.testing.expect(commandForMethod(child_route, .GET) == null);
     try std.testing.expect(matchRoute("/session/id/execute/sync") == null);
     try std.testing.expect(matchRoute("/session/id/unknown") == null);
 }
@@ -997,6 +1519,516 @@ test "WebDriver: protocol session validates capabilities and preserves navigatio
     try testing.expectError(error.WriteFailed, handle(server, request_allocator, .POST, "/session", "{\"capabilities\":{\"alwaysMatch\":{}}}", &failure_writer));
     try testing.expect(server.webdriverReady());
     try testing.expectEqual(@as(usize, 0), server.sessions.count());
+}
+
+fn testFindWebDriverElement(
+    server: *Server,
+    request_allocator: Allocator,
+    session_id: []const u8,
+    parent_id: ?[]const u8,
+    selector: []const u8,
+    out: *std.Io.Writer.Allocating,
+) ![]u8 {
+    const testing = @import("../testing.zig");
+    const path = if (parent_id) |id|
+        try std.fmt.allocPrint(testing.allocator, "/session/{s}/element/{s}/element", .{ session_id, id })
+    else
+        try std.fmt.allocPrint(testing.allocator, "/session/{s}/element", .{session_id});
+    defer testing.allocator.free(path);
+    const body = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"using\":\"css selector\",\"value\":\"{s}\"}}",
+        .{selector},
+    );
+    defer testing.allocator.free(body);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, path, body, &out.writer));
+    var response = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer response.deinit();
+    const reference = response.value.object.get("value").?.object.get(element_key).?.string;
+    return testing.allocator.dupe(u8, reference);
+}
+
+fn expectWebDriverElementValue(
+    server: *Server,
+    request_allocator: Allocator,
+    session_id: []const u8,
+    element_id: []const u8,
+    suffix: []const u8,
+    out: *std.Io.Writer.Allocating,
+    expected: anytype,
+) !void {
+    const testing = @import("../testing.zig");
+    const path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}{s}",
+        .{ session_id, element_id, suffix },
+    );
+    defer testing.allocator.free(path);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, path, "", &out.writer));
+    try testing.expectJson(.{ .value = expected }, out.writer.buffered());
+}
+
+test "WebDriver: element retrieval returns stable references and W3C state" {
+    const testing = @import("../testing.zig");
+
+    var placeholder: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer placeholder.deinit();
+    const server = try Server.initWebDriver(testing.allocator, testing.test_app, &placeholder.writer);
+    defer server.deinit();
+    server.enableIsolateParking();
+
+    var request_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer request_arena.deinit();
+    const request_allocator = request_arena.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    try testing.expectEqual(
+        .ok,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            "/session",
+            "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"lightpanda\"}}}",
+            &out.writer,
+        ),
+    );
+    var created = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    const session_id = try testing.allocator.dupe(
+        u8,
+        created.value.object.get("value").?.object.get("sessionId").?.string,
+    );
+    created.deinit();
+    defer testing.allocator.free(session_id);
+
+    const navigate_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/url", .{session_id});
+    defer testing.allocator.free(navigate_path);
+    const timeouts_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/timeouts", .{session_id});
+    defer testing.allocator.free(timeouts_path);
+    const delete_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}", .{session_id});
+    defer testing.allocator.free(delete_path);
+
+    const page_url =
+        "data:text/html," ++
+        "<div id='parent' data-kind='group' data:kind='colon'>" ++
+        "<span class='item'></span><span class='item' id='hidden' hidden></span></div>" ++
+        "<main id='ancestor'><section id='scope'><span class='target'></span></section></main>" ++
+        "<i id='duplicate'></i><b id='duplicate'></b>" ++
+        "<input id='checked' type='checkbox' checked disabled>" ++
+        "<input id='unchecked' type='checkbox' alpha>" ++
+        "<select><option id='selected' selected>one</option></select>" ++
+        "<select><option id='implicit_selected'>implicit</option></select>" ++
+        "<select disabled><optgroup id='disabled_group'><option id='disabled_option'>blocked</option></optgroup></select>" ++
+        "<fieldset disabled><legend><input id='legend_input'></legend>" ++
+        "<input id='fieldset_input'></fieldset>" ++
+        "<fieldset disabled><fieldset disabled><legend><input id='nested_legend_input'></legend></fieldset></fieldset>" ++
+        "<p id='remove'>remove</p><p id='adopt'>adopt</p>";
+    const navigate_body = try std.fmt.allocPrint(testing.allocator, "{{\"url\":\"{s}\"}}", .{page_url});
+    defer testing.allocator.free(navigate_body);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, navigate_path, navigate_body, &out.writer));
+
+    const parent_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#parent", &out);
+    defer testing.allocator.free(parent_id);
+    const parent_again = try testFindWebDriverElement(server, request_allocator, session_id, null, "#parent", &out);
+    defer testing.allocator.free(parent_again);
+    try std.testing.expectEqualStrings(parent_id, parent_again);
+    const selector_list_id = try testFindWebDriverElement(server, request_allocator, session_id, null, ".item, #parent", &out);
+    defer testing.allocator.free(selector_list_id);
+    try std.testing.expectEqualStrings(parent_id, selector_list_id);
+    const root_id = try testFindWebDriverElement(server, request_allocator, session_id, null, ":root", &out);
+    defer testing.allocator.free(root_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, root_id, "/name", &out, "html");
+
+    const child_id = try testFindWebDriverElement(server, request_allocator, session_id, parent_id, ".item", &out);
+    defer testing.allocator.free(child_id);
+    const scope_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#scope", &out);
+    defer testing.allocator.free(scope_id);
+    const target_id = try testFindWebDriverElement(server, request_allocator, session_id, scope_id, "#ancestor .target", &out);
+    defer testing.allocator.free(target_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, parent_id, "/name", &out, "div");
+    try expectWebDriverElementValue(server, request_allocator, session_id, parent_id, "/attribute/data-kind", &out, "group");
+    try expectWebDriverElementValue(server, request_allocator, session_id, parent_id, "/attribute/data%3Akind", &out, "colon");
+    try expectWebDriverElementValue(
+        server,
+        request_allocator,
+        session_id,
+        parent_id,
+        "/attribute/missing",
+        &out,
+        @as(?[]const u8, null),
+    );
+
+    const child_elements_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}/elements",
+        .{ session_id, parent_id },
+    );
+    defer testing.allocator.free(child_elements_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            child_elements_path,
+            "{\"using\":\"css selector\",\"value\":\".item\"}",
+            &out.writer,
+        ),
+    );
+    var children = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer children.deinit();
+    const child_values = children.value.object.get("value").?.array.items;
+    try testing.expectEqual(@as(usize, 2), child_values.len);
+    try std.testing.expectEqualStrings(
+        child_id,
+        child_values[0].object.get(element_key).?.string,
+    );
+
+    const all_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/elements", .{session_id});
+    defer testing.allocator.free(all_path);
+    const find_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/element", .{session_id});
+    defer testing.allocator.free(find_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":\"css selector\",\"value\":\".missing\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = &.{} }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":\"css selector\",\"value\":\".item, #parent\"}",
+            &out.writer,
+        ),
+    );
+    var ordered = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer ordered.deinit();
+    const ordered_values = ordered.value.object.get("value").?.array.items;
+    try testing.expectEqual(@as(usize, 3), ordered_values.len);
+    try std.testing.expectEqualStrings(parent_id, ordered_values[0].object.get(element_key).?.string);
+    try std.testing.expectEqualStrings(child_id, ordered_values[1].object.get(element_key).?.string);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":\"css selector\",\"value\":\"#duplicate\"}",
+            &out.writer,
+        ),
+    );
+    var duplicates = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer duplicates.deinit();
+    try testing.expectEqual(@as(usize, 2), duplicates.value.object.get("value").?.array.items.len);
+
+    const hidden_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#hidden", &out);
+    defer testing.allocator.free(hidden_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, hidden_id, "/attribute/hidden", &out, "true");
+    try expectWebDriverElementValue(server, request_allocator, session_id, hidden_id, "/attribute/HIDDEN", &out, "true");
+
+    const checked_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#checked", &out);
+    defer testing.allocator.free(checked_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, checked_id, "/selected", &out, true);
+    try expectWebDriverElementValue(server, request_allocator, session_id, checked_id, "/enabled", &out, false);
+
+    const unchecked_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#unchecked", &out);
+    defer testing.allocator.free(unchecked_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, unchecked_id, "/selected", &out, false);
+    try expectWebDriverElementValue(server, request_allocator, session_id, unchecked_id, "/attribute/alpha", &out, "true");
+
+    const selected_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#selected", &out);
+    defer testing.allocator.free(selected_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, selected_id, "/selected", &out, true);
+
+    const implicit_selected_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#implicit_selected", &out);
+    defer testing.allocator.free(implicit_selected_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, implicit_selected_id, "/selected", &out, true);
+
+    const disabled_group_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#disabled_group", &out);
+    defer testing.allocator.free(disabled_group_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, disabled_group_id, "/enabled", &out, false);
+
+    const disabled_option_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#disabled_option", &out);
+    defer testing.allocator.free(disabled_option_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, disabled_option_id, "/enabled", &out, false);
+
+    const legend_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#legend_input", &out);
+    defer testing.allocator.free(legend_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, legend_id, "/enabled", &out, true);
+
+    const fieldset_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#fieldset_input", &out);
+    defer testing.allocator.free(fieldset_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, fieldset_id, "/enabled", &out, false);
+
+    const nested_legend_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#nested_legend_input", &out);
+    defer testing.allocator.free(nested_legend_id);
+    try expectWebDriverElementValue(server, request_allocator, session_id, nested_legend_id, "/enabled", &out, false);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .bad_request,
+        try handle(server, request_allocator, .POST, all_path, "{\"using\":\"css selector\"}", &out.writer),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "invalid argument" } }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .bad_request,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":[99,115,115,32,115,101,108,101,99,116,111,114],\"value\":\"div\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "invalid argument" } }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .bad_request,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":\"tag name\",\"value\":\"div\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "invalid argument" } }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .bad_request,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            all_path,
+            "{\"using\":\"css selector\",\"value\":\"#bad[\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "invalid selector" } }, out.writer.buffered());
+
+    const active = server.getWebDriverSession(session_id).?;
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun(
+            "setTimeout(() => { const el = document.createElement('p'); el.id = 'later'; document.body.append(el); }, 25)",
+            null,
+        );
+    }
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"implicit\":250}", &out.writer));
+    const later_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#later", &out);
+    defer testing.allocator.free(later_id);
+
+    const remove_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#remove", &out);
+    defer testing.allocator.free(remove_id);
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun("document.querySelector('#remove').remove()", null);
+    }
+    const removed_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}/name",
+        .{ session_id, remove_id },
+    );
+    defer testing.allocator.free(removed_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, removed_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "stale element reference" } }, out.writer.buffered());
+
+    const unknown_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}-4294967295/name",
+        .{ session_id, session_id },
+    );
+    defer testing.allocator.free(unknown_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, unknown_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such element" } }, out.writer.buffered());
+
+    const unknown_child_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}-4294967295/element",
+        .{ session_id, session_id },
+    );
+    defer testing.allocator.free(unknown_child_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .not_found,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            unknown_child_path,
+            "{\"using\":\"css selector\",\"value\":\"#bad[\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such element" } }, out.writer.buffered());
+
+    const noncanonical_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}-0{s}/name",
+        .{ session_id, session_id, parent_id[session_id.len + 1 ..] },
+    );
+    defer testing.allocator.free(noncanonical_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, noncanonical_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such element" } }, out.writer.buffered());
+
+    const adopt_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#adopt", &out);
+    defer testing.allocator.free(adopt_id);
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun(
+            "globalThis.otherDocument = document.implementation.createHTMLDocument('other'); otherDocument.body.append(document.querySelector('#adopt'))",
+            null,
+        );
+    }
+    const adopted_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}/name",
+        .{ session_id, adopt_id },
+    );
+    defer testing.allocator.free(adopted_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, adopted_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "stale element reference" } }, out.writer.buffered());
+
+    const fragment_body = try std.fmt.allocPrint(testing.allocator, "{{\"url\":\"{s}#fragment\"}}", .{page_url});
+    defer testing.allocator.free(fragment_body);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, navigate_path, fragment_body, &out.writer));
+    try expectWebDriverElementValue(server, request_allocator, session_id, parent_id, "/name", &out, "div");
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"pageLoad\":0}", &out.writer));
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .internal_server_error,
+        try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,aborted\"}", &out.writer),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "timeout" } }, out.writer.buffered());
+    try expectWebDriverElementValue(server, request_allocator, session_id, parent_id, "/name", &out, "div");
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"implicit\":0}", &out.writer));
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .ok,
+        try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,<p>next</p>\"}", &out.writer),
+    );
+    const stale_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}/name",
+        .{ session_id, parent_id },
+    );
+    defer testing.allocator.free(stale_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, stale_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "stale element reference" } }, out.writer.buffered());
+
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun(
+            "setTimeout(() => { location.href = \"data:text/html,<p id='late_navigation_target'>new</p>\"; }, 1)",
+            null,
+        );
+    }
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"implicit\":100}", &out.writer));
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .not_found,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            find_path,
+            "{\"using\":\"css selector\",\"value\":\"#late_navigation_target\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such element" } }, out.writer.buffered());
+
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun("setTimeout(() => { while (true) {} }, 1)", null);
+    }
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"implicit\":50}", &out.writer));
+    out.clearRetainingCapacity();
+    try testing.expectEqual(
+        .not_found,
+        try handle(
+            server,
+            request_allocator,
+            .POST,
+            find_path,
+            "{\"using\":\"css selector\",\"value\":\"#never\"}",
+            &out.writer,
+        ),
+    );
+    try testing.expectJson(.{ .value = .{ .@"error" = "no such element" } }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .DELETE, delete_path, "", &out.writer));
 }
 
 test "WebDriver: capabilities support version constraints and valid prompt handlers" {

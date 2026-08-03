@@ -69,6 +69,15 @@ pub const Registry = struct {
         _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
     }
 
+    /// Reset document-scoped nodes without retaining a potentially huge
+    /// one-off query's hash-table capacity.
+    pub fn resetAndFree(self: *Registry) void {
+        self.lookup_by_id.clearAndFree(self.allocator);
+        self.lookup_by_node.clearAndFree(self.allocator);
+        _ = self.arena.reset(.{ .retain_with_limit = 1024 });
+        _ = self.node_pool.reset(self.allocator, .{ .retain_with_limit = 1024 });
+    }
+
     /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
     /// IDs valid. Must run before the page's arena is freed — attribution walks
     /// each node's live parent chain.

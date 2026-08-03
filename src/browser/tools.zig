@@ -2036,7 +2036,6 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
 /// `until = null` implements WebDriver's `pageLoadStrategy: "none"`.
 pub fn gotoLiteral(
     session: *lp.Session,
-    registry: *CDPNode.Registry,
     url: [:0]const u8,
     timeout_ms: ?u64,
     until: ?lp.Config.WaitUntil,
@@ -2066,14 +2065,16 @@ pub fn gotoLiteral(
         }
     };
 
-    // A WebDriver navigation replaces the document in the current top-level
-    // browsing context. Keep its frame id, history, and session storage alive,
-    // while invalidating document-scoped node references.
-    registry.reset();
     const navigate_opts: lp.Frame.NavigateOpts = .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     };
+    if (frame.navigateSameDocument(resolved_url, navigate_opts) catch {
+        return ToolError.NavigationFailed;
+    }) {
+        return .completed;
+    }
+
     const replaces_current_document = frame._load_state != .waiting;
     const navigation = if (!replaces_current_document)
         frame.navigate(resolved_url, navigate_opts)
