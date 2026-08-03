@@ -103,7 +103,6 @@ pub fn postMessage(self: *BroadcastChannel, message: js.Value, exec: *Execution)
 
     try exec.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "BroadcastChannel.postMessage",
-        .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
     });
 }
