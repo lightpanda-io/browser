@@ -21,22 +21,41 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const adblock = @import("adblock.zig");
+const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
 
 const AdBlocker = @This();
 
 arena: std.heap.ArenaAllocator,
-/// All network filters from every list parsed so far.
+/// Network filters the tries cannot express: patterns, type/party/domain
+/// constraints, badfilter directives.
 filters: std.ArrayList(NetworkFilter),
+trie: HostnameTrie,
+blocked: u32,
+/// $important hostname blocks: they beat exceptions.
+blocked_important: u32,
+/// Pure-hostname `@@` exceptions.
+allowed: u32,
 
-pub fn init(allocator: Allocator) AdBlocker {
+pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
+    var trie: HostnameTrie = try .init(allocator);
+    errdefer trie.deinit(allocator);
+    const blocked = try trie.createTrie(allocator);
+    const blocked_important = try trie.createTrie(allocator);
+    const allowed = try trie.createTrie(allocator);
+
     return .{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .filters = .empty,
+        .trie = trie,
+        .blocked = blocked,
+        .blocked_important = blocked_important,
+        .allowed = allowed,
     };
 }
 
 pub fn deinit(self: *AdBlocker) void {
+    self.trie.deinit(self.arena.child_allocator);
     self.arena.deinit();
 }
 
@@ -50,11 +69,52 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !adblock.ParseStats {
 
     var parsed: std.ArrayList(NetworkFilter) = .empty;
     while (try parser.next(scratch)) |filter| {
+        if (self.trieRoot(&filter)) |root| {
+            // Duplicate and subdomain-of-existing entries drop.
+            self.trie.add(self.arena.child_allocator, root, filter.hostname) catch |err| switch (err) {
+                error.OutOfMemory, error.TrieFull => |e| return e,
+                // The parser never yields a .hostname filter without one.
+                error.InvalidHostname => unreachable,
+            };
+            continue;
+        }
         try parsed.append(scratch, try filter.dupe(arena));
     }
 
     try self.filters.appendSlice(arena, parsed.items);
     return parser.stats;
+}
+
+pub const Verdict = enum { none, allowed, blocked };
+
+/// `.none` means no hostname-wide filter applies; the filters kept in `filters` may
+/// still have an opinion once the request engine exists.
+pub fn matchHostname(self: *const AdBlocker, hostname: []const u8) Verdict {
+    if (self.trie.matches(self.blocked_important, hostname) != null) return .blocked;
+    if (self.trie.matches(self.allowed, hostname) != null) return .allowed;
+    if (self.trie.matches(self.blocked, hostname) != null) return .blocked;
+    return .none;
+}
+
+/// The trie holding this filter, or null when the filter's behavior is
+/// more than a hostname-wide match and must stay in `filters`.
+fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
+    if (filter.kind != .hostname) return null;
+    // `||host` without '^' also matches hostnames merely *starting* with
+    // host ("example.com.evil.org"): broader than a suffix match.
+    if (!filter.require_separator) return null;
+    // `||host^|` pins the URL end to the separator: narrower.
+    if (filter.left_anchor or filter.right_anchor) return null;
+    if (filter.badfilter) return null;
+    if (!filter.first_party or !filter.third_party) return null;
+    if (!filter.domains.isEmpty()) return null;
+    if (filter.types.bits() != NetworkFilter.ResourceTypes.all.bits()) return null;
+    if (filter.exception) {
+        // Cosmetic-realm exceptions never unblock network requests.
+        if (filter.generichide or filter.specifichide or filter.elemhide) return null;
+        return self.allowed;
+    }
+    return if (filter.important) self.blocked_important else self.blocked;
 }
 
 const testing = std.testing;
