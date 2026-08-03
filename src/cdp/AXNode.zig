@@ -34,6 +34,38 @@ const AXNode = @This();
 // Anything beyond is freed back to the backing allocator.
 const scratch_retain_limit = 64 * 1024;
 
+const ordered_list_marker_max_len = std.fmt.count("{d}. ", .{std.math.maxInt(usize)});
+
+fn formatOrderedListMarker(number: usize, buf: *[ordered_list_marker_max_len]u8) ![]u8 {
+    if (number == 0) return error.InvalidListItemNumber;
+    return std.fmt.bufPrint(buf, "{d}. ", .{number});
+}
+
+fn orderedListItemNumber(node: *DOMNode, frame: *Frame) usize {
+    const element = node.is(DOMNode.Element) orelse return 0;
+    if (element.getTag() != .li) return 0;
+
+    const parent = node._parent orelse return 0;
+    const parent_element = parent.is(DOMNode.Element) orelse return 0;
+    if (parent_element.getTag() != .ol) return 0;
+
+    var number: usize = 0;
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        const is_root = child == node;
+        if (child.is(DOMNode.Element.Html)) |child_html| {
+            const child_element = child_html.asElement();
+            if (child_element.getTag() == .li and (is_root or !frame._style_manager.hasDisplayNone(child_element))) {
+                number += 1;
+            }
+        }
+        if (is_root) {
+            return number;
+        }
+    }
+    return 0;
+}
+
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without children, sometimes with just
 // its direct children, and sometimes the entire tree.
@@ -85,7 +117,7 @@ pub const Writer = struct {
         } else {
             const root = AXNode.fromNode(self.root.dom);
             if (try self.writeNode(self.root.id, root, false, w)) {
-                try self.writeNodeChildren(root, false, w);
+                try self.writeNodeChildren(root, false, orderedListItemNumber(root.dom, self.frame), w);
             }
         }
         return w.endArray();
@@ -116,11 +148,11 @@ pub const Writer = struct {
         try w.write(s);
     }
 
-    fn writeNodeChildren(self: *const Writer, parent: AXNode, in_aria_hidden: bool, w: anytype) !void {
+    fn writeNodeChildren(self: *const Writer, parent: AXNode, in_aria_hidden: bool, ordered_list_item_number: usize, w: anytype) !void {
         // Add ListMarker for listitem elements
         if (parent.dom.is(DOMNode.Element)) |parent_el| {
             if (parent_el.getTag() == .li) {
-                try self.writeListMarker(parent.dom, w);
+                try self.writeListMarker(parent.dom, ordered_list_item_number, w);
             }
         }
 
@@ -131,7 +163,23 @@ pub const Writer = struct {
 
         var it = parent.dom.childrenIterator();
         const ignore_text = ignoreText(parent.dom);
+        const is_ordered_list = if (parent.dom.is(DOMNode.Element)) |parent_el|
+            parent_el.getTag() == .ol
+        else
+            false;
+        var list_item_number: usize = 0;
         while (it.next()) |dom_node| {
+            var child_list_item_number: usize = 0;
+            if (is_ordered_list) {
+                if (dom_node.is(DOMNode.Element.Html)) |child_html| {
+                    const child_element = child_html.asElement();
+                    if (child_element.getTag() == .li and !self.frame._style_manager.hasDisplayNone(child_element)) {
+                        list_item_number += 1;
+                        child_list_item_number = list_item_number;
+                    }
+                }
+            }
+
             switch (dom_node._type) {
                 .cdata => {
                     if (dom_node.is(DOMNode.CData.Text) == null) {
@@ -156,12 +204,12 @@ pub const Writer = struct {
             const node = try self.registry.register(dom_node);
             const axn = AXNode.fromNode(node.dom);
             if (try self.writeNode(node.id, axn, child_in_aria_hidden, w)) {
-                try self.writeNodeChildren(axn, child_in_aria_hidden, w);
+                try self.writeNodeChildren(axn, child_in_aria_hidden, child_list_item_number, w);
             }
         }
     }
 
-    fn writeListMarker(self: *const Writer, li_node: *DOMNode, w: anytype) !void {
+    fn writeListMarker(self: *const Writer, li_node: *DOMNode, ordered_list_item_number: usize, w: anytype) !void {
         // Find the parent list element
         const parent = li_node._parent orelse return;
         const parent_el = parent.is(DOMNode.Element) orelse return;
@@ -201,22 +249,8 @@ pub const Writer = struct {
         switch (list_type) {
             .ul, .menu => try w.write("• "),
             .ol => {
-                // Calculate the list item number by counting preceding li siblings
-                var count: usize = 1;
-                var it = parent.childrenIterator();
-                while (it.next()) |child| {
-                    if (child == li_node) break;
-                    if (child.is(DOMNode.Element.Html) == null) continue;
-                    const child_el = child.as(DOMNode.Element);
-                    if (child_el.getTag() == .li) count += 1;
-                }
-
-                // Sanity check: lists with >9999 items are unrealistic
-                if (count > 9999) return error.ListTooLong;
-
-                // Use a small stack buffer to format the number (max "9999. " = 6 chars)
-                var buf: [6]u8 = undefined;
-                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                var buf: [ordered_list_marker_max_len]u8 = undefined;
+                const marker_text = try formatOrderedListMarker(ordered_list_item_number, &buf);
                 try w.write(marker_text);
             },
             else => unreachable,
@@ -1510,6 +1544,11 @@ test "AXnode: stripWhitespaces" {
 }
 
 const testing = @import("testing.zig");
+test "AXNode: ordered list marker supports five digits" {
+    var buf: [ordered_list_marker_max_len]u8 = undefined;
+    try std.testing.expectEqualStrings("10000. ", try formatOrderedListMarker(10_000, &buf));
+}
+
 test "AXNode: writer" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
@@ -1600,6 +1639,101 @@ test "AXNode: writer" {
         }
     }
     return error.HeadingNodeNotFound;
+}
+
+test "AXNode: writer preserves ordered list numbering semantics" {
+    var registry = Node.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/dom3.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    var doc = frame.window._document;
+    const body = (try doc.querySelector(comptime .wrap("body"), frame)).?;
+
+    const semantics_list = try doc.createElement("ol", null, frame);
+    _ = try body.asNode().appendChild(semantics_list.asNode(), frame);
+    try semantics_list.setInnerHTML(
+        \\<li></li>
+        \\<li id="dn" style="display: none"></li><li></li>
+        \\<li hidden></li><li></li>
+        \\<li style="visibility: hidden"></li><li></li>
+        \\<li aria-hidden="true"></li><li></li>
+        \\<li inert></li><li></li>
+    , frame);
+    const display_none_item = (try doc.querySelector(comptime .wrap("#dn"), frame)).?;
+
+    const list = try doc.createElement("ol", null, frame);
+    _ = try body.asNode().appendChild(list.asNode(), frame);
+
+    const item_count: usize = 1000;
+    for (0..item_count) |i| {
+        if (i == 1 or i == item_count / 2) {
+            const non_list_item = try doc.createElement("div", null, frame);
+            _ = try list.asNode().appendChild(non_list_item.asNode(), frame);
+        }
+        const item = try doc.createElement("li", null, frame);
+        _ = try list.asNode().appendChild(item.asNode(), frame);
+    }
+
+    const node = try registry.register(doc.asNode());
+    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .visibility_cache = &visibility_cache,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const semantic_markers = [_][]const u8{ "1. ", "2. ", "3. ", "5. ", "7. ", "9. " };
+    var marker_count: usize = 0;
+    for (parsed.value.array.items) |node_value| {
+        const object = node_value.object;
+        const role = object.get("role") orelse continue;
+        const role_value = role.object.get("value") orelse continue;
+        if (role_value != .string or !std.mem.eql(u8, role_value.string, "ListMarker")) continue;
+
+        marker_count += 1;
+        var expected_buf: [16]u8 = undefined;
+        const expected: []const u8 = if (marker_count <= semantic_markers.len)
+            semantic_markers[marker_count - 1]
+        else
+            try std.fmt.bufPrint(&expected_buf, "{d}. ", .{marker_count - semantic_markers.len});
+        const marker_name = object.get("name").?.object.get("value").?.string;
+        try std.testing.expectEqualStrings(expected, marker_name);
+    }
+    try testing.expectEqual(item_count + semantic_markers.len, marker_count);
+
+    var subtree_registry = Node.Registry.init(testing.allocator);
+    defer subtree_registry.deinit();
+    const subtree_node = try subtree_registry.register(display_none_item.asNode());
+    var subtree_visibility_cache: DOMNode.Element.VisibilityCache = .empty;
+    var subtree_label_index: Label.LabelByForIndex = .{};
+    const subtree_json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = subtree_node,
+        .registry = &subtree_registry,
+        .frame = frame,
+        .visibility_cache = &subtree_visibility_cache,
+        .label_index = &subtree_label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(subtree_json);
+
+    const subtree_parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, subtree_json, .{});
+    defer subtree_parsed.deinit();
+    try testing.expectEqual(2, subtree_parsed.value.array.items.len);
+    const subtree_marker_name = subtree_parsed.value.array.items[1].object.get("name").?.object.get("value").?.string;
+    try std.testing.expectEqualStrings("2. ", subtree_marker_name);
 }
 
 test "AXNode: writer prunes hidden and resolves labels" {
