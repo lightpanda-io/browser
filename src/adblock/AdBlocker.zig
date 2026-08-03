@@ -120,7 +120,7 @@ fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
 const testing = std.testing;
 
 test "adblock.AdBlocker: parse accumulates filters across lists" {
-    var blocker: AdBlocker = .init(testing.allocator);
+    var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();
 
     var first: Io.Reader = .fixed(
@@ -131,25 +131,93 @@ test "adblock.AdBlocker: parse accumulates filters across lists" {
     );
     const first_stats = try blocker.parse(&first);
 
-    try testing.expectEqual(2, blocker.filters.items.len);
+    // The pure-hostname block went into the trie; the $script exception
+    // is type-restricted and stays a filter.
+    try testing.expectEqual(1, blocker.filters.items.len);
     try testing.expectEqual(2, first_stats.network);
     try testing.expectEqual(1, first_stats.unsupported); // cosmetic line
+    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
+    try testing.expectEqual(.blocked, blocker.matchHostname("sub.ads.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
 
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
     );
     const second_stats = try blocker.parse(&second);
 
-    try testing.expectEqual(3, blocker.filters.items.len);
+    try testing.expectEqual(2, blocker.filters.items.len);
     try testing.expectEqual(1, second_stats.network);
+    try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
 
     // The scratch arena holding each list's text is gone: every retained
     // string must have been deep-copied.
-    try testing.expectEqualStrings("ads.example.com", blocker.filters.items[0].hostname);
-    try testing.expect(blocker.filters.items[1].exception);
-    const tracker = blocker.filters.items[2];
+    try testing.expect(blocker.filters.items[0].exception);
+    try testing.expectEqualStrings("cdn.example.com", blocker.filters.items[0].hostname);
+    const tracker = blocker.filters.items[1];
     try testing.expectEqualStrings("tracker.net", tracker.hostname);
     try testing.expect(!tracker.first_party);
     try testing.expectEqualStrings("news.com", tracker.domains.included[0].value);
     try testing.expectEqualStrings("sports.news.com", tracker.domains.excluded[0].value);
+}
+
+test "adblock.AdBlocker: hostname verdict precedence" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    var list: Io.Reader = .fixed(
+        \\||ads.example.com^
+        \\@@||good.ads.example.com^
+        \\||evil.com^$important
+        \\@@||evil.com^
+    );
+    _ = try blocker.parse(&list);
+
+    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
+    // The exception wins over the plain block...
+    try testing.expectEqual(.allowed, blocker.matchHostname("good.ads.example.com"));
+    try testing.expectEqual(.allowed, blocker.matchHostname("x.good.ads.example.com"));
+    try testing.expectEqual(.blocked, blocker.matchHostname("other.ads.example.com"));
+    // ...but $important beats the exception.
+    try testing.expectEqual(.blocked, blocker.matchHostname("evil.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("example.com"));
+}
+
+test "adblock.AdBlocker: trie absorbs every pure-hostname form" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    var list: Io.Reader = .fixed(
+        \\||anchored.example.com^
+        \\bare-hostname.example.com
+        \\0.0.0.0 hosts-style.example.io
+    );
+    _ = try blocker.parse(&list);
+
+    try testing.expectEqual(0, blocker.filters.items.len);
+    try testing.expectEqual(.blocked, blocker.matchHostname("anchored.example.com"));
+    try testing.expectEqual(.blocked, blocker.matchHostname("bare-hostname.example.com"));
+    try testing.expectEqual(.blocked, blocker.matchHostname("hosts-style.example.io"));
+}
+
+test "adblock.AdBlocker: constrained filters stay out of the trie" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    var list: Io.Reader = .fixed(
+        \\||no-caret.example.com
+        \\||typed.example.com^$script
+        \\||party.example.com^$third-party
+        \\||sited.example.com^$domain=news.com
+        \\||bad.example.com^$badfilter
+        \\@@||cosmetic.example.com^$generichide
+    );
+    _ = try blocker.parse(&list);
+
+    try testing.expectEqual(6, blocker.filters.items.len);
+    try testing.expectEqual(.none, blocker.matchHostname("no-caret.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("typed.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("party.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("sited.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("bad.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("cosmetic.example.com"));
 }
