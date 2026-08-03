@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="options">
+  {
+    const list = document.createElement('datalist')
+    const options = list.options
+
+    testing.expectEqual('HTMLCollection', options.constructor.name)
+    testing.expectTrue(options === list.options)
+    testing.expectEqual(0, options.length)
+
+    const first = document.createElement('option')
+    first.value = 'first'
+    list.appendChild(first)
+    testing.expectEqual(1, options.length)
+    testing.expectEqual('first', options[0].value)
+
+    const nested = document.createElement('option')
+    nested.value = 'nested'
+    const wrapper = document.createElement('div')
+    wrapper.appendChild(nested)
+    list.appendChild(wrapper)
+    testing.expectEqual(2, options.length)
+    testing.expectEqual('nested', options[1].value)
+
+    list.removeChild(first)
+    testing.expectEqual(1, options.length)
+    testing.expectEqual(nested, options[0])
+  }
+</script>

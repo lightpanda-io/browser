@@ -692,15 +692,18 @@ const PrivateSymbols = struct {
     const Private = @import("Private.zig");
 
     child_nodes: Private,
+    datalist_options: Private,
 
     fn init(isolate: *v8.Isolate) PrivateSymbols {
         return .{
             .child_nodes = Private.init(isolate, "child_nodes"),
+            .datalist_options = Private.init(isolate, "datalist_options"),
         };
     }
 
     fn deinit(self: *PrivateSymbols) void {
         self.child_nodes.deinit();
+        self.datalist_options.deinit();
     }
 };
 
