@@ -148,6 +148,19 @@
   testing.expectEqual('', number.value);
   testing.expectError('TypeError', () => { number.valueAsNumber = Infinity; });
 
+  const date = document.createElement('input');
+  date.type = 'date';
+  testing.expectTrue(Number.isNaN(date.valueAsNumber));
+  date.value = '2024-03-01';
+  testing.expectEqual(1709251200000, date.valueAsNumber);
+  date.valueAsNumber = -1;
+  testing.expectEqual('1969-12-31', date.value);
+  date.valueAsNumber = 0;
+  testing.expectEqual('1970-01-01', date.value);
+  date.valueAsNumber = NaN;
+  testing.expectEqual('', date.value);
+  testing.expectError('TypeError', () => { date.valueAsNumber = Infinity; });
+
   const range = document.createElement('input');
   range.type = 'range';
   range.min = '0';
@@ -156,8 +169,9 @@
   testing.expectEqual(10, range.valueAsNumber);
 
   const text = document.createElement('input');
-  testing.expectError('InvalidStateError', () => { void text.valueAsNumber; });
+  testing.expectTrue(Number.isNaN(text.valueAsNumber));
   testing.expectError('InvalidStateError', () => { text.valueAsNumber = 1; });
+  testing.expectError('TypeError', () => { text.valueAsNumber = Infinity; });
 }
 </script>
 

@@ -167,32 +167,35 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     self._value = try self.sanitizeValue(true, value, frame);
 }
 
-/// The numeric value for number and range controls. Other input states do not
-/// define a number conversion and must reject this API.
-pub fn getValueAsNumber(self: *const Input) !f64 {
-    switch (self._input_type) {
-        .number, .range => {},
-        else => return error.InvalidStateError,
-    }
-
+/// The numeric value for number, range, and date controls. Getters on other
+/// input states return NaN; their setters reject the API.
+pub fn getValueAsNumber(self: *const Input) f64 {
     const value = self.getValue();
-    if (!isValidFloatingPoint(value)) {
-        return std.math.nan(f64);
-    }
-    return std.fmt.parseFloat(f64, value) catch std.math.nan(f64);
+    return switch (self._input_type) {
+        .number, .range => if (isValidFloatingPoint(value))
+            std.fmt.parseFloat(f64, value) catch std.math.nan(f64)
+        else
+            std.math.nan(f64),
+        .date => dateValueAsNumber(value),
+        else => std.math.nan(f64),
+    };
 }
 
 pub fn setValueAsNumber(self: *Input, value: f64, frame: *Frame) !void {
+    if (std.math.isInf(value)) {
+        return error.TypeError;
+    }
     switch (self._input_type) {
-        .number, .range => {},
+        .number, .range, .date => {},
         else => return error.InvalidStateError,
     }
 
     if (std.math.isNan(value)) {
         return self.setValue("", frame);
     }
-    if (!std.math.isFinite(value)) {
-        return error.TypeError;
+
+    if (self._input_type == .date) {
+        return self.setValue(try dateFromValueAsNumber(frame.local_arena, value), frame);
     }
     return self.setValue(try formatFloat(frame.local_arena, value), frame);
 }
@@ -1122,6 +1125,85 @@ fn isValidFloatingPoint(value: []const u8) bool {
     return !std.math.isInf(f) and !std.math.isNan(f);
 }
 
+const DateComponents = struct {
+    year: u32,
+    month: u32,
+    day: u32,
+};
+
+const CivilDate = struct {
+    year: i64,
+    month: i64,
+    day: i64,
+};
+
+const milliseconds_per_day: f64 = 86_400_000;
+const maximum_time_value: f64 = 8_640_000_000_000_000;
+
+fn dateValueAsNumber(value: []const u8) f64 {
+    const date = parseDateComponents(value) orelse return std.math.nan(f64);
+    const days = daysFromCivil(date.year, date.month, date.day);
+    return @as(f64, @floatFromInt(days)) * milliseconds_per_day;
+}
+
+fn dateFromValueAsNumber(arena: std.mem.Allocator, value: f64) ![]const u8 {
+    // Match the time-value range supported by browser date controls. Values
+    // outside it cannot produce a valid date string and reset to empty.
+    if (@abs(value) > maximum_time_value) return "";
+
+    const milliseconds = @round(value);
+    const days: i64 = @intFromFloat(@floor(milliseconds / milliseconds_per_day));
+    const date = civilFromDays(days);
+    if (date.year < 1) return "";
+    const year: u64 = @intCast(date.year);
+    const month: u64 = @intCast(date.month);
+    const day: u64 = @intCast(date.day);
+    return std.fmt.allocPrint(arena, "{d:0>4}-{d:0>2}-{d:0>2}", .{ year, month, day });
+}
+
+fn parseDateComponents(value: []const u8) ?DateComponents {
+    if (!isValidDate(value)) return null;
+    const year_len = value.len - 6;
+    return .{
+        .year = parseAllDigits(value[0..year_len]) orelse return null,
+        .month = parseAllDigits(value[year_len + 1 .. year_len + 3]) orelse return null,
+        .day = parseAllDigits(value[year_len + 4 ..]) orelse return null,
+    };
+}
+
+/// Days since 1970-01-01 in the proleptic Gregorian calendar.
+fn daysFromCivil(year: u32, month: u32, day: u32) i64 {
+    var y: i64 = year;
+    const m: i64 = month;
+    const d: i64 = day;
+    if (m <= 2) y -= 1;
+    const era = @divFloor(y, 400);
+    const year_of_era = y - era * 400;
+    const month_offset: i64 = if (m > 2) -3 else 9;
+    const day_of_year = @divFloor(153 * (m + month_offset) + 2, 5) + d - 1;
+    const day_of_era = year_of_era * 365 + @divFloor(year_of_era, 4) - @divFloor(year_of_era, 100) + day_of_year;
+    return era * 146_097 + day_of_era - 719_468;
+}
+
+fn civilFromDays(days: i64) CivilDate {
+    const z = days + 719_468;
+    const era = @divFloor(z, 146_097);
+    const day_of_era = z - era * 146_097;
+    const year_of_era = @divFloor(day_of_era - @divFloor(day_of_era, 1_460) + @divFloor(day_of_era, 36_524) - @divFloor(day_of_era, 146_096), 365);
+    var year = year_of_era + era * 400;
+    const day_of_year = day_of_era - (365 * year_of_era + @divFloor(year_of_era, 4) - @divFloor(year_of_era, 100));
+    const month_prime = @divFloor(5 * day_of_year + 2, 153);
+    const day = day_of_year - @divFloor(153 * month_prime + 2, 5) + 1;
+    const month_offset: i64 = if (month_prime < 10) 3 else -9;
+    const month = month_prime + month_offset;
+    if (month <= 2) year += 1;
+    return .{
+        .year = year,
+        .month = month,
+        .day = day,
+    };
+}
+
 /// Validate a WHATWG "valid date string": YYYY-MM-DD
 fn isValidDate(value: []const u8) bool {
     // Minimum: 4-digit year + "-MM-DD" = 10 chars
@@ -1355,13 +1437,15 @@ fn formatFloat(arena: std.mem.Allocator, value: f64) ![]const u8 {
     return std.fmt.allocPrint(arena, "{d}", .{value});
 }
 
-/// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any non-digit or empty.
+/// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any
+/// byte is not a digit, the slice is empty, or the value overflows.
 fn parseAllDigits(s: []const u8) ?u32 {
     if (s.len == 0) return null;
     var result: u32 = 0;
     for (s) |c| {
         if (!std.ascii.isDigit(c)) return null;
-        result = result *% 10 +% (c - '0');
+        result = std.math.mul(u32, result, 10) catch return null;
+        result = std.math.add(u32, result, c - '0') catch return null;
     }
     return result;
 }
@@ -1625,8 +1709,30 @@ test "isValidDate" {
     try testing.expect(!isValidDate("2024-00-01")); // month 0
     try testing.expect(!isValidDate("0000-01-01")); // year 0
     try testing.expect(!isValidDate("2024-1-01")); // single-digit month
+    try testing.expect(!isValidDate("4294967297-01-01")); // unsupported year must not wrap
     try testing.expect(!isValidDate(""));
     try testing.expect(!isValidDate("not-a-date"));
+}
+
+test "date valueAsNumber conversion" {
+    try testing.expectEqual(@as(f64, 0), dateValueAsNumber("1970-01-01"));
+    try testing.expectEqual(@as(f64, 1_709_251_200_000), dateValueAsNumber("2024-03-01"));
+
+    const previous = try dateFromValueAsNumber(testing.allocator, -1);
+    defer testing.allocator.free(previous);
+    try testing.expectEqual("1969-12-31", previous);
+
+    const epoch = try dateFromValueAsNumber(testing.allocator, 0);
+    defer testing.allocator.free(epoch);
+    try testing.expectEqual("1970-01-01", epoch);
+
+    const rounded_before_epoch = try dateFromValueAsNumber(testing.allocator, -0.1);
+    defer testing.allocator.free(rounded_before_epoch);
+    try testing.expectEqual("1970-01-01", rounded_before_epoch);
+
+    const rounded_next_day = try dateFromValueAsNumber(testing.allocator, 86_399_999.6);
+    defer testing.allocator.free(rounded_next_day);
+    try testing.expectEqual("1970-01-02", rounded_next_day);
 }
 
 test "isValidMonth" {
