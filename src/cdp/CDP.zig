@@ -440,15 +440,28 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
     return error.UnknownDomain;
 }
 
-fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+pub fn resolveSessionId(self: *const CDP, input_session_id: []const u8) ?[]const u8 {
     if (self.browser_session_id) |browser_session_id| {
         if (std.mem.eql(u8, browser_session_id, input_session_id)) {
-            return true;
+            return browser_session_id;
         }
     }
-    const browser_context = &(self.browser_context orelse return false);
-    const session_id = browser_context.session_id orelse return false;
-    return std.mem.eql(u8, session_id, input_session_id);
+    const browser_context = &(self.browser_context orelse return null);
+    if (browser_context.session_id) |session_id| {
+        if (std.mem.eql(u8, session_id, input_session_id)) {
+            return session_id;
+        }
+    }
+    for (browser_context.attached_sessions.items) |session| {
+        if (std.mem.eql(u8, session.id, input_session_id)) {
+            return session.id;
+        }
+    }
+    return null;
+}
+
+fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    return self.resolveSessionId(input_session_id) != null;
 }
 
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
@@ -508,6 +521,10 @@ pub const BrowserContext = struct {
         id: u32,
     };
 
+    pub const AttachedSession = struct {
+        id: []const u8,
+        parent_id: ?[]const u8,
+    };
     id: []const u8,
     cdp: *CDP,
 
@@ -550,6 +567,7 @@ pub const BrowserContext = struct {
     // if we get a request with a sessionId that doesn't match the current one
     // we should reject it.
     session_id: ?[]const u8,
+    attached_sessions: std.ArrayList(AttachedSession) = .empty,
 
     security_origin: []const u8,
     page_life_cycle_events: bool,
@@ -572,6 +590,7 @@ pub const BrowserContext = struct {
     extra_headers: std.ArrayList(http.Header) = .empty,
 
     intercept_state: InterceptState,
+    fetch_session_id: ?[]const u8 = null,
 
     // When network is enabled, we'll capture the transfer.id -> body
     // This is awfully memory intensive, but our underlying http client and
@@ -820,17 +839,26 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_request_served_from_cache, self);
     }
 
-    pub fn fetchEnable(self: *BrowserContext, authRequests: bool) !void {
+    pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
         self.fetchDisable(); //in case of multiple calls
+        self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
     }
 
+    pub fn fetchDisableForSession(self: *BrowserContext, session_id: []const u8) void {
+        const active_session_id = self.fetch_session_id orelse return;
+        if (std.mem.eql(u8, active_session_id, session_id)) {
+            self.fetchDisable();
+        }
+    }
+
     pub fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
+        self.fetch_session_id = null;
     }
 
     pub fn lifecycleEventsEnable(self: *BrowserContext) !void {

@@ -143,9 +143,16 @@ const ErrorReason = enum {
     BlockedByResponse,
 };
 
+fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
+    if (cmd.input.session_id) |session_id| {
+        return cmd.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
+    }
+    return bc.session_id orelse error.UnknownSessionId;
+}
+
 fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.fetchDisable();
+    bc.fetchDisableForSession(try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }
 
@@ -157,7 +164,7 @@ fn enable(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.fetchEnable(params.handleAuthRequests);
+    try bc.fetchEnable(params.handleAuthRequests, try commandSessionId(cmd, bc));
 
     return cmd.sendResult(null, .{});
 }
@@ -189,9 +196,8 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
 }
 
 pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = bc.session_id orelse return;
+    // The session that enabled Fetch owns its interception events.
+    const session_id = bc.fetch_session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // TODO: What to do when receiving replies for a previous frame's requests?
@@ -413,9 +419,7 @@ fn failRequest(cmd: *CDP.Command) !void {
 }
 
 pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = bc.session_id orelse return;
+    const session_id = bc.fetch_session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
@@ -458,4 +462,41 @@ fn idFromRequestId(request_id: []const u8) !u32 {
         return error.InvalidParams;
     }
     return std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
+}
+
+const testing = @import("../testing.zig");
+
+test "cdp.Fetch: interception events belong to the enabling session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{
+        .session_id = "SID-PRIMARY",
+        .target_id = "TID-000000000B".*,
+    });
+    try bc.attached_sessions.append(bc.arena, .{
+        .id = "SID-AUX",
+        .parent_id = null,
+    });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .sessionId = "SID-AUX",
+    });
+    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Fetch.disable",
+        .sessionId = "SID-PRIMARY",
+    });
+    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Fetch.disable",
+        .sessionId = "SID-AUX",
+    });
+    try testing.expectEqual(null, bc.fetch_session_id);
 }
