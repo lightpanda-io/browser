@@ -252,18 +252,34 @@ fn liveSessionRoundTrip() !void {
     try live.open(.{ .url = button_url, .width = 640, .height = 480, .wait_ms = 2_000 }, &opened.writer);
     try testing.expect(live.isActive());
     try testing.expectEqual(@as(u64, 1), live.version);
-    try testing.expectEqual(@as(usize, 1), live.targets.items.len);
-    try testing.expect(std.mem.indexOf(u8, opened.written(), "data-lp-live-target=\"0\"") != null);
+    try testing.expectEqual(@as(usize, 4), live.targets.items.len);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"toggle\" type=\"checkbox\" checked data-lp-live-target=\"1\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"disabled\" type=\"checkbox\" disabled>") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"text\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"file\" type=\"file\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<input id=\"submit\" type=\"submit\">") != null);
+    try testing.expect(std.mem.indexOf(u8, opened.written(), "<select id=\"select\">") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), ">before<") != null);
     try testing.expect(std.mem.indexOf(u8, opened.written(), "<script") == null);
 
     const token = live.tokenText();
     var activated: std.Io.Writer.Allocating = .init(testing.test_app.allocator);
     defer activated.deinit();
-    try live.activate(token[0..], live.version, 0, 2_000, &activated.writer);
+    try live.activate(token[0..], live.version, 1, 2_000, &activated.writer);
     try testing.expectEqual(@as(u64, 2), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), "<input id=\"toggle\" type=\"checkbox\" data-lp-live-target=\"1\">") != null);
+    try testing.expectEqual(@as(usize, 4), live.targets.items.len);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 3, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 3), live.version);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), "<input id=\"radio-a\" type=\"radio\" name=\"choice\" data-lp-live-target=\"2\">") != null);
+    try testing.expect(std.mem.indexOf(u8, activated.written(), "<input id=\"radio-b\" type=\"radio\" name=\"choice\" checked data-lp-live-target=\"3\">") != null);
+
+    activated.clearRetainingCapacity();
+    try live.activate(token[0..], live.version, 0, 2_000, &activated.writer);
+    try testing.expectEqual(@as(u64, 4), live.version);
     try testing.expect(std.mem.indexOf(u8, activated.written(), ">after<") != null);
-    try testing.expectEqual(@as(usize, 1), live.targets.items.len);
     try live.closeForToken(token[0..]);
     try testing.expect(!live.isActive());
     try testing.expectEqual(@as(usize, 0), live.targets.capacity);

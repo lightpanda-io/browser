@@ -24,6 +24,7 @@ const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
 const Anchor = @import("webapi/element/html/Anchor.zig");
 const Button = @import("webapi/element/html/Button.zig");
+const Input = @import("webapi/element/html/Input.zig");
 
 pub const DumpError = error{ WriteFailed, OutOfMemory, TargetLimit };
 
@@ -235,7 +236,16 @@ pub fn isLiveTarget(el: *Node.Element, frame: *Frame) bool {
             !el.isDisabled() and button.getForm(frame) == null
         else
             false,
+        .input => liveCheckable(el) != null and !el.isDisabled(),
         else => false,
+    };
+}
+
+fn liveCheckable(el: *Node.Element) ?*Input {
+    const input = el.is(Input) orelse return null;
+    return switch (input._input_type) {
+        .checkbox, .radio => input,
+        else => null,
     };
 }
 
@@ -254,12 +264,19 @@ fn formatElement(el: *Node.Element, opts: Opts, writer: *std.Io.Writer, frame: *
     try writer.writeByte('<');
     try writer.writeAll(el.getTagNameDump());
 
+    const live_checkable = if (opts.live_targets != null) liveCheckable(el) else null;
     for (el.attributeEntries()) |*attr| {
         if (opts.live_targets != null and std.ascii.eqlIgnoreCase(attr.name(), "data-lp-live-target")) {
             continue;
         }
+        if (live_checkable != null and std.ascii.eqlIgnoreCase(attr.name(), "checked")) {
+            continue;
+        }
         try writer.writeByte(' ');
         try attr.format(writer);
+    }
+    if (live_checkable) |input| {
+        if (input.getChecked()) try writer.writeAll(" checked");
     }
 
     if (opts.live_targets) |targets| {
@@ -600,6 +617,66 @@ test "dump: live targets replace author markers without mutating the DOM" {
     try testing.expect(!isLiveTarget(associated, frame));
     try testing.expect(!isLiveTarget(file, frame));
     try testing.expectEqual(dom_version, frame._page.dom_version);
+}
+
+test "dump: live checkables serialize current checked state" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const doc = frame.window._document;
+    const body = doc.is(Node.Document.HTMLDocument).?.getBody().?;
+
+    const checkbox = try doc.createElement("input", null, frame);
+    try checkbox.setAttributeSafe(comptime .wrap("id"), .wrap("checkbox"), frame);
+    try checkbox.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), frame);
+    try checkbox.setAttributeSafe(comptime .wrap("checked"), .wrap(""), frame);
+    _ = try body.asNode().appendChild(checkbox.asNode(), frame);
+    try checkbox.is(Input).?.setChecked(false, frame);
+
+    const radio = try doc.createElement("input", null, frame);
+    try radio.setAttributeSafe(comptime .wrap("id"), .wrap("radio"), frame);
+    try radio.setAttributeSafe(comptime .wrap("type"), .wrap("radio"), frame);
+    _ = try body.asNode().appendChild(radio.asNode(), frame);
+    try radio.is(Input).?.setChecked(true, frame);
+
+    const disabled = try doc.createElement("input", null, frame);
+    try disabled.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), frame);
+    try disabled.setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
+    _ = try body.asNode().appendChild(disabled.asNode(), frame);
+
+    const text = try doc.createElement("input", null, frame);
+    _ = try body.asNode().appendChild(text.asNode(), frame);
+
+    const file = try doc.createElement("input", null, frame);
+    try file.setAttributeSafe(comptime .wrap("type"), .wrap("file"), frame);
+    _ = try body.asNode().appendChild(file.asNode(), frame);
+
+    const submit = try doc.createElement("input", null, frame);
+    try submit.setAttributeSafe(comptime .wrap("type"), .wrap("submit"), frame);
+    _ = try body.asNode().appendChild(submit.asNode(), frame);
+
+    const select = try doc.createElement("select", null, frame);
+    _ = try body.asNode().appendChild(select.asNode(), frame);
+
+    var elements: std.ArrayListUnmanaged(*Node.Element) = .empty;
+    defer elements.deinit(testing.allocator);
+    var targets: LiveTargets = .{ .elements = &elements, .allocator = testing.allocator };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try root(doc, .{ .live_targets = &targets }, &aw.writer, frame);
+
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"checkbox\" type=\"checkbox\" data-lp-live-target=\"0\">") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "<input id=\"radio\" type=\"radio\" checked data-lp-live-target=\"1\">") != null);
+    try testing.expectEqualSlices(*Node.Element, &.{ checkbox, radio }, elements.items);
+    try testing.expect(!isLiveTarget(disabled, frame));
+    try testing.expect(!isLiveTarget(text, frame));
+    try testing.expect(!isLiveTarget(file, frame));
+    try testing.expect(!isLiveTarget(submit, frame));
+    try testing.expect(!isLiveTarget(select, frame));
+    try testing.expect(checkbox.hasAttributeSafe(comptime .wrap("checked")));
+    try testing.expect(!radio.hasAttributeSafe(comptime .wrap("checked")));
 }
 
 test "dump: live snapshots strip meta refresh without mutating the DOM" {
