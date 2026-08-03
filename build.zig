@@ -88,7 +88,7 @@ pub fn build(b: *Build) !void {
         // Set default behavior
         b.default_step.dependOn(fmt_step);
 
-        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path, link_gc_sections);
+        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod, enable_tsan, link_gc_sections);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
@@ -232,7 +232,6 @@ fn linkV8(
     is_asan: bool,
     is_tsan: bool,
     prebuilt_v8_path: ?[]const u8,
-    link_gc_sections: bool,
 ) !void {
     const target = mod.resolved_target.?;
 
