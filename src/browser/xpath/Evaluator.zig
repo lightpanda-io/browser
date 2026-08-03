@@ -534,7 +534,7 @@ fn appendAttributes(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) E
         // (Capybara/Selenium polling) reuse the same *Attribute instead
         // of leaking fresh ones into page-lifetime storage on every call.
         const attribute = try el._attributes.getOrCreateAttribute(entry, el, self.frame);
-        try out.append(self.arena, attribute._proto);
+        try out.append(self.arena, attribute.asNode());
     }
 }
 

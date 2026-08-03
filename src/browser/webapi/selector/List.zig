@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
@@ -27,12 +28,10 @@ const Selector = @import("Selector.zig");
 const TreeWalker = @import("../TreeWalker.zig").Full;
 const GenericIterator = @import("../collections/iterator.zig").Entry;
 
-const Allocator = std.mem.Allocator;
-
 const List = @This();
 
 _nodes: []const *Node,
-_arena: Allocator,
+_arena: *lp.Arena,
 // For the [somewhat common] case where we just have an #id selector
 // we can avoid allocating a slice and just use this.
 _single_node: [1]*Node = undefined,
@@ -41,8 +40,8 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 
-pub fn deinit(self: *const List, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *const List, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn collect(

@@ -17,11 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const Factory = @import("../../../Factory.zig");
 const DOMRect = @import("../../DOMRect.zig");
 const DOMMatrixReadOnly = @import("../../DOMMatrixReadOnly.zig");
 const SvgElement = @import("../Svg.zig");
@@ -44,8 +46,8 @@ pub const Geometry = @import("Geometry.zig");
 const Graphics = @This();
 
 pub const Proto = SvgElement;
-_proto: *SvgElement,
 _type: Type,
+_proto_canary: if (lp.IS_DEBUG) *SvgElement else void = undefined,
 
 pub const Type = union(enum) {
     svg: *Svg,
@@ -79,7 +81,7 @@ pub fn is(self: *Graphics, comptime T: type) ?*T {
 }
 
 pub fn asElement(self: *Graphics) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Graphics) *Node {
     return self.asElement().asNode();

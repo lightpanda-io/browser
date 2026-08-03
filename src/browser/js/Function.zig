@@ -22,7 +22,6 @@ const js = @import("js.zig");
 
 const v8 = js.v8;
 const log = lp.log;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Function = @This();
 
@@ -52,7 +51,7 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
 pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Object {
     const local = self.local;
 
-    if (comptime IS_DEBUG == false) {
+    if (comptime lp.IS_DEBUG == false) {
         // This should not be possible, yet it happens. In Release, we'll log an
         // error and hope for the best. In Debug, we'll let the code execute
         // and v8 will crash on the null reference. This null value almost
@@ -142,7 +141,7 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     caught.* = .{};
     const local = self.local;
 
-    if (comptime IS_DEBUG == false) {
+    if (comptime lp.IS_DEBUG == false) {
         // This should not be possible, yet it happens. In Release, we'll log an
         // error and hope for the best. In Debug, we'll let the code execute
         // and v8 will crash on the null reference. This null value almost

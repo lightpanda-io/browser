@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Factory = @import("../../Factory.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -28,8 +29,6 @@ const GenericIterator = @import("../collections/iterator.zig").Entry;
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -43,10 +42,14 @@ pub const Attribute = @This();
 
 pub const Proto = Node;
 
-_proto: *Node,
 _name: String,
 _value: String,
 _element: ?*Element,
+_proto_canary: if (lp.IS_DEBUG) *Node else void = undefined,
+
+pub fn asNode(self: *Attribute) *Node {
+    return Factory.protoOf(self);
+}
 
 pub fn format(self: *const Attribute, writer: *std.Io.Writer) !void {
     return formatAttribute(self._name.str(), self._value.str(), writer);
@@ -87,7 +90,6 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
 
 pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
     return frame._factory.node(Attribute{
-        ._proto = undefined,
         ._element = self._element,
         ._name = self._name,
         ._value = self._value,
@@ -276,7 +278,7 @@ pub const List = struct {
     // not efficient, won't be called often (if ever!)
     pub fn putAttribute(self: *List, attribute: *Attribute, element: *Element, frame: *Frame) !?*Attribute {
         // we expect our caller to make sure this is true
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(attribute._element == null);
         }
 
@@ -463,7 +465,6 @@ pub const List = struct {
 
         pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
             return frame._factory.node(Attribute{
-                ._proto = undefined,
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.

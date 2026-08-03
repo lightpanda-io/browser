@@ -27,7 +27,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const CLAMP_MS = 4;
 const CLAMP_NESTING = 5;
@@ -97,7 +96,7 @@ pub fn schedule(
     }
 
     const arena = try exec.getArena(.tiny, "Timers.schedule");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
@@ -191,7 +190,7 @@ const ScheduleCallback = struct {
     mode: Mode,
     exec: *js.Execution,
     timers: *Timers,
-    arena: Allocator,
+    arena: *lp.Arena,
     removed: bool = false,
     params: []const js.Value.Global,
 
@@ -205,7 +204,7 @@ const ScheduleCallback = struct {
         for (self.params) |param| {
             param.release();
         }
-        self.exec.releaseArena(self.arena);
+        self.arena.release();
     }
 
     fn run(ptr: *anyopaque) !?u32 {

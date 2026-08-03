@@ -28,7 +28,15 @@
  *     isolated; parallelism means multiple processes.
  *   - The library is not fork-safe after lp_init.
  *
+ * Strings: every string, input and output, is a pointer plus a byte
+ * length. Inputs need not be NUL-terminated and outputs are not guaranteed
+ * to be. (The only exceptions are lp_version and lp_tools_json, which
+ * return static NUL-terminated C strings.)
+ *
  * Logging goes to stderr (level: warnings and errors in release builds).
+ *
+ * Anonymous usage telemetry is enabled in release builds; set
+ * LIGHTPANDA_DISABLE_TELEMETRY in the environment to opt out.
  *
  * Linking: `make lib` builds liblightpanda.so (liblightpanda.dylib on macOS)
  * into zig-out/lib and installs this header (zig-out/include) plus a
@@ -73,8 +81,8 @@ typedef enum lp_status {
     LP_ERR_MISUSE = 9
 } lp_status;
 
-/* Output of lp_fetch and lp_call. text is NUL-terminated (len excludes the
- * NUL), read-only, and owned by the library: it stays valid until the next
+/* Output of lp_fetch and lp_call. text points at len bytes — read-only,
+ * not NUL-terminated — owned by the library: it stays valid until the next
  * lp_call on the same session (for lp_fetch: the next lp_fetch on the same
  * browser), or until that session/browser is torn down. Copy it out to keep
  * it longer — including before handing it to another thread. lp_session_pump
@@ -88,14 +96,16 @@ typedef struct lp_result {
 } lp_result;
 
 /* Zero-initialize for defaults: no proxy, default user agent, no HTTP
- * cache, 5s HTTP timeout, 30s JS watchdog, telemetry off. */
+ * cache, 5s HTTP timeout, 30s JS watchdog. */
 typedef struct lp_options {
     const char *user_agent;      /* NULL: default ("Lightpanda/1.0") */
+    size_t user_agent_len;
     const char *http_proxy;      /* NULL: none */
+    size_t http_proxy_len;
     const char *http_cache_dir;  /* NULL: no persistent HTTP cache */
+    size_t http_cache_dir_len;
     uint32_t http_timeout_ms;    /* 0: default (5000) */
     int32_t watchdog_ms;         /* 0: default (30000), <0: disabled */
-    bool enable_telemetry;       /* false: no telemetry */
 } lp_options;
 
 typedef enum lp_format {
@@ -120,6 +130,7 @@ typedef struct lp_fetch_opts {
     uint32_t wait_ms;          /* 0: default (5000) */
     int wait_until;            /* lp_wait_until */
     const char *wait_selector; /* NULL: none; else wait for this CSS selector */
+    size_t wait_selector_len;
 } lp_fetch_opts;
 
 /* Initialize the library. opts may be NULL (all defaults). On LP_OK,
@@ -134,7 +145,7 @@ void lp_shutdown(lp_browser *browser);
  * serialized per opts (NULL: all defaults). "curl that runs JavaScript".
  * Every call gets a fresh session (cookies, storage, pages); the underlying
  * browser is created on first use and reused, so looping lp_fetch is cheap. */
-lp_status lp_fetch(lp_browser *browser, const char *url,
+lp_status lp_fetch(lp_browser *browser, const char *url, size_t url_len,
                    const lp_fetch_opts *opts, lp_result *out);
 
 /* Create an isolated browsing session: its own page, cookies, JS heap. */
@@ -149,10 +160,12 @@ void lp_session_close(lp_session *session);
  * tool's argument object as a JSON string (NULL: no arguments); the tool
  * names and their JSON schemas are enumerated by lp_tools_json. Tools that
  * read the page accept a "url" argument to navigate first, so
- *   lp_call(s, "markdown", "{\"url\":\"https://example.com\"}", &r)
- * is a complete one-call scrape. */
-lp_status lp_call(lp_session *session, const char *tool,
-                  const char *args_json, lp_result *out);
+ *   lp_call(s, "markdown", strlen("markdown"), args, strlen(args), &r)
+ * with args = "{\"url\":\"https://example.com\"}" is a complete one-call
+ * scrape. */
+lp_status lp_call(lp_session *session, const char *tool, size_t tool_len,
+                  const char *args_json, size_t args_json_len,
+                  lp_result *out);
 
 /* Pump background work (timers, in-flight fetches) once; returns how many
  * milliseconds the caller may sleep before pumping again. Only needed when
@@ -165,6 +178,14 @@ uint32_t lp_session_pump(lp_session *session);
  * other threads (e.g. an atomic flag set by a signal handler). */
 void lp_session_set_cancel_hook(lp_session *session,
                                 bool (*cb)(void *), void *ctx);
+
+/* Diagnostic for the most recent failing call on this session (lp_call) or
+ * browser (lp_fetch, lp_session_new): an error name such as "Timeout" or
+ * "CertificateError", more specific than the lp_status code. Empty when the
+ * last call succeeded; NULL for a NULL handle or after lp_shutdown. len may
+ * be NULL. Static — do not free. */
+const char *lp_last_error(lp_session *session, size_t *len);
+const char *lp_browser_last_error(lp_browser *browser, size_t *len);
 
 /* JSON array of every tool lp_call accepts:
  * [{"name", "description", "inputSchema"}, ...]. Static — do not free. */

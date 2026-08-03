@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
@@ -24,7 +23,6 @@ const js = @import("../../../js/js.zig");
 const Event = @import("../../Event.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 const Execution = js.Execution;
 
 const IDBVersionChangeEvent = @This();
@@ -44,18 +42,18 @@ const Options = Event.inheritOptions(IDBVersionChangeEvent, IDBVersionChangeEven
 
 pub fn init(typ: []const u8, opts_: ?Options, exec: *const Execution) !*IDBVersionChangeEvent {
     const arena = try exec.getArena(.tiny, "IDBVersionChangeEvent");
-    errdefer exec.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, exec);
 }
 
 pub fn initTrusted(typ: String, old_version: u64, new_version: ?u64, exec: *const Execution) !*IDBVersionChangeEvent {
     const arena = try exec.getArena(.tiny, "IDBVersionChangeEvent.trusted");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, .{ .oldVersion = old_version, .newVersion = new_version }, true, exec);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, exec: *const Execution) !*IDBVersionChangeEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, opts_: ?Options, trusted: bool, exec: *const Execution) !*IDBVersionChangeEvent {
     const opts = opts_ orelse Options{};
 
     const event = try exec._factory.event(arena, typ, IDBVersionChangeEvent{

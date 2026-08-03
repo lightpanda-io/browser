@@ -27,7 +27,7 @@
 //! See spec for more info: https://drafts.csswg.org/css-syntax/#tokenization
 
 const std = @import("std");
-const builtin = @import("builtin");
+const lp = @import("lightpanda");
 const assert = std.debug.assert;
 
 const Tokenizer = @This();
@@ -228,7 +228,7 @@ fn sliceFrom(self: *const Tokenizer, start_pos: usize) []const u8 {
 // over ASCII bytes (excluding newlines), or UTF-8 sequence
 // leaders (excluding leaders for 4-byte sequences).
 fn advance(self: *Tokenizer, n: usize) void {
-    if (builtin.mode == .Debug) {
+    if (lp.IS_DEBUG) {
         // Each byte must either be an ASCII byte or a sequence leader,
         // but not a 4-byte leader; also newlines are rejected.
         for (0..n) |i| {

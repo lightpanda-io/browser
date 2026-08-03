@@ -23,8 +23,6 @@ const js = @import("../js/js.zig");
 
 const EventTarget = @import("EventTarget.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const Key = struct {
     target: *EventTarget,
     handler: Handler,
@@ -34,14 +32,14 @@ const Key = struct {
     /// See `Context.hash`.
     fn fuse(self: *const Key) u64 {
         // Check if we have 3 bits available from alignment of 8.
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             lp.assert(@alignOf(EventTarget) == 8, "Key.fuse: incorrect alignment", .{
                 .event_target_alignment = @alignOf(EventTarget),
             });
         }
 
         const ptr = @intFromPtr(self.target) >> 3;
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             lp.assert(ptr < (1 << 57), "Key.fuse: pointer overflow", .{ .ptr = ptr });
         }
         return ptr | (@as(u64, @intFromEnum(self.handler)) << 57);

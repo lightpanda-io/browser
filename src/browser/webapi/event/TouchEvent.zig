@@ -60,8 +60,8 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
 
 fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*TouchEvent {
     const arena = try frame.getArena(.tiny, "TouchEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = _opts orelse Options{};
     const event = try frame._factory.uiEvent(

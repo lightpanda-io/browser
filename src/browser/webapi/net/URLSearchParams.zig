@@ -42,7 +42,7 @@ pub fn registerTypes() []const type {
 const URLSearchParams = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _params: KeyValueList,
 
 const InitOpts = union(enum) {
@@ -53,17 +53,17 @@ const InitOpts = union(enum) {
 
 pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
     const arena = try exec.getArena(.small, "URLSearchParams");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
-            .query_string => |qs| break :blk try paramsFromString(arena, qs, exec.buf),
-            .form_data => |fd| break :blk try fd.toKeyValueList(arena),
+            .query_string => |qs| break :blk try paramsFromString(arena.allocator(), qs, exec.buf),
+            .form_data => |fd| break :blk try fd.toKeyValueList(arena.allocator()),
             .value => |js_val| {
                 // Order matters here; Array is also an Object.
                 if (js_val.isArray()) {
-                    break :blk try paramsFromArray(arena, js_val.toArray());
+                    break :blk try paramsFromArray(arena.allocator(), js_val.toArray());
                 }
                 if (js_val.isObject()) {
                     // Per the URL spec, an iterable init (URLSearchParams,
@@ -73,13 +73,13 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
                     // the prototype-method-leak doesn't just turn into a
                     // silent empty querystring.
                     if (js_val.toZig(*URLSearchParams)) |other| {
-                        break :blk try KeyValueList.copy(arena, other._params);
+                        break :blk try KeyValueList.copy(arena.allocator(), other._params);
                     } else |_| {}
                     // normalizer is null, so frame won't be used
-                    break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, exec.buf);
+                    break :blk try KeyValueList.fromJsObject(arena.allocator(), js_val.toObject(), null, exec.buf);
                 }
                 if (js_val.isString()) |js_str| {
-                    break :blk try paramsFromString(arena, try js_str.toSliceWithAlloc(arena), exec.buf);
+                    break :blk try paramsFromString(arena.allocator(), try js_str.toSliceWithAlloc(arena.allocator()), exec.buf);
                 }
                 return error.InvalidArgument;
             },
@@ -94,8 +94,8 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
     return self;
 }
 
-pub fn deinit(self: *URLSearchParams, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *URLSearchParams, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *URLSearchParams, page: *Page) void {
@@ -107,7 +107,7 @@ pub fn acquireRef(self: *URLSearchParams) void {
 }
 
 pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, exec: *const Execution) !void {
-    self._params = try paramsFromString(self._arena, query_string, exec.buf);
+    self._params = try paramsFromString(self._arena.allocator(), query_string, exec.buf);
 }
 
 pub fn getSize(self: *const URLSearchParams) usize {
@@ -127,11 +127,11 @@ pub fn has(self: *const URLSearchParams, name: []const u8) bool {
 }
 
 pub fn set(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    return self._params.set(self._arena, name, value);
+    return self._params.set(self._arena.allocator(), name, value);
 }
 
 pub fn append(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    return self._params.append(self._arena, name, value);
+    return self._params.append(self._arena.allocator(), name, value);
 }
 
 pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) void {

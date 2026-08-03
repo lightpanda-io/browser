@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -27,7 +26,6 @@ const Event = @import("../Event.zig");
 const FormData = @import("../net/FormData.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/FormDataEvent
 const FormDataEvent = @This();
@@ -43,18 +41,18 @@ const Options = Event.inheritOptions(FormDataEvent, struct {
 
 pub fn init(typ: []const u8, maybe_options: Options, frame: *Frame) !*FormDataEvent {
     const arena = try frame.getArena(.tiny, "FormDataEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, maybe_options, false, frame);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*FormDataEvent {
     const arena = try frame.getArena(.tiny, "FormDataEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, maybe_options: ?Options, trusted: bool, frame: *Frame) !*FormDataEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, maybe_options: ?Options, trusted: bool, frame: *Frame) !*FormDataEvent {
     const options = maybe_options orelse Options{};
 
     const event = try frame._factory.event(

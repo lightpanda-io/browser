@@ -28,7 +28,6 @@ pub const ValueIterator = GenericIterator(Iterator, "1");
 pub const EntryIterator = GenericIterator(Iterator, null);
 
 const Execution = js.Execution;
-const Allocator = std.mem.Allocator;
 
 // not registered in collections.zig, because this is one of the rare
 // collections that's also available in Worker
@@ -44,15 +43,15 @@ pub fn registerTypes() []const type {
 pub const DOMStringList = @This();
 
 _rc: lp.RC = .{},
-_arena: Allocator,
+_arena: *lp.Arena,
 _items: []const []const u8,
 
 pub fn acquireRef(self: *DOMStringList) void {
     self._rc.acquire();
 }
 
-pub fn deinit(self: *DOMStringList, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *DOMStringList, _: *Page) void {
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *DOMStringList, page: *Page) void {

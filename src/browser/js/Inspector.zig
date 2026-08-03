@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -26,7 +27,6 @@ const Allocator = std.mem.Allocator;
 
 const CONTEXT_GROUP_ID = 1;
 const CLIENT_TRUST_LEVEL = 1;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Inspector exists for the lifetime of the Isolate/Env. 1 Isolate = 1 Inspector.
 // It combines the v8.Inspector and the v8.InspectorClientImpl. The v8.InspectorClientImpl
@@ -81,7 +81,7 @@ pub fn deinit(self: *const Inspector, allocator: Allocator) void {
 }
 
 pub fn startSession(self: *Inspector, ctx: anytype) *Session {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.session == null);
     }
 

@@ -288,7 +288,6 @@ fn testForms(html: []const u8) ![]FormInfo {
 }
 
 test "browser.forms: login form" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form action="/login" method="POST">
         \\  <input type="email" name="email" required placeholder="Email">
@@ -310,7 +309,6 @@ test "browser.forms: login form" {
 }
 
 test "browser.forms: form with select" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <select name="color">
@@ -330,7 +328,6 @@ test "browser.forms: form with select" {
 }
 
 test "browser.forms: form with textarea" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form method="POST">
         \\  <textarea name="message" placeholder="Your message"></textarea>
@@ -345,7 +342,6 @@ test "browser.forms: form with textarea" {
 }
 
 test "browser.forms: empty form skipped" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form action="/empty">
         \\  <p>No fields here</p>
@@ -357,7 +353,6 @@ test "browser.forms: empty form skipped" {
 }
 
 test "browser.forms: hidden inputs excluded" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <input type="hidden" name="csrf" value="token123">
@@ -372,7 +367,6 @@ test "browser.forms: hidden inputs excluded" {
 }
 
 test "browser.forms: multiple forms" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form action="/search" method="GET">
         \\  <input type="text" name="q" placeholder="Search">
@@ -390,7 +384,6 @@ test "browser.forms: multiple forms" {
 }
 
 test "browser.forms: disabled fields flagged" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <input type="text" name="enabled_field">
@@ -406,7 +399,6 @@ test "browser.forms: disabled fields flagged" {
 }
 
 test "browser.forms: disabled fieldset" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <fieldset disabled>
@@ -424,7 +416,6 @@ test "browser.forms: disabled fieldset" {
 }
 
 test "browser.forms: external field via form attribute" {
-    defer testing.reset();
     const forms = try testForms(
         \\<input type="text" name="external" form="myform">
         \\<form id="myform" action="/submit">
@@ -438,7 +429,6 @@ test "browser.forms: external field via form attribute" {
 }
 
 test "browser.forms: checkbox and radio return value attribute" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <input type="checkbox" name="agree" value="yes" checked>
@@ -456,7 +446,6 @@ test "browser.forms: checkbox and radio return value attribute" {
 }
 
 test "browser.forms: form without action or method" {
-    defer testing.reset();
     const forms = try testForms(
         \\<form>
         \\  <input type="text" name="q">

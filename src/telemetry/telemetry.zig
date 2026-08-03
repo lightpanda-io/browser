@@ -1,6 +1,5 @@
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
@@ -10,11 +9,8 @@ const log = lp.log;
 const IID_FILE = "iid";
 const Allocator = std.mem.Allocator;
 
-/// The env/build-level opt-out. Config.telemetryDisabled folds it into
-/// the predicate everything else reads; only crash_handler calls this
-/// directly (no Config exists on the crash path).
 pub fn isDisabled() bool {
-    if (builtin.mode == .Debug or builtin.is_test) {
+    if (lp.IS_DEBUG or lp.IS_TEST) {
         return true;
     }
 
@@ -32,8 +28,8 @@ fn TelemetryT(comptime P: type) type {
         const Self = @This();
 
         pub fn init(app: *App, run_mode: Config.RunMode, interactive: bool) !Self {
-            const disabled = app.config.telemetryDisabled();
-            if (builtin.mode != .Debug and builtin.is_test == false) {
+            const disabled = isDisabled();
+            if (lp.IS_DEBUG == false and lp.IS_TEST == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
 

@@ -31,10 +31,10 @@ _proto: *HtmlElement,
 _sheet: ?*CSSStyleSheet = null,
 
 pub fn asElement(self: *Style) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Style) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Style) *Node {
     return self.asElement().asNode();

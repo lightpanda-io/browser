@@ -248,7 +248,6 @@ pub fn handleResourceRead(self: *Self, arena: std.mem.Allocator, req: protocol.R
 }
 
 test "MCP.Server - Integration: synchronous smoke test" {
-    defer testing.reset();
     const allocator = testing.allocator;
     const app = testing.test_app;
 

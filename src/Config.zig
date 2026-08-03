@@ -19,11 +19,9 @@
 const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
-const telemetry = @import("telemetry/telemetry.zig");
 
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
@@ -395,9 +393,7 @@ const Commands = cli.Builder(.{
         // programmatically; it is not typeable on the command line.
         .name = "embed",
         .hidden = true,
-        .options = .{
-            .{ .name = "enable_telemetry", .type = bool },
-        },
+        .options = .{},
         .shared_options = CommonOptions,
     },
     .{ .name = "version", .options = .{
@@ -441,14 +437,6 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
     if (modeNeedsHttp(self.mode)) {
         self.http_headers.deinit(allocator);
     }
-}
-
-pub fn telemetryDisabled(self: *const Config) bool {
-    if (telemetry.isDisabled()) return true;
-    return switch (self.mode) {
-        .embed => |opts| !opts.enable_telemetry,
-        else => false,
-    };
 }
 
 pub fn interactive(self: *const Config) bool {
@@ -884,9 +872,8 @@ pub const HttpHeaders = struct {
 pub fn printUsageAndExit(self: *const Config, allocator: Allocator, help_for: RunMode, success: bool) !void {
     const exec_name = self.exec_name;
     const Help = @import("help.zon");
-    const is_debug = builtin.mode == .Debug;
-    const info_or_warn = if (comptime is_debug) "info" else "warn";
-    const pretty_or_logfmt = if (comptime is_debug) "pretty" else "logfmt";
+    const info_or_warn = if (comptime lp.IS_DEBUG) "info" else "warn";
+    const pretty_or_logfmt = if (comptime lp.IS_DEBUG) "pretty" else "logfmt";
     const comptimePrint = std.fmt.comptimePrint;
 
     const text = switch (help_for) {

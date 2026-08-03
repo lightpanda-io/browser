@@ -47,10 +47,10 @@ pub fn asHtmlElement(self: *Form) *HtmlElement {
     return self._proto;
 }
 fn asConstElement(self: *const Form) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asElement(self: *Form) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Form) *Node {
     return self.asElement().asNode();

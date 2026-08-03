@@ -37,11 +37,11 @@ _executed: bool = false,
 _force_async: bool = true,
 
 pub fn asElement(self: *Script) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asConstElement(self: *const Script) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 
 pub fn asNode(self: *Script) *Node {
@@ -194,7 +194,7 @@ pub const Build = struct {
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: Script" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
+    testing.expectLog(&.{ .js, .js });
     try testing.htmlRunner("element/html/script", .{});
 }

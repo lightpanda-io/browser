@@ -26,15 +26,13 @@ const Node = @import("Node.zig");
 const Range = @import("Range.zig");
 const StaticRange = @import("StaticRange.zig");
 
-const Allocator = std.mem.Allocator;
-
 const AbstractRange = @This();
 
 pub const _prototype_root = true;
 
 _rc: lp.RC = .{},
 _type: Type,
-_arena: Allocator,
+_arena: *lp.Arena,
 _end_offset: u32,
 _start_offset: u32,
 _frame_loader_id: u32,
@@ -55,7 +53,7 @@ pub fn deinit(self: *AbstractRange, page: *Page) void {
             frame._live_ranges.remove(&self._range_link);
         }
     }
-    page.releaseArena(self._arena);
+    self._arena.release();
 }
 
 pub fn releaseRef(self: *AbstractRange, page: *Page) void {

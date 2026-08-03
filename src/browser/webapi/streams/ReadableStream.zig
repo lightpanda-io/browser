@@ -27,7 +27,6 @@ const WritableStream = @import("WritableStream.zig");
 
 const log = lp.log;
 const Execution = js.Execution;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -187,7 +186,7 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
     self._pulling = true;
 
     const exec = self._execution;
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         if (exec.js.local == null) {
             log.fatal(.bug, "null context scope", .{ .src = "ReadableStream.callPullIfNeeded", .url = exec.url.* });
             std.debug.assert(exec.js.local != null);

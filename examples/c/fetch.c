@@ -7,6 +7,7 @@
 
 #include <lightpanda.h>
 #include <stdio.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -25,7 +26,7 @@ int main(int argc, char **argv) {
     opts.format = LP_FORMAT_MARKDOWN;
 
     lp_result result = {0};
-    status = lp_fetch(browser, argv[1], &opts, &result);
+    status = lp_fetch(browser, argv[1], strlen(argv[1]), &opts, &result);
     if (status != LP_OK) {
         fprintf(stderr, "lp_fetch failed: %d\n", status);
         lp_shutdown(browser);

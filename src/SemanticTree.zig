@@ -730,8 +730,6 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
-    defer testing.reset();
-
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 
@@ -756,7 +754,6 @@ test "SemanticTree backendDOMNodeId" {
 }
 
 test "SemanticTree max_depth" {
-    defer testing.reset();
     var registry: CDPNode.Registry = .init(testing.allocator);
     defer registry.deinit();
 

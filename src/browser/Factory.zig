@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const reflect = @import("reflect.zig");
 
@@ -32,6 +31,7 @@ const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
+const AbortSignal = @import("webapi/AbortSignal.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
@@ -42,7 +42,6 @@ const log = lp.log;
 const String = lp.String;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 // Shared across all frames of a Page.
 const Factory = @This();
@@ -77,10 +76,10 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
 }
 
 // this is a root object
-pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn event(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -90,10 +89,10 @@ pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !
     return chain.get(1);
 }
 
-pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn uiEvent(_: *const Factory, arena: *lp.Arena, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -104,10 +103,10 @@ pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype)
     return chain.get(2);
 }
 
-pub fn mouseEvent(_: *const Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
+pub fn mouseEvent(_: *const Factory, arena: *lp.Arena, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
@@ -236,7 +235,7 @@ fn AutoPrototypeChain(comptime types: []const type) type {
     };
 }
 
-fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
+fn eventInit(arena: *lp.Arena, typ: String, value: anytype) !Event {
     // Round to 2ms for privacy (browsers do this)
     // Same (already coarsened) clock as the performance time origin, so the
     // timeStamp getter can report it relative to that origin.
@@ -255,7 +254,7 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     // Special case: Blob has slice and mime fields, so we need manual setup
     const chain = try PrototypeChain(
         &.{ Blob, @TypeOf(child) },
-    ).allocate(arena);
+    ).allocate(arena.allocator());
 
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
@@ -270,8 +269,8 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     return chain.get(1);
 }
 
-pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, frame: *Frame) !*@TypeOf(child) {
-    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena);
+pub fn abstractRange(_: *const Factory, arena: *lp.Arena, child: anytype, frame: *Frame) !*@TypeOf(child) {
+    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena.allocator());
 
     const doc = frame.document.asNode();
     const abstract_range = chain.get(0);
@@ -381,7 +380,7 @@ pub fn protoOffset(comptime T: type) usize {
 pub fn protoOf(value: anytype) *reflect.Proto(reflect.Struct(@TypeOf(value))).? {
     const T = reflect.Struct(@TypeOf(value));
     const proto: *reflect.Proto(T).? = @ptrFromInt(@intFromPtr(value) - comptime protoOffset(T));
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // In debug, we'll assert that our offset and the _proto field agree.
         std.debug.assert(proto == if (comptime hasStoredProto(T)) value._proto else value._proto_canary);
     }
@@ -393,7 +392,7 @@ fn setProto(ptr: anytype, proto: anytype) void {
     const T = reflect.Struct(@TypeOf(ptr));
     if (comptime hasStoredProto(T)) {
         ptr._proto = proto;
-    } else if (comptime IS_DEBUG and @hasField(T, "_proto_canary")) {
+    } else if (comptime lp.IS_DEBUG and @hasField(T, "_proto_canary")) {
         ptr._proto_canary = proto;
     }
 }
@@ -485,11 +484,12 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     inline for (1..types.len - 1) |i| {
         const T = types[i];
         if (T == Element.Svg) {
-            chain.set(i, .{
-                ._proto = chain.get(i - 1),
+            const svg_ptr = chain.get(i);
+            svg_ptr.* = .{
                 ._tag_name = try String.init(self._arena, tag_name, .{}),
                 ._type = unionInit(Element.Svg.Type, chain.get(i + 1)),
-            });
+            };
+            setProto(svg_ptr, chain.get(i - 1));
         } else {
             chain.setMiddle(i, T.Type);
         }
@@ -512,6 +512,12 @@ pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !
     ).create(allocator, child);
 }
 
+pub fn taskSignal(self: *Factory, child: anytype) !*@TypeOf(child) {
+    return try AutoPrototypeChain(
+        &.{ EventTarget, AbortSignal, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
+}
+
 pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     const TextTrackCue = @import("webapi/media/TextTrackCue.zig");
@@ -524,14 +530,12 @@ pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {
 pub fn destroy(self: *Factory, value: anytype) void {
     const S = reflect.Struct(@TypeOf(value));
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // We should always destroy from the leaf down.
-        if (@hasDecl(S, "_prototype_root")) {
-            // A Event{._type == .generic} (or any other similar types)
-            // _should_ be destroyed directly. The _type = .generic is a pseudo
-            // child
-            if (S != Event or value._type != .generic) {
-                log.fatal(.bug, "factory.destroy.event", .{ .type = @typeName(S) });
+        if (comptime @hasDecl(S, "_prototype_root")) {
+            const is_leaf = if (comptime @hasField(S, "_type")) value._type == .generic else false;
+            if (!is_leaf) {
+                log.fatal(.bug, "factory.destroy.root", .{ .type = @typeName(S) });
                 unreachable;
             }
         }

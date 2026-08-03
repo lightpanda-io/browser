@@ -51,6 +51,12 @@ pub fn memoryPressureNotification(self: Isolate, level: MemoryPressureLevel) voi
     v8.v8__Isolate__MemoryPressureNotification(self.handle, @intFromEnum(level));
 }
 
+// Tells V8 how much native memory is hanging off objects in this isolate, so
+// heap-growth heuristics account for it. May enter GC work.
+pub fn adjustAmountOfExternalAllocatedMemory(self: Isolate, delta: i64) void {
+    _ = v8.v8__Isolate__AdjustAmountOfExternalAllocatedMemory(self.handle, delta);
+}
+
 pub fn notifyContextDisposed(self: Isolate) void {
     _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }

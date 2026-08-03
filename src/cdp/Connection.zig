@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const CDP = @import("CDP.zig");
 
@@ -58,7 +57,7 @@ pub fn init(
 ) !void {
     const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
-    if (builtin.is_test == false) {
+    if (lp.IS_TEST == false) {
         lp.assert(socket_flags & nonblocking == nonblocking, "Connection.init blocking", .{});
     }
 
@@ -374,7 +373,7 @@ fn handleMessage(self: *Connection, msg: WS.Message) !bool {
         .text, .binary => return self.pushCdp(msg.data),
         .ping => {
             const arena = try self.arena_pool.acquire(.tiny, "cdp ping");
-            errdefer self.arena_pool.release(arena);
+            errdefer arena.release();
             self.inbox.push(arena, .{ .ping = try arena.dupe(u8, msg.data) });
             return true;
         },
@@ -396,13 +395,13 @@ fn handleMessage(self: *Connection, msg: WS.Message) !bool {
 fn pushCdp(self: *Connection, bytes: []const u8) !bool {
     // TODO: is it worth trying to pad this for the cost overhead of parsing?
     const arena = try self.arena_pool.acquire(bytes.len, "cdp data");
-    errdefer self.arena_pool.release(arena);
+    errdefer arena.release();
 
     const raw = try arena.dupe(u8, bytes);
 
     const input = std.json.parseFromSliceLeaky(
         CDP.InputMessage,
-        arena,
+        arena.allocator(),
         raw,
         .{ .ignore_unknown_fields = true },
     ) catch {

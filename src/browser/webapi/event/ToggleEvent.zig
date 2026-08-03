@@ -16,7 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -26,7 +25,6 @@ const Event = @import("../Event.zig");
 const HtmlElement = @import("../element/Html.zig");
 
 const String = lp.String;
-const Allocator = std.mem.Allocator;
 
 /// https://html.spec.whatwg.org/multipage/popover.html#toggleevent
 const ToggleEvent = @This();
@@ -48,18 +46,18 @@ const Options = Event.inheritOptions(ToggleEvent, ToggleEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, frame: *Frame) !*ToggleEvent {
     const arena = try frame.getArena(.tiny, "ToggleEvent");
-    errdefer frame.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
     return initWithTrusted(arena, type_string, opts_, false, frame);
 }
 
 pub fn initTrusted(typ: String, _opts: ?Options, frame: *Frame) !*ToggleEvent {
     const arena = try frame.getArena(.tiny, "ToggleEvent.trusted");
-    errdefer frame.releaseArena(arena);
+    errdefer arena.release();
     return initWithTrusted(arena, typ, _opts, true, frame);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*ToggleEvent {
+fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool, frame: *Frame) !*ToggleEvent {
     const opts = _opts orelse Options{};
 
     const event = try frame._factory.event(

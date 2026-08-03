@@ -946,7 +946,6 @@ test "normalizePropertyValue: collapse duplicate two-value shorthands" {
 }
 
 test "normalizePropertyValue: anchor() canonical order" {
-    defer testing.reset();
     const cases = .{
         // Dashed ident should come before keyword
         .{ "left", "anchor(left --foo)", "anchor(--foo left)" },

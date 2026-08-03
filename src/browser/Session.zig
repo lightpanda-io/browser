@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 
@@ -39,8 +38,6 @@ const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
-const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 // A Session represents a browsing context group (cookie jar, session storage,
 // navigation history) within a Browser. It owns a set of live Pages — each a
@@ -50,7 +47,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 const Session = @This();
 
 browser: *Browser,
-arena: Allocator,
+arena: *lp.Arena,
 history: History,
 navigation: *Navigation,
 storage_shed: storage.Shed,
@@ -161,9 +158,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const arena_pool = browser.arena_pool;
 
     const arena = try arena_pool.acquire(.small, "Session");
-    errdefer arena_pool.release(arena);
+    errdefer arena.release();
 
-    const navigation = try Factory.chainedWithAllocator(arena, .{
+    const navigation = try Factory.chainedWithAllocator(arena.allocator(), .{
         EventTarget{ ._type = undefined },
         Navigation{ ._proto = undefined },
     });
@@ -211,7 +208,7 @@ pub fn deinit(self: *Session) void {
         self.bridge_store.deinit(allocator);
     }
     self._console_messages.deinit();
-    self.arena_pool.release(self.arena);
+    self.arena.release();
 }
 
 /// Register the console listener so `drainConsoleMessages` returns output. Idempotent.
@@ -285,7 +282,12 @@ fn allocatePage(self: *Session, frame_id: u32) !*Page {
 
 // Tear down and free a Page allocated via allocatePage.
 fn queuePageDestruction(self: *Session, page: *Page) void {
-    self._page_destruction_queue.append(self.arena, page) catch @panic("OOM");
+    if (page.destroying) {
+        // see Page.destroying field for why this is necessary.
+        return;
+    }
+    page.destroying = true;
+    self._page_destruction_queue.append(self.arena.allocator(), page) catch @panic("OOM");
 }
 
 fn retire(self: *Session, page: *Page) void {
@@ -293,6 +295,10 @@ fn retire(self: *Session, page: *Page) void {
         // page is being destroyed, if it was replacing a page, then update that
         // page's replacement to keep replaces<->replacement consistent.
         live.replacement = null;
+        // Might have retired while transfer was active and the Frame's
+        // header/error callback might still happen. Setting this null prevents
+        // those callbacks from using this page post-retirement
+        page.replaces = null;
     }
 
     if (page.replacement) |replacement| {
@@ -348,7 +354,7 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     const page = try self.allocatePage(frame_id);
     errdefer self.queuePageDestruction(page);
 
-    try self.pages.append(self.arena, page);
+    try self.pages.append(self.arena.allocator(), page);
     errdefer _ = self.pages.pop();
 
     const frame = &page.frame;
@@ -362,7 +368,7 @@ pub fn createPage(self: *Session) !PageHandle {
     // Drain any pending Page deinits now, while we're at a known-safe point
     self.processDestroyQueues();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "create page", .{});
     }
 
@@ -390,21 +396,21 @@ pub fn closePage(self: *Session, frame_id: u32) void {
 // We queue then process so that there is a single place (processDestroyQueues)
 // where pages get destroyed.
 pub fn closeAllPages(self: *Session) void {
-    self._page_destruction_queue.ensureUnusedCapacity(self.arena, self.pages.items.len) catch @panic("OOM");
     for (self.pages.items) |page| {
         page.frame.abortTransfers();
-        self._page_destruction_queue.appendAssumeCapacity(page);
+        self.queuePageDestruction(page);
     }
     self.pages.clearRetainingCapacity();
     self.processDestroyQueues();
 }
 
-pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.arena_pool.acquire(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *Session, allocator: Allocator) void {
-    self.arena_pool.release(allocator);
+// For an arena owned by a JS-exposed object, freed by its finalizer.
+pub fn getPinnedArena(self: *Session, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.arena_pool.acquirePinned(&self.browser.arena_account, size_or_bucket, debug);
 }
 
 // The live page for a top-level browsing context, by its root frame id.
@@ -433,7 +439,7 @@ pub fn pendingOrLivePage(self: *Session, frame_id: u32) ?*Page {
 pub fn replacementOf(self: *Session, page: *Page) ?*Page {
     const replacement = page.replacement;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         // quick check to make sure our replacement <=> replaces link is in sync
         var found: ?*Page = null;
         for (self.pages.items) |p| {
@@ -457,7 +463,7 @@ pub fn primaryPage(self: *Session) ?PageHandle {
         return null;
     }
     const page = self.pages.items[0];
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(page.replaces == null);
     }
     return .{ .session = self, .frame_id = page.frame._frame_id };
@@ -473,7 +479,7 @@ pub fn currentFrame(self: *Session) ?*Frame {
         return null;
     }
     const page = self.pages.items[0];
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(page.replaces == null);
     }
     return &page.frame;
@@ -594,7 +600,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
 
         if (qn.is_about_blank) {
             // Defer about:blank to second pass
-            try about_blank_queue.append(self.arena, frame);
+            try about_blank_queue.append(self.arena.allocator(), frame);
             continue;
         }
 
@@ -643,7 +649,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
 
 fn processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation) !void {
     frame._queued_navigation = null;
-    defer self.releaseArena(qn.arena);
+    defer qn.arena.release();
 
     // A popup whose window was close()'d is parked in page.closed_frames and
     // torn down at Page.deinit. It must never be navigated. This navigation
@@ -782,7 +788,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn
     // arena as soon as navigate returns.
-    defer self.arena_pool.release(qn.arena);
+    defer qn.arena.release();
 
     if (is_synthetic) {
         return self.replaceRootImmediate(current_frame._frame_id, qn.url, qn.opts);
@@ -799,7 +805,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
 fn replaceRootImmediate(self: *Session, frame_id: u32, url: [:0]const u8, opts: Frame.NavigateOpts) !void {
     if (self.livePage(frame_id)) |page| {
         self.tearDownPage(page);
-    } else if (comptime IS_DEBUG) {
+    } else if (comptime lp.IS_DEBUG) {
         lp.assert(false, "Session.replaceRootImmediate - no live page", .{});
     }
     const new_frame = try self.installNewActivePage(frame_id);
@@ -844,10 +850,11 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     live.replacement = page;
 
     errdefer live.replacement = null;
-    try self.pages.append(self.arena, page);
-    errdefer _ = self.pages.pop();
+    try self.pages.append(self.arena.allocator(), page);
+    // don't just pop, frame.navitate() can itself remove this page from the pages list
+    errdefer self.removePageFromList(page);
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "initiate root navigation", .{ .url = url });
     }
 
@@ -888,7 +895,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
         lp.assert(false, "Session.commitPendingPage - page has no replaces", .{});
     };
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "commit pending page", .{});
     }
 
@@ -926,7 +933,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
 // (HTTP error before commit, session deinit during pending, etc.). The
 // active page is untouched.
 pub fn discardPendingPage(self: *Session, replacement: *Page) void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "discard pending page", .{});
     }
 
@@ -976,3 +983,36 @@ pub const PageHandle = struct {
         return f.navigate(request_url, opts);
     }
 };
+
+const testing = @import("../testing.zig");
+test "Session: retiring a pending page destroys it once" {
+    const session = testing.test_session;
+    defer session.closeAllPages();
+
+    const handle = try session.createPage();
+    const live = handle.page().?;
+
+    // A pending root navigation, set up like initiateRootNavigation does.
+    const pending = try session.allocatePage(live.frame._frame_id);
+    pending.replaces = live;
+    live.replacement = pending;
+    try session.pages.append(session.arena.allocator(), pending);
+
+    // Its transfer failed inside submit(): the error_callback discards the
+    // pending page...
+    session.discardPendingPage(pending);
+    try testing.expectEqual(null, pending.replaces);
+    try testing.expectEqual(null, live.replacement);
+
+    // ...and then submit's error unwinds initiateRootNavigation's errdefers
+    // over a page that is already off the list and already queued.
+    session.removePageFromList(pending);
+    session.queuePageDestruction(pending);
+
+    try testing.expectEqual(1, session.pages.items.len);
+    try testing.expectEqual(live, session.pages.items[0]);
+    try testing.expectEqual(1, session._page_destruction_queue.items.len);
+
+    // Would deinit `pending` twice if it had been queued twice.
+    session.processDestroyQueues();
+}

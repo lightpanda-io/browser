@@ -76,12 +76,12 @@ pub fn dupeString(self: *const Execution, value: []const u8) ![]const u8 {
     return self.arena.dupe(u8, value);
 }
 
-pub fn getArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.page.getArena(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *const Execution, allocator: Allocator) void {
-    self.page.releaseArena(allocator);
+pub fn getPinnedArena(self: *const Execution, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.page.getPinnedArena(size_or_bucket, debug);
 }
 
 pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const builtin = @import("builtin");
+const lp = @import("lightpanda");
 
 pub fn lookup(value: []const u8) bool {
     return public_suffix_list.has(value);
@@ -8,7 +8,7 @@ pub fn lookup(value: []const u8) bool {
 const public_suffix_list = std.StaticStringMap(void).initComptime(entries);
 
 const entries: []const struct { []const u8, void } =
-    if (builtin.is_test) &.{
+    if (lp.IS_TEST) &.{
         .{ "api.gov.uk", {} },
         .{ "gov.uk", {} },
     } else &.{

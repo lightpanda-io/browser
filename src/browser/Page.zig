@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
 
@@ -31,7 +30,6 @@ const Blob = @import("webapi/Blob.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 // A Page is the container for a root Frame and all of its descendants
 // (nested iframes). It owns the resources that share the lifetime of the root
@@ -72,6 +70,7 @@ factory: Factory,
 
 // The arena for this Page's lifetime. Document / Frame / Factory / DOM
 // objects allocate out of this.
+_frame_arena: *lp.Arena,
 frame_arena: Allocator,
 
 // Origin map for same-origin context sharing. Entries live for the Page's
@@ -139,6 +138,13 @@ replaces: ?*Page = null,
 // code. The two are kept in sync.
 replacement: ?*Page = null,
 
+// Prevents double entry in session._page_destruction_queue. Can happen since
+// various paths can enter this, and there isn't always a single clear owner
+// of who should errdefer, e.g. if this happens before a navigation's
+// transfer.submit(), then the caller needs to handle the failure. If it happens
+// after, then frameErrorCallback does.
+destroying: bool = false,
+
 // The viewport every consumer should read. The runtime override (set via
 // Emulation.setDeviceMetricsOverride) is stored on the Browser so it persists
 // across page navigations; delegate to it here, keeping a single read path for
@@ -150,13 +156,14 @@ pub fn getViewport(self: *const Page) Viewport {
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");
-    errdefer session.arena_pool.release(frame_arena);
+    errdefer frame_arena.release();
 
     self.* = .{
         .session = session,
         .frame = undefined,
-        .frame_arena = frame_arena,
-        .factory = Factory.init(frame_arena),
+        ._frame_arena = frame_arena,
+        .frame_arena = frame_arena.allocator(),
+        .factory = Factory.init(frame_arena.allocator()),
         .globals = .init(session.browser.app.allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
@@ -185,7 +192,7 @@ pub fn deinit(self: *Page) void {
     self.shared_workers = .empty;
 
     {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(self.blob_urls.count() == 0);
         }
 
@@ -215,7 +222,7 @@ pub fn deinit(self: *Page) void {
 
     self.globals.deinit();
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.origins.count() == 0);
     }
     // Defensive cleanup in case origins leaked.
@@ -228,7 +235,7 @@ pub fn deinit(self: *Page) void {
         self.origins = .empty;
     }
 
-    session.arena_pool.release(self.frame_arena);
+    self._frame_arena.release();
 }
 
 pub fn recordJsError(self: *Page, err: anyerror) void {
@@ -236,12 +243,12 @@ pub fn recordJsError(self: *Page, err: anyerror) void {
     lp.metrics.js_errors.incr(if (err == error.JsException) .js_exception else .other);
 }
 
-pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self.session.getArena(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *Page, allocator: Allocator) void {
-    return self.session.releaseArena(allocator);
+pub fn getPinnedArena(self: *Page, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self.session.getPinnedArena(size_or_bucket, debug);
 }
 
 pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
@@ -255,7 +262,7 @@ pub fn getOrCreateOrigin(self: *Page, key_: ?[]const u8) !*js.Origin {
         return js.Origin.init(session.browser.app, session.browser.env.isolate, &opaque_origin);
     };
 
-    const gop = try self.origins.getOrPut(session.arena, key);
+    const gop = try self.origins.getOrPut(session.arena.allocator(), key);
     if (gop.found_existing) {
         const origin = gop.value_ptr.*;
         origin.rc += 1;
@@ -320,7 +327,7 @@ pub fn scheduleNavigation(self: *Page, frame: *Frame) !void {
         }
     }
 
-    return list.append(self.session.arena, frame);
+    return list.append(self.session.arena.allocator(), frame);
 }
 
 pub fn findFrameByFrameId(self: *Page, frame_id: u32) ?*Frame {
@@ -405,7 +412,8 @@ fn appendFrameExecutions(frame: *Frame, origin: []const u8, arena: Allocator, li
 const testing = @import("../testing.zig");
 
 test "Page: js_error_count" {
-    defer testing.reset();
+    testing.expectLog(&.{ .js, .js, .js });
+
     // One uncaught top-level script exception, one uncaught timer-callback
     // exception.
     const page = try testing.pageTest("page_js_error.html", .{});

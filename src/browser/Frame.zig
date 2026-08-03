@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const JS = @import("js/js.zig");
 const Mime = @import("Mime.zig");
@@ -86,7 +85,6 @@ const log = lp.log;
 const String = lp.String;
 const IFrame = Element.Html.IFrame;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = builtin.mode == .Debug;
 
 pub const BUF_SIZE = 1024;
 
@@ -298,10 +296,12 @@ arena: Allocator,
 // An arena with a lifetime for at least the scope of one Zig invocation from
 // JS. Prefer local_arena where possible. Use call_arena when allocations may
 // need to call back into JS (event dispatch, forEach callback, ....)
+_call_arena: *lp.Arena,
 call_arena: Allocator,
 
 // An arena with a lifetime guaranteed to be for exactly 1 invoking of a Zig
 // function from JS. Best arena to use, when possible.
+_local_arena: *lp.Arena,
 local_arena: Allocator,
 
 parent: ?*Frame,
@@ -350,7 +350,7 @@ pub const InitOpts = struct {
 };
 
 pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.init", .{});
     }
 
@@ -358,10 +358,10 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     const session = page.session;
     const call_arena = try session.getArena(.medium, "call_arena");
-    errdefer session.releaseArena(call_arena);
+    errdefer call_arena.release();
 
     const local_arena = try session.getArena(.medium, "local_arena");
-    errdefer session.releaseArena(local_arena);
+    errdefer local_arena.release();
 
     const factory = &page.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
@@ -376,8 +376,10 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .parent = parent,
         .document = document,
         .window = undefined,
-        .call_arena = call_arena,
-        .local_arena = local_arena,
+        ._call_arena = call_arena,
+        ._local_arena = local_arena,
+        .call_arena = call_arena.allocator(),
+        .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
         ._page = page,
         ._session = session,
@@ -452,7 +454,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     document._frame = self;
 
-    if (comptime builtin.is_test == false) {
+    if (comptime lp.IS_TEST == false) {
         if (parent == null) {
             // HTML test runner manually calls these as necessary
             try self.js.scheduler.add(session.browser, struct {
@@ -471,7 +473,7 @@ pub fn deinit(self: *Frame) void {
         frame.deinit();
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame.deinit", .{ .url = self.url, .type = self._type });
 
         // Uncomment if you want slab statistics to print.
@@ -491,7 +493,7 @@ pub fn deinit(self: *Frame) void {
     const page = self._page;
 
     if (self._queued_navigation) |qn| {
-        page.releaseArena(qn.arena);
+        qn.arena.release();
     }
 
     while (self._message_ports.first) |node| {
@@ -549,8 +551,8 @@ pub fn deinit(self: *Frame) void {
     self._script_manager.deinit();
     self._style_manager.deinit();
 
-    page.releaseArena(self.call_arena);
-    page.releaseArena(self.local_arena);
+    self._call_arena.release();
+    self._local_arena.release();
 }
 
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
@@ -614,12 +616,12 @@ pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
     }
 }
 
-pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !Allocator {
+pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
     return self._session.getArena(size_or_bucket, debug);
 }
 
-pub fn releaseArena(self: *Frame, allocator: Allocator) void {
-    return self._session.releaseArena(allocator);
+pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !*lp.Arena {
+    return self._session.getPinnedArena(size_or_bucket, debug);
 }
 
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
@@ -705,11 +707,11 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
                 return error.BlobNotFound;
             };
             const parse_arena = try self.getArena(.medium, "Frame.parseBlob");
-            defer self.releaseArena(parse_arena);
+            defer parse_arena.release();
             // A script executed mid-parse can revoke the blob URL, letting GC
             // free the buffer under the parser; parse a copy.
             const html = try parse_arena.dupe(u8, blob._slice);
-            var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
+            var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
             parser.parse(html);
         } else {
             self.document.injectBlank(self) catch |err| {
@@ -805,7 +807,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             try transfer.req.headers.add(hdr);
         }
         if (opts.referer) |ref| {
-            const ref_header = try std.mem.concatWithSentinel(transfer.arena, u8, &.{ "Referer: ", ref }, 0);
+            const ref_header = try std.mem.concatWithSentinel(transfer.arena.allocator(), u8, &.{ "Referer: ", ref }, 0);
             try transfer.req.headers.add(ref_header);
         }
     }
@@ -865,14 +867,14 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
         return;
     }
     const arena = try self._session.getArena(.small, "scheduleNavigation");
-    errdefer self._session.releaseArena(arena);
+    errdefer arena.release();
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
 
 // Don't name the first parameter "self", because the target of this navigation
 // might change inside the function. So the code should be explicit about the
 // frame that it's acting on.
-fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
     const resolved_url, const is_about_blank = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk .{ try arena.dupeZ(u8, request_url), false };
@@ -900,7 +902,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         };
 
         const u = try URL.resolve(
-            arena,
+            arena.allocator(),
             frame_base,
             request_url,
             .{ .encoding = originator.charset },
@@ -926,7 +928,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         std.mem.eql(u8, target.url, resolved_url) and
         std.mem.indexOfScalar(u8, resolved_url, '#') != null)
     {
-        session.releaseArena(arena);
+        arena.release();
         return;
     }
 
@@ -949,7 +951,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error
-        session.releaseArena(arena);
+        arena.release();
         return;
     }
 
@@ -997,7 +999,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     };
 
     if (target._queued_navigation) |existing| {
-        session.releaseArena(existing.arena);
+        existing.arena.release();
     }
 
     target._queued_navigation = qn;
@@ -1206,7 +1208,7 @@ fn _documentIsComplete(self: *Frame) !void {
         try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
     }
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "load", .{ .url = self.url, .type = self._type });
     }
 
@@ -1217,7 +1219,7 @@ fn notifyParentLoadComplete(self: *Frame) void {
     const parent = self.parent orelse return;
 
     if (self._parent_notified == true) {
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             std.debug.assert(false);
         }
         // shouldn't happen, don't want to crash a release build over it
@@ -1267,7 +1269,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     self.window._location.releaseRef(self._page);
     self.window._location = location;
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate header", .{
             .url = self.url,
             .status = transfer.responseStatus(),
@@ -1483,7 +1485,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             }
         }
 
-        if (comptime IS_DEBUG) {
+        if (comptime lp.IS_DEBUG) {
             log.debug(.frame, "navigate first chunk", .{
                 .content_type = mime.content_type,
                 .len = data.len,
@@ -1535,7 +1537,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     }
 
     switch (self._parse_state) {
-        .html => |*html| try html.buffer.appendSlice(html.arena, data),
+        .html => |*html| try html.buffer.appendSlice(html.arena.allocator(), data),
         .text => |*buf| {
             // we have to escape the data...
             var v = data;
@@ -1575,7 +1577,7 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
 fn frameDoneCallback(ctx: *anyopaque) !void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
-    if (comptime IS_DEBUG) {
+    if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "navigate done", .{ .type = self._type, .url = self.url });
     }
 
@@ -1587,7 +1589,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
         self._pending_content_type = null;
     }
 
-    defer if (comptime IS_DEBUG) {
+    defer if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame load complete", .{
             .url = self.url,
             .type = self._type,
@@ -1596,15 +1598,15 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
     };
 
     const parse_arena = try self.getArena(.medium, "Frame.parse");
-    defer self.releaseArena(parse_arena);
+    defer parse_arena.release();
 
-    var parser = Parser.init(parse_arena, self.document.asNode(), self, .{ .allow_declarative_shadow = true });
+    var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
 
     switch (self._parse_state) {
         .html => |*html| {
             {
                 defer {
-                    self.releaseArena(html.arena);
+                    html.arena.release();
                     self._parse_state = .complete;
                 }
 
@@ -1629,7 +1631,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .raw_done = buf.items };
 
             // Use empty an HTML containing the image.
-            const html = try std.mem.concat(parse_arena, u8, &.{
+            const html = try std.mem.concat(parse_arena.allocator(), u8, &.{
                 "<html><head><meta charset=\"utf-8\"></head><body><img src=\"",
                 self.url,
                 "\"></body></html>",
@@ -1656,7 +1658,7 @@ fn frameDoneCallback(ctx: *anyopaque) !void {
         },
         .err => |err| {
             // Generate a pseudo HTML page indicating the failure.
-            const html = try std.mem.concat(parse_arena, u8, &.{
+            const html = try std.mem.concat(parse_arena.allocator(), u8, &.{
                 "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
                 @errorName(err),
                 "</p></body></html>",
@@ -2005,7 +2007,7 @@ fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
                 };
             }
             // Detached nodes should not have IDs registered
-            if (IS_DEBUG) {
+            if (lp.IS_DEBUG) {
                 std.debug.assert(false);
             }
             return .{
@@ -2176,10 +2178,11 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     }
     const element = link.asElement();
 
-    const arena = try session.getArena(.medium, "Frame.loadExternalStylesheet");
-    defer session.releaseArena(arena);
+    // HttpClient will take out a larger arena for the body, if necessary
+    const arena = try session.getArena(.small, "Frame.loadExternalStylesheet");
+    defer arena.release();
 
-    const resolved = URL.resolve(arena, self.base(), href, .{ .encoding = self.charset }) catch |err| {
+    const resolved = URL.resolve(arena.allocator(), self.base(), href, .{ .encoding = self.charset }) catch |err| {
         log.warn(.http, "external stylesheet resolve", .{ .err = err, .href = href });
         try self.fireElementEvent(element, comptime .wrap("error"));
         return;
@@ -2208,7 +2211,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = http_client.syncRequest(arena, .{
+    var response = http_client.syncRequest(.{
         .url = resolved,
         .method = .GET,
         .frame_id = self._frame_id,
@@ -2223,7 +2226,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
-    defer response.deinit(arena);
+    defer response.deinit();
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
@@ -2967,7 +2970,7 @@ const ParseState = union(enum) {
     complete,
     err: anyerror,
     html: struct {
-        arena: Allocator,
+        arena: *lp.Arena,
         buffer: std.ArrayList(u8),
     },
     text: std.ArrayList(u8),
@@ -2976,9 +2979,9 @@ const ParseState = union(enum) {
     raw_done: []const u8,
     download: Download,
 
-    fn deinit(self: *ParseState, frame: *Frame) void {
+    fn deinit(self: *ParseState, _: *Frame) void {
         switch (self.*) {
-            .html => |html| frame.releaseArena(html.arena),
+            .html => |html| html.arena.release(),
             // Only reached when a frame is torn down mid-download (the normal
             // completion path in frameDoneCallback already closes the file and
             // transitions to .complete).
@@ -3143,7 +3146,7 @@ const Navigation = union(NavigationType) {
 };
 
 pub const QueuedNavigation = struct {
-    arena: Allocator,
+    arena: *lp.Arena,
     url: [:0]const u8,
     opts: NavigateOpts,
     is_about_blank: bool,
@@ -3365,7 +3368,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const is_post = std.mem.eql(u8, method, "post");
 
     const arena = try self._session.getArena(.medium, "submitForm");
-    errdefer self._session.releaseArena(arena);
+    errdefer arena.release();
 
     // Get charset from accept-charset attribute or fall back to document charset
     const charset: []const u8 = blk: {
@@ -3394,8 +3397,8 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk .urlencode;
     };
 
-    var buf = std.Io.Writer.Allocating.init(arena);
-    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena }, &buf.writer);
+    var buf = std.Io.Writer.Allocating.init(arena.allocator());
+    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena.allocator() }, &buf.writer);
 
     var action = blk: {
         if (submit_button) |s| {
@@ -3413,13 +3416,13 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         opts.body = buf.written();
         opts.header = switch (encoding) {
             .urlencode => "Content-Type: application/x-www-form-urlencoded",
-            .formdata => |b| try std.fmt.allocPrintSentinel(arena, "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
+            .formdata => |b| try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: multipart/form-data; boundary={s}", .{b}, 0),
             // Per WHATWG HTML §4.10.21.6, text/plain submissions include the form's
             // resolved encoding (accept-charset or document charset).
-            .plaintext => try std.fmt.allocPrintSentinel(arena, "Content-Type: text/plain; charset={s}", .{charset}, 0),
+            .plaintext => try std.fmt.allocPrintSentinel(arena.allocator(), "Content-Type: text/plain; charset={s}", .{charset}, 0),
         };
     } else {
-        action = try URL.concatQueryString(arena, action, buf.written());
+        action = try URL.concatQueryString(arena.allocator(), action, buf.written());
     }
 
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
@@ -3456,8 +3459,7 @@ test "Frame: urlBasename" {
 }
 
 test "WebApi: Frame" {
-    const filter: testing.LogFilter = .init(&.{.http});
-    defer filter.deinit();
+    testing.silenceLog(&.{.http});
     try testing.htmlRunner("page", .{});
 }
 
@@ -3466,8 +3468,7 @@ test "WebApi: Frames" {
 }
 
 test "WebApi: Frame Blob" {
-    const filter: testing.LogFilter = .init(&.{ .frame, .browser, .js });
-    defer filter.deinit();
+    testing.silenceLog(&.{ .frame, .browser, .js });
     try testing.htmlRunner("frames/blob", .{});
 }
 
@@ -3520,6 +3521,8 @@ test "Page: isSameOrigin" {
 }
 
 test "Frame: httpMetadata after navigation" {
+    testing.expectLog(&.{.http});
+
     const page = try testing.pageTest("page/meta.html", .{});
     defer page.close();
 
@@ -3540,8 +3543,6 @@ test "Frame: httpMetadata 404" {
 }
 
 test "Frame: 401" {
-    defer testing.reset();
-
     var page = try testing.pageTest("401", .{});
     defer page.close();
 

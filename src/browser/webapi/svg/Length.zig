@@ -32,7 +32,7 @@ const Length = @This();
 // lookup cache, so a JS wrapper being collected can never free it. Only a
 // detached length (own arena, zero initial refs) dies with its last wrapper.
 _rc: lp.RC = .init(1),
-_arena: ?std.mem.Allocator = null,
+_arena: ?*lp.Arena = null,
 _value: f64 = 0,
 _unit: Unit = .number,
 _element: ?*Element = null,
@@ -66,14 +66,14 @@ const MAX_ANCESTOR_DEPTH = 32;
 
 pub fn detached(frame: *Frame) !*Length {
     const arena = try frame._page.getArena(.tiny, "SVGLength");
-    errdefer frame._page.releaseArena(arena);
+    errdefer arena.release();
     const self = try arena.create(Length);
     self.* = .{ ._rc = .{}, ._arena = arena };
     return self;
 }
 
-pub fn deinit(self: *Length, page: *Page) void {
-    page.releaseArena(self._arena.?);
+pub fn deinit(self: *Length, _: *Page) void {
+    self._arena.?.release();
 }
 
 pub fn acquireRef(self: *Length) void {

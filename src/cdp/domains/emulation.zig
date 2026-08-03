@@ -188,8 +188,7 @@ test "cdp.Emulation: setUserAgentOverride with valid user agent" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -206,8 +205,7 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla" {
 }
 
 test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -224,8 +222,7 @@ test "cdp.Emulation: setUserAgentOverride ignores mozilla case insensitive" {
 }
 
 test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -241,8 +238,7 @@ test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
 }
 
 test "cdp.Emulation: setUserAgentOverride with optional params" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
+    testing.silenceLog(&.{.not_implemented});
 
     var ctx = try testing.context();
     defer ctx.deinit();

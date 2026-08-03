@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=schedulerSurface>
+{
+  testing.expectEqual('function', typeof scheduler.postTask);
+  testing.expectEqual('function', typeof scheduler.yield);
+  testing.expectEqual(true, scheduler instanceof Scheduler);
+  testing.expectEqual('function', typeof TaskController);
+  testing.expectEqual('function', typeof TaskSignal);
+  testing.expectEqual('function', typeof TaskPriorityChangeEvent);
+}
+</script>
+
+<script id=taskControllerSignal>
+{
+  const controller = new TaskController();
+  const signal = controller.signal;
+  testing.expectEqual(true, signal instanceof TaskSignal);
+  testing.expectEqual(true, signal instanceof AbortSignal);
+  testing.expectEqual('user-visible', signal.priority);
+  testing.expectEqual(false, signal.aborted);
+
+  const bg = new TaskController({ priority: 'background' });
+  testing.expectEqual('background', bg.signal.priority);
+}
+</script>
+
+<script id=setPriorityFiresPriorityChange>
+{
+  const controller = new TaskController({ priority: 'user-blocking' });
+  const signal = controller.signal;
+
+  let fired = 0;
+  signal.addEventListener('prioritychange', (event) => {
+    fired += 1;
+    testing.expectEqual('prioritychange', event.type);
+    testing.expectEqual('user-blocking', event.previousPriority);
+    testing.expectEqual('background', signal.priority);
+  });
+
+  controller.setPriority('background');
+  testing.expectEqual(1, fired);
+
+  // same priority: no event
+  controller.setPriority('background');
+  testing.expectEqual(1, fired);
+}
+</script>
+
+<script id=taskPriorityChangeEventConstructor>
+{
+  const event = new TaskPriorityChangeEvent('prioritychange', { previousPriority: 'background' });
+  testing.expectEqual('background', event.previousPriority);
+  testing.expectEqual(false, event.isTrusted);
+
+  let threw = false;
+  try {
+    new TaskPriorityChangeEvent('prioritychange');
+  } catch (e) {
+    threw = true;
+  }
+  testing.expectEqual(true, threw);
+}
+</script>
+
+<script id=postTaskResolves type=module>
+{
+  const state = await testing.async();
+  const value = await scheduler.postTask(() => 42);
+  state.resolve(value);
+  await state.done((v) => {
+    testing.expectEqual(42, v);
+  });
+}
+</script>
+
+<script id=postTaskAdoptsAsyncCallback type=module>
+{
+  const state = await testing.async();
+  const value = await scheduler.postTask(async () => 'async-result');
+  state.resolve(value);
+  await state.done((v) => {
+    testing.expectEqual('async-result', v);
+  });
+}
+</script>
+
+<script id=postTaskRejectsOnThrow type=module>
+{
+  const state = await testing.async();
+  try {
+    await scheduler.postTask(() => { throw new Error('boom'); });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.message);
+  }
+  await state.done((v) => {
+    testing.expectEqual('boom', v);
+  });
+}
+</script>
+
+<script id=postTaskOrderingAndDelay type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  const delayed = scheduler.postTask(() => order.push('delayed'), { delay: 5 });
+  const first = scheduler.postTask(() => order.push('first'));
+  const second = scheduler.postTask(() => order.push('second'));
+  await Promise.all([delayed, first, second]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    testing.expectEqual('first,second,delayed', v);
+  });
+}
+</script>
+
+<script id=postTaskPreAbortedSignal type=module>
+{
+  const state = await testing.async();
+  const controller = new TaskController();
+  controller.abort('nope');
+  let ran = false;
+  try {
+    await scheduler.postTask(() => { ran = true; }, { signal: controller.signal });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e);
+  }
+  await state.done((v) => {
+    testing.expectEqual('nope', v);
+    testing.expectEqual(false, ran);
+  });
+}
+</script>
+
+<script id=postTaskAbortBeforeRun type=module>
+{
+  const state = await testing.async();
+  const controller = new TaskController();
+  let ran = false;
+  const task = scheduler.postTask(() => { ran = true; }, { signal: controller.signal, delay: 50 });
+  controller.abort('cancelled');
+  try {
+    await task;
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e);
+  }
+  await state.done((v) => {
+    testing.expectEqual('cancelled', v);
+    testing.expectEqual(false, ran);
+  });
+}
+</script>
+
+<script id=postTaskPlainAbortControllerWorks type=module>
+{
+  const state = await testing.async();
+  const controller = new AbortController();
+  const task = scheduler.postTask(() => 'ok', { signal: controller.signal, delay: 50 });
+  controller.abort();
+  try {
+    await task;
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.name);
+  }
+  await state.done((v) => {
+    testing.expectEqual('AbortError', v);
+  });
+}
+</script>
+
+<script id=postTaskInvalidPriority type=module>
+{
+  const state = await testing.async();
+  try {
+    await scheduler.postTask(() => {}, { priority: 'bogus' });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve(e.name);
+  }
+  await state.done((v) => {
+    testing.expectEqual('TypeError', v);
+  });
+}
+</script>
+
+<script id=postTaskAbortDuringRun type=module>
+{
+  const state = await testing.async();
+  const controller = new TaskController();
+  try {
+    await scheduler.postTask(() => {
+      controller.abort('mid');
+      return 'value';
+    }, { signal: controller.signal });
+    state.resolve('resolved');
+  } catch (e) {
+    state.resolve('rejected:' + e);
+  }
+  await state.done((v) => {
+    testing.expectEqual('rejected:mid', v);
+  });
+}
+</script>
+
+<script id=yieldInterleavesTasks type=module>
+{
+  const state = await testing.async();
+  const order = [];
+  const yielding = scheduler.postTask(async () => {
+    order.push('a');
+    await scheduler.yield();
+    order.push('c');
+  });
+  const other = scheduler.postTask(() => order.push('b'));
+  await Promise.all([yielding, other]);
+  state.resolve(order.join(','));
+  await state.done((v) => {
+    // the yield continuation jumps ahead of the already-queued task
+    testing.expectEqual('a,c,b', v);
+  });
+}
+</script>
+
+<script id=yieldInheritsAbortedSignal type=module>
+{
+  const state = await testing.async();
+  const controller = new TaskController();
+  const task = scheduler.postTask(async () => {
+    controller.abort('stop');
+    try {
+      await scheduler.yield();
+      state.resolve('not-interrupted');
+    } catch (e) {
+      state.resolve('interrupted:' + e);
+    }
+  }, { signal: controller.signal });
+  // the abort also rejects the task promise itself (see postTaskAbortDuringRun)
+  task.catch(() => {});
+  await state.done((v) => {
+    testing.expectEqual('interrupted:stop', v);
+  });
+}
+</script>
+
+<script id=yieldOutsideTask type=module>
+{
+  const state = await testing.async();
+  await scheduler.yield();
+  state.resolve('done');
+  await state.done((v) => {
+    testing.expectEqual('done', v);
+  });
+}
+</script>

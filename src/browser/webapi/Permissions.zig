@@ -16,14 +16,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Execution = js.Execution;
-
-const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
     return &.{ Permissions, PermissionStatus };
@@ -48,7 +45,7 @@ const QueryDescriptor = struct {
 // 'prompt' (the default safe value — neither granted nor denied) when unset.
 pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution) !js.Promise {
     const arena = try exec.getArena(.tiny, "PermissionStatus");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
     const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
     const status = try arena.create(PermissionStatus);
@@ -62,12 +59,12 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
 
 const PermissionStatus = struct {
     _rc: lp.RC = .{},
-    _arena: Allocator,
+    _arena: *lp.Arena,
     _name: []const u8,
     _state: State,
 
-    pub fn deinit(self: *PermissionStatus, page: *Page) void {
-        page.releaseArena(self._arena);
+    pub fn deinit(self: *PermissionStatus, _: *Page) void {
+        self._arena.release();
     }
 
     pub fn releaseRef(self: *PermissionStatus, page: *Page) void {

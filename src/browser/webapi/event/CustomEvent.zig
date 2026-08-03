@@ -43,15 +43,15 @@ const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     const arena = try page.getArena(.tiny, "CustomEvent");
-    errdefer page.releaseArena(arena);
-    const type_string = try String.init(arena, typ, .{});
+    errdefer arena.release();
+    const type_string = try String.init(arena.allocator(), typ, .{});
 
     const opts = opts_ orelse Options{};
     const event = try page.factory.event(
         arena,
         type_string,
         CustomEvent{
-            ._arena = arena,
+            ._arena = arena.allocator(),
             ._proto = undefined,
             ._detail = opts.detail,
         },
@@ -76,7 +76,7 @@ pub fn initCustomEvent(
     // This function can only be called after the constructor has called.
     // So we assume proto is initialized already by constructor.
     self._proto._initialized = true;
-    self._proto._type_string = try String.init(self._proto._arena, event_string, .{});
+    self._proto._type_string = try String.init(self._proto._arena.allocator(), event_string, .{});
     self._proto._bubbles = bubbles orelse false;
     self._proto._cancelable = cancelable orelse false;
     // Detail is stored separately.

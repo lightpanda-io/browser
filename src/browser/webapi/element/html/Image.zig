@@ -26,10 +26,10 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
 }
 
 pub fn asElement(self: *Image) *Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asConstElement(self: *const Image) *const Element {
-    return self._proto._proto;
+    return self._proto.asElement();
 }
 pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();

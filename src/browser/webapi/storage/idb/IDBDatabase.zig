@@ -90,11 +90,11 @@ pub fn createObjectStore(
         if (opts.autoIncrement and keyPathBlocksAutoIncrement(kp)) {
             return error.InvalidAccessError;
         }
-        break :blk try Key.dupeKeyPath(txn._arena, kp);
+        break :blk try Key.dupeKeyPath(txn._arena.allocator(), kp);
     } else null;
 
     const store_id = self._engine.createObjectStore(
-        txn._arena,
+        txn._arena.allocator(),
         self._database_id,
         name,
         key_path,
@@ -158,7 +158,7 @@ pub fn transaction(
         .readonly => .readonly,
         .readwrite => .readwrite,
     }, opts.durability, exec);
-    txn._scope = try normalizeStoreNames(txn._arena, store_names);
+    txn._scope = try normalizeStoreNames(txn._arena.allocator(), store_names);
     return txn;
 }
 
@@ -213,9 +213,9 @@ pub fn getVersion(self: *const IDBDatabase) i64 {
 
 pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList {
     const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
-    errdefer exec.releaseArena(arena);
+    errdefer arena.release();
 
-    const names = try self._engine.objectStoreNames(arena, self._database_id);
+    const names = try self._engine.objectStoreNames(arena.allocator(), self._database_id);
     const list = try arena.create(DOMStringList);
     list.* = .{ ._items = names, ._arena = arena };
     return list;

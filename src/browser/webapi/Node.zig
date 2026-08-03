@@ -38,7 +38,6 @@ pub const ShadowRoot = @import("ShadowRoot.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Node, *Element.Html.Slot);
 
@@ -56,7 +55,7 @@ _prev: ?*Node = null,
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
 // work to resolve the proto).
-_proto_canary: if (IS_DEBUG) *EventTarget else void = undefined,
+_proto_canary: if (lp.IS_DEBUG) *EventTarget else void = undefined,
 
 // Lookup for nodes that have a different owner document than frame.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
@@ -1211,7 +1210,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
         .document_fragment => |frag| return frag.cloneFragment(deep, frame),
         .attribute => |attr| {
             const cloned = attr.clone(frame) catch return error.CloneError;
-            return cloned._proto;
+            return cloned.asNode();
         },
     }
 }
