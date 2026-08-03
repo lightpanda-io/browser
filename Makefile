@@ -10,8 +10,8 @@ F=
 # to point at a prebuilt V8 archive and skip the multi-minute source rebuild:
 #   ZIGFLAGS=-Dprebuilt_v8_path=/path/to/libc_v8.a make test
 ZIGFLAGS ?=
-PI_OPTIMIZE ?= ReleaseSmall
-PI_JOBS ?= 1
+SMALL_OPTIMIZE ?= ReleaseSmall
+SMALL_JOBS ?= 1
 
 # OS and ARCH
 kernel = $(shell uname -ms)
@@ -81,7 +81,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-pi build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-small build-pi build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 archive (skips the 10+ min source build)
 download-v8:
@@ -105,13 +105,16 @@ build: build-v8-snapshot
 	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
-## Build a low-memory, size-optimized binary for Raspberry Pi
-build-pi: download-v8
-	@printf "\033[36mGenerating V8 snapshot ($(PI_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(PI_JOBS) $(ZIG) build -j$(PI_JOBS) $(ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
-	@printf "\033[36mBuilding Raspberry Pi profile ($(PI_OPTIMIZE), $(PI_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(PI_JOBS) $(ZIG) build -j$(PI_JOBS) $(ZIGFLAGS) -Doptimize=$(PI_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mPi build ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mPi build OK: zig-out/bin/lightpanda\033[0m\n"
+## Build a low-parallelism, size-optimized native binary
+build-small: download-v8
+	@printf "\033[36mGenerating V8 snapshot ($(SMALL_JOBS) job)...\033[0m\n"
+	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
+	@printf "\033[36mBuilding small native profile ($(SMALL_OPTIMIZE), $(SMALL_JOBS) job)...\033[0m\n"
+	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(ZIGFLAGS) -Doptimize=$(SMALL_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mSmall build ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mSmall build OK: zig-out/bin/lightpanda\033[0m\n"
+
+## Build natively on a supported 64-bit Raspberry Pi (not cross-compilation)
+build-pi: build-small
 
 ## Build in debug mode
 build-dev:
