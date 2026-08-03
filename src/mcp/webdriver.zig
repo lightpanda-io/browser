@@ -70,6 +70,7 @@ const Command = enum {
     find_elements_from_element,
     get_active_element,
     get_element_tag_name,
+    get_element_rect,
     get_element_attribute,
     is_element_selected,
     is_element_enabled,
@@ -140,6 +141,7 @@ pub fn handle(
         .find_elements_from_element => findElements(server, session, arena, body, route.element_id.?, out),
         .get_active_element => getActiveElement(session, out),
         .get_element_tag_name => getElementTagName(session, route.element_id.?, out),
+        .get_element_rect => getElementRect(session, route.element_id.?, out),
         .get_element_attribute => getElementAttribute(session, arena, route.element_id.?, route.attribute_name.?, out),
         .is_element_selected => isElementSelected(session, route.element_id.?, out),
         .is_element_enabled => isElementEnabled(session, route.element_id.?, out),
@@ -877,6 +879,21 @@ fn getElementTagName(session: *Server.Session, id: []const u8, out: *std.Io.Writ
     return sendValue(out, element.getTagNameLower());
 }
 
+fn getElementRect(session: *Server.Session, id: []const u8, out: *std.Io.Writer) !std.http.Status {
+    const element = (try resolveElement(session, id, out)) orelse return .not_found;
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    // Engine geometry is currently faux and scroll-stable. Return it directly;
+    // adding window scroll offsets would invent coordinates it does not model.
+    const rect = element.boundingClientRectValues(frame);
+    return sendValue(out, .{
+        .x = rect.x,
+        .y = rect.y,
+        .width = rect.width,
+        .height = rect.height,
+    });
+}
+
 fn getElementAttribute(
     session: *Server.Session,
     arena: Allocator,
@@ -1208,6 +1225,8 @@ fn matchElementRoute(session_id: []const u8, suffix: []const u8) ?Route {
         .{ .find_elements_from_element, null }
     else if (std.mem.eql(u8, command_suffix, "/name"))
         .{ .get_element_tag_name, null }
+    else if (std.mem.eql(u8, command_suffix, "/rect"))
+        .{ .get_element_rect, null }
     else if (std.mem.eql(u8, command_suffix, "/selected"))
         .{ .is_element_selected, null }
     else if (std.mem.eql(u8, command_suffix, "/enabled"))
@@ -1246,6 +1265,7 @@ fn commandMethod(command: Command) std.http.Method {
         .get_timeouts,
         .get_active_element,
         .get_element_tag_name,
+        .get_element_rect,
         .get_element_attribute,
         .is_element_selected,
         .is_element_enabled,
@@ -1310,6 +1330,9 @@ test "WebDriver: routes use URL paths and distinguish methods" {
     try std.testing.expectEqual(Command.find_element_from_element, commandForMethod(child_route, .POST).?);
     try std.testing.expectEqual(Command.find_elements_from_element, commandForMethod(matchRoute("/session/id/element/ref/elements").?, .POST).?);
     try std.testing.expectEqual(Command.get_element_tag_name, commandForMethod(matchRoute("/session/id/element/ref/name").?, .GET).?);
+    const rect_route = matchRoute("/session/id/element/ref/rect").?;
+    try std.testing.expectEqual(Command.get_element_rect, commandForMethod(rect_route, .GET).?);
+    try std.testing.expect(commandForMethod(rect_route, .POST) == null);
     const attribute_route = matchRoute("/session/id/element/ref/attribute/data-kind").?;
     try std.testing.expectEqualStrings("data-kind", attribute_route.attribute_name.?);
     try std.testing.expectEqual(Command.get_element_attribute, commandForMethod(attribute_route, .GET).?);
@@ -1605,17 +1628,20 @@ test "WebDriver: pageless sessions return no such window" {
     var unknown_element_buffer: [48]u8 = undefined;
     const unknown_element_id = try std.fmt.bufPrint(&unknown_element_buffer, "{s}-999999", .{session_id});
     const element_ids = [_][]const u8{ known_element_id, unknown_element_id, "malformed" };
+    const element_suffixes = [_][]const u8{ "enabled", "rect" };
     for (element_ids) |element_id| {
-        const enabled_path = try std.fmt.allocPrint(
-            testing.allocator,
-            "/session/{s}/element/{s}/enabled",
-            .{ session_id, element_id },
-        );
-        defer testing.allocator.free(enabled_path);
+        for (element_suffixes) |element_suffix| {
+            const element_path = try std.fmt.allocPrint(
+                testing.allocator,
+                "/session/{s}/element/{s}/{s}",
+                .{ session_id, element_id, element_suffix },
+            );
+            defer testing.allocator.free(element_path);
 
-        out.clearRetainingCapacity();
-        try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, enabled_path, "", &out.writer));
-        try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+            out.clearRetainingCapacity();
+            try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, element_path, "", &out.writer));
+            try testing.expectJson(.{ .value = .{ .@"error" = "no such window" } }, out.writer.buffered());
+        }
     }
 }
 
@@ -1776,6 +1802,43 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
     const parent_again = try testFindWebDriverElement(server, request_allocator, session_id, null, "#parent", &out);
     defer testing.allocator.free(parent_again);
     try std.testing.expectEqualStrings(parent_id, parent_again);
+    try expectWebDriverElementValue(
+        server,
+        request_allocator,
+        session_id,
+        parent_id,
+        "/rect",
+        &out,
+        .{ .x = 20.0, .y = 20.0, .width = 5.0, .height = 5.0 },
+    );
+    const unscrolled_rect = try testing.allocator.dupe(u8, out.writer.buffered());
+    defer testing.allocator.free(unscrolled_rect);
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+        const frame = primaryFrame(active).?;
+        try frame.window.scrollTo(.{ .x = 0 }, 53, frame);
+        try testing.expectEqual(@as(u32, 53), frame.window.getScrollY());
+    }
+    try expectWebDriverElementValue(
+        server,
+        request_allocator,
+        session_id,
+        parent_id,
+        "/rect",
+        &out,
+        .{ .x = 20.0, .y = 20.0, .width = 5.0, .height = 5.0 },
+    );
+    try std.testing.expectEqualStrings(unscrolled_rect, out.writer.buffered());
+    const rect_path = try std.fmt.allocPrint(
+        testing.allocator,
+        "/session/{s}/element/{s}/rect",
+        .{ session_id, parent_id },
+    );
+    defer testing.allocator.free(rect_path);
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.method_not_allowed, try handle(server, request_allocator, .POST, rect_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "unknown method" } }, out.writer.buffered());
     const selector_list_id = try testFindWebDriverElement(server, request_allocator, session_id, null, ".item, #parent", &out);
     defer testing.allocator.free(selector_list_id);
     try std.testing.expectEqualStrings(parent_id, selector_list_id);
@@ -1886,6 +1949,15 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
     defer testing.allocator.free(hidden_id);
     try expectWebDriverElementValue(server, request_allocator, session_id, hidden_id, "/attribute/hidden", &out, "true");
     try expectWebDriverElementValue(server, request_allocator, session_id, hidden_id, "/attribute/HIDDEN", &out, "true");
+    try expectWebDriverElementValue(
+        server,
+        request_allocator,
+        session_id,
+        hidden_id,
+        "/rect",
+        &out,
+        .{ .x = 0.0, .y = 0.0, .width = 0.0, .height = 0.0 },
+    );
 
     const checked_id = try testFindWebDriverElement(server, request_allocator, session_id, null, "#checked", &out);
     defer testing.allocator.free(checked_id);
@@ -2002,7 +2074,7 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
     }
     const removed_path = try std.fmt.allocPrint(
         testing.allocator,
-        "/session/{s}/element/{s}/name",
+        "/session/{s}/element/{s}/rect",
         .{ session_id, remove_id },
     );
     defer testing.allocator.free(removed_path);
@@ -2012,7 +2084,7 @@ test "WebDriver: element retrieval returns stable references and W3C state" {
 
     const unknown_path = try std.fmt.allocPrint(
         testing.allocator,
-        "/session/{s}/element/{s}-4294967295/name",
+        "/session/{s}/element/{s}-4294967295/rect",
         .{ session_id, session_id },
     );
     defer testing.allocator.free(unknown_path);
