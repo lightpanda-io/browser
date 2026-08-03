@@ -22,6 +22,12 @@ const builtin = @import("builtin");
 const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
 
+// A host linking its own curl/zlib/... must not bind to liblightpanda's
+// bundled copies. ELF hides them via src/lightpanda.map; Mach-O has no
+// version-script equivalent, so they are hidden at compile time.
+// Unconditional: the executable exports nothing either way.
+const hide_symbols = "-fvisibility=hidden";
+
 const Build = blk: {
     if (builtin.zig_version.order(min_zig_version) == .lt) {
         const message = std.fmt.comptimePrint(
@@ -244,15 +250,39 @@ pub fn build(b: *Build) !void {
             shared_lib.version_script = b.path("src/lightpanda.map");
             shared_lib.linker_allow_shlib_undefined = false;
             const install_so = b.addInstallArtifact(shared_lib, .{});
-            // The version script is load-bearing: a host's own OpenSSL/curl
-            // must not collide with the bundled copies. Gate the install on
-            // the check so an installed .so is always a checked one.
-            if (target.result.os.tag == .linux) {
+            // Gate the install on the export check so an installed library
+            // is always a checked one (see hide_symbols for why).
+            const Query = struct { nm: []const u8, awk: []const u8 };
+            const leak_query: ?Query = switch (target.result.os.tag) {
+                // The version script keeps everything but lp_* local, so
+                // anything else in the dynamic table is a leak.
+                .linux => .{
+                    .nm = "nm -D",
+                    .awk = "$2 == \"T\" && $3 !~ /^lp_/ { print $3 }",
+                },
+                // V8's own C++ symbols stay exported on Mach-O, so only the
+                // bundled C libraries — the ones include/lightpanda.h
+                // promises absent — can be asserted.
+                .macos => .{
+                    .nm = "nm -gU",
+                    .awk = "$2 == \"T\" && $3 ~ /^_(AES|ASN1|BIO|Brotli|EVP|OPENSSL|RSA|SSL|X509|adler32|crc32|curl|deflate|inflate|nghttp2|sqlite3)/ { print $3 }",
+                },
+                else => null,
+            };
+            if (leak_query) |query| {
                 const export_check = b.addSystemCommand(&.{
                     "sh", "-ec",
-                    \\test -z "$(nm -D "$0" | awk '$2 == "T" && $3 !~ /^lp_/')" ||
-                    \\  { echo "liblightpanda.so exports non-lp_ symbols" >&2; exit 1; }
-                    \\: > "$1"
+                    // Two statements, not `test -z "$(nm ... | awk ...)"`: there
+                    // a failing nm yields no output and the check passes. The
+                    // bare assignment lets -e see nm's status.
+                    b.fmt(
+                        \\symbols=$({s} "$0")
+                        \\leaked=$(printf '%s\n' "$symbols" | awk '{s}')
+                        \\test -z "$leaked" ||
+                        \\  {{ echo "liblightpanda exports bundled dependency symbols:" >&2
+                        \\    printf '%s\n' "$leaked" | head -20 >&2; exit 1; }}
+                        \\: > "$1"
+                    , .{ query.nm, query.awk }),
                 });
                 export_check.addFileArg(shared_lib.getEmittedBin());
                 _ = export_check.addOutputFileArg("export-check-ok");
@@ -388,6 +418,10 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     lib.root_module.pic = true;
 
     const macros = [_]struct { []const u8, []const u8 }{
+        // The amalgamation is one translation unit, so everything not static is
+        // tagged SQLITE_API; redefining it hides the lot. `-fvisibility=hidden`
+        // is not reachable here — the sources belong to the dependency.
+        .{ "SQLITE_API", "__attribute__((visibility(\"hidden\")))" },
         .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
         .{ "SQLITE_DEFAULT_MEMSTATUS", "0" },
         .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
@@ -489,6 +523,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     mod.addCSourceFiles(.{
         .root = dep.path(""),
         .flags = &.{
+            hide_symbols,
             "-DHAVE_SYS_TYPES_H",
             "-DHAVE_STDINT_H",
             "-DHAVE_STDDEF_H",
@@ -525,6 +560,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
         .root = dep.path("c/common"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "transform.c",  "shared_dictionary.c", "platform.c",
             "dictionary.c", "context.c",           "constants.c",
@@ -532,6 +568,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     });
     mod.addCSourceFiles(.{
         .root = dep.path("c/dec"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "bit_reader.c", "decode.c", "huffman.c",
             "prefix.c",     "state.c",  "static_init.c",
@@ -539,6 +576,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     });
     mod.addCSourceFiles(.{
         .root = dep.path("c/enc"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "backward_references.c",        "backward_references_hq.c", "bit_cost.c",
             "block_splitter.c",             "brotli_bit_stream.c",      "cluster.c",
@@ -559,6 +597,7 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
         .target = target,
         .optimize = optimize,
         .force_pic = true,
+        .hidden_visibility = true,
     });
 
     const ssl = dep.artifact("ssl");
@@ -598,6 +637,7 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     mod.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{
+            hide_symbols,
             "-DNGHTTP2_STATICLIB",
             "-DHAVE_TIME_H",
             "-DHAVE_ARPA_INET_H",
@@ -884,6 +924,7 @@ fn buildCurl(
     mod.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{
+            hide_symbols,
             "-D_GNU_SOURCE",
             "-DHAVE_CONFIG_H",
             "-DCURL_STATICLIB",

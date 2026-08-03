@@ -38,14 +38,17 @@
  * Anonymous usage telemetry is enabled in release builds; set
  * LIGHTPANDA_DISABLE_TELEMETRY in the environment to opt out.
  *
- * Linking: `make lib` builds liblightpanda.so (zig-out/lib) and
- * installs this header (zig-out/include) plus a pkg-config file:
+ * Linking: `make lib` builds liblightpanda.so (liblightpanda.dylib on macOS)
+ * into zig-out/lib and installs this header (zig-out/include) plus a
+ * pkg-config file:
  *   cc app.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda)
  * or by hand:
  *   cc app.c -Izig-out/include -Lzig-out/lib -llightpanda
- * The library resolves its dependencies internally and exports only lp_*
- * symbols (safe next to a host's own OpenSSL/curl/sqlite), and it is
- * dlopen-able for FFI (Python ctypes etc.).
+ * The library resolves its dependencies internally, and the bundled
+ * OpenSSL/curl/sqlite are hidden on both platforms, so it is safe to load
+ * next to a host's own copies — including dlopen'd for FFI (Python ctypes
+ * etc.). ELF exports nothing but lp_*; Mach-O has no version script, so V8's
+ * own C++ symbols stay visible there.
  */
 
 #ifndef LIGHTPANDA_H
@@ -157,8 +160,9 @@ void lp_session_close(lp_session *session);
  * tool's argument object as a JSON string (NULL: no arguments); the tool
  * names and their JSON schemas are enumerated by lp_tools_json. Tools that
  * read the page accept a "url" argument to navigate first, so
- *   lp_call(s, "markdown", "{\"url\":\"https://example.com\"}", &r)
- * is a complete one-call scrape. */
+ *   lp_call(s, "markdown", strlen("markdown"), args, strlen(args), &r)
+ * with args = "{\"url\":\"https://example.com\"}" is a complete one-call
+ * scrape. */
 lp_status lp_call(lp_session *session, const char *tool, size_t tool_len,
                   const char *args_json, size_t args_json_len,
                   lp_result *out);
