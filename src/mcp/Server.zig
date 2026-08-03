@@ -73,9 +73,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*S
 }
 
 /// Initialize the WebDriver endpoint without an otherwise-unused default
-/// browser. The first New Session command creates the sole browser lazily.
+/// browser. The first New Session command creates the sole browser and starts
+/// deadline enforcement lazily.
 pub fn initWebDriver(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
-    try app.watchdog.enableExecutionDeadlines();
     return initEmpty(allocator, app, writer);
 }
 
@@ -105,6 +105,10 @@ pub fn deinit(self: *Self) void {
 /// Create the session named `id`, or return the existing one. The `id` is
 /// duped, so the caller keeps ownership of its slice.
 pub fn createSession(self: *Self, id: []const u8) !*Session {
+    return self.createSessionWithConsoleCapture(id, true);
+}
+
+fn createSessionWithConsoleCapture(self: *Self, id: []const u8, capture_console: bool) !*Session {
     if (self.sessions.get(id)) |existing| return existing;
 
     const owned_id = try self.allocator.dupe(u8, id);
@@ -129,7 +133,7 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
     errdefer entry.browser.deinit();
 
     entry.session = try entry.browser.newSession(notification);
-    try entry.session.enableConsoleCapture();
+    if (capture_console) try entry.session.enableConsoleCapture();
 
     // Only the default session is backed by the on-disk cookie file; named
     // sessions start clean so agents stay isolated by default.
@@ -220,7 +224,11 @@ pub fn createWebDriverSession(
     }
     if (id.len != 36) return error.InvalidSessionId;
 
-    const entry = try self.createSession(id);
+    // A disabled global watchdog normally means no checker thread. WebDriver
+    // still needs its per-command execution deadlines, but only after a
+    // client actually asks us to create a browser.
+    try self.app.watchdog.enableExecutionDeadlines();
+    const entry = try self.createSessionWithConsoleCapture(id, false);
     errdefer {
         const removed = self.sessions.fetchRemove(id).?;
         self.destroySession(removed.value);
@@ -411,4 +419,46 @@ test "MCP.Server - Integration: synchronous smoke test" {
     try router.processRequests(server, &in_reader, null);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
+}
+
+test "MCP.Server - WebDriver initialization leaves a disabled watchdog thread-free" {
+    var app: App = undefined;
+    app.watchdog = .init(null);
+    defer app.watchdog.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const server = try Self.initWebDriver(testing.allocator, &app, &out.writer);
+    defer server.deinit();
+
+    try testing.expect(app.watchdog.thread == null);
+}
+
+test "MCP.Server - MCP sessions keep console capture" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const server = try Self.init(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+    server.enableIsolateParking();
+
+    try testing.expect(server.defaultSession().session._console_capture);
+    const named = try server.createSession("named");
+    try testing.expect(named.session._console_capture);
+}
+
+test "MCP.Server - WebDriver skips unused console capture" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const server = try Self.initWebDriver(testing.allocator, testing.test_app, &out.writer);
+    defer server.deinit();
+    server.enableIsolateParking();
+
+    const session = try server.createWebDriverSession(
+        "11111111-1111-4111-8111-111111111111",
+        .load,
+        300_000,
+        30_000,
+        0,
+    );
+    try testing.expect(!session.session._console_capture);
 }
