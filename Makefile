@@ -61,6 +61,13 @@ ifeq ($(strip $(ZIGFLAGS)),)
   endif
 endif
 
+# `build-small` always uses a prebuilt V8 archive. Reuse an explicit path when
+# supplied; otherwise download and select the archive for this host.
+SMALL_ZIGFLAGS := $(ZIGFLAGS)
+ifeq ($(filter -Dprebuilt_v8_path=%,$(SMALL_ZIGFLAGS)),)
+  SMALL_ZIGFLAGS += -Dprebuilt_v8_path=$(V8_CACHE)
+  SMALL_V8_DEP := download-v8
+endif
 
 # Infos
 # -----
@@ -106,12 +113,14 @@ build: build-v8-snapshot
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build a low-parallelism, size-optimized native binary
-build-small: download-v8
+build-small: $(SMALL_V8_DEP)
 	@printf "\033[36mGenerating V8 snapshot ($(SMALL_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
+	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(SMALL_ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
 	@printf "\033[36mBuilding small native profile ($(SMALL_OPTIMIZE), $(SMALL_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(ZIGFLAGS) -Doptimize=$(SMALL_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mSmall build ERROR\033[0m\n"; exit 1;)
-	@printf "\033[33mSmall build OK: zig-out/bin/lightpanda\033[0m\n"
+	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(SMALL_ZIGFLAGS) -Doptimize=$(SMALL_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mSmall build ERROR\033[0m\n"; exit 1;)
+	@strip -x zig-out/bin/lightpanda || (printf "\033[33mStrip ERROR\033[0m\n"; exit 1;)
+	@if [ "$(OS)" = "macos" ]; then codesign --force --sign - zig-out/bin/lightpanda || (printf "\033[33mCodesign ERROR\033[0m\n"; exit 1;); fi
+	@printf "\033[33mSmall build OK: %s bytes\033[0m\n" "$$(wc -c < zig-out/bin/lightpanda | tr -d ' ')"
 
 ## Build natively on a supported 64-bit Raspberry Pi (not cross-compilation)
 build-pi: build-small
