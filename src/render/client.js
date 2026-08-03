@@ -13,10 +13,18 @@ function aborted(signal) {
 }
 
 async function readResponseText(response, limit) {
-  const contentLength = Number(response.headers?.get?.("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > limit) {
+  const contentLengthHeader = response.headers?.get?.("content-length");
+  const parsedContentLength =
+    typeof contentLengthHeader === "string" && /^\d+$/.test(contentLengthHeader)
+      ? Number(contentLengthHeader)
+      : null;
+  const contentLength = Number.isSafeInteger(parsedContentLength) ? parsedContentLength : null;
+  if (contentLength !== null && contentLength > limit) {
     throw new RangeError(`Lightpanda response exceeds ${limit} bytes`);
   }
+  const contentEncoding = response.headers?.get?.("content-encoding")?.trim().toLowerCase();
+  const expectedLength =
+    !contentEncoding || contentEncoding === "identity" ? contentLength : null;
 
   const reader = response.body?.getReader?.();
   if (!reader) {
@@ -27,8 +35,10 @@ async function readResponseText(response, limit) {
     return text;
   }
 
-  const chunks = [];
+  let bytes = expectedLength === null ? null : new Uint8Array(expectedLength);
+  let chunks = bytes ? null : [];
   let length = 0;
+  let offset = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -37,11 +47,22 @@ async function readResponseText(response, limit) {
       await reader.cancel().catch(() => {});
       throw new RangeError(`Lightpanda response exceeds ${limit} bytes`);
     }
-    chunks.push(value);
+    if (bytes && length <= bytes.byteLength) {
+      bytes.set(value, offset);
+      offset = length;
+    } else {
+      if (bytes) {
+        chunks = [bytes.subarray(0, offset)];
+        bytes = null;
+      }
+      chunks.push(value);
+    }
   }
 
-  const bytes = new Uint8Array(length);
-  let offset = 0;
+  if (bytes) return new TextDecoder().decode(bytes.subarray(0, length));
+
+  bytes = new Uint8Array(length);
+  offset = 0;
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;

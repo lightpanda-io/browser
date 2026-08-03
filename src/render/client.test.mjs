@@ -100,6 +100,38 @@ async function waitUntil(predicate) {
   assert.fail("condition did not become ready");
 }
 
+function streamingResponse(parts, headers = {}, { mutateFirstBeforeSecond = false } = {}) {
+  const encoder = new TextEncoder();
+  const chunks = parts.map((part) => encoder.encode(part));
+  let index = 0;
+  let cancelled = false;
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(headers),
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (index === chunks.length) return { done: true };
+            const value = chunks[index++];
+            if (mutateFirstBeforeSecond && index === 2) {
+              chunks[0][0] = "X".charCodeAt(0);
+            }
+            return { done: false, value };
+          },
+          async cancel() {
+            cancelled = true;
+          },
+        };
+      },
+    },
+    get cancelled() {
+      return cancelled;
+    },
+  };
+}
+
 const source = (await readFile(new URL("./client.js", import.meta.url), "utf8")).replace(
   /^const DEFAULT_ENDPOINT = .*;$/m,
   'const DEFAULT_ENDPOINT = "https://renderer.example/v1/render";',
@@ -186,6 +218,50 @@ const { attachLightpandaRenderer } = await import(
     renderer.render("https://source.example/large"),
     /Lightpanda response exceeds 4 bytes/,
   );
+}
+
+{
+  const response = streamingResponse(
+    ["abc", "def"],
+    { "content-length": "6" },
+    { mutateFirstBeforeSecond: true },
+  );
+  fetchImpl = async () => response;
+  const renderer = attachLightpandaRenderer(new FakeElement());
+  await renderer.render("https://source.example/preallocated");
+  assert.equal(renderer.iframe.snapshot, "abcdef");
+}
+
+{
+  const cases = [
+    [streamingResponse(["short"], { "content-length": "8" }), "short"],
+    [streamingResponse(["abc", "def"], { "content-length": "3" }), "abcdef"],
+    [streamingResponse(["abc", "def"], { "content-length": "invalid" }), "abcdef"],
+    [
+      streamingResponse(["abc", "def"], {
+        "content-length": "3",
+        "content-encoding": "gzip",
+      }),
+      "abcdef",
+    ],
+  ];
+  for (const [response, expected] of cases) {
+    fetchImpl = async () => response;
+    const renderer = attachLightpandaRenderer(new FakeElement());
+    await renderer.render("https://source.example/fallback");
+    assert.equal(renderer.iframe.snapshot, expected);
+  }
+}
+
+{
+  const response = streamingResponse(["123", "45"]);
+  fetchImpl = async () => response;
+  const renderer = attachLightpandaRenderer(new FakeElement(), { maxResponseBytes: 4 });
+  await assert.rejects(
+    renderer.render("https://source.example/streaming-large"),
+    /Lightpanda response exceeds 4 bytes/,
+  );
+  assert.equal(response.cancelled, true);
 }
 
 {
