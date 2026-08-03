@@ -167,6 +167,36 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     self._value = try self.sanitizeValue(true, value, frame);
 }
 
+/// The numeric value for number and range controls. Other input states do not
+/// define a number conversion and must reject this API.
+pub fn getValueAsNumber(self: *const Input) !f64 {
+    switch (self._input_type) {
+        .number, .range => {},
+        else => return error.InvalidStateError,
+    }
+
+    const value = self.getValue();
+    if (!isValidFloatingPoint(value)) {
+        return std.math.nan(f64);
+    }
+    return std.fmt.parseFloat(f64, value) catch std.math.nan(f64);
+}
+
+pub fn setValueAsNumber(self: *Input, value: f64, frame: *Frame) !void {
+    switch (self._input_type) {
+        .number, .range => {},
+        else => return error.InvalidStateError,
+    }
+
+    if (std.math.isNan(value)) {
+        return self.setValue("", frame);
+    }
+    if (!std.math.isFinite(value)) {
+        return error.TypeError;
+    }
+    return self.setValue(try formatFloat(frame.local_arena, value), frame);
+}
+
 pub fn getDefaultValue(self: *const Input) []const u8 {
     return self._default_value orelse "";
 }
@@ -1411,6 +1441,7 @@ pub const JsApi = struct {
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
+    pub const valueAsNumber = bridge.accessor(Input.getValueAsNumber, Input.setValueAsNumber, .{});
     pub const files = bridge.accessor(Input.getFiles, null, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});

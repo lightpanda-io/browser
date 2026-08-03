@@ -135,6 +135,32 @@
   testing.expectEqual('new value', $('#text2').value)
 </script>
 
+<script id="value_as_number">
+{
+  const number = document.createElement('input');
+  number.type = 'number';
+  testing.expectTrue(Number.isNaN(number.valueAsNumber));
+  number.value = '12.5';
+  testing.expectEqual(12.5, number.valueAsNumber);
+  number.valueAsNumber = -4;
+  testing.expectEqual('-4', number.value);
+  number.valueAsNumber = NaN;
+  testing.expectEqual('', number.value);
+  testing.expectError('TypeError', () => { number.valueAsNumber = Infinity; });
+
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.min = '0';
+  range.max = '10';
+  range.valueAsNumber = 12;
+  testing.expectEqual(10, range.valueAsNumber);
+
+  const text = document.createElement('input');
+  testing.expectError('InvalidStateError', () => { void text.valueAsNumber; });
+  testing.expectError('InvalidStateError', () => { text.valueAsNumber = 1; });
+}
+</script>
+
 <script id="checked_initial">
   testing.expectEqual(true, $('#check1').checked)
   testing.expectEqual(false, $('#check2').checked)
