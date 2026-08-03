@@ -109,9 +109,9 @@ const BrowserHandle = struct {
     config_arena: std.heap.ArenaAllocator,
     // Owns the previous lp_fetch result; reset at the start of the next one.
     fetch_arena: std.heap.ArenaAllocator,
-    // lp_fetch's browser, created on first use and reused after — each call
-    // still gets a fresh session. Its isolate parks between calls.
-    fetch_browser: ?lp.Browser,
+    // lp_fetch's browser, created on first use; its isolate parks between
+    // calls. Heap-allocated: Browser registers self-pointers and must not move.
+    fetch_browser: ?*lp.Browser,
     sessions: std.ArrayList(*SessionHandle),
     // Static @errorName of the last failing lp_fetch/lp_session_new.
     last_error: []const u8,
@@ -210,10 +210,11 @@ pub export fn lp_shutdown(handle_: ?*BrowserHandle) void {
 
     while (handle.sessions.pop()) |session| destroySession(session);
     handle.sessions.deinit(c_allocator);
-    if (handle.fetch_browser) |*browser| {
+    if (handle.fetch_browser) |browser| {
         // Browser.deinit's Env.deinit exit balances against this enter.
         browser.env.isolate.enter();
         browser.deinit();
+        c_allocator.destroy(browser);
     }
     handle.app.deinit();
     handle.config.deinit(c_allocator);
@@ -279,17 +280,18 @@ pub export fn lp_fetch(
     // Sessions park their isolate between calls, so entering this
     // browser's isolate here nests correctly. Browser.init leaves the
     // isolate entered; the exit below parks it either way.
-    if (handle.fetch_browser) |*browser| {
+    if (handle.fetch_browser) |browser| {
         browser.env.isolate.enter();
     } else {
-        handle.fetch_browser = @as(lp.Browser, undefined);
-        (&handle.fetch_browser.?).init(handle.app, .{}, null) catch |err| {
-            handle.fetch_browser = null;
+        const browser = c_allocator.create(lp.Browser) catch return .out_of_memory;
+        browser.init(handle.app, .{}, null) catch |err| {
+            c_allocator.destroy(browser);
             handle.last_error = @errorName(err);
             return .internal;
         };
+        handle.fetch_browser = browser;
     }
-    const browser = &handle.fetch_browser.?;
+    const browser = handle.fetch_browser.?;
     defer browser.env.isolate.exit();
 
     lp.fetch(handle.app, browser, &.{url}, fetch_opts) catch |err| {
@@ -356,7 +358,7 @@ fn createSession(handle: *BrowserHandle) !*SessionHandle {
     try entry.ts.init(handle.app);
     errdefer entry.ts.deinit();
 
-    entry.ts.setCancelHook(.{ .context = entry, .check = cancelTrampoline });
+    entry.ts.session.cancel_hook = .{ .context = entry, .check = cancelTrampoline };
 
     try handle.sessions.append(c_allocator, entry);
 
@@ -473,21 +475,24 @@ fn cancelTrampoline(ctx: *anyopaque) bool {
 /// Error name of the most recent failing `lp_call` on this session; empty
 /// when the last call succeeded. Static storage — do not free.
 pub export fn lp_last_error(entry_: ?*SessionHandle, len_: ?*usize) ?[*]const u8 {
-    if (len_) |len| len.* = 0;
-    const entry = entry_ orelse return null;
-    if (app_state != .live) return null;
-    if (len_) |len| len.* = entry.last_error.len;
-    return entry.last_error.ptr;
+    const entry = entry_ orelse return publishError(null, len_);
+    return publishError(if (app_state == .live) entry.last_error else null, len_);
 }
 
 /// Like `lp_last_error`, for the browser-level calls (`lp_fetch`,
 /// `lp_session_new`).
 pub export fn lp_browser_last_error(handle_: ?*BrowserHandle, len_: ?*usize) ?[*]const u8 {
-    if (len_) |len| len.* = 0;
-    const handle = handle_ orelse return null;
-    if (app_state != .live) return null;
-    if (len_) |len| len.* = handle.last_error.len;
-    return handle.last_error.ptr;
+    const handle = handle_ orelse return publishError(null, len_);
+    return publishError(if (app_state == .live) handle.last_error else null, len_);
+}
+
+fn publishError(err: ?[]const u8, len_: ?*usize) ?[*]const u8 {
+    const e = err orelse {
+        if (len_) |len| len.* = 0;
+        return null;
+    };
+    if (len_) |len| len.* = e.len;
+    return e.ptr;
 }
 
 /// JSON array describing every tool `lp_call` accepts, in the MCP

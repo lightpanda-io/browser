@@ -225,7 +225,7 @@ pub fn build(b: *Build) !void {
     }
 
     {
-        // C API (src/c_api.zig): liblightpanda.so for embedders.
+        // c api
         const c_api_module = createCApiModule(b, lightpanda_module);
 
         const c_api_check = b.addLibrary(.{
@@ -290,9 +290,7 @@ pub fn build(b: *Build) !void {
             }
             lib_step.dependOn(&install_so.step);
             lib_step.dependOn(&install_header.step);
-            // The .so resolves its own dependencies, so the link line is
-            // just the library.
-            const shared_pc = pkgConfigFile(b, version_string, "-L${libdir} -llightpanda");
+            const shared_pc = pkgConfigFile(b, version_string);
             lib_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
         } else {
             lib_step.dependOn(&b.addFail("lib needs a source-built V8: drop -Dprebuilt_v8_path").step);
@@ -319,8 +317,6 @@ pub fn build(b: *Build) !void {
     }
 }
 
-/// Root module for a C-API artifact. The ABI tests get their own instance
-/// so their test-only header import stays off the .so.
 fn createCApiModule(b: *Build, lightpanda: *Build.Module) *Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),
@@ -335,7 +331,7 @@ fn createCApiModule(b: *Build, lightpanda: *Build.Module) *Build.Module {
     return mod;
 }
 
-fn pkgConfigFile(b: *Build, version: []const u8, libs: []const u8) Build.LazyPath {
+fn pkgConfigFile(b: *Build, version: []const u8) Build.LazyPath {
     return b.addWriteFiles().add("lightpanda.pc", b.fmt(
         \\prefix=${{pcfiledir}}/../..
         \\libdir=${{prefix}}/lib
@@ -345,9 +341,9 @@ fn pkgConfigFile(b: *Build, version: []const u8, libs: []const u8) Build.LazyPat
         \\Description: Lightpanda headless browser C library
         \\Version: {s}
         \\Cflags: -I${{includedir}}
-        \\Libs: {s}
+        \\Libs: -L${{libdir}} -llightpanda
         \\
-    , .{ version, libs }));
+    , .{version}));
 }
 
 fn linkV8(
