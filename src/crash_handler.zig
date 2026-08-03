@@ -69,17 +69,12 @@ pub noinline fn crash(
     abort();
 }
 
-/// Stamped by App.init from Config.telemetryDisabled so crash reports
-/// honor a programmatic opt-out (the C API's); the env check in `report`
-/// still covers crashes before an App exists.
-pub var config_disables_reports: bool = false;
-
 fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
     if (comptime lp.IS_DEBUG) {
         return;
     }
 
-    if (config_disables_reports or @import("telemetry/telemetry.zig").isDisabled()) {
+    if (@import("telemetry/telemetry.zig").isDisabled()) {
         return;
     }
 

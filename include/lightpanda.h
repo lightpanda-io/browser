@@ -35,6 +35,9 @@
  *
  * Logging goes to stderr (level: warnings and errors in release builds).
  *
+ * Anonymous usage telemetry is enabled in release builds; set
+ * LIGHTPANDA_DISABLE_TELEMETRY in the environment to opt out.
+ *
  * Linking: `make lib` builds liblightpanda.so (zig-out/lib) and
  * installs this header (zig-out/include) plus a pkg-config file:
  *   cc app.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda)
@@ -90,7 +93,7 @@ typedef struct lp_result {
 } lp_result;
 
 /* Zero-initialize for defaults: no proxy, default user agent, no HTTP
- * cache, 5s HTTP timeout, 30s JS watchdog, telemetry off. */
+ * cache, 5s HTTP timeout, 30s JS watchdog. */
 typedef struct lp_options {
     const char *user_agent;      /* NULL: default ("Lightpanda/1.0") */
     size_t user_agent_len;
@@ -100,7 +103,6 @@ typedef struct lp_options {
     size_t http_cache_dir_len;
     uint32_t http_timeout_ms;    /* 0: default (5000) */
     int32_t watchdog_ms;         /* 0: default (30000), <0: disabled */
-    bool enable_telemetry;       /* false: no telemetry */
 } lp_options;
 
 typedef enum lp_format {

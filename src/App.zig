@@ -27,7 +27,6 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Storage = @import("storage/Storage.zig");
 const Network = @import("network/Network.zig");
 const Watchdog = @import("Watchdog.zig");
-const crash_handler = @import("crash_handler.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
 const log = lp.log;
@@ -79,7 +78,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    crash_handler.config_disables_reports = config.telemetryDisabled();
     app.telemetry = try Telemetry.init(app, config.command, config.interactive());
     errdefer app.telemetry.deinit(allocator);
 
