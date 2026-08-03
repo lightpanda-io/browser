@@ -920,13 +920,14 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     transfer._cache_key = req.url;
 
     const arena = transfer.arena;
-    var iter = req.headers.iterator();
-    const req_headers = try iter.collect(arena.allocator());
-
     const cached = cache.get(arena.allocator(), .{
         .url = req.url,
         .timestamp = lp.datetime.timestamp(.real),
-        .request_headers = req_headers.items,
+        .request_headers = &.{},
+        .request_header_lookup = .{
+            .context = @ptrCast(&req.headers),
+            .get = getRequestHeader,
+        },
     }) orelse {
         lp.metrics.http_cache.incr(.miss);
         transfer._cache_intent = .store;
@@ -962,6 +963,11 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     }
     transfer._cache_intent = .{ .revalidate = cached };
     return false;
+}
+
+fn getRequestHeader(context: *const anyopaque, name: []const u8) ?[]const u8 {
+    const headers: *const http.Headers = @ptrCast(@alignCast(context));
+    return headers.get(name);
 }
 
 // 304 on a revalidation: renew the stored entry from the fresh headers and

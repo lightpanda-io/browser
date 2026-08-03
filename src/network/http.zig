@@ -193,6 +193,18 @@ pub const Headers = struct {
     pub fn iterator(self: Headers) HeaderIterator {
         return .{ .curl_slist = .{ .header = self.headers } };
     }
+
+    // The curl list owns header storage. Borrow a value while the list lives
+    // instead of materializing every request header for a single lookup.
+    pub fn get(self: Headers, name: []const u8) ?[]const u8 {
+        var it = self.iterator();
+        while (it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, name)) {
+                return header.value;
+            }
+        }
+        return null;
+    }
 };
 
 // In normal cases, the header iterator comes from the curl linked list.
@@ -1026,6 +1038,15 @@ test "Headers.set adds a new header and preserves defaults" {
     try testing.expectEqual(@as(usize, 1), findHeader(headers, "X-Custom").count);
     try testing.expectEqual(@as(usize, 1), findHeader(headers, "User-Agent").count);
     try testing.expectEqual(@as(usize, 1), findHeader(headers, "Accept-Language").count);
+}
+
+test "Headers.get matches header names case-insensitively" {
+    var headers = try Headers.init("User-Agent: Lightpanda/1.0");
+    defer headers.deinit();
+    try headers.add("Accept-Encoding: gzip");
+
+    try testing.expectEqual("gzip", headers.get("accept-encoding").?);
+    try testing.expectEqual(null, headers.get("missing"));
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {

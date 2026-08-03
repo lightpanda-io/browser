@@ -213,9 +213,7 @@ pub fn get(self: *FsCache, arena: std.mem.Allocator, req: CacheRequest) ?CachedR
         const name = vary_hdr.name;
         const value = vary_hdr.value;
 
-        const incoming = for (req.request_headers) |h| {
-            if (std.ascii.eqlIgnoreCase(h.name, name)) break h.value;
-        } else "";
+        const incoming = req.getHeader(name) orelse "";
 
         if (!std.ascii.eqlIgnoreCase(value, incoming)) {
             log.debug(.cache, "miss", .{
@@ -582,6 +580,18 @@ test "FsCache: garbage file" {
 }
 
 test "FsCache: vary hit and miss" {
+    const Context = struct {
+        accept_encoding: []const u8,
+
+        fn get(context: *const anyopaque, name: []const u8) ?[]const u8 {
+            const self: *const @This() = @ptrCast(@alignCast(context));
+            if (std.ascii.eqlIgnoreCase(name, "Accept-Encoding")) {
+                return self.accept_encoding;
+            }
+            return null;
+        }
+    };
+
     var setup = try setupCache();
     defer {
         setup.cache.deinit();
@@ -632,14 +642,28 @@ test "FsCache: vary hit and miss" {
         .request_headers = &.{},
     }));
 
+    const gzip = Context{ .accept_encoding = "gzip" };
     const result2 = cache.get(arena.allocator(), .{
         .url = "https://example.com",
         .timestamp = now,
-        .request_headers = &.{
-            .{ .name = "Accept-Encoding", .value = "gzip" },
+        .request_headers = &.{},
+        .request_header_lookup = .{
+            .context = @ptrCast(&gzip),
+            .get = Context.get,
         },
     }) orelse return error.CacheMiss;
     result2.data.file.file.close(lp.io);
+
+    const br = Context{ .accept_encoding = "br" };
+    try testing.expectEqual(null, cache.get(arena.allocator(), .{
+        .url = "https://example.com",
+        .timestamp = now,
+        .request_headers = &.{},
+        .request_header_lookup = .{
+            .context = @ptrCast(&br),
+            .get = Context.get,
+        },
+    }));
 }
 
 test "FsCache: vary multiple headers" {

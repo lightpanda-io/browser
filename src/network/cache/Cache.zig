@@ -200,6 +200,28 @@ pub const CacheRequest = struct {
     url: []const u8,
     timestamp: u64,
     request_headers: []const Http.Header,
+    request_header_lookup: ?RequestHeaderLookup = null,
+
+    pub fn getHeader(self: CacheRequest, name: []const u8) ?[]const u8 {
+        if (self.request_header_lookup) |lookup| {
+            return lookup.get(lookup.context, name);
+        }
+
+        for (self.request_headers) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, name)) {
+                return header.value;
+            }
+        }
+        return null;
+    }
+};
+
+// A cache lookup only needs request headers named by the cached response's
+// Vary field. This lets callers borrow a request's native header storage
+// instead of allocating a complete temporary header list on every lookup.
+pub const RequestHeaderLookup = struct {
+    context: *const anyopaque,
+    get: *const fn (context: *const anyopaque, name: []const u8) ?[]const u8,
 };
 
 pub const RenewResponse = struct {
