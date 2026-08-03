@@ -23,6 +23,82 @@
   }
 </script>
 
+<script id=src_attribute_change type=module>
+  const state = await testing.async();
+  const iframe = document.createElement('iframe');
+  let loads = 0;
+
+  const nextLoad = () => new Promise((resolve) => {
+    iframe.onload = () => {
+      loads += 1;
+      resolve();
+    };
+  });
+
+  let loaded = nextLoad();
+  iframe.src = 'support/page.html?initial';
+  document.body.appendChild(iframe);
+  await loaded;
+  loads = 0;
+
+  loaded = nextLoad();
+  iframe.setAttribute('src', 'support/page.html?attribute');
+  await loaded;
+  testing.expectEqual('a-page\n', iframe.contentDocument.body.textContent);
+
+  loaded = nextLoad();
+  iframe.setAttribute('src', '');
+  await loaded;
+  testing.expectEqual('', iframe.src);
+  testing.expectEqual('<html><head></head><body></body></html>', iframe.contentDocument.documentElement.outerHTML);
+
+  const document_before_remove = iframe.contentDocument;
+  iframe.removeAttribute('src');
+  await scheduler.postTask(() => {});
+  testing.expectEqual(null, iframe.getAttribute('src'));
+  testing.expectEqual('', iframe.src);
+  testing.expectEqual('<html><head></head><body></body></html>', iframe.contentDocument.documentElement.outerHTML);
+  testing.expectTrue(document_before_remove === iframe.contentDocument);
+
+  loaded = nextLoad();
+  iframe.setAttribute('src', '');
+  await loaded;
+  await scheduler.postTask(() => {});
+  document.body.removeChild(iframe);
+  iframe.removeAttribute('src');
+  loaded = nextLoad();
+  document.body.appendChild(iframe);
+  await loaded;
+
+  loaded = nextLoad();
+  iframe.src = 'support/page.html?property';
+  await loaded;
+
+  loaded = nextLoad();
+  iframe.src = 'support/page.html?property';
+  await loaded;
+
+  // The task boundary lets a queued re-navigation replace contentDocument.
+  const document_before_move = iframe.contentDocument;
+  document.body.appendChild(iframe);
+  await scheduler.postTask(() => {});
+  testing.expectTrue(document_before_move === iframe.contentDocument);
+
+  document.body.removeChild(iframe);
+  iframe.removeAttribute('src');
+  iframe.setAttribute('src', 'support/page.html?detached');
+  loaded = nextLoad();
+  document.body.appendChild(iframe);
+  await loaded;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(7, loads);
+    testing.expectEqual('a-page\n', iframe.contentDocument.body.textContent);
+    testing.expectEqual(11, window.length);
+  });
+</script>
+
 <script id="basic">
    // reload it
   $('#f2').src = 'support/sub2.html';
@@ -165,6 +241,6 @@
 
 <script id=count>
   testing.onload(() => {
-    testing.expectEqual(10, window.length);
+    testing.expectEqual(11, window.length);
   });
 </script>

@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -29,12 +30,15 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const IFrame = @This();
 
 pub const Proto = HtmlElement;
 _proto: *HtmlElement,
 _src: []const u8 = "",
 _executed: bool = false,
+// setSrc lets the reflected attribute update state, then reports navigation errors itself.
+_setting_src: bool = false,
 _window: ?*Window = null,
 
 pub fn asElement(self: *IFrame) *Element {
@@ -66,13 +70,41 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
-    self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
-    if (element.asNode().isConnected()) {
-        // unlike script, an iframe is reloaded every time the src is set
-        // even if it's set to the same URL.
-        self._executed = false;
+    const was_setting_src = self._setting_src;
+    self._setting_src = true;
+    defer self._setting_src = was_setting_src;
+
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
+    if (!was_setting_src) {
+        try self.navigateForSrcChange(frame);
+    }
+}
+
+fn srcAttributeChanged(self: *IFrame, frame: *Frame) !void {
+    self._src = self.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
+    self._executed = false;
+    if (!self._setting_src) {
+        try self.navigateForSrcChange(frame);
+    }
+}
+
+fn srcAttributeRemoved(self: *IFrame, frame: *Frame) !void {
+    const was_blank = self._src.len == 0;
+    self._src = "";
+    if (was_blank and self.asNode().isConnected()) {
+        return;
+    }
+
+    self._executed = false;
+    if (!was_blank) {
+        try self.navigateForSrcChange(frame);
+    }
+}
+
+fn navigateForSrcChange(self: *IFrame, frame: *Frame) !void {
+    if (self.asNode().isConnected()) {
+        // Unlike script, an iframe is reloaded every time src is set,
+        // even if it is set to the same URL.
         try frame.iframeAddedCallback(self);
     }
 }
@@ -114,5 +146,21 @@ pub const Build = struct {
         const self = node.as(IFrame);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+
+        try element.as(IFrame).srcAttributeChanged(frame);
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+
+        try element.as(IFrame).srcAttributeRemoved(frame);
     }
 };
