@@ -81,7 +81,7 @@ fn bump(self: *Baseline, field: []const u8, nonempty: bool) error{OutOfMemory}!v
 /// The session's baseline as a full `// lp:baseline {...}` line, or null when
 /// no extract ran.
 pub fn serialize(self: *const Baseline, arena: std.mem.Allocator) error{OutOfMemory}!?[]const u8 {
-    return fieldsToLine(arena, &self.fields);
+    return fieldsToLine(arena, self.fields);
 }
 
 /// Baseline line from a script run's extract stats (per-field totals folded
@@ -94,22 +94,14 @@ pub fn serializeStats(arena: std.mem.Allocator, stats: []const extract.ExtractSt
         gop.value_ptr.calls += stat.calls;
         gop.value_ptr.nonempty += stat.calls - stat.empty;
     }
-    return fieldsToLine(arena, &fields);
+    return fieldsToLine(arena, fields);
 }
 
-fn fieldsToLine(arena: std.mem.Allocator, fields: *const Fields) error{OutOfMemory}!?[]const u8 {
+fn fieldsToLine(arena: std.mem.Allocator, fields: Fields) error{OutOfMemory}!?[]const u8 {
     if (fields.count() == 0) return null;
-    var fields_obj: std.json.ObjectMap = .empty;
-    var it = fields.iterator();
-    while (it.next()) |entry| {
-        var stat_obj: std.json.ObjectMap = .empty;
-        try stat_obj.put(arena, "calls", .{ .integer = entry.value_ptr.calls });
-        try stat_obj.put(arena, "nonempty", .{ .integer = entry.value_ptr.nonempty });
-        try fields_obj.put(arena, entry.key_ptr.*, .{ .object = stat_obj });
-    }
-    var root: std.json.ObjectMap = .empty;
-    try root.put(arena, "fields", .{ .object = fields_obj });
-    const json = try std.json.Stringify.valueAlloc(arena, std.json.Value{ .object = root }, .{});
+    // The `std.json` wrapper stringifies the map as an object, keys in order.
+    const wrapped: std.json.ArrayHashMap(FieldStat) = .{ .map = fields };
+    const json = try std.json.Stringify.valueAlloc(arena, .{ .fields = wrapped }, .{});
     return try std.mem.concat(arena, u8, &.{ marker, json });
 }
 

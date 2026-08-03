@@ -121,10 +121,11 @@ fn dupeExtractStats(arena: std.mem.Allocator, stats: []const extract.ExtractStat
 /// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
 const detail_max_bytes: usize = 2048;
 
-/// `string.capBytes` at `detail_max_bytes`, always duped — `RunFacts` details
-/// must outlive the runtime whose arena the text came from.
+/// `string.capBytes` at `detail_max_bytes`; the result never aliases `text`,
+/// which may live in a runtime arena that dies before the caller's report.
 fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    return arena.dupe(u8, string.capBytes(arena, text, detail_max_bytes));
+    const capped = string.capBytes(arena, text, detail_max_bytes);
+    return if (capped.ptr == text.ptr) arena.dupe(u8, capped) else capped;
 }
 
 /// A finding worth a verdict, not yet confirmed: the return value was
@@ -173,7 +174,7 @@ fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []con
 /// message fed to the next heal attempt. Running clean is not a cure on its
 /// own — a revision that deletes the failing extract (or the `return`) also
 /// runs clean.
-pub fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
+pub fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
     switch (first.kind) {
         .threw => return null,
         .empty => return if (facts.returned == .data)
@@ -192,9 +193,12 @@ pub fn cureFailure(arena: std.mem.Allocator, first: ScriptError, facts: RunFacts
     }
 }
 
-pub fn refreshedBaselineScript(arena: std.mem.Allocator, revised: []const u8, stats: []const extract.ExtractStat) ?[]const u8 {
-    const line = Baseline.serializeStats(arena, stats) catch return null;
-    return Baseline.withBaseline(arena, revised, line) catch null;
+/// Suffix of the on-disk file `commitValidated` swaps through; exported so
+/// callers can build the same path for their own cleanup.
+pub const tmp_suffix = ".heal.js";
+
+pub fn tmpPath(arena: std.mem.Allocator, path: []const u8) error{OutOfMemory}![]const u8 {
+    return std.mem.concat(arena, u8, &.{ path, tmp_suffix });
 }
 
 /// Atomically swap the validated revision into `path`, its baseline refreshed
@@ -202,8 +206,9 @@ pub fn refreshedBaselineScript(arena: std.mem.Allocator, revised: []const u8, st
 /// broken script. Returns the failure message, or null once `path` holds the
 /// revision; after a failed rename the revision is deliberately kept on disk.
 pub fn commitValidated(arena: std.mem.Allocator, path: []const u8, script: []const u8, stats: []const extract.ExtractStat) error{OutOfMemory}!?[]const u8 {
-    const final = refreshedBaselineScript(arena, script, stats) orelse script;
-    const tmp_path = try std.fmt.allocPrint(arena, "{s}.heal.js", .{path});
+    const line = try Baseline.serializeStats(arena, stats);
+    const final = Baseline.withBaseline(arena, script, line) catch return error.OutOfMemory;
+    const tmp_path = try tmpPath(arena, path);
     writeScriptFile(tmp_path, final) catch |err| {
         std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch {};
         return try std.fmt.allocPrint(arena, "validated, but writing {s} failed: {s}", .{ tmp_path, @errorName(err) });
@@ -215,33 +220,54 @@ pub fn commitValidated(arena: std.mem.Allocator, path: []const u8, script: []con
     return null;
 }
 
-fn writeScriptFile(path: []const u8, content: []const u8) !void {
+/// Overwrite `path` with `content`, newline-terminated. Shared with the MCP
+/// `save` tool.
+pub fn writeScriptFile(path: []const u8, content: []const u8) !void {
     const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
     defer file.close(lp.io);
     try file.writeStreamingAll(lp.io, content);
     if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
+/// Bound for script source echoed into reports and LLM turns — a script is
+/// human-scale, but a synthesized one with an embedded blob shouldn't balloon
+/// them.
+pub const source_max_bytes = 64 * 1024;
+
+/// fmt fragment taking the script source as its one argument; shared by the
+/// diagnose message and the CLI verdict turn.
+pub const script_intent_block =
+    \\The script (its comments and structure carry the intent):
+    \\```js
+    \\{s}
+    \\```
+;
+
+/// The diagnose protocol, shared by the CLI heal turn and the MCP
+/// failed-replay guidance.
+pub const diagnose_instructions =
+    \\Diagnose the failure: inspect the live page (tree, findElement,
+    \\markdown) to see how the site differs from what the script expects,
+    \\then perform the corrected step(s) with tools to prove they work —
+    \\verify selectors against the live page, never guess. If the failing
+    \\step gated the rest of the script (a login, a navigation), carry on
+    \\far enough to show the script's goal is reachable again.
+;
+
 pub fn buildDiagnoseMessage(arena: std.mem.Allocator, path: []const u8, source: []const u8, error_detail: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena,
         \\Replaying the saved script {s} failed. The browser session is still
         \\at the failure state.
         \\
-        \\The script (its comments and structure carry the intent):
-        \\```js
-        \\{s}
-        \\```
+        \\
+    ++ script_intent_block ++
+        \\
         \\
         \\The error:
         \\{s}
         \\
-        \\Diagnose the failure: inspect the live page (tree, findElement,
-        \\markdown) to see how the site differs from what the script expects,
-        \\then perform the corrected step(s) with tools to prove they work —
-        \\verify selectors against the live page, never guess. If the failing
-        \\step gated the rest of the script (a login, a navigation), carry on
-        \\far enough to show the script's goal is reachable again.
-    , .{ path, source, error_detail });
+        \\
+    ++ diagnose_instructions, .{ path, string.capBytes(arena, source, source_max_bytes), error_detail });
 }
 
 /// Heal synthesis instruction; rides on the regular save revision system prompt.
@@ -260,15 +286,12 @@ pub const heal_revision_prompt =
 
 pub const replay_failed_guidance =
     \\The replay failed and the session is still at the failure state.
-    \\Diagnose the failure: inspect the live page (tree, findElement,
-    \\markdown) to see how the site differs from what the script expects —
-    \\`source` carries the intent in its comments and structure — then
-    \\perform the corrected step(s) with tools to prove they work: verify
-    \\selectors against the live page, never guess. If the failing step gated
-    \\the rest of the script (a login, a navigation), carry on far enough to
-    \\show the script's goal is reachable again. Then call heal_commit with
-    \\the revised script and this report's `failure` object echoed back
-    \\verbatim.
+    \\`source` carries the script's intent in its comments and structure.
+    \\
+++ diagnose_instructions ++
+    \\ Then call
+    \\heal_commit with the revised script and this report's `failure` object
+    \\echoed back verbatim.
 ;
 
 /// Shared by the CLI verdict prompt and the MCP suspicious-replay guidance.
@@ -346,10 +369,8 @@ test "cureFailure: running clean is not a cure" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const dry: ScriptError = .{
+    const dry: WireFailure = .{
         .kind = .dry_extracts,
-        .detail = "",
-        .source = "",
         .dry_fields = &.{ "comments", "" },
     };
     const cured_stats: []const extract.ExtractStat = &.{
@@ -370,12 +391,12 @@ test "cureFailure: running clean is not a cure" {
     try std.testing.expect((try cureFailure(aa, dry, testFacts(.data, still_dry_stats))) != null);
 
     // .empty is cured only by a data-carrying return.
-    const empty: ScriptError = .{ .kind = .empty, .detail = "", .source = "" };
+    const empty: WireFailure = .{ .kind = .empty };
     try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts(.data, &.{})));
     try std.testing.expect((try cureFailure(aa, empty, testFacts(.none, &.{}))) != null);
 
     // .threw needs nothing beyond running clean.
-    const threw: ScriptError = .{ .kind = .threw, .detail = "", .source = "" };
+    const threw: WireFailure = .{ .kind = .threw };
     try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(.none, &.{})));
 }
 

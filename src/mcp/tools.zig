@@ -222,7 +222,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
         return sendErrorContent(server, id, "out of memory");
 
-    writeScript(args.path, script) catch |err| {
+    lp.heal.writeScriptFile(args.path, script) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
             return sendErrorContent(server, id, "could not write script file");
         return sendErrorContent(server, id, msg);
@@ -236,10 +236,6 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 
     try sendToolResultText(server, id, msg, false);
 }
-
-/// Bound `RunReport.source` — a script is human-scale, but a synthesized one
-/// with an embedded blob shouldn't balloon the report.
-const source_max_bytes = 64 * 1024;
 
 /// Caps captured `console.*` output so a chatty script can't balloon the
 /// report.
@@ -268,12 +264,13 @@ const ConsoleCollector = struct {
             return;
         };
         if (scrubbed.len > remaining) self.truncated = true;
+        const capped = string.capBytes(self.arena, scrubbed, remaining);
         // A pass-through line aliases the runtime's per-call arena, which
         // dies before the report is sent.
-        const text = self.arena.dupe(u8, string.capBytes(self.arena, scrubbed, remaining)) catch {
+        const text = if (capped.ptr == line.ptr) self.arena.dupe(u8, capped) catch {
             self.truncated = true;
             return;
-        };
+        } else capped;
         self.lines.append(self.arena, .{ .level = @tagName(method), .text = text }) catch {
             self.truncated = true;
             return;
@@ -289,6 +286,18 @@ fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, so
     runtime.console_sink = collector.sink();
     const result = try runtime.runSource(source, path);
     return lp.heal.classifyRun(arena, result, source);
+}
+
+/// `runClassified` with its bring-up failures reported to the client; null
+/// after reporting.
+fn runClassifiedOrReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, collector: *ConsoleCollector) !?lp.heal.Classified {
+    return runClassified(server, arena, path, source, collector) catch |err| {
+        try sendErrorContent(server, id, switch (err) {
+            error.OutOfMemory => "out of memory",
+            error.RuntimeInitFailed, error.TooManyContexts => "could not initialize the script runtime",
+        });
+        return null;
+    };
 }
 
 // `validation` (heal_commit) skips the guidance and the source scrub: the
@@ -334,7 +343,7 @@ fn reportSource(arena: std.mem.Allocator, source: []const u8, mode: ReportMode) 
         .replay => try browser_tools.reverseSubstituteEnvVars(arena, source),
         .validation => source,
     };
-    return string.capBytes(arena, scrubbed, source_max_bytes);
+    return string.capBytes(arena, scrubbed, lp.heal.source_max_bytes);
 }
 
 fn sendReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, report: anytype) !void {
@@ -357,10 +366,7 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     };
 
     var collector: ConsoleCollector = .{ .arena = arena };
-    const classified = runClassified(server, arena, args.path, source, &collector) catch |err| switch (err) {
-        error.OutOfMemory => return sendErrorContent(server, id, "out of memory"),
-        error.RuntimeInitFailed, error.TooManyContexts => return sendErrorContent(server, id, "could not initialize the script runtime"),
-    };
+    const classified = (try runClassifiedOrReport(server, arena, id, args.path, source, &collector)) orelse return;
     // A failed script is still a successful replay: report it in-band, never
     // as a tool error — the report is the answer.
     const report = buildRunReport(arena, args.path, classified, &collector, .replay) catch
@@ -376,7 +382,6 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     if (!browser_tools.isPathSafe(args.path)) {
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
-    const first: lp.heal.ScriptError = .{ .kind = args.failure.kind, .detail = args.failure.detail, .source = "", .dry_fields = args.failure.dry_fields };
     // The client never sees resolved secrets, but scrub as a safety net
     // before running or persisting the candidate.
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
@@ -390,10 +395,7 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     };
 
     var collector: ConsoleCollector = .{ .arena = arena };
-    const classified = runClassified(server, arena, args.path, script, &collector) catch |err| switch (err) {
-        error.OutOfMemory => return sendErrorContent(server, id, "out of memory"),
-        error.RuntimeInitFailed, error.TooManyContexts => return sendErrorContent(server, id, "could not initialize the script runtime"),
-    };
+    const classified = (try runClassifiedOrReport(server, arena, id, args.path, script, &collector)) orelse return;
     const run = buildRunReport(arena, args.path, classified, &collector, .validation) catch
         return sendErrorContent(server, id, "out of memory");
 
@@ -401,7 +403,7 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     switch (classified) {
         .script_error => |script_error| report.failure = script_error.detail,
         .facts => |facts| {
-            const residual = lp.heal.cureFailure(arena, first, facts) catch
+            const residual = lp.heal.cureFailure(arena, args.failure, facts) catch
                 return sendErrorContent(server, id, "out of memory");
             if (residual) |failure| {
                 report.failure = failure;
@@ -480,13 +482,6 @@ fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Va
     }
 
     return sendToolResultFmt(server, arena, id, "closed session {s}", .{args.id});
-}
-
-fn writeScript(path: []const u8, content: []const u8) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
-    defer file.close(lp.io);
-    try file.writeStreamingAll(lp.io, content);
-    if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
@@ -1318,7 +1313,7 @@ test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
     try testing.expect(std.mem.startsWith(u8, written, "const page = new Page();"));
     try testing.expect(std.mem.indexOf(u8, written, "// lp:baseline ") != null);
     try testing.expect(std.mem.indexOf(u8, written, "\"btn\":{\"calls\":1,\"nonempty\":1}") != null);
-    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path ++ ".heal.js", .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path ++ lp.heal.tmp_suffix, .{}));
 }
 
 test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {

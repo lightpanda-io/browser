@@ -1307,7 +1307,12 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
     self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
     defer self.conversation.rollback(baseline);
 
-    return self.sendMetaTurn(arena, label, &self.conversation.messages, self.conversation.arena.allocator(), max_tokens, effort);
+    var result = self.runMetaTurn(label, &self.conversation.messages, self.conversation.arena.allocator(), .{ .max_tokens = max_tokens, .effort = effort }) orelse return null;
+    defer result.deinit();
+    // `result.text` lives in the conversation arena, which the rollback above
+    // may free on return; the dupe happens before that.
+    const raw = result.text orelse return self.failSynthesis(label, "the model returned no text");
+    return arena.dupe(u8, raw) catch self.failSynthesis(label, "out of memory");
 }
 
 /// `metaTurn` minus the conversation — session history would only add tokens
@@ -1332,15 +1337,6 @@ fn soloToolTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, syste
 fn failToolTurn(self: *Agent, label: []const u8, reason: []const u8) ?std.json.Value {
     _ = self.failSynthesis(label, reason);
     return null;
-}
-
-fn sendMetaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, messages: *std.ArrayList(zenai.provider.Message), message_arena: std.mem.Allocator, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
-    var result = self.runMetaTurn(label, messages, message_arena, .{ .max_tokens = max_tokens, .effort = effort }) orelse return null;
-    defer result.deinit();
-    // `result.text` lives in `message_arena`, which the caller may roll back
-    // on return; the dupe happens before that.
-    const raw = result.text orelse return self.failSynthesis(label, "the model returned no text");
-    return arena.dupe(u8, raw) catch self.failSynthesis(label, "out of memory");
 }
 
 const MetaTurnOptions = struct {
@@ -1802,7 +1798,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
     var source = first.source;
     var error_detail = first.detail;
 
-    const tmp_path = std.fmt.allocPrint(arena, "{s}.heal.js", .{path}) catch return self.healOom();
+    const tmp_path = lp.heal.tmpPath(arena, path) catch return self.healOom();
 
     // Every exit leaves no stray revision behind; a failed rename is the one
     // deliberate keep (its error message points at tmp_path).
@@ -1846,7 +1842,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
 
         switch (self.runScriptOutcome(arena, tmp_path) orelse return false) {
             .facts => |facts| {
-                if (lp.heal.cureFailure(arena, first, facts) catch return self.healOom()) |failure| {
+                if (lp.heal.cureFailure(arena, .{ .kind = first.kind, .dry_fields = first.dry_fields }, facts) catch return self.healOom()) |failure| {
                     self.terminal.printWarning("{s}", .{failure});
                     source = revised;
                     error_detail = failure;
@@ -1917,11 +1913,8 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
     const user_msg = std.fmt.allocPrint(arena,
         \\Replay of {s} completed without errors, but {s}
         \\
-        \\The script (its comments and structure carry the intent):
-        \\```js
-        \\{s}
-        \\```
-    , .{ path, suspicion.detail, suspicion.source }) catch return null;
+        \\
+    ++ lp.heal.script_intent_block, .{ path, suspicion.detail, string.capBytes(arena, suspicion.source, lp.heal.source_max_bytes) }) catch return null;
     const args = self.soloToolTurn(arena, "verdict", verdict_system_prompt, user_msg, .{
         .name = "verdict",
         .description = "Report whether the replay's dry output means the script is broken.",
