@@ -115,7 +115,7 @@ build: build-v8-snapshot
 ## Build a low-parallelism, size-optimized native binary
 build-small: $(SMALL_V8_DEP)
 	@printf "\033[36mGenerating V8 snapshot ($(SMALL_JOBS) job)...\033[0m\n"
-	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(SMALL_ZIGFLAGS) -Doptimize=ReleaseSmall snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
+	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(SMALL_ZIGFLAGS) -Doptimize=$(SMALL_OPTIMIZE) snapshot_creator -- src/snapshot.bin || (printf "\033[33mSnapshot build ERROR\033[0m\n"; exit 1;)
 	@printf "\033[36mBuilding small native profile ($(SMALL_OPTIMIZE), $(SMALL_JOBS) job)...\033[0m\n"
 	@CARGO_BUILD_JOBS=$(SMALL_JOBS) $(ZIG) build -j$(SMALL_JOBS) $(SMALL_ZIGFLAGS) -Doptimize=$(SMALL_OPTIMIZE) -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mSmall build ERROR\033[0m\n"; exit 1;)
 	@strip -x zig-out/bin/lightpanda || (printf "\033[33mStrip ERROR\033[0m\n"; exit 1;)
