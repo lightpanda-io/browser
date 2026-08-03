@@ -259,16 +259,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     const exec = self._exec;
 
     const session = exec.session;
-    const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true
     const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
-
-    try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
-    if (cookie_support) {
-        try exec.headersForRequest(&headers);
-    }
 
     self.acquireRef();
     self._active_requests += 1;
@@ -278,7 +271,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .ctx = self,
         .url = self._url,
         .method = self._method,
-        .headers = headers,
         .frame_id = exec.frameId(),
         .loader_id = exec.loaderId(),
         .body = self._request_body,
@@ -298,6 +290,18 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         self._send_flag = false;
         return err;
     };
+
+    {
+        errdefer {
+            transfer.deinit();
+            self.releaseSelfRef();
+            self._send_flag = false;
+        }
+        try self._request_headers.populateRequestHeaders(transfer);
+        if (cookie_support) {
+            try exec.headersForRequest(transfer);
+        }
+    }
 
     // Held for abort() / open() / deinit; the error, shutdown and done
     // callbacks clear it.

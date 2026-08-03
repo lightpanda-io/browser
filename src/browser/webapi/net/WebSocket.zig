@@ -56,7 +56,6 @@ _got_upgrade: bool = false,
 
 _conn: ?*http.Connection,
 _http_client: *HttpClient,
-_req_headers: http.Headers,
 
 _owner_node: std.DoublyLinkedList.Node = .{},
 
@@ -185,7 +184,6 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
         ._arena = arena,
         ._proto = undefined,
         ._url = resolved_url,
-        ._req_headers = .{ .headers = null },
         ._http_client = http_client,
     });
 
@@ -238,12 +236,13 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
     try conn.setWriteCallback(receivedDataCallback);
     try conn.setHeaderCallback(receivedHeaderCallback);
 
-    var headers = try http_client.newHeaders();
-    errdefer headers.deinit();
+    const allocator = arena.allocator();
+    for (http_client.baselineHeaders()) |hdr| {
+        try conn.addHeader(allocator, hdr.name, hdr.value);
+    }
 
     if (protocols.len > 0) {
-        const header = try std.fmt.allocPrintSentinel(arena.allocator(), "Sec-WebSocket-Protocol: {s}", .{try std.mem.join(arena.allocator(), ", ", protocols)}, 0);
-        try headers.add(header);
+        try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
     }
 
     {
@@ -252,13 +251,12 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
         // protection on WS servers) reject upgrades that arrive without it.
         // Non-tuple origins (about:blank, data:) serialize to "null", like
         // Chrome sends for opaque origins.
-        const origin = (try URL.getOrigin(arena.allocator(), exec.url.*)) orelse "null";
-        const header = try std.fmt.allocPrintSentinel(arena.allocator(), "Origin: {s}", .{origin}, 0);
-        try headers.add(header);
+        const origin = (try URL.getOrigin(allocator, exec.url.*)) orelse "null";
+        try conn.addHeader(allocator, "Origin", origin);
     }
 
     {
-        var buf: std.Io.Writer.Allocating = .init(arena.allocator());
+        var buf: std.Io.Writer.Allocating = .init(allocator);
         try exec.session.cookie_jar.forRequest(resolved_url, &buf.writer, .{
             .is_http = true,
             .is_navigation = false,
@@ -271,13 +269,12 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
         }
     }
 
-    try conn.setHeaders(&headers);
+    try conn.commitHeaders();
 
     conn.transport = .{ .websocket = self };
     try http_client.trackConn(conn);
 
     self._conn = conn;
-    self._req_headers = headers;
 }
 
 fn isBlockedPort(url: [:0]const u8) bool {
@@ -454,14 +451,13 @@ fn deactivate(self: *WebSocket) void {
     self.releaseRef(self._exec.page);
 }
 
-// Unlink the connection from the http client and free the request headers.
-// Queued outgoing messages are kept: their arenas are released in deinit,
-// and bufferedAmount keeps reporting them, as the spec wants.
+// Unlink the connection from the http client. Queued outgoing messages are
+// kept: their arenas are released in deinit, and bufferedAmount keeps
+// reporting them, as the spec wants.
 fn releaseTransport(self: *WebSocket) void {
     const conn = self._conn orelse return;
     self._conn = null;
     self._http_client.removeConn(conn);
-    self._req_headers.deinit();
 }
 
 // Pump-side: record an event for delivery. Errors propagate to libcurl's
