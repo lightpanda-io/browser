@@ -76,7 +76,7 @@ fn camelToKebab(arena: Allocator, camel: String) !String {
             idx += 1;
         }
 
-        return .{ .len = @intCast(output_len), .payload = .{ .content = @bitCast(content) } };
+        return .wrap(content[0..output_len]);
     }
 
     // Fallback: allocate for longer strings
