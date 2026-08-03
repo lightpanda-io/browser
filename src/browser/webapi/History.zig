@@ -20,8 +20,7 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
-
-const PopStateEvent = @import("event/PopStateEvent.zig");
+const URL = @import("../URL.zig");
 
 const History = @This();
 
@@ -65,11 +64,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
 
-    session.notification.dispatch(.frame_navigated_within_document, &.{
-        .url = url,
-        .frame_id = frame._frame_id,
-        .navigation_type = .historyApi,
-    });
+    frame.notifyNavigatedWithinDocument(.historyApi);
 }
 
 pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
@@ -87,37 +82,28 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
 
-    session.notification.dispatch(.frame_navigated_within_document, &.{
-        .url = url,
-        .frame_id = frame._frame_id,
-        .navigation_type = .historyApi,
-    });
+    frame.notifyNavigatedWithinDocument(.historyApi);
 }
 
 fn goInner(delta: i32, frame: *Frame) !void {
     // 0 behaves the same as no argument, both reloading the frame.
 
-    const current = frame._session.navigation._index;
+    const navigation = frame._session.navigation;
+    const current = navigation._index;
+    const len = navigation._entries.items.len;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
-    if (index_s < 0 or index_s > frame._session.navigation._entries.items.len - 1) {
+    const len_s: i64 = @intCast(len);
+    if (len == 0 or index_s < 0 or index_s >= len_s) {
         return;
     }
 
     const index = @as(usize, @intCast(index_s));
-    const entry = frame._session.navigation._entries.items[index];
-
-    if (entry._url) |url| {
-        if (frame.isSameOrigin(url)) {
-            const target = frame.window.asEventTarget();
-            if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
-                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, frame)).asEvent();
-                try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
-            }
-            // hashchange is queued by navigateInner.
-        }
+    const url = try navigation.resolveEntryURL(index, frame, frame.local_arena);
+    if (URL.eqlDocument(frame.url, url)) {
+        return navigation.traverseSameDocument(index, url, frame);
     }
 
-    _ = try frame._session.navigation.navigateInner(entry._url, .{ .traverse = index }, frame);
+    return frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = .{ .traverse = index } }, .{ .script = frame });
 }
 
 pub fn back(_: *History, frame: *Frame) !void {

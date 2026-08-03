@@ -28,6 +28,7 @@ const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
@@ -35,12 +36,14 @@ const Navigation = @This();
 pub const Proto = EventTarget;
 
 const NavigationKind = @import("root.zig").NavigationKind;
+const NavigationType = @import("root.zig").NavigationType;
 const NavigationActivation = @import("NavigationActivation.zig");
 const NavigationTransition = @import("root.zig").NavigationTransition;
 const NavigationState = @import("root.zig").NavigationState;
 
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
+const PopStateEvent = @import("../event/PopStateEvent.zig");
 
 _proto: *EventTarget,
 _on_currententrychange: ?js.Function.Global = null,
@@ -148,6 +151,87 @@ pub fn updateEntries(
             self._index = index;
         },
         .reload => {},
+    }
+}
+
+pub fn resolveEntryURL(self: *Navigation, index: usize, frame: *Frame, allocator: Allocator) ![:0]const u8 {
+    const url = self._entries.items[index]._url orelse return error.MissingURL;
+    if (lp.URL.isCompleteHTTPUrl(url) or std.mem.eql(u8, url, "about:blank")) {
+        return url;
+    }
+    return URL.resolve(allocator, frame.url, url, .{});
+}
+
+pub fn traverseSameDocument(
+    self: *Navigation,
+    index: usize,
+    url: [:0]const u8,
+    frame: *Frame,
+) !void {
+    const previous = self.getCurrentEntry();
+    const entry = self._entries.items[index];
+    const old_url = frame.url;
+
+    try updateSameDocumentURL(old_url, url, frame);
+    self._index = index;
+
+    dispatchPopState(entry, frame) catch |err| {
+        log.warn(.event, "popstate", .{ .err = err });
+    };
+
+    self._activation = .{
+        ._from = previous,
+        ._entry = entry,
+        ._type = .traverse,
+    };
+    self.dispatchCurrentEntryChange(previous, .traverse, frame) catch |err| {
+        log.warn(.event, "currententrychange", .{ .err = err });
+    };
+}
+
+fn updateSameDocumentURL(old_url: [:0]const u8, url: [:0]const u8, frame: *Frame) !void {
+    try frame.window._location._url.setHref(url, &frame.js.execution);
+    const retained_url = frame.arena.dupeZ(u8, url) catch |err| {
+        frame.window._location._url.setHref(old_url, &frame.js.execution) catch |restore_err| {
+            log.err(.event, "restore location", .{ .err = restore_err });
+        };
+        return err;
+    };
+    frame.url = retained_url;
+
+    if (!std.mem.eql(u8, old_url, url)) {
+        frame.queueHashChange(old_url, retained_url) catch |err| {
+            log.warn(.event, "queue hashchange", .{ .err = err });
+        };
+    }
+    frame.notifyNavigatedWithinDocument(.historyApi);
+}
+
+fn dispatchPopState(entry: *NavigationHistoryEntry, frame: *Frame) !void {
+    const target = frame.window.asEventTarget();
+    if (frame._event_manager.hasDirectListeners(target, "popstate", frame.window._on_popstate)) {
+        const event = (try PopStateEvent.initTrusted(
+            comptime .wrap("popstate"),
+            .{ .state = entry._state.value },
+            frame,
+        )).asEvent();
+        try frame._event_manager.dispatchDirect(target, event, frame.window._on_popstate, .{ .context = "Pop State" });
+    }
+}
+
+fn dispatchCurrentEntryChange(
+    self: *Navigation,
+    previous: *NavigationHistoryEntry,
+    navigation_type: NavigationType,
+    frame: *Frame,
+) !void {
+    if (self._on_currententrychange) |cec| {
+        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{ .from = previous, .navigationType = @tagName(navigation_type) },
+            frame,
+        )).asEvent();
+        try self.dispatch(cec, event, frame);
     }
 }
 
@@ -309,6 +393,16 @@ pub fn navigateInner(
     kind: NavigationKind,
     frame: *Frame,
 ) !NavigationReturn {
+    return self.navigateInnerLocal(_url, kind, frame, frame.js.local.?);
+}
+
+fn navigateInnerLocal(
+    self: *Navigation,
+    _url: ?[:0]const u8,
+    kind: NavigationKind,
+    frame: *Frame,
+    local: *const js.Local,
+) !NavigationReturn {
     const arena = frame._session.arena;
     const url = _url orelse return error.MissingURL;
 
@@ -316,7 +410,6 @@ pub fn navigateInner(
     //
     // These will only settle on same-origin navigation (mostly intended for SPAs).
     // It is fine (and expected) for these to not settle on cross-origin requests :)
-    const local = frame.js.local.?;
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
 
@@ -330,8 +423,6 @@ pub fn navigateInner(
         new_url = try arena.dupeZ(u8, new_url);
     }
 
-    // Captured before the switch overwrites frame.url in the same_document
-    // branches; used to queue the hashchange once below.
     const old_url = frame.url;
 
     const previous = self.getCurrentEntry();
@@ -339,40 +430,37 @@ pub fn navigateInner(
     switch (kind) {
         .push => |state| {
             if (is_same_document) {
-                frame.url = new_url;
+                _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, false);
+                try updateSameDocumentURL(old_url, new_url, frame);
 
                 committed.resolve("navigation push", {});
                 // todo: Fire navigate event
                 finished.resolve("navigation push", {});
-
-                _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
         },
         .replace => |state| {
             if (is_same_document) {
-                frame.url = new_url;
+                _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, false);
+                try updateSameDocumentURL(old_url, new_url, frame);
 
                 committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
                 finished.resolve("navigation replace", {});
-
-                _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
         },
         .traverse => |index| {
-            self._index = index;
-
             if (is_same_document) {
-                frame.url = new_url;
+                try self.traverseSameDocument(index, new_url, frame);
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
                 finished.resolve("navigation traverse", {});
             } else {
+                self._index = index;
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
         },
@@ -381,18 +469,8 @@ pub fn navigateInner(
         },
     }
 
-    if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
-        try frame.queueHashChange(old_url, new_url);
-    }
-
-    if (self._on_currententrychange) |cec| {
-        // If we haven't navigated off, let us fire off an a currententrychange.
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(kind) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
+    if (!is_same_document or std.meta.activeTag(kind) != .traverse) {
+        try self.dispatchCurrentEntryChange(previous, std.meta.activeTag(kind), frame);
     }
 
     _ = try committed.persist();

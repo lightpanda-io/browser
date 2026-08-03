@@ -33,6 +33,7 @@ const h5e = @import("parser/html5ever.zig");
 
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
+const Notification = @import("../Notification.zig");
 const URL = @import("URL.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
@@ -637,6 +638,17 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
+pub fn notifyNavigatedWithinDocument(
+    self: *Frame,
+    navigation_type: Notification.FrameNavigatedWithinDocument.NavigationType,
+) void {
+    self._session.notification.dispatch(.frame_navigated_within_document, &.{
+        .frame_id = self._frame_id,
+        .url = self.url,
+        .navigation_type = navigation_type,
+    });
+}
+
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
     lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
@@ -948,6 +960,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
 
+        target.notifyNavigatedWithinDocument(.fragment);
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error

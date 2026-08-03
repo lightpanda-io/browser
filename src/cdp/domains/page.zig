@@ -412,9 +412,15 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     }
 
     const idx = target_index orelse return error.InvalidParams;
-    const url = target_url orelse return error.InvalidParams;
+    if (target_url == null) return error.InvalidParams;
 
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const resolved_url = try nav.resolveEntryURL(idx, frame, cmd.arena);
+
+    if (URL.eqlDocument(frame.url, resolved_url)) {
+        try nav.traverseSameDocument(idx, resolved_url, frame);
+        return cmd.sendResult(null, .{});
+    }
 
     const opts = Frame.NavigateOpts{
         .reason = .history,
@@ -423,10 +429,10 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
     };
 
     if (frame._load_state == .waiting) {
-        return frame.navigate(url, opts);
+        return frame.navigate(resolved_url, opts);
     }
 
-    try session.initiateRootNavigation(frame._frame_id, url, opts);
+    try session.initiateRootNavigation(frame._frame_id, resolved_url, opts);
 }
 
 pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNavigate) !void {
@@ -1853,4 +1859,146 @@ test "cdp.frame: history.pushState emits Page.navigatedWithinDocument" {
         .navigationType = "historyApi",
         .url = "http://127.0.0.1:9582/next",
     }, .{});
+}
+
+test "cdp.frame: fragment navigation emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-FRAGMENT", .url = "hi.html", .target_id = "FID-00000000FR".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("location.hash = '#section'", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "fragment",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#section",
+    }, .{});
+}
+
+test "cdp.frame: Navigation API traversal emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-NAVIGATION", .url = "hi.html", .target_id = "FID-00000000NA".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("window.__popstate_url = ''; window.onpopstate = () => window.__popstate_url = location.href; navigation.navigate('#section')", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#section",
+    }, .{});
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const value = try ls.local.exec("location.href", null);
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html#section", try value.toStringSlice());
+    }
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("navigation.back()", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+    }, .{});
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const value = try ls.local.exec("location.href + '|' + window.__popstate_url", null);
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html|http://127.0.0.1:9582/src/browser/tests/hi.html", try value.toStringSlice());
+    }
+}
+
+test "cdp.frame: Page.navigateToHistoryEntry emits Page.navigatedWithinDocument" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-HISTORY-ENTRY", .url = "hi.html", .target_id = "FID-00000000HE".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("window.__popstate_urls = []; window.onpopstate = () => window.__popstate_urls.push(location.href); navigation.navigate('#section')", null);
+    }
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#section",
+    }, .{});
+
+    const nav = bc.session.navigation;
+    try testing.expect(nav._index > 0);
+    const fragment_entry_id = try std.fmt.parseInt(
+        i64,
+        nav._entries.items[nav._index]._id,
+        10,
+    );
+    const base_entry_id = try std.fmt.parseInt(i64, nav._entries.items[0]._id, 10);
+    try ctx.processMessage(.{
+        .id = 60,
+        .method = "Page.navigateToHistoryEntry",
+        .params = .{ .entryId = base_entry_id },
+    });
+    try ctx.expectSentResult(null, .{ .id = 60 });
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
+    }, .{});
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const value = try ls.local.exec("location.href + '|' + JSON.stringify(window.__popstate_urls)", null);
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html|[\"http://127.0.0.1:9582/src/browser/tests/hi.html\"]", try value.toStringSlice());
+    }
+
+    try ctx.processMessage(.{
+        .id = 61,
+        .method = "Page.navigateToHistoryEntry",
+        .params = .{ .entryId = fragment_entry_id },
+    });
+    try ctx.expectSentResult(null, .{ .id = 61 });
+
+    try ctx.expectSentEvent("Page.navigatedWithinDocument", .{
+        .frameId = "FID-0000000001",
+        .navigationType = "historyApi",
+        .url = "http://127.0.0.1:9582/src/browser/tests/hi.html#section",
+    }, .{});
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const value = try ls.local.exec("location.href + '|' + JSON.stringify(window.__popstate_urls)", null);
+        try testing.expectEqualSlices(u8, "http://127.0.0.1:9582/src/browser/tests/hi.html#section|[\"http://127.0.0.1:9582/src/browser/tests/hi.html\",\"http://127.0.0.1:9582/src/browser/tests/hi.html#section\"]", try value.toStringSlice());
+    }
 }
