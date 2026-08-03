@@ -31,6 +31,10 @@ const log = lp.log;
 
 const Runner = @This();
 
+// An idle page has no browser work that can make a selector or script condition
+// change. Keep the polling cadence consistent with the main runner loop.
+const idle_poll_ms = 200;
+
 session: *Session,
 browser: *Browser,
 http_client: *HttpClient,
@@ -358,7 +362,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
         }
         switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
+            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, idle_poll_ms))), .awake) catch {},
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
@@ -435,7 +439,7 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
         }
         switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
             // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
+            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, idle_poll_ms))), .awake) catch {},
             .ok => |recommended_sleep_ms| {
                 if (recommended_sleep_ms > 0) {
                     lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
@@ -487,6 +491,20 @@ test "Runner: waitForScript timeout" {
 
     var runner = page.session.runner(.{});
     try testing.expectError(error.Timeout, runner.waitForScript(page.frame_id, "document.querySelector('#nope')", 10));
+}
+
+test "Runner: waitForScript limits idle polls" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try testing.expectError(error.Timeout, runner.waitForScript(page.frame_id, "window.__wait_for_script_runs = (window.__wait_for_script_runs || 0) + 1, false", 250));
+
+    var ls: js.Local.Scope = undefined;
+    page.frame().?.js.localScope(&ls);
+    defer ls.deinit();
+    const runs = try (try ls.local.exec("window.__wait_for_script_runs", null)).toI32();
+    try testing.expect(runs <= 3);
 }
 
 test "Runner: waitForScript" {
