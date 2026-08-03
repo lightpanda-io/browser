@@ -343,161 +343,164 @@ pub const Writer = struct {
         const dom_node = axnode.dom;
 
         switch (dom_node._type) {
-            .document => |document| {
-                const uri = document.getURL(frame);
+            .document => {
+                const uri = dom_node.subtype(DOMNode.Document).getURL(frame);
                 try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                 try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                 try self.writeAXProperty(.{ .name = .focused, .value = .{ .booleanOrUndefined = true } }, w);
                 return;
             },
             .cdata => return,
-            .element => |el| switch (el.getTag()) {
-                .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 1 } }, w),
-                .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 2 } }, w),
-                .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 3 } }, w),
-                .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 4 } }, w),
-                .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 5 } }, w),
-                .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 6 } }, w),
-                .img => {
-                    const img = el.as(DOMNode.Element.Html.Image);
-                    const uri = try img.getSrc(self.frame);
-                    if (uri.len == 0) return;
-                    try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
-                },
-                .anchor => {
-                    const a = el.as(DOMNode.Element.Html.Anchor);
-                    const uri = try a.getHref(self.frame);
-                    if (uri.len == 0) return;
-                    try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
-                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                },
-                .input => {
-                    const input = el.as(DOMNode.Element.Html.Input);
-                    const is_disabled = el.isDisabled();
-
-                    switch (input._input_type) {
-                        .text, .email, .tel, .url, .search, .password, .number => {
-                            if (is_disabled) {
-                                try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
-                            }
-                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                            if (!is_disabled) {
-                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            }
-                            try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
-                            if (!is_disabled) {
-                                try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
-                            }
-                            try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
-                            try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
-                            try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
-                        },
-                        .button, .submit, .reset, .image => {
-                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                            if (!is_disabled) {
-                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            }
-                        },
-                        .checkbox, .radio => {
-                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                            if (!is_disabled) {
-                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                            }
-                            const is_checked = el.hasAttributeSafe(comptime .wrap("checked"));
-                            try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
-                        },
-                        else => {},
-                    }
-                },
-                .textarea => {
-                    const is_disabled = el.isDisabled();
-
-                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                    if (!is_disabled) {
+            .element => {
+                const el = dom_node.subtype(DOMNode.Element);
+                switch (el.getTag()) {
+                    .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 1 } }, w),
+                    .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 2 } }, w),
+                    .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 3 } }, w),
+                    .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 4 } }, w),
+                    .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 5 } }, w),
+                    .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 6 } }, w),
+                    .img => {
+                        const img = el.as(DOMNode.Element.Html.Image);
+                        const uri = try img.getSrc(self.frame);
+                        if (uri.len == 0) return;
+                        try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
+                    },
+                    .anchor => {
+                        const a = el.as(DOMNode.Element.Html.Anchor);
+                        const uri = try a.getHref(self.frame);
+                        if (uri.len == 0) return;
+                        try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                    }
-                    try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
-                    if (!is_disabled) {
-                        try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
-                    }
-                    try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = true } }, w);
-                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
-                    try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
-                },
-                .select => {
-                    const is_disabled = el.isDisabled();
+                    },
+                    .input => {
+                        const input = el.as(DOMNode.Element.Html.Input);
+                        const is_disabled = el.isDisabled();
 
-                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                    if (!is_disabled) {
-                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                    }
-                    try self.writeAXProperty(.{ .name = .hasPopup, .value = .{ .token = "menu" } }, w);
-                    try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
-                },
-                .option => {
-                    const option = el.as(DOMNode.Element.Html.Option);
-                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-
-                    // Check if this option is selected by examining the parent select
-                    const is_selected = blk: {
-                        // First check if explicitly selected
-                        if (option.getSelected()) break :blk true;
-
-                        // Check if implicitly selected (first enabled option in select with no explicit selection)
-                        const parent = dom_node._parent orelse break :blk false;
-                        const parent_el = parent.as(DOMNode.Element);
-                        if (parent_el.getTag() != .select) break :blk false;
-
-                        const select = parent_el.as(DOMNode.Element.Html.Select);
-                        const selected_idx = select.getSelectedIndex();
-
-                        // Find this option's index
-                        var idx: i32 = 0;
-                        var it = parent.childrenIterator();
-                        while (it.next()) |child| {
-                            if (child.is(DOMNode.Element.Html.Option) == null) continue;
-                            if (child == dom_node) {
-                                break :blk idx == selected_idx;
-                            }
-                            idx += 1;
-                        }
-                        break :blk false;
-                    };
-
-                    if (is_selected) {
-                        try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
-                    }
-                },
-                .button => {
-                    const is_disabled = el.isDisabled();
-                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
-                    if (!is_disabled) {
-                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
-                    }
-                },
-                .hr => {
-                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
-                    try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
-                },
-                .li => {
-                    // Calculate level by counting list ancestors (ul, ol, menu)
-                    var level: usize = 0;
-                    var current = dom_node._parent;
-                    while (current) |node| {
-                        if (node.is(DOMNode.Element) == null) {
-                            current = node._parent;
-                            continue;
-                        }
-                        const current_el = node.as(DOMNode.Element);
-                        switch (current_el.getTag()) {
-                            .ul, .ol, .menu => level += 1,
+                        switch (input._input_type) {
+                            .text, .email, .tel, .url, .search, .password, .number => {
+                                if (is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                                }
+                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                                if (!is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                                }
+                                try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                                if (!is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                                }
+                                try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
+                                try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
+                                try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
+                            },
+                            .button, .submit, .reset, .image => {
+                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                                if (!is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                                }
+                            },
+                            .checkbox, .radio => {
+                                try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                                if (!is_disabled) {
+                                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                                }
+                                const is_checked = el.hasAttributeSafe(comptime .wrap("checked"));
+                                try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
+                            },
                             else => {},
                         }
-                        current = node._parent;
-                    }
-                    try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
-                },
-                else => {},
+                    },
+                    .textarea => {
+                        const is_disabled = el.isDisabled();
+
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
+                        try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
+                        try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = true } }, w);
+                        try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
+                        try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
+                    },
+                    .select => {
+                        const is_disabled = el.isDisabled();
+
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
+                        try self.writeAXProperty(.{ .name = .hasPopup, .value = .{ .token = "menu" } }, w);
+                        try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
+                    },
+                    .option => {
+                        const option = el.as(DOMNode.Element.Html.Option);
+                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+
+                        // Check if this option is selected by examining the parent select
+                        const is_selected = blk: {
+                            // First check if explicitly selected
+                            if (option.getSelected()) break :blk true;
+
+                            // Check if implicitly selected (first enabled option in select with no explicit selection)
+                            const parent = dom_node._parent orelse break :blk false;
+                            const parent_el = parent.as(DOMNode.Element);
+                            if (parent_el.getTag() != .select) break :blk false;
+
+                            const select = parent_el.as(DOMNode.Element.Html.Select);
+                            const selected_idx = select.getSelectedIndex();
+
+                            // Find this option's index
+                            var idx: i32 = 0;
+                            var it = parent.childrenIterator();
+                            while (it.next()) |child| {
+                                if (child.is(DOMNode.Element.Html.Option) == null) continue;
+                                if (child == dom_node) {
+                                    break :blk idx == selected_idx;
+                                }
+                                idx += 1;
+                            }
+                            break :blk false;
+                        };
+
+                        if (is_selected) {
+                            try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
+                    },
+                    .button => {
+                        const is_disabled = el.isDisabled();
+                        try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                        if (!is_disabled) {
+                            try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                        }
+                    },
+                    .hr => {
+                        try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                        try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
+                    },
+                    .li => {
+                        // Calculate level by counting list ancestors (ul, ol, menu)
+                        var level: usize = 0;
+                        var current = dom_node._parent;
+                        while (current) |node| {
+                            if (node.is(DOMNode.Element) == null) {
+                                current = node._parent;
+                                continue;
+                            }
+                            const current_el = node.as(DOMNode.Element);
+                            switch (current_el.getTag()) {
+                                .ul, .ol, .menu => level += 1,
+                                else => {},
+                            }
+                            current = node._parent;
+                        }
+                        try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
+                    },
+                    else => {},
+                }
             },
             else => |tag| {
                 log.debug(.cdp, "invalid tag", .{ .tag = tag });
@@ -760,7 +763,8 @@ pub const AXRole = enum(u8) {
     fn fromNode(node: *DOMNode) !AXRole {
         return switch (node._type) {
             .document => return .RootWebArea, // Chrome specific.
-            .cdata => |cd| {
+            .cdata => {
+                const cd = node.subtype(DOMNode.CData);
                 if (cd.is(DOMNode.CData.Text) == null) {
                     log.debug(.cdp, "invalid tag", .{ .tag = cd });
                     return error.InvalidTag;
@@ -768,131 +772,134 @@ pub const AXRole = enum(u8) {
 
                 return .StaticText;
             },
-            .element => |el| switch (el.getTag()) {
-                // Navigation & Structure
-                .nav => .navigation,
-                .main => .main,
-                .aside => .complementary,
-                // TODO conditions:
-                // .banner Not descendant of article, aside, main, nav, section
-                // (none) When descendant of article, aside, main, nav, section
-                .header => .banner,
-                // TODO conditions:
-                // contentinfo Not descendant of article, aside, main, nav, section
-                // (none)  When descendant of article, aside, main, nav, section
-                .footer => .contentinfo,
-                // TODO conditions:
-                // region Has accessible name (aria-label, aria-labelledby, or title) |
-                // (none) No accessible name                                          |
-                .section => .region,
-                .article, .hgroup => .article,
-                .address => .group,
+            .element => {
+                const el = node.subtype(DOMNode.Element);
+                return switch (el.getTag()) {
+                    // Navigation & Structure
+                    .nav => .navigation,
+                    .main => .main,
+                    .aside => .complementary,
+                    // TODO conditions:
+                    // .banner Not descendant of article, aside, main, nav, section
+                    // (none) When descendant of article, aside, main, nav, section
+                    .header => .banner,
+                    // TODO conditions:
+                    // contentinfo Not descendant of article, aside, main, nav, section
+                    // (none)  When descendant of article, aside, main, nav, section
+                    .footer => .contentinfo,
+                    // TODO conditions:
+                    // region Has accessible name (aria-label, aria-labelledby, or title) |
+                    // (none) No accessible name                                          |
+                    .section => .region,
+                    .article, .hgroup => .article,
+                    .address => .group,
 
-                // Headings
-                .h1, .h2, .h3, .h4, .h5, .h6 => .heading,
-                .ul, .ol, .menu => .list,
-                .li => .listitem,
-                .dt => .term,
-                .dd => .definition,
+                    // Headings
+                    .h1, .h2, .h3, .h4, .h5, .h6 => .heading,
+                    .ul, .ol, .menu => .list,
+                    .li => .listitem,
+                    .dt => .term,
+                    .dd => .definition,
 
-                // Forms & Inputs
-                // TODO conditions:
-                //  form  Has accessible name
-                //  (none) No accessible name
-                .form => .form,
-                .input => {
-                    const input = el.as(DOMNode.Element.Html.Input);
-                    return switch (input._input_type) {
-                        .tel, .url, .email, .text, .password => .textbox,
-                        .image, .reset, .button, .submit => .button,
-                        .radio => .radio,
-                        .range => .slider,
-                        .number => .spinbutton,
-                        .search => .searchbox,
-                        .checkbox => .checkbox,
-                        .color => .color,
-                        .date => .date,
-                        .file => .file,
-                        .month => .month,
-                        .@"datetime-local", .week, .time => .combobox,
-                        .hidden => .none,
-                    };
-                },
-                .textarea => .textbox,
-                .select => {
-                    if (el.getAttributeSafe(comptime .wrap("multiple")) != null) {
-                        return .listbox;
-                    }
-                    if (el.getAttributeSafe(comptime .wrap("size"))) |size| {
-                        if (!std.ascii.eqlIgnoreCase(size, "1")) {
+                    // Forms & Inputs
+                    // TODO conditions:
+                    //  form  Has accessible name
+                    //  (none) No accessible name
+                    .form => .form,
+                    .input => {
+                        const input = el.as(DOMNode.Element.Html.Input);
+                        return switch (input._input_type) {
+                            .tel, .url, .email, .text, .password => .textbox,
+                            .image, .reset, .button, .submit => .button,
+                            .radio => .radio,
+                            .range => .slider,
+                            .number => .spinbutton,
+                            .search => .searchbox,
+                            .checkbox => .checkbox,
+                            .color => .color,
+                            .date => .date,
+                            .file => .file,
+                            .month => .month,
+                            .@"datetime-local", .week, .time => .combobox,
+                            .hidden => .none,
+                        };
+                    },
+                    .textarea => .textbox,
+                    .select => {
+                        if (el.getAttributeSafe(comptime .wrap("multiple")) != null) {
                             return .listbox;
                         }
-                    }
-                    return .combobox;
-                },
-                .option => .option,
-                .optgroup, .fieldset => .group,
-                .button => .button,
-                .output => .status,
-                .progress => .progressbar,
-                .meter => .meter,
-                .datalist => .listbox,
-
-                // Interactive Elements
-                .anchor, .area => {
-                    if (el.getAttributeSafe(comptime .wrap("href")) == null) {
-                        return .none;
-                    }
-
-                    return .link;
-                },
-                .details => .group,
-                .summary => .button,
-                .dialog => .dialog,
-
-                // Media
-                .img => .image,
-                .figure => .figure,
-
-                // Tables
-                .table => .table,
-                .caption => .caption,
-                .thead, .tbody, .tfoot => .rowgroup,
-                .tr => .row,
-                .th => {
-                    if (el.getAttributeSafe(comptime .wrap("scope"))) |scope| {
-                        if (std.ascii.eqlIgnoreCase(scope, "row")) {
-                            return .rowheader;
+                        if (el.getAttributeSafe(comptime .wrap("size"))) |size| {
+                            if (!std.ascii.eqlIgnoreCase(size, "1")) {
+                                return .listbox;
+                            }
                         }
-                    }
-                    return .columnheader;
-                },
-                .td => .cell,
+                        return .combobox;
+                    },
+                    .option => .option,
+                    .optgroup, .fieldset => .group,
+                    .button => .button,
+                    .output => .status,
+                    .progress => .progressbar,
+                    .meter => .meter,
+                    .datalist => .listbox,
 
-                // Text & Semantics
-                .p => .paragraph,
-                .hr => .separator,
-                .blockquote => .blockquote,
-                .code => .code,
-                .em => .emphasis,
-                .strong => .strong,
-                .s, .del => .deletion,
-                .ins => .insertion,
-                .sub => .subscript,
-                .sup => .superscript,
-                .time => .time,
-                .dfn => .term,
+                    // Interactive Elements
+                    .anchor, .area => {
+                        if (el.getAttributeSafe(comptime .wrap("href")) == null) {
+                            return .none;
+                        }
 
-                // Document Structure
-                .html => .none,
-                .body => .none,
+                        return .link;
+                    },
+                    .details => .group,
+                    .summary => .button,
+                    .dialog => .dialog,
 
-                // Deprecated/Obsolete Elements
-                .marquee => .marquee,
+                    // Media
+                    .img => .image,
+                    .figure => .figure,
 
-                .br => .LineBreak,
+                    // Tables
+                    .table => .table,
+                    .caption => .caption,
+                    .thead, .tbody, .tfoot => .rowgroup,
+                    .tr => .row,
+                    .th => {
+                        if (el.getAttributeSafe(comptime .wrap("scope"))) |scope| {
+                            if (std.ascii.eqlIgnoreCase(scope, "row")) {
+                                return .rowheader;
+                            }
+                        }
+                        return .columnheader;
+                    },
+                    .td => .cell,
 
-                else => .none,
+                    // Text & Semantics
+                    .p => .paragraph,
+                    .hr => .separator,
+                    .blockquote => .blockquote,
+                    .code => .code,
+                    .em => .emphasis,
+                    .strong => .strong,
+                    .s, .del => .deletion,
+                    .ins => .insertion,
+                    .sub => .subscript,
+                    .sup => .superscript,
+                    .time => .time,
+                    .dfn => .term,
+
+                    // Document Structure
+                    .html => .none,
+                    .body => .none,
+
+                    // Deprecated/Obsolete Elements
+                    .marquee => .marquee,
+
+                    .br => .LineBreak,
+
+                    else => .none,
+                };
             },
             else => |tag| {
                 log.debug(.cdp, "invalid tag", .{ .tag = tag });
@@ -980,21 +987,25 @@ fn writeName(
     const node = axnode.dom;
 
     return switch (node._type) {
-        .document => |doc| switch (doc._type) {
+        .document => switch (node.subtype(DOMNode.Document)._type) {
             .html => |doc_html| {
                 try w.write(try doc_html.getTitle(frame));
                 return .title;
             },
             else => null,
         },
-        .cdata => |cd| switch (cd._type) {
-            .text => {
-                try writeString(cd._data.str(), w);
-                return .contents;
-            },
-            else => null,
+        .cdata => {
+            const cd = node.subtype(DOMNode.CData);
+            switch (cd._type) {
+                .text => {
+                    try writeString(cd._data.str(), w);
+                    return .contents;
+                },
+                else => return null,
+            }
         },
-        .element => |el| {
+        .element => {
+            const el = node.subtype(DOMNode.Element);
             // Handle aria-labelledby attribute (highest priority)
             if (el.getAttributeSafe(.wrap("aria-labelledby"))) |labelledby| {
                 // Get the document to look up elements by ID
@@ -1107,17 +1118,18 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *F
     var it = node.childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
-            .cdata => |cd| switch (cd._type) {
-                .text => {
+            .cdata => {
+                const cd = child.subtype(DOMNode.CData);
+                if (cd._type == .text) {
                     const content = std.mem.trim(u8, cd._data.str(), &std.ascii.whitespace);
                     if (content.len > 0) {
                         try writer.writeAll(content);
                         try writer.writeByte(' ');
                     }
-                },
-                else => {},
+                }
             },
-            .element => |el| {
+            .element => {
+                const el = child.subtype(DOMNode.Element);
                 if (el.getTag() == .img) {
                     if (el.getAttributeSafe(.wrap("alt"))) |alt| {
                         try writer.writeAll(alt);

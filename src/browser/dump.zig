@@ -79,7 +79,8 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) erro
 
 fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
     switch (node._type) {
-        .cdata => |cd| {
+        .cdata => {
+            const cd = node.subtype(Node.CData);
             if (node.is(Node.CData.Comment)) |_| {
                 try writer.writeAll("<!--");
                 try writer.writeAll(cd.getData().str());
@@ -98,7 +99,8 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 }
             }
         },
-        .element => |el| {
+        .element => {
+            const el = node.subtype(Node.Element);
             if (shouldStripElement(el, opts, frame)) {
                 return;
             }
@@ -164,7 +166,8 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
         },
         .document => try children(node, opts, writer, frame),
-        .document_type => |dt| {
+        .document_type => {
+            const dt = node.subtype(Node.DocumentType);
             try writer.writeAll("<!DOCTYPE ");
             try writer.writeAll(dt.getName());
 
@@ -207,7 +210,7 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
     try writer.beginObject();
 
     try writer.objectField("type");
-    switch (node.type) {
+    switch (node._type) {
         .cdata => {
             try writer.write("cdata");
         },
@@ -217,7 +220,8 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
         .document_type => {
             try writer.write("document_type");
         },
-        .element => |*el| {
+        .element => {
+            const el = node.subtype(Node.Element);
             try writer.write("element");
             try writer.objectField("tag");
             try writer.write(el.tagName());

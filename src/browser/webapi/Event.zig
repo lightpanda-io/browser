@@ -349,8 +349,9 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
 
         // Check if this node is a shadow root
         if (n._type == .document_fragment) {
-            if (n._type.document_fragment._type == .shadow_root) {
-                const shadow = n._type.document_fragment._type.shadow_root;
+            const df = n.subtype(Node.DocumentFragment);
+            if (df._type == .shadow_root) {
+                const shadow = df._type.shadow_root;
 
                 if (!self._composed and n == target_root) {
                     stopped_at_shadow_boundary = true;

@@ -52,8 +52,8 @@ pub const Result = union(enum) {
 /// (concatenation buffer).
 pub fn stringValueOf(arena: Allocator, node: *Node) error{WriteFailed}![]const u8 {
     return switch (node._type) {
-        .attribute => |attr| attr._value.str(),
-        .cdata => |cd| cd._data.str(),
+        .attribute => node.subtype(Node.Element.Attribute)._value.str(),
+        .cdata => node.subtype(Node.CData)._data.str(),
         .element, .document => blk: {
             var buf = std.Io.Writer.Allocating.init(arena);
             try node.getTextContent(&buf.writer);

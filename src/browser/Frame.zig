@@ -2001,9 +2001,10 @@ fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
 
         const parent = current._parent orelse {
             if (current._type == .document) {
+                const doc = current.subtype(Document);
                 return .{
-                    .lookup = &current._type.document._elements_by_id,
-                    .removed_ids = &current._type.document._removed_ids,
+                    .lookup = &doc._elements_by_id,
+                    .removed_ids = &doc._removed_ids,
                 };
             }
             // Detached nodes should not have IDs registered
@@ -2054,7 +2055,7 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     // shadow DOM. Walk to the root once and consult the matching map.
     const root = node.getRootNode(.{});
     if (root._type == .document) {
-        return root._type.document.getElementById(id, self);
+        return root.subtype(Document).getElementById(id, self);
     }
     if (root.is(ShadowRoot)) |shadow_root| {
         return shadow_root.getElementById(id, self);
