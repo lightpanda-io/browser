@@ -56,6 +56,7 @@ pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const extract = @import("script/extract.zig");
 pub const heal = @import("script/heal.zig");
+pub const replay = @import("script/replay.zig");
 pub const Schema = @import("script/Schema.zig");
 pub const skill = @import("script/skill.zig");
 pub const cookies = @import("cookies.zig");

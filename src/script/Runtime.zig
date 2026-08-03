@@ -526,7 +526,7 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     switch (result) {
         .ok => |text| switch (tool) {
             .extract => {
-                const normalized = normalizeExtractReturnJson(arena, text) catch |err| switch (err) {
+                const normalized = parseExtractReturnJson(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
                 // Recording happens after `callTool` returns, so a re-entrant
@@ -548,11 +548,10 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
 /// Tally each top-level field of an extract result; callers judge what the
 /// tallies mean.
 fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
-    const raw_schema = switch ((args orelse return).object.get("schema") orelse return) {
+    const schema = switch ((args orelse return).object.get("schema") orelse return) {
         .string => |s| s,
         else => return,
     };
-    const schema = stripExtractSchemaRoot(raw_schema);
     for (try extract.classifyExtractFields(arena, result)) |fc| {
         try self.bumpExtractStat(schema, fc.field, fc.empty);
     }
@@ -563,7 +562,7 @@ fn bumpExtractStat(self: *Runtime, schema: []const u8, field: []const u8, is_emp
         if (!std.mem.eql(u8, stat.schema, schema)) continue;
         if (!std.mem.eql(u8, stat.field, field)) continue;
         stat.calls += 1;
-        if (is_empty) stat.empty += 1;
+        if (!is_empty) stat.nonempty += 1;
         return;
     }
     // `schema`/`field` live in invoke's per-call arena; the stat outlives it.
@@ -572,7 +571,7 @@ fn bumpExtractStat(self: *Runtime, schema: []const u8, field: []const u8, is_emp
         .schema = try arena.dupe(u8, schema),
         .field = try arena.dupe(u8, field),
         .calls = 1,
-        .empty = @intFromBool(is_empty),
+        .nonempty = @intFromBool(!is_empty),
     });
 }
 
@@ -905,33 +904,9 @@ fn extractArgs(
 
 fn extractSchemaString(arena: std.mem.Allocator, value: std.json.Value) error{OutOfMemory}![]const u8 {
     return switch (value) {
-        .string => |str| normalizeExtractSchemaString(arena, str),
-        .array => |arr| normalizeExtractSchemaString(
-            arena,
-            try std.json.Stringify.valueAlloc(arena, std.json.Value{ .array = arr }, .{}),
-        ),
+        .string => |str| str,
         else => try std.json.Stringify.valueAlloc(arena, value, .{}),
     };
-}
-
-/// Key under which `normalizeExtractSchemaString` nests an array schema so the
-/// walker always receives an object; wrap, unwrap, and display-strip must agree.
-const extract_root_key = "__root";
-
-fn normalizeExtractSchemaString(arena: std.mem.Allocator, schema: []const u8) error{OutOfMemory}![]const u8 {
-    const trimmed = std.mem.trim(u8, schema, &std.ascii.whitespace);
-    if (trimmed.len == 0 or trimmed[0] != '[') return schema;
-    return try std.fmt.allocPrint(arena, "{{\"" ++ extract_root_key ++ "\":{s}}}", .{schema});
-}
-
-/// Inverse of the wrapping above, for showing an array schema the way the
-/// script wrote it.
-fn stripExtractSchemaRoot(schema: []const u8) []const u8 {
-    const prefix = "{\"" ++ extract_root_key ++ "\":";
-    if (std.mem.startsWith(u8, schema, prefix) and std.mem.endsWith(u8, schema, "}")) {
-        return schema[prefix.len .. schema.len - 1];
-    }
-    return schema;
 }
 
 fn argJson(
@@ -963,11 +938,9 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
     return .{ .object = obj };
 }
 
-/// Unwraps only the `__root` sentinel that `normalizeExtractSchemaString` injects
-/// for array schemas; a real single-field object schema keeps its shape.
-/// `parsed` is the post-unwrap value, null when the raw text is empty or not
-/// JSON — the stats hook classifies it without a second parse.
-fn normalizeExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}!struct {
+/// `parsed` is null when the raw text is empty or not JSON — the stats hook
+/// classifies it without a second parse.
+fn parseExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}!struct {
     text: []const u8,
     parsed: ?std.json.Value,
 } {
@@ -977,14 +950,6 @@ fn normalizeExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .text = value, .parsed = null },
     };
-    if (parsed == .object and parsed.object.count() == 1) {
-        var it = parsed.object.iterator();
-        const entry = it.next().?;
-        if (std.mem.eql(u8, entry.key_ptr.*, extract_root_key)) return .{
-            .text = try std.json.Stringify.valueAlloc(arena, entry.value_ptr.*, .{}),
-            .parsed = entry.value_ptr.*,
-        };
-    }
     return .{ .text = value, .parsed = parsed };
 }
 
@@ -1735,24 +1700,24 @@ test "agent script runtime: extract stats tally list-field emptiness" {
 
     try testing.expectString("items", stats[0].field);
     try testing.expectEqual(2, stats[0].calls);
-    try testing.expectEqual(2, stats[0].empty);
+    try testing.expectEqual(0, stats[0].nonempty);
 
     try testing.expectString("btn", stats[1].field);
     try testing.expectEqual(1, stats[1].calls);
-    try testing.expectEqual(0, stats[1].empty);
+    try testing.expectEqual(1, stats[1].nonempty);
 
     try testing.expectString("buttons", stats[2].field);
     try testing.expectEqual(1, stats[2].calls);
-    try testing.expectEqual(0, stats[2].empty);
+    try testing.expectEqual(1, stats[2].nonempty);
 
     try testing.expectString("", stats[3].field);
     try testing.expectString("[\".no-such-root\"]", stats[3].schema);
     try testing.expectEqual(1, stats[3].calls);
-    try testing.expectEqual(1, stats[3].empty);
+    try testing.expectEqual(0, stats[3].nonempty);
 
     try testing.expectString("sel", stats[4].field);
     try testing.expectEqual(2, stats[4].calls);
-    try testing.expectEqual(1, stats[4].empty);
+    try testing.expectEqual(1, stats[4].nonempty);
 
     const rerun = try runtime.runSource("return 1;", "agent-runtime-extract-stats.js");
     try testing.expectEqual(0, rerun.ok.extract_stats.len);

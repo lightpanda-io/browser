@@ -24,22 +24,22 @@
 const std = @import("std");
 
 /// One top-level field of a parsed extract result: an object yields an entry
-/// per key, an array (a `__root` schema) the single "" field. Slices
+/// per key, an array (an array schema's result) the single "" field. Slices
 /// reference the parsed value.
 pub const ExtractField = struct {
     field: []const u8,
     empty: bool,
 };
 
-/// One extract schema's top-level result field, tallied across a run.
+/// One extract schema's top-level result field, tallied across a run. Counts
+/// data presence — the same polarity as the persisted baseline lines.
 pub const ExtractStat = struct {
-    /// Schema JSON as the script wrote it (array schemas are shown without the
-    /// internal `__root` wrapper).
+    /// Schema JSON as the script wrote it.
     schema: []const u8,
     /// Top-level field of the result; "" when the schema itself is a list.
     field: []const u8,
     calls: u32,
-    empty: u32,
+    nonempty: u32,
 };
 
 pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) error{OutOfMemory}![]const ExtractField {

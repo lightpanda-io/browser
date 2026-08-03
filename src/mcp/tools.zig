@@ -222,7 +222,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
         return sendErrorContent(server, id, "out of memory");
 
-    lp.heal.writeScriptFile(args.path, script) catch |err| {
+    lp.replay.writeScriptFile(args.path, script) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ args.path, @errorName(err) }) catch
             return sendErrorContent(server, id, "could not write script file");
         return sendErrorContent(server, id, msg);
@@ -241,7 +241,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 /// report.
 const ConsoleCollector = struct {
     arena: std.mem.Allocator,
-    lines: std.ArrayList(lp.heal.ConsoleLine) = .empty,
+    lines: std.ArrayList(lp.replay.ConsoleLine) = .empty,
     bytes: usize = 0,
     truncated: bool = false,
 
@@ -279,18 +279,18 @@ const ConsoleCollector = struct {
     }
 };
 
-fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, source: []const u8, collector: *ConsoleCollector) !lp.heal.Classified {
+fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, source: []const u8, collector: *ConsoleCollector) !lp.replay.Classified {
     const active = server.active_session;
     const runtime = try ScriptRuntime.init(server.allocator, server.app, active.session, &active.node_registry);
     defer runtime.deinit();
     runtime.console_sink = collector.sink();
     const result = try runtime.runSource(source, path);
-    return lp.heal.classifyRun(arena, result, source);
+    return lp.replay.classifyRun(arena, result, source);
 }
 
 /// `runClassified` with its bring-up failures reported to the client; null
 /// after reporting.
-fn runClassifiedOrReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, collector: *ConsoleCollector) !?lp.heal.Classified {
+fn runClassifiedOrReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, collector: *ConsoleCollector) !?lp.replay.Classified {
     return runClassified(server, arena, path, source, collector) catch |err| {
         try sendErrorContent(server, id, switch (err) {
             error.OutOfMemory => "out of memory",
@@ -307,11 +307,11 @@ const ReportMode = enum { replay, validation };
 fn buildRunReport(
     arena: std.mem.Allocator,
     path: []const u8,
-    classified: lp.heal.Classified,
+    classified: lp.replay.Classified,
     collector: *const ConsoleCollector,
     mode: ReportMode,
-) error{OutOfMemory}!lp.heal.RunReport {
-    var report: lp.heal.RunReport = .{
+) error{OutOfMemory}!lp.replay.RunReport {
+    var report: lp.replay.RunReport = .{
         .status = .ok,
         .path = path,
         .console = collector.lines.items,
@@ -327,7 +327,7 @@ fn buildRunReport(
         .facts => |facts| {
             report.returned = facts.returned;
             report.extracts = facts.extract_stats;
-            if (lp.heal.suspicionOf(arena, facts)) |suspicion| {
+            if (lp.replay.suspicionOf(arena, facts)) |suspicion| {
                 report.status = .suspicious;
                 report.failure = .{ .kind = suspicion.kind, .detail = suspicion.detail, .dry_fields = suspicion.dry_fields };
                 report.source = try reportSource(arena, facts.source, mode);
@@ -343,7 +343,7 @@ fn reportSource(arena: std.mem.Allocator, source: []const u8, mode: ReportMode) 
         .replay => try browser_tools.reverseSubstituteEnvVars(arena, source),
         .validation => source,
     };
-    return string.capBytes(arena, scrubbed, lp.heal.source_max_bytes);
+    return string.capBytes(arena, scrubbed, lp.replay.source_max_bytes);
 }
 
 fn sendReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, report: anytype) !void {
@@ -360,7 +360,7 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     if (!browser_tools.isPathSafe(args.path)) {
         return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
     }
-    const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(lp.heal.max_script_bytes)) catch |err| {
+    const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(lp.replay.max_script_bytes)) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not read {s}: {s}", .{ args.path, @errorName(err) }) catch "could not read script";
         return sendErrorContent(server, id, msg);
     };
@@ -375,7 +375,7 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
 }
 
 fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Args = struct { path: []const u8, script: []const u8, failure: lp.heal.WireFailure };
+    const Args = struct { path: []const u8, script: []const u8, failure: lp.replay.WireFailure };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.sendError(id, .InvalidParams, "expected { path: string, script: string, failure: { kind, detail?, dry_fields? } }");
     };

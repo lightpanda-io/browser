@@ -403,7 +403,7 @@ pub const Tool = enum {
             },
             .extract => .{
                 .description =
-                \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. Value shapes:
+                \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. A top-level array spec is also accepted and returns the array directly. Value shapes:
                 \\  "<sel>"                                → first match's text (trimmed; null if no match)
                 \\  ["<sel>"]                              → every match's text (string[])
                 \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value (href/src resolved to absolute URLs)
@@ -425,7 +425,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "schema": { "type": "string", "description": "Extraction schema as a string: a JSON object literal mapping output field names to CSS-selector specs (see tool description). Not a JSON Schema." },
+                    \\    "schema": { "type": "string", "description": "Extraction schema as a string: a JSON object literal mapping output field names to CSS-selector specs, or a top-level array spec (see tool description). Not a JSON Schema." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /evaluate calls." }
                     \\  },
                     \\  "required": ["schema"]
@@ -873,7 +873,7 @@ pub fn extract(
     schema_json: []const u8,
 ) ToolError!ToolResult {
     const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
-    if (trimmed.len == 0 or trimmed[0] != '{') return error.InvalidParams;
+    if (trimmed.len == 0 or (trimmed[0] != '{' and trimmed[0] != '[')) return error.InvalidParams;
     const valid = try std.json.validate(arena, schema_json);
     if (!valid) return error.InvalidParams;
 
@@ -919,14 +919,21 @@ const schema_walker_prefix =
     \\    if (!t) return null;
     \\    return valueOf(t, v);
     \\  }
-    \\  const out = {};
+    \\  let out;
     \\  let any = false;
-    \\  for (const k in schema) {
-    \\    out[k] = ext(document, schema[k]);
-    \\    const v = out[k];
-    \\    // A resolved array — even empty — is a real result (e.g. a page with
-    \\    // zero comments); only an all-null schema means every selector missed.
-    \\    if (v !== null) any = true;
+    \\  if (Array.isArray(schema)) {
+    \\    // A top-level array schema is one list spec: the result is the array.
+    \\    out = ext(document, schema);
+    \\    any = out !== null;
+    \\  } else {
+    \\    out = {};
+    \\    for (const k in schema) {
+    \\      out[k] = ext(document, schema[k]);
+    \\      const v = out[k];
+    \\      // A resolved array — even empty — is a real result (e.g. a page with
+    \\      // zero comments); only an all-null schema means every selector missed.
+    \\      if (v !== null) any = true;
+    \\    }
     \\  }
     \\  if (!any) throw new Error("extract: no schema selector matched any element — inspect the page with tree/markdown and retry with corrected selectors");
     \\  return JSON.stringify(out);

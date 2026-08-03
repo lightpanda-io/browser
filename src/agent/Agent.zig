@@ -1692,8 +1692,8 @@ const ScriptOutput = struct {
     }
 };
 
-const RunFacts = lp.heal.RunFacts;
-const ScriptError = lp.heal.ScriptError;
+const RunFacts = lp.replay.RunFacts;
+const ScriptError = lp.replay.ScriptError;
 
 fn runScript(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
@@ -1720,12 +1720,18 @@ fn runAndJudge(self: *Agent, arena: std.mem.Allocator, path: []const u8) RunJudg
 
 /// Null covers setup failures (unreadable file, runtime init, OOM) that a
 /// retry can't help.
-fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?lp.heal.Classified {
-    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(lp.heal.max_script_bytes)) catch |err| {
+fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?lp.replay.Classified {
+    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(lp.replay.max_script_bytes)) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return null;
     };
+    return self.runSourceOutcome(arena, content, path);
+}
 
+/// `runScriptOutcome` for source already in hand — heal validates its revised
+/// candidate without touching disk. `label` names the run in the terminal and
+/// in V8 stack traces.
+fn runSourceOutcome(self: *Agent, arena: std.mem.Allocator, source: []const u8, label: []const u8) ?lp.replay.Classified {
     const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
         return null;
@@ -1745,8 +1751,8 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?l
 
     var output: ScriptOutput = .{ .terminal = &self.terminal };
     runtime.console_observer = .{ .context = @ptrCast(&output), .notify = ScriptOutput.observe };
-    self.terminal.beginTool("script", path);
-    const result = runtime.runSource(content, path);
+    self.terminal.beginTool("script", label);
+    const result = runtime.runSource(source, label);
     self.terminal.endTool();
 
     const run_result = result catch |err| {
@@ -1761,9 +1767,9 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?l
         // A script that printed nothing leaves no trace, so freeze the spinner
         // into a green bullet (like /goto); one that printed already showed its
         // result.
-        if (!output.emitted) self.terminal.printScriptDone("script", path);
+        if (!output.emitted) self.terminal.printScriptDone("script", label);
     }
-    return lp.heal.classifyRun(arena, run_result, content) catch null;
+    return lp.replay.classifyRun(arena, run_result, source) catch null;
 }
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
@@ -1776,7 +1782,7 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     // failure (a flaky page load), and the model judges the re-run's facts,
     // the ones healing would act on.
     switch (self.runScriptOutcome(arena.allocator(), path) orelse return false) {
-        .facts => |facts| if (lp.heal.suspicionOf(arena.allocator(), facts) == null) return true,
+        .facts => |facts| if (lp.replay.suspicionOf(arena.allocator(), facts) == null) return true,
         .script_error => {},
     }
     self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
@@ -1797,13 +1803,6 @@ const max_heal_attempts = 2;
 fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: ScriptError) bool {
     var source = first.source;
     var error_detail = first.detail;
-
-    const tmp_path = lp.heal.tmpPath(arena, path) catch return self.healOom();
-
-    // Every exit leaves no stray revision behind; a failed rename is the one
-    // deliberate keep (its error message points at tmp_path).
-    var keep_revision = false;
-    defer if (!keep_revision) self.removeTempScript(tmp_path);
 
     // The recorder and baseline are /save's stream: heal must neither
     // synthesize from the REPL's prior recordings nor leak its diagnose
@@ -1828,11 +1827,6 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
 
         const revised = self.synthesizeScriptText(arena, "heal", path, source, lp.heal.heal_revision_prompt) orelse return false;
 
-        save.writeContentFile(tmp_path, revised, .replace) catch |err| {
-            self.terminal.printError("heal failed: could not write {s}: {s}", .{ tmp_path, @errorName(err) });
-            return false;
-        };
-
         // Validate in a fresh session so failure-state cookies and pages can't
         // mask a still-broken script.
         self.startSession() catch |err| {
@@ -1840,14 +1834,13 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
             return false;
         };
 
-        switch (self.runScriptOutcome(arena, tmp_path) orelse return false) {
+        switch (self.runSourceOutcome(arena, revised, path) orelse return false) {
             .facts => |facts| {
                 if (lp.heal.cureFailure(arena, .{ .kind = first.kind, .dry_fields = first.dry_fields }, facts) catch return self.healOom()) |failure| {
                     self.terminal.printWarning("{s}", .{failure});
                     source = revised;
                     error_detail = failure;
                 } else {
-                    keep_revision = true;
                     const commit_failure = lp.heal.commitValidated(arena, path, revised, facts.extract_stats) catch return self.healOom();
                     if (commit_failure) |failure| {
                         self.terminal.printError("heal failed: {s}", .{failure});
@@ -1914,7 +1907,7 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
         \\Replay of {s} completed without errors, but {s}
         \\
         \\
-    ++ lp.heal.script_intent_block, .{ path, suspicion.detail, string.capBytes(arena, suspicion.source, lp.heal.source_max_bytes) }) catch return null;
+    ++ lp.heal.script_intent_block, .{ path, suspicion.detail, string.capBytes(arena, suspicion.source, lp.replay.source_max_bytes) }) catch return null;
     const args = self.soloToolTurn(arena, "verdict", verdict_system_prompt, user_msg, .{
         .name = "verdict",
         .description = "Report whether the replay's dry output means the script is broken.",
@@ -1928,7 +1921,7 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
 /// verdict call falls back to the raw facts — the heal prompt, defaulting to
 /// no, becomes the judgment of last resort.
 fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts: RunFacts) ?ScriptError {
-    const suspicion = lp.heal.suspicionOf(arena, facts) orelse return null;
+    const suspicion = lp.replay.suspicionOf(arena, facts) orelse return null;
     if (self.ai_client == null) return null;
     if (self.judgeSuspicion(arena, path, suspicion)) |verdict| {
         if (!verdict.broken) {
@@ -1960,14 +1953,6 @@ fn confirmedDryFields(arena: std.mem.Allocator, judged: []const []const u8, actu
         }
     }
     return if (kept.items.len == 0) actual else kept.items;
-}
-
-fn removeTempScript(self: *Agent, tmp_path: []const u8) void {
-    std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch |err| switch (err) {
-        // Covers exits before the first write.
-        error.FileNotFound => {},
-        else => self.terminal.printWarning("could not remove temp script {s}: {s}", .{ tmp_path, @errorName(err) }),
-    };
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the

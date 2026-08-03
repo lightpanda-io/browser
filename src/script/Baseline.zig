@@ -92,7 +92,7 @@ pub fn serializeStats(arena: std.mem.Allocator, stats: []const extract.ExtractSt
         const gop = try fields.getOrPut(arena, stat.field);
         if (!gop.found_existing) gop.value_ptr.* = .{};
         gop.value_ptr.calls += stat.calls;
-        gop.value_ptr.nonempty += stat.calls - stat.empty;
+        gop.value_ptr.nonempty += stat.nonempty;
     }
     return fieldsToLine(arena, fields);
 }
