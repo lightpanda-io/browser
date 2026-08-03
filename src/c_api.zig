@@ -183,7 +183,13 @@ fn createBrowser(opts_: ?*const InitOpts) !*BrowserHandle {
     handle.config = try lp.Config.init(c_allocator, "lightpanda", .{ .embed = mode });
     errdefer handle.config.deinit(c_allocator);
 
-    handle.app = try lp.App.init(c_allocator, &handle.config);
+    // Everything above is plain validation and can be retried; App.init
+    // touches V8's process-global platform, so a failure here poisons the
+    // process like a shutdown does.
+    handle.app = lp.App.init(c_allocator, &handle.config) catch |err| {
+        app_state = .shutdown;
+        return err;
+    };
     handle.fetch_browser = null;
     handle.sessions = .empty;
     return handle;
@@ -613,6 +619,19 @@ test "c_api: null handles are rejected" {
 
 test "c_api: lifecycle" {
     var browser: *BrowserHandle = undefined;
+
+    // Option validation happens before V8 is touched, so a rejected init
+    // must leave the library initializable.
+    const bad_opts: InitOpts = .{
+        .user_agent = "bad\nagent",
+        .http_proxy = null,
+        .http_cache_dir = null,
+        .http_timeout_ms = 0,
+        .watchdog_ms = 0,
+        .enable_telemetry = false,
+    };
+    try testing.expectEqual(.invalid_params, lp_init(&bad_opts, &browser));
+
     try testing.expectEqual(.ok, lp_init(null, &browser));
 
     var second: *BrowserHandle = undefined;
