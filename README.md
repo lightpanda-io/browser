@@ -124,11 +124,13 @@ Once the CDP server started, you can run a Puppeteer script by configuring the
 ```
 
 This initial W3C WebDriver slice supports `GET /status`, session creation and
-deletion, navigation, reading the current URL, and timeouts. It accepts one
-active session and loopback binds only. Use `browserName: "lightpanda"`;
-unsupported capabilities fail session creation instead of being silently
-ignored. Element commands and script execution are not yet implemented. Pages
-in a WebDriver session report `navigator.webdriver === true`.
+deletion, navigation, current URL, title, serialized page source, current
+window handle(s), closing the sole window, and timeouts. It accepts one active
+session with one top-level browsing context and loopback binds only; closing
+that context closes the session. Use `browserName: "lightpanda"`; unsupported
+capabilities fail session creation instead of being silently ignored. Element
+commands and script execution are not yet implemented. Pages in a WebDriver
+session report `navigator.webdriver === true`.
 
 <details>
 <summary>Example Puppeteer script</summary>

@@ -5,7 +5,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const lp = @import("lightpanda");
 
+const cdp_id = @import("../cdp/id.zig");
 const Server = @import("Server.zig");
+const protocol = @import("protocol.zig");
 
 const Allocator = std.mem.Allocator;
 const JsonObject = std.json.ObjectMap;
@@ -49,6 +51,11 @@ const Command = enum {
     delete_session,
     navigate,
     current_url,
+    get_title,
+    get_page_source,
+    get_window_handle,
+    get_window_handles,
+    close_window,
     get_timeouts,
     set_timeouts,
 };
@@ -94,12 +101,20 @@ pub fn handle(
         return sendValue(out, @as(?u8, null));
     }
 
+    // Closing the last WebDriver window destroys its session. Do this before
+    // entering its isolate, so the normal isolate defer cannot outlive it.
+    if (command == .close_window) return closeWindow(server, session_id, session, out);
+
     server.enterIsolate(session);
     defer server.exitIsolate(session);
 
     return switch (command) {
         .navigate => navigate(server, session, arena, body, out),
         .current_url => currentUrl(session, out),
+        .get_title => getTitle(session, out),
+        .get_page_source => getPageSource(session, out),
+        .get_window_handle => getWindowHandle(session, out),
+        .get_window_handles => getWindowHandles(session, out),
         .get_timeouts => getTimeouts(server, out),
         .set_timeouts => setTimeouts(server, arena, body, out),
         else => unreachable,
@@ -561,10 +576,73 @@ fn navigate(
 }
 
 fn currentUrl(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
-    const frame = session.session.currentFrame() orelse
+    const frame = primaryFrame(session) orelse
         return sendError(out, .not_found, "no such window", "Current browsing context has no document");
     return sendValue(out, frame.url);
 }
+
+fn getTitle(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    const title = frame.getTitle() catch |err|
+        return sendError(out, .internal_server_error, "unknown error", @errorName(err));
+    return sendValue(out, title orelse "");
+}
+
+fn getPageSource(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const frame = primaryFrame(session) orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    return sendValue(out, PageSource{ .frame = frame });
+}
+
+fn getWindowHandle(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const page = session.session.primaryPage() orelse
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    return sendValue(out, cdp_id.toFrameId(page.frame_id));
+}
+
+fn getWindowHandles(session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const page = session.session.primaryPage() orelse return sendValue(out, [_][]const u8{});
+    const window_handle = cdp_id.toFrameId(page.frame_id);
+    return sendValue(out, [_][]const u8{&window_handle});
+}
+
+fn closeWindow(server: *Server, session_id: []const u8, session: *Server.Session, out: *std.Io.Writer) !std.http.Status {
+    const has_window = blk: {
+        server.enterIsolate(session);
+        defer server.exitIsolate(session);
+        break :blk session.session.primaryPage() != null;
+    };
+    if (!has_window) {
+        return sendError(out, .not_found, "no such window", "Current browsing context has no document");
+    }
+    _ = server.closeWebDriverSession(session_id);
+    return sendValue(out, [_][]const u8{});
+}
+
+fn primaryFrame(session: *Server.Session) ?*lp.Frame {
+    const page = session.session.primaryPage() orelse return null;
+    return session.session.findFrameByFrameId(page.frame_id);
+}
+
+const PageSource = struct {
+    frame: *lp.Frame,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginWriteRaw();
+        try jw.writer.writeByte('"');
+        var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+        // WebDriver serializes the document element first, not the Document
+        // node, so a doctype is neither preserved nor synthesized here.
+        const node = if (self.frame.document.getDocumentElement()) |document_element|
+            document_element.asNode()
+        else
+            self.frame.document.asNode();
+        lp.dump.deep(node, .{ .shadow = .skip }, &escaped.writer, self.frame) catch return error.WriteFailed;
+        try jw.writer.writeByte('"');
+        jw.endWriteRaw();
+    }
+};
 
 fn getTimeouts(server: *const Server, out: *std.Io.Writer) !std.http.Status {
     return sendValue(out, .{
@@ -619,6 +697,23 @@ fn matchRoute(path: []const u8) ?Route {
         .alternate = .navigate,
         .session_id = session_id,
     };
+    if (std.mem.eql(u8, suffix, "/title")) return .{
+        .command = .get_title,
+        .session_id = session_id,
+    };
+    if (std.mem.eql(u8, suffix, "/source")) return .{
+        .command = .get_page_source,
+        .session_id = session_id,
+    };
+    if (std.mem.eql(u8, suffix, "/window")) return .{
+        .command = .get_window_handle,
+        .alternate = .close_window,
+        .session_id = session_id,
+    };
+    if (std.mem.eql(u8, suffix, "/window/handles")) return .{
+        .command = .get_window_handles,
+        .session_id = session_id,
+    };
     if (std.mem.eql(u8, suffix, "/timeouts")) return .{
         .command = .get_timeouts,
         .alternate = .set_timeouts,
@@ -637,9 +732,9 @@ fn commandForMethod(route: Route, method: std.http.Method) ?Command {
 
 fn commandMethod(command: Command) std.http.Method {
     return switch (command) {
-        .status, .current_url, .get_timeouts => .GET,
+        .status, .current_url, .get_title, .get_page_source, .get_window_handle, .get_window_handles, .get_timeouts => .GET,
         .new_session, .navigate, .set_timeouts => .POST,
-        .delete_session => .DELETE,
+        .delete_session, .close_window => .DELETE,
     };
 }
 
@@ -677,6 +772,12 @@ test "WebDriver: routes use URL paths and distinguish methods" {
     const timeouts_route = matchRoute("/session/id/timeouts").?;
     try std.testing.expectEqual(Command.get_timeouts, commandForMethod(timeouts_route, .GET).?);
     try std.testing.expectEqual(Command.set_timeouts, commandForMethod(timeouts_route, .POST).?);
+    try std.testing.expectEqual(Command.get_title, commandForMethod(matchRoute("/session/id/title").?, .GET).?);
+    try std.testing.expectEqual(Command.get_page_source, commandForMethod(matchRoute("/session/id/source").?, .GET).?);
+    const window_route = matchRoute("/session/id/window").?;
+    try std.testing.expectEqual(Command.get_window_handle, commandForMethod(window_route, .GET).?);
+    try std.testing.expectEqual(Command.close_window, commandForMethod(window_route, .DELETE).?);
+    try std.testing.expectEqual(Command.get_window_handles, commandForMethod(matchRoute("/session/id/window/handles").?, .GET).?);
     try std.testing.expect(matchRoute("/session/id/execute/sync") == null);
     try std.testing.expect(matchRoute("/session/id/unknown") == null);
 }
@@ -772,6 +873,26 @@ test "WebDriver: protocol session validates capabilities and preserves navigatio
     const frame_id_before = active.session.primaryPage().?.frame_id;
     const navigate_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/url", .{session_id});
     defer testing.allocator.free(navigate_path);
+    const title_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/title", .{session_id});
+    defer testing.allocator.free(title_path);
+    const source_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/source", .{session_id});
+    defer testing.allocator.free(source_path);
+    const window_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/window", .{session_id});
+    defer testing.allocator.free(window_path);
+    const window_handles_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}/window/handles", .{session_id});
+    defer testing.allocator.free(window_handles_path);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, window_path, "", &out.writer));
+    var initial_window = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer initial_window.deinit();
+    const initial_handle = try testing.allocator.dupe(u8, initial_window.value.object.get("value").?.string);
+    defer testing.allocator.free(initial_handle);
+    try testing.expect(!std.mem.eql(u8, initial_handle, "current"));
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, window_handles_path, "", &out.writer));
+    try testing.expectJson(.{ .value = &.{initial_handle} }, out.writer.buffered());
 
     out.clearRetainingCapacity();
     try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, timeouts_path, "{\"script\":20,\"pageLoad\":20}", &out.writer));
@@ -807,17 +928,49 @@ test "WebDriver: protocol session validates capabilities and preserves navigatio
     try testing.expect(std.mem.indexOf(u8, navigated_url, "expanded") == null);
 
     out.clearRetainingCapacity();
-    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,<title>second</title>\"}", &out.writer));
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, navigate_path, "{\"url\":\"data:text/html,<!doctype html><title>escaped &quot;title&quot;</title><body><p>before</p></body>\"}", &out.writer));
     try testing.expectEqual(frame_id_before, active.session.primaryPage().?.frame_id);
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, window_path, "", &out.writer));
+    try testing.expectJson(.{ .value = initial_handle }, out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, title_path, "", &out.writer));
+    const title_json_escape = [_]u8{ '\\', '"' };
+    try testing.expect(std.mem.indexOf(u8, out.writer.buffered(), &title_json_escape) != null);
+    try testing.expectJson(.{ .value = "escaped \"title\"" }, out.writer.buffered());
+
+    {
+        server.enterIsolate(active);
+        defer server.exitIsolate(active);
+
+        const frame = active.session.currentFrame().?;
+        var scope: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&scope);
+        defer scope.deinit();
+        _ = try scope.local.compileAndRun("document.body.innerHTML = '<p id=\\\"after\\\">after</p>'", null);
+    }
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .GET, source_path, "", &out.writer));
+    var source = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.writer.buffered(), .{});
+    defer source.deinit();
+    const page_source = source.value.object.get("value").?.string;
+    try testing.expect(std.mem.startsWith(u8, page_source, "<html"));
+    try testing.expect(std.mem.indexOf(u8, page_source, "<!DOCTYPE") == null);
+    try testing.expect(std.mem.indexOf(u8, page_source, "id=\"after\"") != null);
+    try testing.expect(std.mem.indexOf(u8, page_source, "before") == null);
 
     try active.session.cookie_jar.populateFromResponse("https://example.com/", "token=secret; Path=/");
     try testing.expectEqual(@as(usize, 1), active.session.cookie_jar.cookies.items.len);
 
-    const delete_path = try std.fmt.allocPrint(testing.allocator, "/session/{s}", .{session_id});
-    defer testing.allocator.free(delete_path);
     out.clearRetainingCapacity();
-    try testing.expectEqual(.ok, try handle(server, request_allocator, .DELETE, delete_path, "", &out.writer));
-    try testing.expectJson(.{ .value = null }, out.writer.buffered());
+    try testing.expectEqual(.ok, try handle(server, request_allocator, .DELETE, window_path, "", &out.writer));
+    try testing.expectString("{\"value\":[]}", out.writer.buffered());
+
+    out.clearRetainingCapacity();
+    try testing.expectEqual(.not_found, try handle(server, request_allocator, .GET, window_path, "", &out.writer));
+    try testing.expectJson(.{ .value = .{ .@"error" = "invalid session id" } }, out.writer.buffered());
 
     out.clearRetainingCapacity();
     try testing.expectEqual(.ok, try handle(server, request_allocator, .POST, "/session", "{\"capabilities\":{\"alwaysMatch\":{\"pageLoadStrategy\":\"none\",\"timeouts\":{\"pageLoad\":0}}}}", &out.writer));
