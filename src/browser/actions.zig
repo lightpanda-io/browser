@@ -276,9 +276,9 @@ fn remainingMs(timeout_ms: u32, timer: std.Io.Timestamp) u32 {
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !*DOMNode {
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     var runner = session.runner(.{});
-    // Only parsing has to be done before polling — gating on `.load` would
-    // re-wait for the late-script tail a `waitUntil: domcontentloaded`
-    // navigation deliberately skipped (#3138).
+    // Polling needs a parsed document, nothing more. Gating on `.load` would
+    // re-wait the late-script tail a `waitUntil: domcontentloaded` navigation
+    // deliberately skipped (#3138).
     try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .domcontentloaded });
 
     const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, timer));

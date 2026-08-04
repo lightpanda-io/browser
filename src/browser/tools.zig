@@ -276,6 +276,17 @@ pub const Tool = enum {
         };
     }
 
+    /// Waits for page readiness on its own, making a preceding `goto`'s full
+    /// `load` wait redundant — the recorder downgrades such gotos to
+    /// `domcontentloaded` (#3138). Exhaustive like the sibling predicates so a
+    /// new wait tool makes an explicit choice here.
+    pub fn waitsForReadiness(self: Tool) bool {
+        return switch (self) {
+            .waitForSelector, .waitForScript, .waitForState => true,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// A read tool that navigates when handed a `url`. The read isn't recorded,
     /// but the navigation is, so the recorder captures it as a `goto`. Excludes
     /// `evaluate` (carries its own `url`), `search` (derived engine URL), and
@@ -330,7 +341,9 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "waitUntil": { "type": "string", "enum": ["load", "domcontentloaded", "networkalmostidle", "networkidle"], "description": "Event that completes the navigation. Defaults to 'load'. Prefer 'domcontentloaded' followed by waitForSelector on pages whose late scripts (ads) hold 'load' back." }
+                    \\    "waitUntil": { "type": "string", "enum":
+                ++ lp.Config.tagJsonArray(lp.Config.WaitUntil) ++
+                    \\, "description": "Event that completes the navigation. Defaults to 'load'. Prefer 'domcontentloaded' followed by waitForSelector on pages whose late scripts (ads) hold 'load' back." }
                     \\  },
                     \\  "required": ["url"]
                     \\}
@@ -759,7 +772,7 @@ pub const ToolResult = struct {
 pub const GotoParams = struct {
     url: [:0]const u8,
     timeout: ?u32 = null,
-    waitUntil: ?lp.Config.WaitUntil = null,
+    waitUntil: lp.Config.WaitUntil = default_nav_wait,
 };
 
 pub const UrlParams = struct {
@@ -938,7 +951,7 @@ const schema_walker_suffix = ")";
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
-    return switch (try performGoto(session, registry, args.url, args.timeout, args.waitUntil)) {
+    return switch (try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil })) {
         .completed => "Navigated successfully.",
         .timeout => "Navigation started but the page did not finish loading before the timeout.",
     };
@@ -990,7 +1003,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         .{encoded},
         0,
     ) catch return ToolError.OutOfMemory;
-    _ = try performGoto(session, registry, ddg_url, args.timeout, null);
+    _ = try performGoto(session, registry, ddg_url, .{ .timeout = args.timeout });
     const ddg_frame = try requireFrame(session);
     return .{ .text = try renderFrameMarkdown(arena, ddg_frame) };
 }
@@ -1923,7 +1936,7 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
         if (session.currentFrame()) |frame| {
             if (std.mem.eql(u8, frame.url, u)) return frame;
         }
-        _ = try performGoto(session, registry, u, timeout, null);
+        _ = try performGoto(session, registry, u, .{ .timeout = timeout });
     }
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
@@ -1977,11 +1990,16 @@ pub fn startGoto(
     return .{
         .frame_id = page.frame_id,
         .timeout_ms = args.timeout orelse default_nav_timeout_ms,
-        .until = args.waitUntil orelse default_nav_wait,
+        .until = args.waitUntil,
     };
 }
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32, wait_until: ?lp.Config.WaitUntil) ToolError!lp.Session.Runner.WaitResult {
+const PerformGotoOpts = struct {
+    timeout: ?u32 = null,
+    wait_until: lp.Config.WaitUntil = default_nav_wait,
+};
+
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, opts: PerformGotoOpts) ToolError!lp.Session.Runner.WaitResult {
     if (session.primaryPage()) |old_page| {
         registry.reset();
         old_page.close();
@@ -1989,9 +2007,9 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     const page = try openPage(session, url);
 
     var runner = session.runner(.{});
-    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = wait_until orelse default_nav_wait };
+    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = opts.wait_until };
     var conditions = [_]lp.Session.Runner.WaitCondition{condition};
-    const result = runner.waitResult(timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
+    const result = runner.waitResult(opts.timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
     };
 

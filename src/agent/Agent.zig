@@ -1155,11 +1155,7 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         null;
     defer if (new_save_path) |p| self.allocator.free(p);
 
-    const recorded = self.save_buffer.bytes() catch |err| {
-        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
-        return;
-    };
-    save.writeContentFile(path, recorded, mode) catch |err| {
+    save.writeContentFile(path, self.save_buffer.bytes(), mode) catch |err| {
         self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
         return;
     };
@@ -1229,7 +1225,7 @@ fn bumpedEffort(effort: Config.Effort) Config.Effort {
 fn synthesizeSave(self: *Agent, arena: std.mem.Allocator, filename: ?[]const u8, prompt: ?[]const u8) void {
     // With nothing recorded and no prompt, a re-synthesis has nothing to act
     // on — it would just re-roll the previous output.
-    if (self.save_buffer.isEmpty() and prompt == null) {
+    if (self.save_buffer.bytes().len == 0 and prompt == null) {
         if (self.save_path) |saved| {
             self.terminal.printWarning("nothing ran since the last save; run more commands or give a prompt to revise {s}, e.g. /save <what to change>", .{saved});
         } else {
@@ -1356,7 +1352,7 @@ fn buildSaveSynthesisMessage(self: *Agent, arena: std.mem.Allocator, path: []con
         try w.print("\nThe previously saved script in {s}, the base you are revising:\n", .{path});
         try w.writeAll(script);
     }
-    const recorded = try self.save_buffer.bytes();
+    const recorded = self.save_buffer.bytes();
     if (recorded.len > 0) {
         const since: []const u8 = if (previous_script != null) " since the last save" else " this session";
         try w.print("\nCommands and JS that actually ran{s}:\n", .{since});
