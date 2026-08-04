@@ -95,7 +95,36 @@
   await state.done(() => {
     testing.expectEqual(7, loads);
     testing.expectEqual('a-page\n', iframe.contentDocument.body.textContent);
-    testing.expectEqual(11, window.length);
+    testing.expectEqual(13, window.length);
+  });
+</script>
+
+<script id=connected_inner_html_iframe type=module>
+  const state = await testing.async();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  host.innerHTML = '<iframe src="support/page.html?inner-html"></iframe>';
+
+  const iframe = host.firstElementChild;
+  iframe.onload = () => state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('a-page\n', iframe.contentDocument.body.textContent);
+  });
+</script>
+
+<script id=connected_shadow_iframe type=module>
+  const state = await testing.async();
+  const host = document.createElement('div');
+  const shadow = host.attachShadow({mode: 'closed'});
+  const iframe = document.createElement('iframe');
+  iframe.src = 'support/page.html?shadow';
+  iframe.onload = () => state.resolve();
+  shadow.appendChild(iframe);
+  document.body.appendChild(host);
+
+  await state.done(() => {
+    testing.expectEqual('a-page\n', iframe.contentDocument.body.textContent);
   });
 </script>
 
@@ -241,6 +270,6 @@
 
 <script id=count>
   testing.onload(() => {
-    testing.expectEqual(11, window.length);
+    testing.expectEqual(13, window.length);
   });
 </script>

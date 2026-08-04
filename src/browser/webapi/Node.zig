@@ -1602,6 +1602,13 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
         } else {
             try Frame.parse.htmlAsChildren(frame, self, html);
         }
+
+        if (self.isConnected()) {
+            var child_it = self.childrenIterator();
+            while (child_it.next()) |child| {
+                try frame.runReadySubtree(child);
+            }
+        }
     }
 
     if (notify) {

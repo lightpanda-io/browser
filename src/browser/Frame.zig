@@ -2881,20 +2881,37 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 // children, for its descendants in tree order: appending a subtree
 // containing scripts must execute them all, after the whole insertion.
 fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
-    if (node._type != .element or node.firstChild() == null) {
-        return self.nodeIsReady(false, node);
-    }
-
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
-    while (tw.next()) |el| {
-        try elements.append(self.call_arena, el.asNode());
+    var pending: std.ArrayList(*Node) = .empty;
+    try pending.append(self.call_arena, node);
+    while (pending.pop()) |current| {
+        var child = current.lastChild();
+        while (child) |value| {
+            try pending.append(self.call_arena, value);
+            child = value.previousSibling();
+        }
+
+        if (current.is(Element)) |element| {
+            try elements.append(self.call_arena, current);
+            if (self._element_shadow_roots.get(element)) |shadow_root| {
+                var shadow_child = shadow_root.asNode().lastChild();
+                while (shadow_child) |value| {
+                    try pending.append(self.call_arena, value);
+                    shadow_child = value.previousSibling();
+                }
+            }
+        }
     }
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
     }
+}
+
+pub fn runReadySubtree(self: *Frame, node: *Node) !void {
+    if (!node.isConnected()) return;
+    try self.nodeIsReadySubtree(node);
 }
 
 fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
