@@ -38,18 +38,15 @@ content: std.Io.Writer.Allocating,
 buf: std.Io.Writer.Allocating,
 /// Reset per write — backs short-lived scrub allocations.
 arena: std.heap.ArenaAllocator,
-/// The just-emitted `goto` line stays rewritable for exactly one step: if the
-/// next recorded call waits for readiness on its own (`Tool.waitsForReadiness`),
-/// the line is rewound and re-emitted with `waitUntil: "domcontentloaded"` —
-/// the follow-up wait covers readiness, and dcl skips the ad chains that hold
-/// `load` back (#3138). Anything else recorded in between closes the window.
+/// The just-emitted `goto` line stays rewritable for exactly one step: a
+/// readiness wait recorded next (`Tool.waitsForReadiness`) swaps it for its
+/// `waitUntil: "domcontentloaded"` variant; anything else closes the window.
 pending_goto: ?PendingGoto,
 
 const PendingGoto = struct {
     /// `content` length just before the emitted goto line.
     start: usize,
-    /// Scrubbed replacement line. Null when the call carried an explicit
-    /// waitUntil — the author chose.
+    /// Scrubbed replacement line; null when the call carried an explicit waitUntil.
     downgraded: ?[]u8,
 };
 
@@ -73,8 +70,7 @@ pub fn deinit(self: *Recorder) void {
 }
 
 pub fn bytes(self: *Recorder) []const u8 {
-    // A snapshot closes the rewrite window: the caller may persist this exact
-    // text, so the goto line it contains must not change afterwards.
+    // A snapshot may be persisted verbatim — its goto line must not change afterwards.
     self.freePendingGoto();
     return self.content.written();
 }
@@ -98,7 +94,7 @@ pub fn record(self: *Recorder, cmd: Command) !void {
     }
 
     // The page is born once, up front; every recorded call is then a method
-    // on it — `goto` async, the rest sync. Constant text: skip buf and scrub.
+    // on it — `goto` async, the rest sync.
     if (!self.page_declared) {
         try self.content.writer.writeAll("const page = new Page();\n");
         self.lines += 1;
@@ -132,7 +128,6 @@ pub fn recordRaw(self: *Recorder, line: []const u8) !void {
     try self.appendScrubbed();
 }
 
-/// One recorded call as a script line: receiver, await-ness, terminator.
 fn renderCall(self: *Recorder, cmd: Command, w: *std.Io.Writer) !void {
     if (cmd.tool_call.tool.isAsync()) try w.writeAll("await ");
     try w.writeAll("page.");
@@ -140,11 +135,10 @@ fn renderCall(self: *Recorder, cmd: Command, w: *std.Io.Writer) !void {
     try w.writeByte('\n');
 }
 
-/// The emitted goto's `domcontentloaded` twin, rendered and scrubbed up front
-/// while the command's args are still alive. Null when there's nothing to
-/// downgrade (explicit waitUntil, or non-object args).
+/// Rendered and scrubbed up front — the command's args die with the caller.
+/// Null when there's nothing to downgrade (explicit waitUntil, non-object args).
 fn renderDowngradedGoto(self: *Recorder, cmd: Command) !?[]u8 {
-    // `isRecorded` guaranteed the required `url` arg, so args is present.
+    // `isRecorded` guaranteed the required `url` arg.
     const args = cmd.tool_call.args.?;
     if (args != .object) return null;
     if (args.object.get("waitUntil") != null) return null;
@@ -159,10 +153,9 @@ fn renderDowngradedGoto(self: *Recorder, cmd: Command) !?[]u8 {
     return try self.allocator.dupe(u8, scrubbed);
 }
 
-/// Swap the just-emitted plain goto line for its `domcontentloaded` twin.
-/// Both are exactly one line, so `lines` needs no adjustment.
 fn downgradePendingGoto(self: *Recorder, pending: PendingGoto) !void {
     const line = pending.downgraded orelse return;
+    // Both variants are exactly one line, so `lines` needs no adjustment.
     self.content.shrinkRetainingCapacity(pending.start);
     try self.content.writer.writeAll(line);
 }

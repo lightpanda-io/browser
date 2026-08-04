@@ -276,10 +276,9 @@ pub const Tool = enum {
         };
     }
 
-    /// Waits for page readiness on its own, making a preceding `goto`'s full
-    /// `load` wait redundant — the recorder downgrades such gotos to
-    /// `domcontentloaded` (#3138). Exhaustive like the sibling predicates so a
-    /// new wait tool makes an explicit choice here.
+    /// Waits for page readiness on its own, letting the recorder downgrade a
+    /// preceding `goto` to `domcontentloaded`. Exhaustive like the sibling
+    /// predicates so a new wait tool makes an explicit choice here.
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,

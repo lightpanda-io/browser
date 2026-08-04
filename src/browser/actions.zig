@@ -278,7 +278,7 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, s
     var runner = session.runner(.{});
     // Polling needs a parsed document, nothing more. Gating on `.load` would
     // re-wait the late-script tail a `waitUntil: domcontentloaded` navigation
-    // deliberately skipped (#3138).
+    // deliberately skipped.
     try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .domcontentloaded });
 
     const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, timer));
