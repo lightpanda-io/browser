@@ -74,6 +74,7 @@ const PendingGoto = struct {
     receiver: v8.Global,
     /// `run_timer` reading (ms) past which the navigation is abandoned.
     deadline_ms: u64,
+    until: lp.Config.WaitUntil,
 
     fn reset(self: *PendingGoto) void {
         v8.v8__Global__Reset(&self.resolver);
@@ -513,6 +514,7 @@ fn invokeGoto(
         .resolver = undefined,
         .receiver = undefined,
         .deadline_ms = @as(u64, @intCast(self.run_timer.untilNow(lp.io, .boot).toMilliseconds())) + started.timeout_ms,
+        .until = started.until,
     };
     v8.v8__Global__New(self.env.isolate.handle, resolver, &pending.resolver);
     v8.v8__Global__New(self.env.isolate.handle, this, &pending.receiver);
@@ -551,7 +553,7 @@ fn driveAsync(self: *Runtime, context: *const v8.Context, try_catch: *const v8.T
             break;
         };
         for (self.pending_gotos.items, conditions) |pending, *condition| {
-            condition.* = .{ .frame_id = pending.frame_id, .until = .load };
+            condition.* = .{ .frame_id = pending.frame_id, .until = pending.until };
         }
 
         // Browser-side tick: run under the browser's isolate, exit before the
