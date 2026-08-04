@@ -43,10 +43,6 @@ const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
 const GC_HINT_FLOOR = 16 * 1024 * 1024;
 
-// Seems like V8 keeps 2 internal contexts, so this is really 3 frame/workers
-// we need dead before triggering a GC.
-const GC_HINT_MIN_DEAD_CONTEXTS = 5;
-
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -518,15 +514,9 @@ pub fn runIdleTasks(self: *const Env) void {
 // a Context, it's managed by the garbage collector. We use the
 // `memoryPressureNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
-// The level indicates the aggressivity of the GC required:
-// moderate speeds up incremental GC
-// critical runs one full GC
-// Skips if there's little to reclaim AND not enough dead contexts.
+// Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
     const stats = self.isolate.getHeapStatistics();
-    if (stats.number_of_native_contexts < self.contexts.items.len + GC_HINT_MIN_DEAD_CONTEXTS) {
-        return;
-    }
     if (stats.used_heap_size + stats.external_memory < GC_HINT_FLOOR) {
         return;
     }
