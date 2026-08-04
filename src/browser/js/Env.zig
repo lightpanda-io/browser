@@ -544,13 +544,11 @@ pub fn dumpMemoryStats(self: *Env) void {
 }
 
 pub fn isExecutionTerminating(self: *const Env) bool {
-    return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle);
+    return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending();
 }
 
-// Whether a forcible terminate has been requested (and not yet cleared by
-// cancelTerminate). Unlike isExecutionTerminating, this is our own sticky
-// flag, so it stays true after V8 consumes the terminate on the JSEntry
-// unwind. Callers about to enter a fresh eval use it to refuse to run.
+// Our sticky terminate flag remains true after V8 consumes the request while
+// unwinding a JSEntry. isExecutionTerminating includes it to block fresh work.
 pub fn terminatePending(self: *const Env) bool {
     return self.terminate_requested.load(.acquire);
 }
@@ -632,7 +630,7 @@ pub fn cancelTerminate(self: *Env) void {
 pub fn performIsolateMicrotasks(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) return;
+    if (self.isExecutionTerminating()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }
 
