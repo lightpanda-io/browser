@@ -38,6 +38,17 @@ content: std.Io.Writer.Allocating,
 buf: std.Io.Writer.Allocating,
 /// Reset per write — backs short-lived scrub allocations.
 arena: std.heap.ArenaAllocator,
+/// A recorded `goto` held back one step. If the next recorded call waits on
+/// its own (waitForSelector/waitForState), the `domcontentloaded` variant is
+/// emitted instead of the default load wait — the follow-up wait covers
+/// readiness, and dcl skips the ad chains that hold `load` back (#3138).
+pending_goto: ?PendingGoto,
+
+const PendingGoto = struct {
+    plain: []u8,
+    /// Null when the call carried an explicit waitUntil — the author chose.
+    downgraded: ?[]u8,
+};
 
 pub fn init(allocator: std.mem.Allocator) Recorder {
     return .{
@@ -47,20 +58,28 @@ pub fn init(allocator: std.mem.Allocator) Recorder {
         .content = .init(allocator),
         .buf = .init(allocator),
         .arena = .init(allocator),
+        .pending_goto = null,
     };
 }
 
 pub fn deinit(self: *Recorder) void {
+    self.freePendingGoto();
     self.content.deinit();
     self.buf.deinit();
     self.arena.deinit();
 }
 
-pub fn bytes(self: *Recorder) []const u8 {
+pub fn bytes(self: *Recorder) ![]const u8 {
+    try self.flushPendingGoto(false);
     return self.content.written();
 }
 
+pub fn isEmpty(self: *const Recorder) bool {
+    return self.content.writer.end == 0 and self.pending_goto == null;
+}
+
 pub fn reset(self: *Recorder) void {
+    self.freePendingGoto();
     self.lines = 0;
     self.page_declared = false;
     self.content.clearRetainingCapacity();
@@ -70,32 +89,86 @@ pub fn reset(self: *Recorder) void {
 
 pub fn record(self: *Recorder, cmd: Command) !void {
     if (!cmd.isRecorded()) return;
-    self.buf.clearRetainingCapacity();
-    _ = self.arena.reset(.retain_capacity);
-    // `isRecorded` guarantees `.tool_call`. The page is born once, up front; every
-    // recorded call is then a method on it — `goto` async, the rest sync.
+    // `isRecorded` guarantees `.tool_call`.
+    const tool = cmd.tool_call.tool;
+    try self.flushPendingGoto(tool == .waitForSelector or tool == .waitForState);
+
+    // The page is born once, up front; every recorded call is then a method
+    // on it — `goto` async, the rest sync.
     if (!self.page_declared) {
+        self.buf.clearRetainingCapacity();
         try self.buf.writer.writeAll("const page = new Page();\n");
         self.page_declared = true;
+        try self.appendScrubbed();
     }
-    if (cmd.tool_call.tool.isAsync()) try self.buf.writer.writeAll("await ");
+
+    self.buf.clearRetainingCapacity();
+    _ = self.arena.reset(.retain_capacity);
+    if (tool.isAsync()) try self.buf.writer.writeAll("await ");
     try self.buf.writer.writeAll("page.");
     try cmd.formatJs(self.arena.allocator(), &self.buf.writer);
     try self.buf.writer.writeByte('\n');
+
+    if (tool == .goto) {
+        const plain = try self.allocator.dupe(u8, self.buf.written());
+        errdefer self.allocator.free(plain);
+        self.pending_goto = .{ .plain = plain, .downgraded = try self.renderDowngradedGoto(cmd) };
+        return;
+    }
     try self.appendScrubbed();
 }
 
 pub fn recordComment(self: *Recorder, comment: []const u8) !void {
+    try self.flushPendingGoto(false);
     self.buf.clearRetainingCapacity();
     try writeCommentLines(&self.buf.writer, comment);
     try self.appendScrubbed();
 }
 
 pub fn recordRaw(self: *Recorder, line: []const u8) !void {
+    try self.flushPendingGoto(false);
     self.buf.clearRetainingCapacity();
     try self.buf.writer.writeAll(line);
     try self.buf.writer.writeByte('\n');
     try self.appendScrubbed();
+}
+
+/// The held goto's `domcontentloaded` twin, rendered up front while the
+/// command's args are still alive. Null when there's nothing to downgrade
+/// (explicit waitUntil, or args in a shape the recorder doesn't rewrite).
+fn renderDowngradedGoto(self: *Recorder, cmd: Command) !?[]u8 {
+    const args = cmd.tool_call.args orelse return null;
+    if (args != .object) return null;
+    if (args.object.get("waitUntil") != null) return null;
+
+    const aa = self.arena.allocator();
+    var cloned: std.json.ObjectMap = .empty;
+    try cloned.ensureTotalCapacity(aa, args.object.count() + 1);
+    var it = args.object.iterator();
+    while (it.next()) |entry| try cloned.put(aa, entry.key_ptr.*, entry.value_ptr.*);
+    try cloned.put(aa, "waitUntil", .{ .string = "domcontentloaded" });
+
+    var w: std.Io.Writer.Allocating = .init(self.arena.allocator());
+    try w.writer.writeAll("await page.");
+    try Command.fromToolCall(.goto, .{ .object = cloned }).formatJs(self.arena.allocator(), &w.writer);
+    try w.writer.writeByte('\n');
+    return try self.allocator.dupe(u8, w.written());
+}
+
+fn flushPendingGoto(self: *Recorder, downgrade: bool) !void {
+    const pending = self.pending_goto orelse return;
+    defer self.freePendingGoto();
+    self.buf.clearRetainingCapacity();
+    const line = if (downgrade) pending.downgraded orelse pending.plain else pending.plain;
+    try self.buf.writer.writeAll(line);
+    try self.appendScrubbed();
+}
+
+fn freePendingGoto(self: *Recorder) void {
+    const pending = self.pending_goto orelse return;
+    self.allocator.free(pending.plain);
+    if (pending.downgraded) |d| self.allocator.free(d);
+    self.pending_goto = null;
 }
 
 fn appendScrubbed(self: *Recorder) !void {
@@ -144,16 +217,16 @@ test "record filters state-mutating commands and comments" {
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.click({ selector: \"Login\" });\n// search for login\n",
-        recorder.bytes(),
+        try recorder.bytes(),
     );
     try std.testing.expectEqual(@as(u32, 4), recorder.lines);
 
     recorder.reset();
-    try std.testing.expectEqualStrings("", recorder.bytes());
+    try std.testing.expectEqualStrings("", try recorder.bytes());
     try std.testing.expectEqual(@as(u32, 0), recorder.lines);
 
     try recorder.record(parseLine(aa, "/scroll y=200"));
-    try std.testing.expectEqualStrings("const page = new Page();\npage.scroll({ y: 200 });\n", recorder.bytes());
+    try std.testing.expectEqualStrings("const page = new Page();\npage.scroll({ y: 200 });\n", try recorder.bytes());
     try std.testing.expectEqual(@as(u32, 2), recorder.lines);
 }
 
@@ -164,7 +237,7 @@ test "recordRaw writes the JS line verbatim" {
     try recorder.recordRaw("document.title");
     try recorder.recordRaw("window.scrollTo(0, 100)");
 
-    try std.testing.expectEqualStrings("document.title\nwindow.scrollTo(0, 100)\n", recorder.bytes());
+    try std.testing.expectEqualStrings("document.title\nwindow.scrollTo(0, 100)\n", try recorder.bytes());
 }
 
 test "record emits multi-line extract as JavaScript" {
@@ -180,7 +253,7 @@ test "record emits multi-line extract as JavaScript" {
 
     try std.testing.expectEqualStrings(
         "const page = new Page();\npage.extract({ title: \"span.title\", desc: \"p.description\" });\n",
-        recorder.bytes(),
+        try recorder.bytes(),
     );
 }
 
@@ -194,7 +267,7 @@ test "recordComment splits embedded newlines into separate comment lines" {
 
     try std.testing.expectEqualStrings(
         "// note\n// /goto https://attacker\n// more\n",
-        recorder.bytes(),
+        try recorder.bytes(),
     );
 }
 
@@ -211,7 +284,73 @@ test "recordComment scrubs literal LP_* values back to placeholders" {
 
     try std.testing.expectEqualStrings(
         "// a user noted that their password is $LP_RECORDER_COMMENT_TEST\n",
-        recorder.bytes(),
+        try recorder.bytes(),
+    );
+}
+
+test "record downgrades goto before waitForSelector to domcontentloaded" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"domcontentloaded\" });\npage.waitForSelector(\".story\");\n",
+        try recorder.bytes(),
+    );
+}
+
+test "record keeps the load wait when goto is followed by extract" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try recorder.record(parseLine(aa, "/extract '{\"title\": \"h1\"}'"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.extract({ title: \"h1\" });\n",
+        try recorder.bytes(),
+    );
+}
+
+test "record preserves an explicit waitUntil on goto" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com waitUntil=networkidle"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"networkidle\" });\npage.waitForSelector(\".story\");\n",
+        try recorder.bytes(),
+    );
+}
+
+test "trailing goto is flushed unmodified by bytes" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\n",
+        try recorder.bytes(),
     );
 }
 
@@ -231,6 +370,6 @@ test "record scrubs literal LP_* values in JavaScript calls" {
     try recorder.record(parseLine(aa, "/fill selector='#user' value='secret-user'"));
     try std.testing.expectEqualStrings(
         "const page = new Page();\npage.fill({ selector: \"#user\", value: \"$LP_RECORDER_COMMAND_TEST\" });\n",
-        recorder.bytes(),
+        try recorder.bytes(),
     );
 }
