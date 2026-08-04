@@ -905,45 +905,48 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         out.* = .{ .name = hdr.name, .value = hdr.value };
     }
 
-    const cached = cache.get(arena.allocator(), .{
+    const cache_result = cache.get(arena.allocator(), .{
         .url = req.url,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers,
-    }) orelse {
-        lp.metrics.http_cache.incr(.miss);
-        transfer._cache_intent = .store;
-        return false;
+    }) catch |e| blk: {
+        log.err(.cache, "failed to get", .{ .url = req.url, .err = e });
+        break :blk .miss;
     };
 
-    if (cached.expired == false) {
-        lp.metrics.http_cache.incr(.hit);
-        try transfer.bufferCached(cached);
-        return true;
+    switch (cache_result) {
+        .hit => |cached| {
+            lp.metrics.http_cache.incr(.hit);
+            try transfer.bufferCached(cached);
+            return true;
+        },
+        .revalidate => |cached| {
+            log.debug(.cache, "revalidate cache entry", .{
+                .url = req.url,
+                .etag = cached.etag,
+                .last_modified = cached.last_modified,
+            });
+            if (cached.etag) |etag| {
+                try transfer.addHeader("If-None-Match", etag, .{});
+            }
+            if (cached.last_modified) |lm| {
+                try transfer.addHeader("If-Modified-Since", lm, .{});
+            }
+            transfer._cache_intent = .{ .revalidate = cached };
+            return false;
+        },
+        .miss => {
+            lp.metrics.http_cache.incr(.miss);
+            transfer._cache_intent = .store;
+            return false;
+        },
+        .stale => {
+            lp.metrics.http_cache.incr(.miss);
+            cache.evict(req.url);
+            transfer._cache_intent = .store;
+            return false;
+        },
     }
-
-    if (cached.metadata.hasValidators() == false) {
-        // Expired and no validators
-        lp.metrics.http_cache.incr(.miss);
-        cached.data.deinit();
-        cache.evict(req.url);
-        transfer._cache_intent = .store;
-        return false;
-    }
-
-    // expired but with validators
-    log.debug(.cache, "revalidate with etag", .{
-        .url = req.url,
-        .etag = cached.metadata.etag,
-        .last_modified = cached.metadata.last_modified,
-    });
-    if (cached.metadata.etag) |etag| {
-        try transfer.addHeader("If-None-Match", etag, .{});
-    }
-    if (cached.metadata.last_modified) |lm| {
-        try transfer.addHeader("If-Modified-Since", lm, .{});
-    }
-    transfer._cache_intent = .{ .revalidate = cached };
-    return false;
 }
 
 // 304 on a revalidation: renew the stored entry from the fresh headers and
@@ -1000,7 +1003,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     const headers = transfer.res.headers;
 
     const vary = findHeader(headers, "vary");
-    const maybe_cm = Cache.tryCache(
+    const maybe_req = Cache.tryCache(
         arena.allocator(),
         lp.datetime.timestamp(.real),
         transfer._cache_key,
@@ -1017,7 +1020,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
         log.warn(.http, "cache eligibility", .{ .err = err });
         return;
     };
-    var metadata = maybe_cm orelse return;
+    var req = maybe_req orelse return;
 
     var vary_headers: std.ArrayList(http.Header) = .empty;
     if (vary) |vary_str| {
@@ -1036,13 +1039,13 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
         }
     }
 
-    metadata.headers = headers;
-    metadata.vary_headers = vary_headers.items;
+    req.headers = headers;
+    req.vary_headers = vary_headers.items;
 
     if (comptime lp.IS_DEBUG) {
-        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .metadata = metadata });
+        log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .put = req });
     }
-    cache.put(metadata, transfer.res.buffer.items) catch |err| {
+    cache.put(req, transfer.res.buffer.items) catch |err| {
         log.warn(.http, "cache put failed", .{ .err = err });
     };
 }
@@ -2361,20 +2364,12 @@ pub const Transfer = struct {
     // Serve a cache entry as this transfer's response. Takes ownership of
     // `cached` (file-backed bodies are read into the arena and closed).
     fn bufferCached(self: *Transfer, cached: Cache.CachedResponse) !void {
-        const arena = self.arena;
-
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
-            .file => |f| blk: {
-                defer f.file.close(lp.io);
-                const buf = try arena.alloc(u8, f.len);
-                const n = try f.file.readPositionalAll(lp.io, buf, f.offset);
-                break :blk buf[0..n];
-            },
         };
 
-        self.setResponseHead(cached.metadata.status, cached.metadata.content_type);
-        self.res.headers = cached.metadata.headers;
+        self.setResponseHead(cached.status, cached.content_type);
+        self.res.headers = cached.headers;
         self._from_cache = true;
         self._content_length = body.len;
         try self.bufferEvents(body);
