@@ -276,7 +276,10 @@ fn remainingMs(timeout_ms: u32, timer: std.Io.Timestamp) u32 {
 pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !*DOMNode {
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     var runner = session.runner(.{});
-    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
+    // Only parsing has to be done before polling — gating on `.load` would
+    // re-wait for the late-script tail a `waitUntil: domcontentloaded`
+    // navigation deliberately skipped (#3138).
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .domcontentloaded });
 
     const el = try runner.waitForSelector(frame_id, selector, remainingMs(timeout_ms, timer));
     return el.asNode();
@@ -285,7 +288,7 @@ pub fn waitForSelector(selector: [:0]const u8, timeout_ms: u32, frame_id: u32, s
 pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, session: *Session) !void {
     const timer: std.Io.Timestamp = .now(lp.io, .boot);
     var runner = session.runner(.{});
-    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .load });
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .domcontentloaded });
 
     return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, timer));
 }
