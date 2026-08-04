@@ -212,6 +212,11 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     });
 }
 
+pub fn getReferrer(self: *const Document) []const u8 {
+    const frame = self._frame orelse return "";
+    return frame._referrer orelse "";
+}
+
 pub fn getCharset(self: *const Document) []const u8 {
     if (self._charset) |charset| {
         return charset;
@@ -1588,15 +1593,12 @@ pub const JsApi = struct {
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
-    pub const characterSet = bridge.accessor(getCharacterSet, null, .{});
-    pub const charset = bridge.accessor(getCharacterSet, null, .{});
-    pub const inputEncoding = bridge.accessor(getCharacterSet, null, .{});
+    pub const characterSet = bridge.accessor(Document.getCharset, null, .{});
+    pub const charset = bridge.accessor(Document.getCharset, null, .{});
+    pub const inputEncoding = bridge.accessor(Document.getCharset, null, .{});
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
-    fn getCharacterSet(self: *const Document) []const u8 {
-        return self.getCharset();
-    }
-    pub const referrer = bridge.property("", .{ .template = false });
+    pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
 
     // Generates a getter/setter pair backed by the frame's attribute-listener
     // map, like onclick above, for other document event handler properties.
