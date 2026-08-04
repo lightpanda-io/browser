@@ -482,7 +482,7 @@ fn enumValuesOf(arena: std.mem.Allocator, value: std.json.Value) ![]const []cons
 fn jsonStringArray(arena: std.mem.Allocator, value: std.json.Value) ![]const []const u8 {
     if (value != .array) return &.{};
     var out: std.ArrayList([]const u8) = .empty;
-    try out.ensureTotalCapacity(arena, value.array.items.len);
+    try out.ensureTotalCapacityPrecise(arena, value.array.items.len);
     for (value.array.items) |item| {
         if (item != .string) continue;
         out.appendAssumeCapacity(item.string);

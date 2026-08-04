@@ -579,7 +579,7 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
     var buf: std.ArrayList(u8) = .empty;
 
     // the most space well need is the url + ('?' or '&') + the query_string + null terminator
-    try buf.ensureTotalCapacity(arena, url.len + 2 + query_string.len);
+    try buf.ensureTotalCapacityPrecise(arena, url.len + 2 + query_string.len);
     buf.appendSliceAssumeCapacity(url);
 
     if (std.mem.indexOfScalar(u8, url, '?')) |index| {
