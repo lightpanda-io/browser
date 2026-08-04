@@ -49,33 +49,61 @@ pub const Proto = SvgElement;
 _type: Type,
 _proto_canary: if (lp.IS_DEBUG) *SvgElement else void = undefined,
 
-pub const Type = union(enum) {
-    svg: *Svg,
-    g: *G,
-    a: *A,
-    use: *Use,
-    image: *Image,
-    defs: *Defs,
-    symbol: *Symbol,
-    switch_element: *Switch,
-    foreign_object: *ForeignObject,
-    text_content: *TextContent,
-    geometry: *Geometry,
+pub const Type = enum(u8) {
+    svg,
+    g,
+    a,
+    use,
+    image,
+    defs,
+    symbol,
+    switch_element,
+    foreign_object,
+    text_content,
+    geometry,
 };
 
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .svg => Svg,
+        .g => G,
+        .a => A,
+        .use => Use,
+        .image => Image,
+        .defs => Defs,
+        .symbol => Symbol,
+        .switch_element => Switch,
+        .foreign_object => ForeignObject,
+        .text_content => TextContent,
+        .geometry => Geometry,
+    };
+}
+
+pub fn subtype(self: *const Graphics, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, Graphics);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
+
 pub fn is(self: *Graphics, comptime T: type) ?*T {
-    inline for (@typeInfo(Type).@"union".fields) |f| {
-        if (@field(Type, f.name) == self._type) {
-            if (f.type == *T) {
-                return @field(self._type, f.name);
+    switch (self._type) {
+        inline else => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
             }
-        }
+        },
     }
     if (self._type == .geometry) {
-        return self._type.geometry.is(T);
+        return self.subtype(Geometry).is(T);
     }
     if (self._type == .text_content) {
-        return self._type.text_content.is(T);
+        return self.subtype(TextContent).is(T);
     }
     return null;
 }
@@ -108,12 +136,12 @@ pub const JsApi = struct {
 pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
     var bounds: PathData.Bounds = .{};
     switch (self._type) {
-        .geometry => |geometry| {
-            var path = try geometry.buildPath(frame);
+        .geometry => {
+            var path = try self.subtype(Geometry).buildPath(frame);
             defer path.deinit(frame.local_arena);
             bounds = path.bounds(.{});
         },
-        .foreign_object => |foreign_object| bounds = try foreign_object.getBounds(frame),
+        .foreign_object => bounds = try self.subtype(ForeignObject).getBounds(frame),
         .g, .a, .svg => try accumulateChildren(self, .{}, &bounds, frame),
         .defs, .symbol, .switch_element, .use, .image, .text_content => {},
     }
@@ -156,13 +184,13 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
         const child_matrix = parent_matrix.multiply(transformMatrix(element));
 
         switch (graphics._type) {
-            .geometry => |geometry| {
-                var path = try geometry.buildPath(frame);
+            .geometry => {
+                var path = try graphics.subtype(Geometry).buildPath(frame);
                 defer path.deinit(frame.local_arena);
                 bounds.merge(path.bounds(child_matrix));
             },
-            .foreign_object => |foreign_object| {
-                const child_bounds = try foreign_object.getBounds(frame);
+            .foreign_object => {
+                const child_bounds = try graphics.subtype(ForeignObject).getBounds(frame);
                 if (!child_bounds.isEmpty()) {
                     var foreign_path: PathData.Path = .{};
                     defer foreign_path.deinit(frame.local_arena);

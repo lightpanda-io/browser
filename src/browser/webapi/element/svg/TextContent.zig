@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -39,18 +40,39 @@ pub const Proto = Graphics;
 _type: Type,
 _proto_canary: if (lp.IS_DEBUG) *Graphics else void = undefined,
 
-pub const Type = union(enum) {
-    positioning: *TextPositioning,
-    text_path: *TextPath,
+pub const Type = enum(u8) {
+    positioning,
+    text_path,
 };
 
-pub fn is(self: *TextContent, comptime T: type) ?*T {
-    inline for (@typeInfo(Type).@"union".fields) |field| {
-        if (@field(Type, field.name) == self._type) {
-            if (field.type == *T) return @field(self._type, field.name);
-        }
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .positioning => TextPositioning,
+        .text_path => TextPath,
+    };
+}
+
+pub fn subtype(self: *const TextContent, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, TextContent);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
     }
-    if (self._type == .positioning) return self._type.positioning.is(T);
+    return sub;
+}
+
+pub fn is(self: *TextContent, comptime T: type) ?*T {
+    switch (self._type) {
+        inline else => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
+            }
+        },
+    }
+    if (self._type == .positioning) return self.subtype(TextPositioning).is(T);
     return null;
 }
 

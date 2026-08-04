@@ -802,8 +802,8 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
 
 fn getDefaultDisplay(element: *const Element) []const u8 {
     switch (element._type) {
-        .html => |html| {
-            return switch (html._type) {
+        .html => {
+            return switch (element.subtype(Element.Html)._type) {
                 .anchor, .br, .span, .label, .time, .font, .mod, .quote => "inline",
                 .body, .div, .dl, .p, .heading, .form, .button, .canvas, .details, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .frameset, .legend, .map, .marquee, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .source, .table, .table_caption, .table_cell, .table_col, .table_row, .table_section, .track => "block",
                 .generic, .custom, .unknown, .data => blk: {
@@ -835,8 +835,8 @@ fn isInlineTag(tag_name: []const u8) bool {
 
 fn getDefaultColor(element: *const Element) []const u8 {
     switch (element._type) {
-        .html => |html| {
-            return switch (html._type) {
+        .html => {
+            return switch (element.subtype(Element.Html)._type) {
                 .anchor => "rgb(0, 0, 238)", // blue
                 else => "rgb(0, 0, 0)",
             };

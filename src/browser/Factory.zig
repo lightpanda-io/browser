@@ -474,7 +474,7 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
             const svg_ptr = chain.get(i);
             svg_ptr.* = .{
                 ._tag_name = try String.init(self._arena, tag_name, .{}),
-                ._type = unionInit(Element.Svg.Type, chain.get(i + 1)),
+                ._type = typeInit(Element.Svg, chain.get(i + 1)),
             };
             setProto(svg_ptr, chain.get(i - 1));
         } else {
