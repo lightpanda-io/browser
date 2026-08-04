@@ -41,7 +41,7 @@ const Allocator = std.mem.Allocator;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
-const GC_HINT_FLOOR = 4 * 1024 * 1024;
+const GC_HINT_FLOOR = 2 * 1024 * 1024;
 
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
