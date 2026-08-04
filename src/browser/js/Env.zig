@@ -461,7 +461,7 @@ pub fn runMacrotasks(self: *Env) !void {
 
 pub fn hasMacrotasks(self: *Env) bool {
     for (self.contexts.items) |ctx| {
-        if (ctx.scheduler.high_priority.count() > 0) {
+        if (ctx.scheduler.blocksCompletion()) {
             return true;
         }
     }

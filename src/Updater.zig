@@ -52,7 +52,7 @@ pub fn deinit(self: *Updater) void {
 /// Sends running Lightpanda version to remote to get update information.
 /// Outputs directly to given `Writer`.
 pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
-    const conn = try http.Connection.init(self.x509_store, self.config, null);
+    var conn = try http.Connection.init(self.x509_store, self.config, null);
     defer conn.deinit();
 
     const url = std.fmt.comptimePrint("https://telemetry.lightpanda.io/v/{s}", .{lp.build_config.version});

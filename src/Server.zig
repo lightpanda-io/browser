@@ -567,6 +567,34 @@ test "server: get /json/version" {
     }
 }
 
+test "server: get /json/protocol" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequestAlloc("GET /json/protocol HTTP/1.1\r\n\r\n");
+    defer testing.allocator.free(res);
+
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+    try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+
+    const body_start = std.mem.indexOf(u8, res, "\r\n\r\n").? + 4;
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, res[body_start..], .{});
+    defer parsed.deinit();
+
+    const domains = parsed.value.object.get("domains").?.array;
+    try testing.expectEqual(20, domains.items.len);
+
+    var found_dom = false;
+    var found_lp = false;
+    for (domains.items) |domain| {
+        const name = domain.object.get("domain").?.string;
+        if (std.mem.eql(u8, name, "DOM")) found_dom = true;
+        if (std.mem.eql(u8, name, "LP")) found_lp = true;
+    }
+    try testing.expect(found_dom);
+    try testing.expect(found_lp);
+}
+
 test "server: get /metrics" {
     var c = try createTestClient();
     defer c.deinit();
@@ -727,6 +755,22 @@ const TestClient = struct {
                     return error.DataExceedsContentLength;
                 }
             }
+        }
+    }
+
+    // Reads until the server closes the connection, for responses larger
+    // than buf (e.g. /json/protocol).
+    fn httpRequestAlloc(self: *TestClient, req: []const u8) ![]const u8 {
+        try sys_net.writeAll(self.socket, req);
+
+        var response: std.ArrayList(u8) = .empty;
+        defer response.deinit(testing.allocator);
+        while (true) {
+            const n = try posix.read(self.socket, &self.buf);
+            if (n == 0) {
+                return response.toOwnedSlice(testing.allocator);
+            }
+            try response.appendSlice(testing.allocator, self.buf[0..n]);
         }
     }
 

@@ -84,12 +84,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     };
 
     const session = exec.session;
-    const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
-    if (request._headers) |h| {
-        try h.populateHttpHeader(exec.call_arena, &headers);
-    }
-    try exec.headersForRequest(&headers);
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -108,7 +102,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .frame_id = exec.frameId(),
         .loader_id = exec.loaderId(),
         .body = request._body,
-        .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
         .cookie_origin = exec.url.*,
@@ -127,6 +120,14 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         // OOM-class; nothing was committed and no callback fired.
         return resolver.promise();
     };
+
+    {
+        errdefer transfer.deinit();
+        if (request._headers) |h| {
+            try h.populateRequestHeaders(transfer);
+        }
+        try exec.headersForRequest(transfer);
+    }
 
     // Held for Response.deinit's abort; the error, shutdown and done
     // callbacks clear it.

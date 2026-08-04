@@ -277,9 +277,6 @@ origin: ?[]const u8 = null,
 // If null the url must be used.
 base_url: ?[:0]const u8 = null,
 
-// referer header cache.
-referer_header: ?[:0]const u8 = null,
-
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
 
@@ -463,7 +460,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
                     b.runIdleTasks();
                     return 200;
                 }
-            }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .low_priority = true });
+            }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .blocks_done = false });
         }
     }
 }
@@ -595,24 +592,9 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 
 // Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
-    // Build the referer
-    const referer = blk: {
-        if (self.referer_header == null) {
-            // build the cache
-            if (std.mem.startsWith(u8, self.url, "http")) {
-                self.referer_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", self.url }, 0);
-            } else {
-                self.referer_header = "";
-            }
-        }
-
-        break :blk self.referer_header.?;
-    };
-
-    // If the referer is empty, ignore the header.
-    if (referer.len > 0) {
-        try headers.add(referer);
+pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
+    if (std.mem.startsWith(u8, self.url, "http")) {
+        try transfer.addHeader("Referer", self.url, .{});
     }
 }
 
@@ -802,13 +784,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.req.headers.add(lp.Config.HttpHeaders.navigation_accept);
+        try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
         if (opts.header) |hdr| {
-            try transfer.req.headers.add(hdr);
+            // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
+            if (HttpClient.Header.parse(hdr)) |parsed| {
+                try transfer.addHeader(parsed.name, parsed.value, .{});
+            }
         }
         if (opts.referer) |ref| {
-            const ref_header = try std.mem.concatWithSentinel(transfer.arena.allocator(), u8, &.{ "Referer: ", ref }, 0);
-            try transfer.req.headers.add(ref_header);
+            try transfer.addHeader("Referer", ref, .{});
         }
     }
 
@@ -1040,7 +1024,12 @@ fn canScheduleNavigation(self: *Frame, new_target_type: NavigationType) bool {
 }
 
 pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
-    return self._session.browser.http_client.request(req, &self._http_owner);
+    const transfer = try self._session.browser.http_client.newRequest(req, &self._http_owner);
+    {
+        errdefer transfer.deinit();
+        try self.headersForRequest(transfer);
+    }
+    return transfer.submit();
 }
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
@@ -2001,9 +1990,10 @@ fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
 
         const parent = current._parent orelse {
             if (current._type == .document) {
+                const doc = current.subtype(Document);
                 return .{
-                    .lookup = &current._type.document._elements_by_id,
-                    .removed_ids = &current._type.document._removed_ids,
+                    .lookup = &doc._elements_by_id,
+                    .removed_ids = &doc._removed_ids,
                 };
             }
             // Detached nodes should not have IDs registered
@@ -2054,7 +2044,7 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     // shadow DOM. Walk to the root once and consult the matching map.
     const root = node.getRootNode(.{});
     if (root._type == .document) {
-        return root._type.document.getElementById(id, self);
+        return root.subtype(Document).getElementById(id, self);
     }
     if (root.is(ShadowRoot)) |shadow_root| {
         return shadow_root.getElementById(id, self);
@@ -2195,9 +2185,25 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // the frame while it's registered (they'd run JS on the parser's stack)
     // and delivers them on the next tick after the sync fetch returns.
 
-    var headers = try http_client.newHeaders();
-    try headers.add("Accept: text/css,*/*;q=0.1");
-    try self.headersForRequest(&headers);
+    const transfer = http_client.newRequest(.{
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .stylesheet,
+        .notification = session.notification,
+        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
+    }, &self._http_owner) catch |err| {
+        log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
+        return self.fireElementEvent(element, comptime .wrap("error"));
+    };
+    {
+        errdefer transfer.deinit();
+        try transfer.addHeader("Accept", "text/css,*/*;q=0.1", .{});
+        try self.headersForRequest(transfer);
+    }
 
     // Set the script-manager `is_evaluating` flag for the same reason
     // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
@@ -2211,18 +2217,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     sm.is_evaluating = true;
     defer sm.endEvaluationWindow(was_evaluating);
 
-    var response = http_client.syncRequest(.{
-        .url = resolved,
-        .method = .GET,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .headers = headers,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
-        .resource_type = .stylesheet,
-        .notification = session.notification,
-        .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
-    }, &self._http_owner) catch |err| {
+    var response = http_client.syncRequest(transfer) catch |err| {
         log.warn(.http, "external stylesheet fetch", .{ .err = err, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
     };

@@ -101,7 +101,11 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
         // in ReleaseMode where v8 won't write to content if it starts off zero
         // initiated
         @memset(content[l..], 0);
-        return .{ .len = @intCast(l), .payload = .{ .content = @bitCast(content) } };
+        return .{
+            .len = @intCast(l),
+            .prefix = @bitCast(content[0..4].*),
+            .suffix = .{ .buf = content[4..12].* },
+        };
     }
 
     const buf = try allocator.alloc(u8, l);
@@ -110,15 +114,10 @@ pub fn toSSOWithAlloc(self: String, allocator: Allocator) !lp.String {
         std.debug.assert(n == l);
     }
 
-    var prefix: [4]u8 = @splat(0);
-    @memcpy(&prefix, buf[0..4]);
-
     return .{
         .len = @intCast(l),
-        .payload = .{ .heap = .{
-            .prefix = @bitCast(prefix),
-            .ptr = @intFromPtr(buf.ptr),
-        } },
+        .prefix = @bitCast(buf[0..4].*),
+        .suffix = .{ .ptr = @intFromPtr(buf.ptr) },
     };
 }
 
