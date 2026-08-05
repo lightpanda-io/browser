@@ -20,9 +20,13 @@
         }
         customElements.define('ce-ctor-innerhtml', CeCtorInnerHtml);
 
+        // Adding children during construction violates a post-condition of
+        // "create an element", so the result is a fallback HTMLUnknownElement
+        // rather than the constructed instance. What matters here is that the
+        // constructor ran exactly once instead of recursing.
         const el = document.createElement('ce-ctor-innerhtml');
         testing.expectEqual(1, calls);
-        testing.expectEqual('<span>hi</span>', el.innerHTML);
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
     }
 </script>
 
