@@ -302,7 +302,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
     }
 
     const entries = try self.takeRecords(frame);
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

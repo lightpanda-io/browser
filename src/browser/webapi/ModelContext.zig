@@ -195,7 +195,7 @@ pub const ModelContextClient = struct {
         defer ls.deinit();
         const resolver = ls.local.createPromiseResolver();
 
-        var caught: js.TryCatch.Caught = undefined;
+        var caught: js.TryCatch.Caught = .{};
         if (callback.tryCall(js.Value, .{}, &caught)) |result| {
             // The callback may itself return a thenable; resolving with its
             // value lets V8's promise resolution machinery unwrap it.

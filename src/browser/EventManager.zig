@@ -322,7 +322,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
-            var caught: js.TryCatch.Caught = undefined;
+            var caught: js.TryCatch.Caught = .{};
             const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, target_et, .{event}, &caught) catch |err| ret: {
                 if (err == error.ExecutionTerminated) {
                     return error.ExecutionTerminated;
@@ -382,7 +382,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                     event._target = getAdjustedTarget(original_target, current_target);
                 }
 
-                var caught: js.TryCatch.Caught = undefined;
+                var caught: js.TryCatch.Caught = .{};
                 const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
                     if (err == error.ExecutionTerminated) {
                         return error.ExecutionTerminated;

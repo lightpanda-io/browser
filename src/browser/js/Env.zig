@@ -412,10 +412,7 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
-        // terminatePending: once a forcible terminate is requested (and not
-        // canceled), refuse to start new work — IsExecutionTerminating alone
-        // goes false again as soon as the killed script finishes unwinding.
-        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
+        if (self.terminatePending()) {
             return;
         }
 
@@ -433,7 +430,7 @@ pub fn runMicrotasks(self: *Env) void {
 }
 
 pub fn runMacrotasks(self: *Env) !void {
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending()) {
+    if (self.terminatePending()) {
         return;
     }
 
@@ -543,12 +540,11 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
-pub fn isExecutionTerminating(self: *const Env) bool {
-    return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending();
-}
-
-// Our sticky terminate flag remains true after V8 consumes the request while
-// unwinding a JSEntry. isExecutionTerminating includes it to block fresh work.
+// The single "must not run JS" predicate. We're the only ones who ever call
+// TerminateExecution (here and in terminateInterrupt) and both set this flag,
+// so it's always at least as true as v8__Isolate__IsExecutionTerminating —
+// and it stays true after V8 consumes the terminate on the JSEntry unwind,
+// which is what stops a fresh eval from re-entering mid-teardown.
 pub fn terminatePending(self: *const Env) bool {
     return self.terminate_requested.load(.acquire);
 }
@@ -556,6 +552,7 @@ pub fn terminatePending(self: *const Env) bool {
 pub fn terminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
+    self.terminate_requested.store(true, .release);
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
@@ -630,7 +627,7 @@ pub fn cancelTerminate(self: *Env) void {
 pub fn performIsolateMicrotasks(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
-    if (self.isExecutionTerminating()) return;
+    if (self.terminatePending()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }
 

@@ -860,7 +860,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     frame.document._throw_on_dynamic_markup_insertion_counter -= 1;
                 };
 
-                var caught: JS.TryCatch.Caught = undefined;
+                var caught: JS.TryCatch.Caught = .{};
                 _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {
                     log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = frame._type, .url = frame.url });
                     return node;
