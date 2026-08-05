@@ -329,7 +329,7 @@ fn buildRunReport(
     switch (classified) {
         .script_error => |script_error| {
             report.status = .failed;
-            report.failure = .{ .kind = script_error.kind, .detail = script_error.detail, .dry_fields = script_error.dry_fields };
+            report.failure = script_error.failure;
             report.source = try reportSource(arena, script_error.source, mode);
             if (mode == .replay) report.guidance = lp.heal.replay_failed_guidance;
         },
@@ -338,7 +338,7 @@ fn buildRunReport(
             report.extracts = facts.extract_stats;
             if (lp.replay.suspicionOf(arena, facts)) |suspicion| {
                 report.status = .suspicious;
-                report.failure = .{ .kind = suspicion.kind, .detail = suspicion.detail, .dry_fields = suspicion.dry_fields };
+                report.failure = suspicion.failure;
                 report.source = try reportSource(arena, facts.source, mode);
                 if (mode == .replay) report.guidance = lp.heal.replay_suspicious_guidance;
             }
@@ -355,6 +355,26 @@ fn reportSource(arena: std.mem.Allocator, source: []const u8, mode: ReportMode) 
     return string.capBytes(arena, scrubbed, lp.replay.source_max_bytes);
 }
 
+/// True when the path passed the guard; the rejection is already sent
+/// otherwise. Callers must guard before reading the path from disk.
+fn guardPathSafe(server: *Server, id: std.json.Value, path: []const u8) !bool {
+    if (browser_tools.isPathSafe(path)) return true;
+    try sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+    return false;
+}
+
+/// One classified run with its report: the shared middle of `replay` and
+/// `heal_commit`. Null after a bring-up failure or OOM has been reported.
+fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, mode: ReportMode) !?struct { classified: lp.replay.Classified, report: lp.replay.RunReport } {
+    var collector: ConsoleCollector = .{ .arena = arena };
+    const classified = (try runClassifiedOrReport(server, arena, id, path, source, &collector)) orelse return null;
+    const report = buildRunReport(arena, path, classified, &collector, mode) catch {
+        try sendErrorContent(server, id, "out of memory");
+        return null;
+    };
+    return .{ .classified = classified, .report = report };
+}
+
 fn sendReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, report: anytype) !void {
     const json = std.json.Stringify.valueAlloc(arena, report, .{ .emit_null_optional_fields = false }) catch
         return sendErrorContent(server, id, "out of memory");
@@ -366,21 +386,16 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.sendError(id, .InvalidParams, "expected { path: string, script?: string }");
     };
-    if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
-    }
+    if (!try guardPathSafe(server, id, args.path)) return;
     const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(lp.replay.max_script_bytes)) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not read {s}: {s}", .{ args.path, @errorName(err) }) catch "could not read script";
         return sendErrorContent(server, id, msg);
     };
 
-    var collector: ConsoleCollector = .{ .arena = arena };
-    const classified = (try runClassifiedOrReport(server, arena, id, args.path, source, &collector)) orelse return;
     // A failed script is still a successful replay: report it in-band, never
     // as a tool error — the report is the answer.
-    const report = buildRunReport(arena, args.path, classified, &collector, .replay) catch
-        return sendErrorContent(server, id, "out of memory");
-    return sendReport(server, arena, id, report);
+    const run = (try runAndReport(server, arena, id, args.path, source, .replay)) orelse return;
+    return sendReport(server, arena, id, run.report);
 }
 
 fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -388,9 +403,7 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
         return server.sendError(id, .InvalidParams, "expected { path: string, script: string, failure: { kind, detail?, dry_fields? } }");
     };
-    if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
-    }
+    if (!try guardPathSafe(server, id, args.path)) return;
     // The client never sees resolved secrets, but scrub as a safety net
     // before running or persisting the candidate.
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
@@ -403,13 +416,10 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
-    var collector: ConsoleCollector = .{ .arena = arena };
-    const classified = (try runClassifiedOrReport(server, arena, id, args.path, script, &collector)) orelse return;
-    const run = buildRunReport(arena, args.path, classified, &collector, .validation) catch
-        return sendErrorContent(server, id, "out of memory");
+    const run = (try runAndReport(server, arena, id, args.path, script, .validation)) orelse return;
 
-    var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run };
-    switch (lp.heal.validationOutcome(arena, args.path, script, args.failure, classified) catch
+    var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run.report };
+    switch (lp.heal.validationOutcome(arena, args.path, script, args.failure, run.classified) catch
         return sendErrorContent(server, id, "out of memory")) {
         .failed_run, .not_cured => |failure| report.failure = failure,
         .cured_uncommitted => |failure| {

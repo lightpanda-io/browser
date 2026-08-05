@@ -49,7 +49,7 @@ pub const ValidationOutcome = union(enum) {
 /// meant to cure, and commit it into `path` when — and only when — it cured.
 pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []const u8, first: WireFailure, classified: replay.Classified) error{OutOfMemory}!ValidationOutcome {
     switch (classified) {
-        .script_error => |script_error| return .{ .failed_run = script_error.detail },
+        .script_error => |script_error| return .{ .failed_run = script_error.failure.detail },
         .facts => |facts| {
             if (try cureFailure(arena, first, facts)) |residual| return .{ .not_cured = residual };
             if (try commitValidated(arena, path, script, facts.extract_stats)) |failure| return .{ .cured_uncommitted = failure };
@@ -215,8 +215,7 @@ test "validationOutcome: failed run and uncured facts never reach the commit" {
     const dry: WireFailure = .{ .kind = .dry_extracts, .dry_fields = &.{"comments"} };
 
     const failed = try validationOutcome(aa, "s.js", "return 1;", dry, .{ .script_error = .{
-        .kind = .threw,
-        .detail = "boom at line 2",
+        .failure = .{ .kind = .threw, .detail = "boom at line 2" },
         .source = "return 1;",
     } });
     try std.testing.expectEqualStrings("boom at line 2", failed.failed_run);

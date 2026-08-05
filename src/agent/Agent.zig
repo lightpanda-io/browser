@@ -876,7 +876,7 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
             .broken => |f| f,
         };
         if (self.ai_client == null) return;
-        switch (promptHeal(path, finding.kind)) {
+        switch (promptHeal(path, finding.failure.kind)) {
             .no => return,
             .retry => {},
             .heal => {
@@ -892,7 +892,7 @@ const HealChoice = enum { heal, retry, no };
 /// Defaults to no: healing spends tokens and its validation step resets the
 /// browser session. Retry is the antidote to a transient failure (a flaky
 /// page load) that would otherwise send a correct script to the model.
-fn promptHeal(path: []const u8, kind: ScriptError.Kind) HealChoice {
+fn promptHeal(path: []const u8, kind: lp.replay.WireFailure.Kind) HealChoice {
     const symptom = switch (kind) {
         .threw => "failed",
         .empty => "ran but returned no data",
@@ -1797,7 +1797,7 @@ const max_heal_attempts = 2;
 /// the original survives a failed heal.
 fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: ScriptError) bool {
     var source = first.source;
-    var error_detail = first.detail;
+    var error_detail = first.failure.detail;
 
     // The recorder and baseline are /save's stream: heal must neither
     // synthesize from the REPL's prior recordings nor leak its diagnose
@@ -1830,7 +1830,7 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
         };
 
         const classified = self.runSourceOutcome(arena, revised, path) orelse return false;
-        switch (lp.heal.validationOutcome(arena, path, revised, .{ .kind = first.kind, .dry_fields = first.dry_fields }, classified) catch return self.healOom()) {
+        switch (lp.heal.validationOutcome(arena, path, revised, first.failure, classified) catch return self.healOom()) {
             // runSourceOutcome already printed the run's own error.
             .failed_run => |detail| {
                 source = revised;
@@ -1903,7 +1903,7 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
         \\Replay of {s} completed without errors, but {s}
         \\
         \\
-    ++ lp.heal.script_intent_block, .{ path, suspicion.detail, string.capBytes(arena, suspicion.source, lp.replay.source_max_bytes) }) catch return null;
+    ++ lp.heal.script_intent_block, .{ path, suspicion.failure.detail, string.capBytes(arena, suspicion.source, lp.replay.source_max_bytes) }) catch return null;
     const args = self.soloToolTurn(arena, "verdict", verdict_system_prompt, user_msg, .{
         .name = "verdict",
         .description = "Report whether the replay's dry output means the script is broken.",
@@ -1925,10 +1925,12 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
             return null;
         }
         return .{
-            .kind = suspicion.kind,
-            .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.detail, verdict.reason }) catch return null,
+            .failure = .{
+                .kind = suspicion.failure.kind,
+                .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.failure.detail, verdict.reason }) catch return null,
+                .dry_fields = confirmedDryFields(arena, verdict.fields, suspicion.failure.dry_fields) catch return null,
+            },
             .source = suspicion.source,
-            .dry_fields = confirmedDryFields(arena, verdict.fields, suspicion.dry_fields) catch return null,
         };
     }
     return suspicion;

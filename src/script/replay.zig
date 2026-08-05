@@ -46,26 +46,13 @@ pub const RunFacts = struct {
     source: []const u8,
 };
 
-/// Both slices are duped into the caller's arena. `source` is the exact text
+/// The failure with the text that produced it. `source` is the exact text
 /// that ran, so a heal diagnoses what actually failed instead of re-reading a
-/// possibly-changed file.
+/// possibly-changed file; the failure's slices are duped into the caller's
+/// arena.
 pub const ScriptError = struct {
-    kind: Kind,
-    /// Formatted error (line, stack) — or, for `empty`, what came back.
-    detail: []const u8,
+    failure: WireFailure,
     source: []const u8,
-    /// For `dry_extracts`: the field names that were empty on every call
-    /// ("" = a whole-array schema). The cure check requires each one to
-    /// come back with data before a heal may replace the file.
-    dry_fields: []const []const u8 = &.{},
-
-    /// `empty` is a run that completed but returned a value with no data in
-    /// it; `dry_extracts` one whose return value had data, but where some
-    /// extract list field came back empty on every call. Both are the usual
-    /// symptom of a stale selector, which matches nothing instead of throwing.
-    /// Only heal treats them as failures; a plain replay still exits 0, since
-    /// an empty answer can be the right answer.
-    pub const Kind = enum { threw, empty, dry_extracts };
 };
 
 pub const Classified = union(enum) {
@@ -84,8 +71,7 @@ pub const max_script_bytes = 10 * 1024 * 1024;
 pub fn classifyRun(arena: std.mem.Allocator, result: ScriptRuntime.RunResult, source: []const u8) error{OutOfMemory}!Classified {
     switch (result) {
         .err => |message| return .{ .script_error = .{
-            .kind = .threw,
-            .detail = try arena.dupe(u8, message),
+            .failure = .{ .kind = .threw, .detail = try arena.dupe(u8, message) },
             .source = source,
         } },
         .ok => |ok| {
@@ -131,8 +117,10 @@ fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]co
 pub fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
     switch (facts.returned) {
         .empty => |text| return .{
-            .kind = .empty,
-            .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
+            .failure = .{
+                .kind = .empty,
+                .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
+            },
             .source = facts.source,
         },
         .none, .data => {},
@@ -163,7 +151,7 @@ fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []con
         try aw.writer.writeAll("\n");
     }
     if (fields.items.len == 0) return null;
-    return .{ .kind = .dry_extracts, .detail = aw.written(), .source = source, .dry_fields = fields.items };
+    return .{ .failure = .{ .kind = .dry_extracts, .detail = aw.written(), .dry_fields = fields.items }, .source = source };
 }
 
 /// Bound for script source echoed into reports and LLM turns — a script is
@@ -180,12 +168,25 @@ pub fn writeScriptFile(path: []const u8, content: []const u8) !void {
     if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
-/// `failure` as it rides in reports and back through `heal_commit`:
-/// `ScriptError` minus its source, which reports echo separately.
+/// `failure` as it rides in reports and back through `heal_commit` — the
+/// wire-serializable core of `ScriptError`, whose `source` reports echo
+/// separately.
 pub const WireFailure = struct {
-    kind: ScriptError.Kind,
+    kind: Kind,
+    /// Formatted error (line, stack) — or, for `empty`, what came back.
     detail: []const u8 = "",
+    /// For `dry_extracts`: the field names that were empty on every call
+    /// ("" = a whole-array schema). The cure check requires each one to
+    /// come back with data before a heal may replace the file.
     dry_fields: []const []const u8 = &.{},
+
+    /// `empty` is a run that completed but returned a value with no data in
+    /// it; `dry_extracts` one whose return value had data, but where some
+    /// extract list field came back empty on every call. Both are the usual
+    /// symptom of a stale selector, which matches nothing instead of throwing.
+    /// Only heal treats them as failures; a plain replay still exits 0, since
+    /// an empty answer can be the right answer.
+    pub const Kind = enum { threw, empty, dry_extracts };
 };
 
 pub const ConsoleLine = struct {
@@ -232,11 +233,11 @@ test "suspicionOf: any all-empty field is suspect, none is not" {
         .{ .schema = "{}", .field = "title", .calls = 3, .nonempty = 0 },
     };
     const s = suspicionOf(aa, testFacts(.data, dry_scalar)).?;
-    try std.testing.expectEqual(ScriptError.Kind.dry_extracts, s.kind);
-    try std.testing.expectEqual(1, s.dry_fields.len);
+    try std.testing.expectEqual(WireFailure.Kind.dry_extracts, s.failure.kind);
+    try std.testing.expectEqual(1, s.failure.dry_fields.len);
 
     const empty_facts = testFacts(.{ .empty = "[]" }, &.{});
-    try std.testing.expectEqual(ScriptError.Kind.empty, suspicionOf(aa, empty_facts).?.kind);
+    try std.testing.expectEqual(WireFailure.Kind.empty, suspicionOf(aa, empty_facts).?.failure.kind);
 }
 
 test "classifyRun: maps err to threw, completion emptiness to returned" {
@@ -245,8 +246,8 @@ test "classifyRun: maps err to threw, completion emptiness to returned" {
     const aa = arena.allocator();
 
     const threw = try classifyRun(aa, .{ .err = "boom at line 2" }, "return 1;");
-    try std.testing.expectEqual(ScriptError.Kind.threw, threw.script_error.kind);
-    try std.testing.expectEqualStrings("boom at line 2", threw.script_error.detail);
+    try std.testing.expectEqual(WireFailure.Kind.threw, threw.script_error.failure.kind);
+    try std.testing.expectEqualStrings("boom at line 2", threw.script_error.failure.detail);
     try std.testing.expectEqualStrings("return 1;", threw.script_error.source);
 
     const empty = try classifyRun(aa, .{ .ok = .{
