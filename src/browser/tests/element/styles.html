@@ -224,6 +224,17 @@
   div.style.setProperty('text-transform', 'lowercase');
   testing.expectEqual('lowercase', window.getComputedStyle(div).getPropertyValue('text-transform'));
 
+  // Pseudo-elements get their own cache entry, keyed per (element, pseudo);
+  // the legacy single-colon form maps to the same entry as the double-colon
+  // one, and a pseudoElt without a leading colon is ignored (CSSOM).
+  const before = window.getComputedStyle(div, ':before');
+  testing.expectTrue(before === window.getComputedStyle(div, '::before'));
+  testing.expectTrue(before === window.getComputedStyle(div, ':BEFORE'));
+  testing.expectFalse(before === cs);
+  testing.expectFalse(before === window.getComputedStyle(div, '::after'));
+  testing.expectTrue(cs === window.getComputedStyle(div, 'before'));
+  testing.expectTrue(cs === window.getComputedStyle(div, ''));
+
   // A normal declaration must not override an earlier !important one, and the
   // computed and inline (el.style) paths must agree on the resolved value.
   const impDiv = document.createElement('div');

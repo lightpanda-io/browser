@@ -51,6 +51,30 @@ pub const Proto = Node;
 
 pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
+pub const ComputedStyleLookup = std.AutoHashMapUnmanaged(ComputedStyleKey, *CSSStyleProperties);
+
+pub const ComputedStyleKey = struct {
+    element: *Element,
+    pseudo: PseudoElement,
+};
+
+pub const PseudoElement = enum {
+    none,
+    before,
+    after,
+    other,
+
+    pub fn parse(pseudo: []const u8) PseudoElement {
+        if (pseudo.len == 0 or pseudo[0] != ':') {
+            return .none;
+        }
+        const name = if (std.mem.startsWith(u8, pseudo, "::")) pseudo[2..] else pseudo[1..];
+        if (std.ascii.eqlIgnoreCase(name, "before")) return .before;
+        if (std.ascii.eqlIgnoreCase(name, "after")) return .after;
+        return .other;
+    }
+};
+
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
