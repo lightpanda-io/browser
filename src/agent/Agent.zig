@@ -424,11 +424,8 @@ fn idlePump(arg: ?*anyopaque) callconv(.c) c_long {
 /// Create a fresh browser session and wire its cancel hook back to this agent
 /// so Ctrl-C aborts in-flight page work. Startup and `/reset`.
 fn startSession(self: *Agent) !void {
-    self.session = try self.browser.newSession(self.notification);
+    self.session = try browser_tools.freshSession(&self.browser, self.notification, &self.node_registry);
     self.session.cancel_hook = .{ .context = @ptrCast(self), .check = checkCancel };
-    try self.session.enableConsoleCapture();
-    // Node IDs are session-scoped; drop them with the session they point into.
-    self.node_registry.reset();
 }
 
 // Compile-time constant; projected once per process to avoid rebuilding per call.
@@ -1284,7 +1281,9 @@ fn promptSaveMode(self: *Agent, path: []const u8) ?save.Mode {
     return modes[idx];
 }
 
-fn failSynthesis(self: *Agent, label: []const u8, reason: []const u8) ?[]const u8 {
+/// Typed null: call sites `return self.failMetaTurn(T, label, reason)` for
+/// whatever the turn yields.
+fn failMetaTurn(self: *Agent, comptime T: type, label: []const u8, reason: []const u8) ?T {
     self.terminal.printError("{s} failed: {s}", .{ label, reason });
     return null;
 }
@@ -1295,7 +1294,7 @@ fn failSynthesis(self: *Agent, label: []const u8, reason: []const u8) ?[]const u
 /// always rolled back out of history; null (with a `label`-tagged report) on
 /// error, no text, or cancellation.
 fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, max_tokens: i32, effort: Config.Effort) ?[]const u8 {
-    self.conversation.ensureSystemPrompt() catch return self.failSynthesis(label, "out of memory");
+    self.conversation.ensureSystemPrompt() catch return self.failMetaTurn([]const u8, label, "out of memory");
 
     // Regular turns keep the driver prompt. (`messages[0]` is the system
     // message — rollback and prune never touch it.)
@@ -1304,15 +1303,15 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
     defer self.conversation.messages.items[0].content = plain_system;
 
     const baseline = self.conversation.messages.items.len;
-    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failSynthesis(label, "out of memory");
+    self.conversation.messages.append(self.allocator, .{ .role = .user, .content = user_msg }) catch return self.failMetaTurn([]const u8, label, "out of memory");
     defer self.conversation.rollback(baseline);
 
     var result = self.runMetaTurn(label, &self.conversation.messages, self.conversation.arena.allocator(), .{ .max_tokens = max_tokens, .effort = effort }) orelse return null;
     defer result.deinit();
     // `result.text` lives in the conversation arena, which the rollback above
     // may free on return; the dupe happens before that.
-    const raw = result.text orelse return self.failSynthesis(label, "the model returned no text");
-    return arena.dupe(u8, raw) catch self.failSynthesis(label, "out of memory");
+    const raw = result.text orelse return self.failMetaTurn([]const u8, label, "the model returned no text");
+    return arena.dupe(u8, raw) catch self.failMetaTurn([]const u8, label, "out of memory");
 }
 
 /// `metaTurn` minus the conversation — session history would only add tokens
@@ -1320,8 +1319,8 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: [
 /// as its schema-shaped arguments (duped into `arena`) instead of free text.
 fn soloToolTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, system: []const u8, user_msg: []const u8, tool: ProviderTool, max_tokens: i32, effort: Config.Effort) ?std.json.Value {
     var messages: std.ArrayList(zenai.provider.Message) = .empty;
-    messages.append(arena, .{ .role = .system, .content = system }) catch return self.failToolTurn(label, "out of memory");
-    messages.append(arena, .{ .role = .user, .content = user_msg }) catch return self.failToolTurn(label, "out of memory");
+    messages.append(arena, .{ .role = .system, .content = system }) catch return self.failMetaTurn(std.json.Value, label, "out of memory");
+    messages.append(arena, .{ .role = .user, .content = user_msg }) catch return self.failMetaTurn(std.json.Value, label, "out of memory");
     var result = self.runMetaTurn(label, &messages, arena, .{
         .max_tokens = max_tokens,
         .effort = effort,
@@ -1329,14 +1328,9 @@ fn soloToolTurn(self: *Agent, arena: std.mem.Allocator, label: []const u8, syste
         .tool_choice = .any,
     }) orelse return null;
     defer result.deinit();
-    if (result.tool_calls_made.len == 0) return self.failToolTurn(label, "the model made no tool call");
-    const args = result.tool_calls_made[0].arguments orelse return self.failToolTurn(label, "the model sent no arguments");
-    return zenai.json.dupeValue(arena, args) catch self.failToolTurn(label, "out of memory");
-}
-
-fn failToolTurn(self: *Agent, label: []const u8, reason: []const u8) ?std.json.Value {
-    _ = self.failSynthesis(label, reason);
-    return null;
+    if (result.tool_calls_made.len == 0) return self.failMetaTurn(std.json.Value, label, "the model made no tool call");
+    const args = result.tool_calls_made[0].arguments orelse return self.failMetaTurn(std.json.Value, label, "the model sent no arguments");
+    return zenai.json.dupeValue(arena, args) catch self.failMetaTurn(std.json.Value, label, "out of memory");
 }
 
 const MetaTurnOptions = struct {
@@ -1374,8 +1368,7 @@ fn runMetaTurn(self: *Agent, label: []const u8, messages: *std.ArrayList(zenai.p
             return null;
         }
         log.err(.app, "AI meta-turn error", .{ .label = label, .err = err });
-        _ = self.failSynthesis(label, @errorName(err));
-        return null;
+        return self.failMetaTurn(zenai.provider.Client.RunToolsResult, label, @errorName(err));
     };
     self.terminal.spinner.stop();
     self.total_usage.add(result.usage);
@@ -1468,11 +1461,11 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
 /// the synthesis turn never stays in history.
 fn synthesizeScriptText(self: *Agent, arena: std.mem.Allocator, label: []const u8, path: []const u8, previous_script: ?[]const u8, prompt: ?[]const u8) ?[]const u8 {
     const user_msg = self.buildSaveSynthesisMessage(arena, path, previous_script, prompt) catch
-        return self.failSynthesis(label, "out of memory");
+        return self.failMetaTurn([]const u8, label, "out of memory");
     const system = savePrompt(previous_script != null);
     const raw = self.metaTurn(arena, label, system, user_msg, 8192, bumpedEffort(self.effort)) orelse return null;
     return browser_tools.reverseSubstituteEnvVars(arena, save.stripCodeFence(raw)) catch
-        return self.failSynthesis(label, "out of memory");
+        return self.failMetaTurn([]const u8, label, "out of memory");
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
@@ -1786,6 +1779,8 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
         .script_error => {},
     }
     self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
+    // Nothing from the first pass is read again.
+    _ = arena.reset(.retain_capacity);
     const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
         .fatal => return false,
         .clean => return true,
@@ -1834,25 +1829,25 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
             return false;
         };
 
-        switch (self.runSourceOutcome(arena, revised, path) orelse return false) {
-            .facts => |facts| {
-                if (lp.heal.cureFailure(arena, .{ .kind = first.kind, .dry_fields = first.dry_fields }, facts) catch return self.healOom()) |failure| {
-                    self.terminal.printWarning("{s}", .{failure});
-                    source = revised;
-                    error_detail = failure;
-                } else {
-                    const commit_failure = lp.heal.commitValidated(arena, path, revised, facts.extract_stats) catch return self.healOom();
-                    if (commit_failure) |failure| {
-                        self.terminal.printError("heal failed: {s}", .{failure});
-                        return false;
-                    }
-                    self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
-                    return true;
-                }
-            },
-            .script_error => |script_error| {
+        const classified = self.runSourceOutcome(arena, revised, path) orelse return false;
+        switch (lp.heal.validationOutcome(arena, path, revised, .{ .kind = first.kind, .dry_fields = first.dry_fields }, classified) catch return self.healOom()) {
+            // runSourceOutcome already printed the run's own error.
+            .failed_run => |detail| {
                 source = revised;
-                error_detail = script_error.detail;
+                error_detail = detail;
+            },
+            .not_cured => |failure| {
+                self.terminal.printWarning("{s}", .{failure});
+                source = revised;
+                error_detail = failure;
+            },
+            .cured_uncommitted => |failure| {
+                self.terminal.printError("heal failed: {s}", .{failure});
+                return false;
+            },
+            .committed => {
+                self.terminal.printInfo("Healed {s}: the revised script validated in a fresh session.", .{path});
+                return true;
             },
         }
     }
@@ -1867,9 +1862,10 @@ fn healOom(self: *Agent) bool {
 
 const verdict_system_prompt =
     \\You judge replays of saved browser-automation scripts. Given the script
-    \\and facts about a run that completed without errors, decide whether the
-    \\empty output means the script is broken (stale selectors after a site
-    \\change) or legitimate (the page genuinely has no such data right now).
+    \\and facts about a run that completed without errors, decide whether
+    \\
+++ lp.heal.broken_or_legitimate_question ++
+    \\
     \\
 ++ lp.heal.baseline_evidence_note ++
     \\
@@ -1945,12 +1941,7 @@ fn confirmedDryFields(arena: std.mem.Allocator, judged: []const []const u8, actu
     if (judged.len == 0) return actual;
     var kept: std.ArrayList([]const u8) = .empty;
     for (judged) |f| {
-        for (actual) |a| {
-            if (std.mem.eql(u8, f, a)) {
-                try kept.append(arena, f);
-                break;
-            }
-        }
+        if (string.isOneOf(f, actual)) try kept.append(arena, f);
     }
     return if (kept.items.len == 0) actual else kept.items;
 }

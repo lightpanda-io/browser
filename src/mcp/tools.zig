@@ -244,6 +244,8 @@ const ConsoleCollector = struct {
     lines: std.ArrayList(lp.replay.ConsoleLine) = .empty,
     bytes: usize = 0,
     truncated: bool = false,
+    /// Lazy — a silent script never pays for the environment scan.
+    env_pairs: ?[]const browser_tools.EnvPair = null,
 
     const max_bytes = 16 * 1024;
 
@@ -258,19 +260,26 @@ const ConsoleCollector = struct {
             self.truncated = true;
             return;
         }
+        const pairs = self.env_pairs orelse pairs: {
+            const p = browser_tools.lpEnvPairs(self.arena) catch {
+                self.truncated = true;
+                return;
+            };
+            self.env_pairs = p;
+            break :pairs p;
+        };
         // Scrub any resolved LP_* secret a script may have printed.
-        const scrubbed = browser_tools.reverseSubstituteEnvVars(self.arena, line) catch {
+        const scrubbed = browser_tools.reverseSubstituteWithPairs(self.arena, line, pairs) catch {
             self.truncated = true;
             return;
         };
         if (scrubbed.len > remaining) self.truncated = true;
-        const capped = string.capBytes(self.arena, scrubbed, remaining);
-        // A pass-through line aliases the runtime's per-call arena, which
-        // dies before the report is sent.
-        const text = if (capped.ptr == line.ptr) self.arena.dupe(u8, capped) catch {
+        // `line` lives in the runtime's per-call arena, which dies before the
+        // report is sent.
+        const text = string.capBytesOwned(self.arena, scrubbed, remaining) catch {
             self.truncated = true;
             return;
-        } else capped;
+        };
         self.lines.append(self.arena, .{ .level = @tagName(method), .text = text }) catch {
             self.truncated = true;
             return;
@@ -400,19 +409,16 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, "out of memory");
 
     var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run };
-    switch (classified) {
-        .script_error => |script_error| report.failure = script_error.detail,
-        .facts => |facts| {
-            const residual = lp.heal.cureFailure(arena, args.failure, facts) catch
-                return sendErrorContent(server, id, "out of memory");
-            if (residual) |failure| {
-                report.failure = failure;
-            } else {
-                report.cured = true;
-                const commit_failure: ?[]const u8 = lp.heal.commitValidated(arena, args.path, script, facts.extract_stats) catch
-                    "validated, but out of memory writing the revision";
-                if (commit_failure) |failure| report.failure = failure else report.committed = true;
-            }
+    switch (lp.heal.validationOutcome(arena, args.path, script, args.failure, classified) catch
+        return sendErrorContent(server, id, "out of memory")) {
+        .failed_run, .not_cured => |failure| report.failure = failure,
+        .cured_uncommitted => |failure| {
+            report.cured = true;
+            report.failure = failure;
+        },
+        .committed => {
+            report.cured = true;
+            report.committed = true;
         },
     }
     return sendReport(server, arena, id, report);

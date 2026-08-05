@@ -779,6 +779,15 @@ const ActionTarget = union(enum) {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
+/// Fresh browsing session with console capture enabled and `registry`
+/// cleared — node IDs are session-scoped.
+pub fn freshSession(browser: *lp.Browser, notification: *lp.Notification, registry: *CDPNode.Registry) !*lp.Session {
+    const session = try browser.newSession(notification);
+    try session.enableConsoleCapture();
+    registry.reset();
+    return session;
+}
+
 pub fn call(
     arena: std.mem.Allocator,
     session: *lp.Session,
@@ -2164,34 +2173,45 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     return result.toOwnedSlice(arena);
 }
 
-/// Inverse of `substituteEnvVars`, used by the recorder so a credential the
-/// agent retyped as a literal doesn't leak into the recording. Values < 4
-/// chars are skipped to avoid false-positive substring matches.
-pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    if (input.len < 4) return input;
-    const env_names = try lpEnvNames(arena);
+pub const EnvPair = struct { name: []const u8, value: []const u8 };
 
-    // Iterate by value length descending. With two LP_* values where one is a
-    // substring of the other (both ≥4 chars so neither is filtered), name-order
-    // iteration would let the shorter value clobber part of the longer one
-    // before its full match is found, leaking a suffix into the recording.
-    const Pair = struct { name: []const u8, value: []const u8 };
-    var pairs: std.ArrayList(Pair) = .empty;
+/// The LP_* (name, value) pairs reverse substitution scrubs against. Values
+/// < 4 chars are skipped to avoid false-positive substring matches.
+///
+/// Sorted by value length descending: with two LP_* values where one is a
+/// substring of the other, name-order iteration would let the shorter value
+/// clobber part of the longer one before its full match is found, leaking a
+/// suffix into the recording.
+pub fn lpEnvPairs(arena: std.mem.Allocator) error{OutOfMemory}![]const EnvPair {
+    const env_names = try lpEnvNames(arena);
+    var pairs: std.ArrayList(EnvPair) = .empty;
     try pairs.ensureTotalCapacityPrecise(arena, env_names.len);
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;
         pairs.appendAssumeCapacity(.{ .name = name, .value = value });
     }
-    std.mem.sort(Pair, pairs.items, {}, struct {
-        fn lt(_: void, a: Pair, b: Pair) bool {
+    std.mem.sort(EnvPair, pairs.items, {}, struct {
+        fn lt(_: void, a: EnvPair, b: EnvPair) bool {
             return a.value.len > b.value.len;
         }
     }.lt);
+    return pairs.items;
+}
 
+/// Inverse of `substituteEnvVars`, used by the recorder so a credential the
+/// agent retyped as a literal doesn't leak into the recording.
+pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
+    if (input.len < 4) return input;
+    return reverseSubstituteWithPairs(arena, input, try lpEnvPairs(arena));
+}
+
+/// `reverseSubstituteEnvVars` against precomputed `lpEnvPairs`.
+pub fn reverseSubstituteWithPairs(arena: std.mem.Allocator, input: []const u8, pairs: []const EnvPair) error{OutOfMemory}![]const u8 {
+    if (input.len < 4) return input;
     var current: []const u8 = input;
     var changed = false;
-    for (pairs.items) |p| {
+    for (pairs) |p| {
         if (std.mem.indexOf(u8, current, p.value) == null) continue;
         const placeholder = try std.fmt.allocPrint(arena, "${s}", .{p.name});
         current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);

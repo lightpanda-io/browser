@@ -117,10 +117,7 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
 /// named sessions stay isolated, and a restart discards the in-memory
 /// failure-state cookies for that clean baseline identity.
 pub fn restartSession(self: *Self, entry: *Session) !void {
-    entry.session = try entry.browser.newSession(entry.notification);
-    try entry.session.enableConsoleCapture();
-    // Node IDs are session-scoped; drop them with the session they point into.
-    entry.node_registry.reset();
+    entry.session = try lp.tools.freshSession(&entry.browser, entry.notification, &entry.node_registry);
     if (entry.isDefault()) {
         if (self.app.config.cookieFile()) |cookie_path| {
             lp.cookies.loadFromFile(entry.session, cookie_path);

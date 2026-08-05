@@ -526,18 +526,18 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     switch (result) {
         .ok => |text| switch (tool) {
             .extract => {
-                const normalized = parseExtractReturnJson(arena, text) catch |err| switch (err) {
+                const parsed = parseJsonLenient(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
                 // Recording happens after `callTool` returns, so a re-entrant
                 // extract (via a `toJSON` during argument marshalling) tallies
                 // inner-then-outer; the map is append-only. Failed extracts
                 // threw above and are intentionally not counted.
-                if (normalized.parsed) |parsed| {
-                    self.recordExtractStats(arena, args, parsed) catch
+                if (parsed) |p| {
+                    self.recordExtractStats(arena, args, p) catch
                         return self.throwError("out of memory");
                 }
-                self.setReturnJson(context, info, normalized.text);
+                self.setReturnJson(context, info, text);
             },
             else => self.setReturnString(info, text),
         },
@@ -938,19 +938,12 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
     return .{ .object = obj };
 }
 
-/// `parsed` is null when the raw text is empty or not JSON — the stats hook
-/// classifies it without a second parse.
-fn parseExtractReturnJson(arena: std.mem.Allocator, value: []const u8) error{OutOfMemory}!struct {
-    text: []const u8,
-    parsed: ?std.json.Value,
-} {
-    if (value.len == 0) return .{ .text = value, .parsed = null };
-
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, value, .{}) catch |err| switch (err) {
+fn parseJsonLenient(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}!?std.json.Value {
+    if (text.len == 0) return null;
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .text = value, .parsed = null },
+        else => return null,
     };
-    return .{ .text = value, .parsed = parsed };
 }
 
 fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {

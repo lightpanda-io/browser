@@ -33,11 +33,36 @@ const string = @import("../string.zig");
 const RunFacts = replay.RunFacts;
 const WireFailure = replay.WireFailure;
 
+/// Outcome of one heal validation run against the original failure.
+pub const ValidationOutcome = union(enum) {
+    /// The validation run itself threw.
+    failed_run: []const u8,
+    /// Ran clean but did not cure the original finding.
+    not_cured: []const u8,
+    /// Cured, but swapping the file failed; the message names the leftover
+    /// `.heal.js` path.
+    cured_uncommitted: []const u8,
+    committed,
+};
+
+/// Judge a validation run of `script` against the `first` failure it was
+/// meant to cure, and commit it into `path` when — and only when — it cured.
+pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []const u8, first: WireFailure, classified: replay.Classified) error{OutOfMemory}!ValidationOutcome {
+    switch (classified) {
+        .script_error => |script_error| return .{ .failed_run = script_error.detail },
+        .facts => |facts| {
+            if (try cureFailure(arena, first, facts)) |residual| return .{ .not_cured = residual };
+            if (try commitValidated(arena, path, script, facts.extract_stats)) |failure| return .{ .cured_uncommitted = failure };
+            return .committed;
+        },
+    }
+}
+
 /// Null when the validation run cured the original finding; otherwise the
 /// message fed to the next heal attempt. Running clean is not a cure on its
 /// own — a revision that deletes the failing extract (or the `return`) also
 /// runs clean.
-pub fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
+fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
     switch (first.kind) {
         .threw => return null,
         .empty => return if (facts.returned == .data)
@@ -63,7 +88,7 @@ pub const tmp_suffix = ".heal.js";
 /// from the validation run — synthesis may have copied the stale one from the
 /// broken script. Returns the failure message, or null once `path` holds the
 /// revision; after a failed rename the revision is deliberately kept on disk.
-pub fn commitValidated(arena: std.mem.Allocator, path: []const u8, script: []const u8, stats: []const extract.ExtractStat) error{OutOfMemory}!?[]const u8 {
+fn commitValidated(arena: std.mem.Allocator, path: []const u8, script: []const u8, stats: []const extract.ExtractStat) error{OutOfMemory}!?[]const u8 {
     const line = try Baseline.serializeStats(arena, stats);
     const final = Baseline.withBaseline(arena, script, line) catch return error.OutOfMemory;
     const tmp_path = try std.mem.concat(arena, u8, &.{ path, tmp_suffix });
@@ -147,11 +172,18 @@ pub const baseline_evidence_note =
     \\it as evidence.
 ;
 
+/// The broken-vs-legitimate decision, shared by both judgment surfaces.
+pub const broken_or_legitimate_question =
+    \\the script is broken (stale selectors after a site change) or the empty
+    \\output is legitimate (the page genuinely has no such data right now).
+;
+
 pub const replay_suspicious_guidance =
     \\The replay completed without errors, but its output looks dry — decide
-    \\whether the script is broken (stale selectors after a site change) or
-    \\the result is legitimate (the page genuinely has no such data right
-    \\now).
+    \\whether
+    \\
+++ broken_or_legitimate_question ++
+    \\
     \\
 ++ baseline_evidence_note ++
     \\
@@ -173,6 +205,27 @@ pub const HealReport = struct {
 
 fn testFacts(returned: replay.Returned, stats: []const extract.ExtractStat) RunFacts {
     return .{ .returned = returned, .extract_stats = stats, .source = "" };
+}
+
+test "validationOutcome: failed run and uncured facts never reach the commit" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const dry: WireFailure = .{ .kind = .dry_extracts, .dry_fields = &.{"comments"} };
+
+    const failed = try validationOutcome(aa, "s.js", "return 1;", dry, .{ .script_error = .{
+        .kind = .threw,
+        .detail = "boom at line 2",
+        .source = "return 1;",
+    } });
+    try std.testing.expectEqualStrings("boom at line 2", failed.failed_run);
+
+    const still_dry: replay.Classified = .{ .facts = testFacts(.data, &.{
+        .{ .schema = "{}", .field = "comments", .calls = 3, .nonempty = 0 },
+    }) };
+    const uncured = try validationOutcome(aa, "s.js", "return 1;", dry, still_dry);
+    try std.testing.expect(std.mem.indexOf(u8, uncured.not_cured, "\"comments\"") != null);
 }
 
 test "cureFailure: running clean is not a cure" {

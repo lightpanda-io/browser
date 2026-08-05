@@ -119,11 +119,9 @@ fn dupeExtractStats(arena: std.mem.Allocator, stats: []const extract.ExtractStat
 /// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
 const detail_max_bytes: usize = 2048;
 
-/// `string.capBytes` at `detail_max_bytes`; the result never aliases `text`,
-/// which may live in a runtime arena that dies before the caller's report.
+/// `text` may live in a runtime arena that dies before the caller's report.
 fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    const capped = string.capBytes(arena, text, detail_max_bytes);
-    return if (capped.ptr == text.ptr) arena.dupe(u8, capped) else capped;
+    return string.capBytesOwned(arena, text, detail_max_bytes);
 }
 
 /// A finding worth a verdict, not yet confirmed: the return value was
