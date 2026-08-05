@@ -208,7 +208,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
     return switch (html_element._type) {
         .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
         .input, .button, .select, .textarea, .label => true,
-        .generic => |generic| generic._tag == .summary,
+        .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
     };
 }
@@ -328,7 +328,8 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
     const html_element = element.is(Element.Html) orelse return;
 
     switch (html_element._type) {
-        .anchor => |anchor| {
+        .anchor => {
+            const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
             if (href.len == 0) {
                 return;
@@ -363,7 +364,8 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
                 .kind = .{ .push = null },
             }, .{ .anchor = target_frame });
         },
-        .input => |input| {
+        .input => {
+            const input = html_element.subtype(Element.Html.Input);
             try element.focus(frame);
             // Per HTML §4.10.18.6.4 "Image Button state (type=image)", clicking an
             // image button submits its form. The form-data set already gets the
@@ -373,14 +375,16 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
                 return frame.submitForm(element, input.getForm(frame), .{});
             }
         },
-        .button => |button| {
+        .button => {
+            const button = html_element.subtype(Element.Html.Button);
             try element.focus(frame);
             if (std.mem.eql(u8, button.getType(), "submit")) {
                 return frame.submitForm(element, button.getForm(frame), .{});
             }
         },
         .select, .textarea => try element.focus(frame),
-        .label => |label| {
+        .label => {
+            const label = html_element.subtype(Element.Html.Label);
             // Per HTML §4.10.4 "The label element", a label's activation
             // behavior is to run the synthetic click activation steps on the
             // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
@@ -388,8 +392,8 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(frame);
         },
-        .generic => |generic| {
-            switch (generic._tag) {
+        .generic => {
+            switch (html_element.subtype(Element.Html.Generic)._tag) {
                 .summary => {
                     const parent_el = target.parentElement() orelse return;
                     const details = parent_el.is(Element.Html.Details) orelse return;

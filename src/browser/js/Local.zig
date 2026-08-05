@@ -1267,7 +1267,15 @@ pub fn resolveValue(value: anytype) Resolved {
     // (e.g. CData); the type maps the tag to the member's type.
     if (comptime @typeInfo(@TypeOf(value._type)) == .@"enum" and @hasDecl(T, "Subtype")) {
         switch (value._type) {
-            inline else => |tag| return resolveValue(value.subtype(T.Subtype(tag))),
+            inline else => |tag| {
+                const S = T.Subtype(tag);
+                if (S == T) {
+                    // A tag can map to the type itself (e.g. Media.generic);
+                    // the value is already the most specific type.
+                    return resolveT(T, value);
+                }
+                return resolveValue(value.subtype(S));
+            },
         }
     }
 

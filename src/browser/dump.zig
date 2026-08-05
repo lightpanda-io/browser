@@ -261,7 +261,7 @@ fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Fram
 
 fn isVoidElement(el: *const Node.Element) bool {
     return switch (el._type) {
-        .html => |html| switch (html._type) {
+        .html => switch (el.subtype(Node.Element.Html)._type) {
             .br, .hr, .img, .input, .link, .meta => true,
             else => false,
         },

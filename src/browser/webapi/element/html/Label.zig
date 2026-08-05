@@ -49,7 +49,7 @@ fn isLabelable(el: *Element) bool {
     const html = el.is(HtmlElement) orelse return false;
     return switch (html._type) {
         .button, .meter, .output, .progress, .select, .textarea => true,
-        .input => |input| input._input_type != .hidden,
+        .input => html.subtype(HtmlElement.Input)._input_type != .hidden,
         else => false,
     };
 }

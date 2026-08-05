@@ -49,11 +49,33 @@ pub const NetworkState = enum(u16) {
     NETWORK_NO_SOURCE = 3,
 };
 
-pub const Type = union(enum) {
+pub const Type = enum(u8) {
     generic,
-    audio: *Audio,
-    video: *Video,
+    audio,
+    video,
 };
+
+// `.generic` maps to Media itself: a bare <media> chain ends at Media, so the
+// tag has no chain member of its own.
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .generic => Media,
+        .audio => Audio,
+        .video => Video,
+    };
+}
+
+pub fn subtype(self: *const Media, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, Media);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
 
 _type: Type,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
@@ -77,18 +99,10 @@ pub fn asNode(self: *Media) *Node {
 }
 
 pub fn is(self: *Media, comptime T: type) ?*T {
-    const type_name = @typeName(T);
     switch (self._type) {
-        .audio => |a| {
-            if (T == *Audio) return a;
-            if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.element.html.Audio")) {
-                return a;
-            }
-        },
-        .video => |v| {
-            if (T == *Video) return v;
-            if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.element.html.Video")) {
-                return v;
+        inline .audio, .video => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
             }
         },
         .generic => {},
