@@ -41,6 +41,8 @@ const Allocator = std.mem.Allocator;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
+const GC_HINT_FLOOR = 1 * 1024 * 1024;
+
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -512,10 +514,12 @@ pub fn runIdleTasks(self: *const Env) void {
 // a Context, it's managed by the garbage collector. We use the
 // `memoryPressureNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
-// The level indicates the aggressivity of the GC required:
-// moderate speeds up incremental GC
-// critical runs one full GC
+// Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
+    const stats = self.isolate.getHeapStatistics();
+    if (stats.used_heap_size + stats.external_memory < GC_HINT_FLOOR) {
+        return;
+    }
     var handle_scope: js.HandleScope = undefined;
     handle_scope.init(self.isolate);
     defer handle_scope.deinit();
