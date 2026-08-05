@@ -228,23 +228,171 @@ pub const Header = struct {
             .value = val_start[0 .. val_end - val_start],
         };
     }
+
+    pub const Iterator = struct {
+        cursor: Cursor,
+        /// Set once the blank line terminating the header block is consumed.
+        done: bool = false,
+
+        pub fn next(self: *Iterator) ParseError!?Header {
+            if (self.done) {
+                return null;
+            }
+            // Running out of buffer before the terminating blank line is a
+            // truncation, not a clean end; only the blank line yields null.
+            if (self.cursor.reachedEnd()) {
+                return error.Incomplete;
+            }
+            // Check if headers part has finished.
+            switch (self.cursor.char()) {
+                '\n' => {
+                    // End of headers.
+                    self.cursor.advance(1);
+                    self.done = true;
+                    return null;
+                },
+                '\r' => {
+                    // We need an LF too.
+                    if (!self.cursor.hasLength(2)) {
+                        return error.Incomplete;
+                    }
+                    if (!self.cursor.peek2('\r', '\n')) {
+                        return error.Invalid;
+                    }
+                    // End of headers.
+                    self.cursor.advance(2);
+                    self.done = true;
+                    return null;
+                },
+                else => {},
+            }
+
+            var header: Header = undefined;
+            try header.parse(&self.cursor);
+            return header;
+        }
+    };
 };
 
-/// Validates WebSocket initialization requests.
-/// Currently does not validate paths.
-pub fn validateWebSocketRequestLine(cursor: *Cursor) !void {
-    // GET / HTTP/1.1\n
-    const min_request_len = 0xf;
+pub const Method = union(enum) {
+    get: void,
+    post: void,
+    head: void,
+    put: void,
+    delete: void,
+    connect: void,
+    options: void,
+    trace: void,
+    patch: void,
+    /// Non-standard HTTP method.
+    custom: []const u8,
+};
+
+/// Parses an HTTP method, checks for shortest possible request length too.
+fn parseMethod(cursor: *Cursor) !Method {
+    // Though the shortest standardized HTTP method is GET, we can receive
+    // a single character for method on non-standard ones.
+    //
+    // A / HTTP/1.1\n
+    const min_request_len = 13;
     if (cursor.hasLength(min_request_len) == false) {
         return error.Incomplete;
     }
 
-    // WS requests can only be send w/ GET method.
-    if (!cursor.peek4('G', 'E', 'T', ' ')) {
+    const m_u32: u32 = cursor.asInteger(u32);
+    // Advance as much as integer value.
+    cursor.advance(4);
+    switch (m_u32) {
+        // "GET "
+        @as(u32, @bitCast([_]u8{ 'G', 'E', 'T', ' ' })) => {
+            return .{ .get = {} };
+        },
+        // "POST"
+        @as(u32, @bitCast([_]u8{ 'P', 'O', 'S', 'T' })) => {
+            if (cursor.peek(' ')) {
+                cursor.advance(1);
+                return .{ .post = {} };
+            }
+        },
+        // "HEAD"
+        @as(u32, @bitCast([_]u8{ 'H', 'E', 'A', 'D' })) => {
+            if (cursor.peek(' ')) {
+                cursor.advance(1);
+                return .{ .head = {} };
+            }
+        },
+        // "PUT "
+        @as(u32, @bitCast([_]u8{ 'P', 'U', 'T', ' ' })) => {
+            return .{ .put = {} };
+        },
+        // "DELE"
+        @as(u32, @bitCast([_]u8{ 'D', 'E', 'L', 'E' })) => {
+            // "TE "
+            if (cursor.peek3('T', 'E', ' ')) {
+                cursor.advance(3);
+                return .{ .delete = {} };
+            }
+        },
+        // "CONN"
+        @as(u32, @bitCast([_]u8{ 'C', 'O', 'N', 'N' })) => {
+            // "ECT "
+            if (cursor.peek4('E', 'C', 'T', ' ')) {
+                cursor.advance(4);
+                return .{ .connect = {} };
+            }
+        },
+        // "OPTI"
+        @as(u32, @bitCast([_]u8{ 'O', 'P', 'T', 'I' })) => {
+            // "ONS "
+            if (cursor.peek4('O', 'N', 'S', ' ')) {
+                cursor.advance(4);
+                return .{ .options = {} };
+            }
+        },
+        // "TRAC"
+        @as(u32, @bitCast([_]u8{ 'T', 'R', 'A', 'C' })) => {
+            // "E "
+            if (cursor.peek2('E', ' ')) {
+                cursor.advance(2);
+                return .{ .trace = {} };
+            }
+        },
+        // "PATC"
+        @as(u32, @bitCast([_]u8{ 'P', 'A', 'T', 'C' })) => {
+            // "H "
+            if (cursor.peek2('H', ' ')) {
+                cursor.advance(2);
+                return .{ .patch = {} };
+            }
+        },
+        // Custom method.
+        else => {},
+    }
+
+    // That 4 bytes we've consumed earlier might've a delimiter in them.
+    cursor.rewind(4);
+    // Continue until first space appearance.
+    const method_start = cursor.current();
+    while (cursor.end - cursor.current() > 0 and cursor.char() != ' ') : (cursor.advance(1)) {}
+    if (cursor.reachedEnd()) {
+        return error.Incomplete;
+    }
+    const method_end = cursor.current();
+    // 0 length.
+    if (method_end == method_start) {
         return error.Invalid;
     }
-    cursor.advance(4);
+    // Consume the delimiting space.
+    cursor.advance(1);
+    return .{ .custom = method_start[0 .. method_end - method_start] };
+}
 
+pub const HttpVersion = enum(u1) { @"1.1", @"1.0" };
+
+pub fn parseRequest(bytes: []const u8) !struct { Method, []const u8, HttpVersion, Header.Iterator } {
+    var cursor = Cursor{ .idx = bytes.ptr, .start = bytes.ptr, .end = bytes.ptr + bytes.len };
+    const method = try parseMethod(&cursor);
+    // Parse path.
     const path_start = cursor.current();
     // Find the first space.
     while (cursor.end - cursor.current() > 0 and cursor.char() != ' ') : (cursor.advance(1)) {}
@@ -254,21 +402,21 @@ pub fn validateWebSocketRequestLine(cursor: *Cursor) !void {
         return error.Invalid;
     }
     const path = path_start[0 .. path_end - path_start];
-    _ = path;
 
     // Skip past the delimiting space(s); the scan above guarantees we're on
     // a space or at the end, and recipients may parse on whitespace
     // boundaries (RFC 9112 §3).
-    while (cursor.end - cursor.current() > 0 and cursor.char() == ' ') : (cursor.advance(1)) {}
+    cursor.skipSpaces();
 
     // HTTP/1.1(\r)\n
     if (cursor.hasLength(9) == false) {
         return error.Incomplete;
     }
-    // Make sure we got HTTP/1.1.
-    if (cursor.asInteger(u64) != @as(u64, @bitCast(@as([]const u8, "HTTP/1.1")[0..8].*))) {
-        return error.Invalid;
-    }
+    const version: HttpVersion = switch (cursor.asInteger(u64)) {
+        @as(u64, @bitCast(@as([]const u8, "HTTP/1.1")[0..8].*)) => .@"1.1",
+        @as(u64, @bitCast(@as([]const u8, "HTTP/1.0")[0..8].*)) => .@"1.0",
+        else => return error.Invalid,
+    };
     cursor.advance(8);
 
     // Trailing (CR)LF.
@@ -288,6 +436,8 @@ pub fn validateWebSocketRequestLine(cursor: *Cursor) !void {
         // Any other character is invalid.
         else => return error.Invalid,
     }
+
+    return .{ method, path, version, .{ .cursor = cursor } };
 }
 
 pub const Disposition = struct {
@@ -377,6 +527,12 @@ pub const Cursor = struct {
         cursor.idx += by;
     }
 
+    /// Rewinds the position of the cursor by given value.
+    /// SAFETY: This function doesn't check if out of bounds reachable.
+    pub fn rewind(cursor: *Cursor, by: usize) void {
+        cursor.idx -= by;
+    }
+
     /// Checks if buffer has `len` length of characters.
     /// `(cursor.end - cursor.idx >= len)`
     pub fn hasLength(cursor: *const Cursor, len: usize) bool {
@@ -396,10 +552,21 @@ pub const Cursor = struct {
         return @bitCast(cursor.idx[0 .. @bitSizeOf(T) / @bitSizeOf(u8)].*);
     }
 
+    /// Peek the current character but don't advance.
+    pub fn peek(cursor: *const Cursor, c: u8) bool {
+        return cursor.idx[0] == c;
+    }
+
     /// Peek the current and the next but don't advance.
     /// SAFETY: This function doesn't check if out of bounds reachable.
     pub fn peek2(cursor: *const Cursor, c0: u8, c1: u8) bool {
         return cursor.asInteger(u16) == @as(u16, @bitCast([2]u8{ c0, c1 }));
+    }
+
+    /// Peek the current and next 2 characters but don't advance.
+    /// SAFETY: This function doesn't check if out of bounds reachable.
+    pub fn peek3(cursor: *const Cursor, c0: u8, c1: u8, c2: u8) bool {
+        return cursor.idx[0] == c0 and cursor.idx[1] == c1 and cursor.idx[2] == c2;
     }
 
     /// Peek the current and next 3 characters but don't advance.
@@ -432,6 +599,10 @@ fn initCursor(bytes: []const u8) Cursor {
 
 fn consumed(cursor: *const Cursor) usize {
     return cursor.idx - cursor.start;
+}
+
+fn drain(it: *Header.Iterator) Header.ParseError!void {
+    while (try it.next()) |_| {}
 }
 
 test "header_parser: parse HTTP header" {
@@ -505,6 +676,46 @@ test "header_parser: parse HTTP header invalid" {
     }
 }
 
+test "header_parser: header iterator" {
+    // Headers iterate until the terminating blank line; afterwards the
+    // iterator stays exhausted and the cursor is left at the body.
+    var it = Header.Iterator{ .cursor = initCursor("Host: a\r\nUpgrade: websocket\n\r\nbody") };
+    var header = (try it.next()).?;
+    try testing.expectString("Host", header.key);
+    try testing.expectString("a", header.value);
+    header = (try it.next()).?;
+    try testing.expectString("Upgrade", header.key);
+    try testing.expectString("websocket", header.value);
+    try testing.expectEqual(null, try it.next());
+    try testing.expectEqual(null, try it.next());
+    try testing.expectString("body", it.cursor.remaining());
+
+    // A blank line right away means no headers at all; both endings work.
+    it = .{ .cursor = initCursor("\r\n") };
+    try testing.expectEqual(null, try it.next());
+    it = .{ .cursor = initCursor("\n") };
+    try testing.expectEqual(null, try it.next());
+
+    // Running out of buffer before the terminating blank line is a
+    // truncation, not a clean end.
+    const truncated_cases = [_][]const u8{
+        "", // nothing at all
+        "Host: a\r\n", // header block never terminated
+        "Host: a\r\nUpg", // buffer ends mid-header
+        "\r", // `\r` still missing its `\n`
+    };
+    for (truncated_cases) |case| {
+        it = .{ .cursor = initCursor(case) };
+        try testing.expectError(error.Incomplete, drain(&it));
+    }
+
+    // Malformed headers surface as `Invalid`.
+    it = .{ .cursor = initCursor("Key\x01: v\r\n\r\n") };
+    try testing.expectError(error.Invalid, drain(&it));
+    it = .{ .cursor = initCursor("\rX\r\n") };
+    try testing.expectError(error.Invalid, drain(&it));
+}
+
 test "header_parser: parse Content-Disposition" {
     var d = try parseDisposition("form-data; name=\"a\"; filename=\"b.txt\"");
     try testing.expectString("a", d.name.?);
@@ -567,52 +778,85 @@ test "header_parser: cursor" {
     try testing.expectEqual(true, cursor.reachedEnd());
 }
 
-test "header_parser: validate WebSocket request line" {
-    // Both CRLF and LF request lines validate; the cursor is left at the
-    // first header, so `Header.parse` can pick up from there.
-    var cursor = initCursor("GET / HTTP/1.1\r\nHost: a\r\n");
-    try validateWebSocketRequestLine(&cursor);
-    try testing.expectEqual(16, consumed(&cursor));
-    var header: Header = undefined;
-    try header.parse(&cursor);
+test "header_parser: parse request" {
+    // Request line plus headers; the returned iterator picks up right after
+    // the line ending.
+    const bytes = "GET /json/version HTTP/1.1\r\nHost: a\r\n\r\n";
+    const method, const path, const version, var it = try parseRequest(bytes);
+    try testing.expectEqual(true, method == .get);
+    try testing.expectString("/json/version", path);
+    try testing.expectEqual(.@"1.1", version);
+    const header = (try it.next()).?;
     try testing.expectString("Host", header.key);
+    try testing.expectString("a", header.value);
+    try testing.expectEqual(null, try it.next());
 
-    cursor = initCursor("GET / HTTP/1.1\n");
-    try validateWebSocketRequestLine(&cursor);
-    try testing.expectEqual(true, cursor.reachedEnd());
-
-    // Longer paths are accepted (but not validated).
-    cursor = initCursor("GET /chat/room?id=1 HTTP/1.1\r\n");
-    try validateWebSocketRequestLine(&cursor);
-    try testing.expectEqual(true, cursor.reachedEnd());
+    // HTTP/1.0 and lone `\n` line endings are accepted too.
+    const method10, _, const version10, _ = try parseRequest("GET / HTTP/1.0\n\n");
+    try testing.expectEqual(true, method10 == .get);
+    try testing.expectEqual(.@"1.0", version10);
 
     // Multiple spaces before the version are tolerated (RFC 9112 §3).
-    cursor = initCursor("GET /   HTTP/1.1\r\n");
-    try validateWebSocketRequestLine(&cursor);
-    try testing.expectEqual(true, cursor.reachedEnd());
+    const req = try parseRequest("GET /   HTTP/1.1\r\n\r\n");
+    try testing.expectString("/", req[1]);
 
-    const invalid_cases = [_][]const u8{
-        "POST / HTTP/1.1\r\n", // non-GET method
-        "get / HTTP/1.1\r\n", // methods are case-sensitive
-        "GET  HTTP/1.1\r\n", // 0 length path
-        "GET  / HTTP/1.1\r\n", // double space, so a 0 length path
-        "GET / HTTP/1.0\r\n", // wrong version
-        "GET / http/1.1\r\n", // the version is case-sensitive
-        "GET / HTTP/1.1\rX\n", // `\r` must be followed by `\n`
-        "GET / HTTP/1.1X\r\n", // junk after the version
+    // Longer paths are accepted (but not validated).
+    const req2 = try parseRequest("GET /chat/room?id=1 HTTP/1.1\r\n\r\n");
+    try testing.expectString("/chat/room?id=1", req2[1]);
+}
+
+test "header_parser: parse request methods" {
+    const cases = [_]struct { []const u8, std.meta.Tag(Method) }{
+        .{ "GET / HTTP/1.1\r\n\r\n", .get },
+        .{ "POST / HTTP/1.1\r\n\r\n", .post },
+        .{ "HEAD / HTTP/1.1\r\n\r\n", .head },
+        .{ "PUT / HTTP/1.1\r\n\r\n", .put },
+        .{ "DELETE / HTTP/1.1\r\n\r\n", .delete },
+        .{ "CONNECT / HTTP/1.1\r\n\r\n", .connect },
+        .{ "OPTIONS / HTTP/1.1\r\n\r\n", .options },
+        .{ "TRACE / HTTP/1.1\r\n\r\n", .trace },
+        .{ "PATCH / HTTP/1.1\r\n\r\n", .patch },
     };
-    for (invalid_cases) |case| {
-        cursor = initCursor(case);
-        try testing.expectError(error.Invalid, validateWebSocketRequestLine(&cursor));
+    for (cases) |case| {
+        const method, _, _, _ = try parseRequest(case[0]);
+        try testing.expectEqual(case[1], std.meta.activeTag(method));
     }
 
-    // Buffer may end anywhere before the line ending is complete; the path
-    // being longer than the minimum request length proves the scan can't run
-    // past the end of a buffer that stops mid-path.
-    const bytes = "GET /websocket/endpoint HTTP/1.1\r\n";
+    // Unknown methods fall back to `custom`; a shared 4-byte prefix with a
+    // standard method or a single character both take that path.
+    const custom_cases = [_]struct { []const u8, []const u8 }{
+        .{ "BREW / HTTP/1.1\r\n\r\n", "BREW" },
+        .{ "POSTER / HTTP/1.1\r\n\r\n", "POSTER" },
+        .{ "GETX / HTTP/1.1\r\n\r\n", "GETX" },
+        .{ "A / HTTP/1.1\r\n\r\n", "A" },
+    };
+    for (custom_cases) |case| {
+        const method, _, _, _ = try parseRequest(case[0]);
+        try testing.expectString(case[1], method.custom);
+    }
+}
+
+test "header_parser: parse request invalid" {
+    const invalid_cases = [_][]const u8{
+        " / HTTP/1.1\r\n\r\n", // 0 length method
+        "GET  HTTP/1.1\r\n\r\n", // 0 length path
+        "GET  / HTTP/1.1\r\n\r\n", // double space, so a 0 length path
+        "GET / HTTP/2.0\r\n\r\n", // unknown version
+        "GET / http/1.1\r\n\r\n", // the version is case-sensitive
+        "GET / HTTP/1.1X\r\n\r\n", // junk after the version
+        "GET / HTTP/1.1\rX\n\r\n", // `\r` must be followed by `\n`
+    };
+    for (invalid_cases) |case| {
+        try testing.expectError(error.Invalid, parseRequest(case));
+    }
+
+    // Buffer may end anywhere before the request line ending is complete;
+    // `DELETE` exercises the multi-byte peek continuation and the path is
+    // longer than the minimum request length, proving neither scan can run
+    // past the end of a truncated buffer.
+    const bytes = "DELETE /websocket/endpoint HTTP/1.1\r\n";
     for (0..bytes.len) |len| {
-        cursor = initCursor(bytes[0..len]);
-        try testing.expectError(error.Incomplete, validateWebSocketRequestLine(&cursor));
+        try testing.expectError(error.Incomplete, parseRequest(bytes[0..len]));
     }
 }
 

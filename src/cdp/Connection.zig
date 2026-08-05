@@ -434,60 +434,28 @@ fn pushCdp(self: *Connection, bytes: []const u8) !bool {
 }
 
 pub fn upgrade(self: *Connection, request: []u8) !void {
-    var cursor = header_parser.Cursor{
-        .idx = request.ptr,
-        .start = request.ptr,
-        .end = request.ptr + request.len,
-    };
-    // A malformed request line maps to a 400 in processHttpRequest.
-    header_parser.validateWebSocketRequestLine(&cursor) catch {
-        return error.InvalidProtocol;
-    };
-
     // We need to extract the `Sec-WebSocket-Key` value.
     var sec_websocket_key: []const u8 = "";
-    // We need to make sure that we got all the necessary headers + values.
-    const RequiredHeaders = packed struct(u8) {
-        /// Upgrade: websocket
-        upgrade: bool = false,
-        sec_websocket_version: bool = false,
-        /// Connection: upgrade
-        connection: bool = false,
-        sec_websocket_key: bool = false,
-        __pad: u4 = 0,
+    // We need to make sure that we got all the necessary headers + values;
+    // a bit per required header.
+    const FOUND_UPGRADE: u8 = 1 << 0; // Upgrade: websocket
+    const FOUND_VERSION: u8 = 1 << 1; // Sec-WebSocket-Version: 13
+    const FOUND_CONNECTION: u8 = 1 << 2; // Connection: upgrade
+    const FOUND_KEY: u8 = 1 << 3; // Sec-WebSocket-Key
+    const FOUND_ALL = FOUND_UPGRADE | FOUND_VERSION | FOUND_CONNECTION | FOUND_KEY;
+
+    // A malformed request line maps to a 400 in processHttpRequest.
+    const method, _, const version, var header_iterator = header_parser.parseRequest(request) catch {
+        return error.InvalidProtocol;
     };
+    if (method != .get or version != .@"1.1") {
+        return error.InvalidProtocol;
+    }
 
-    var required_headers = RequiredHeaders{};
-    // We reuse this to parse headers that're required.
-    var header: header_parser.Header = undefined;
-    while (true) {
-        if (cursor.reachedEnd()) {
-            return error.InvalidRequest;
-        }
+    var found_headers: u8 = 0;
 
-        // Check if headers part has finished.
-        switch (cursor.char()) {
-            '\n' => {
-                // End of headers.
-                cursor.advance(1);
-                break;
-            },
-            '\r' => {
-                // We need an LF too.
-                if (!cursor.hasLength(2) or !cursor.peek2('\r', '\n')) {
-                    return error.InvalidRequest;
-                }
-                // End of headers.
-                cursor.advance(2);
-                break;
-            },
-            else => {},
-        }
-
-        // A malformed header maps to a 400 in processHttpRequest.
-        header.parse(&cursor) catch {
-            return error.InvalidRequest;
-        };
+    // A malformed header maps to a 400 in processHttpRequest.
+    while (header_iterator.next() catch return error.InvalidRequest) |header| {
         const key = header.key;
         const value = header.value;
 
@@ -497,33 +465,27 @@ pub fn upgrade(self: *Connection, request: []u8) !void {
             if (!std.ascii.eqlIgnoreCase("websocket", value)) {
                 return error.InvalidUpgradeHeader;
             }
-            required_headers.upgrade = true;
+            found_headers |= FOUND_UPGRADE;
         } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-version")) {
             if (value.len != 2 or value[0] != '1' or value[1] != '3') {
                 return error.InvalidVersionHeader;
             }
-            required_headers.sec_websocket_version = true;
+            found_headers |= FOUND_VERSION;
         } else if (std.ascii.eqlIgnoreCase(key, "connection")) {
             // find if connection header has upgrade in it, example header:
             // Connection: keep-alive, Upgrade
             if (std.ascii.indexOfIgnoreCase(value, "upgrade") == null) {
                 return error.InvalidConnectionHeader;
             }
-            required_headers.connection = true;
+            found_headers |= FOUND_CONNECTION;
         } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-key")) {
             sec_websocket_key = value;
-            required_headers.sec_websocket_key = true;
+            found_headers |= FOUND_KEY;
         }
     }
 
     // Check if we've received all related headers.
-    const satisfied = @as(u8, @bitCast(required_headers)) == @as(u8, @bitCast(RequiredHeaders{
-        .upgrade = true,
-        .sec_websocket_version = true,
-        .connection = true,
-        .sec_websocket_key = true,
-    }));
-    if (!satisfied) {
+    if (found_headers != FOUND_ALL) {
         return error.MissingHeaders;
     }
 
