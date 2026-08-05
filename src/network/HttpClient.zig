@@ -1071,7 +1071,7 @@ const SyncContext = struct {
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacity(try self.bodyAllocator(cl), cl);
+            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(cl), cl);
         }
         return .proceed;
     }
@@ -1447,7 +1447,19 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Handle redirects: reuse the same connection to preserve TCP state.
     // A redirect status without a Location header is not a redirect, it's a
     // final response and falls through so its body is delivered.
-    if (effective_err == null) {
+    // When the server closes the TLS connection without a close_notify alert,
+    // BoringSSL reports RecvError. If we already received valid HTTP headers,
+    // this is a normal end-of-body (the connection closure signals the end
+    // of the response per HTTP/1.1 when there is no Content-Length).
+    // We must check this before endTransfer, which may reset the easy handle.
+    const is_conn_close_recv = blk: {
+        const err = effective_err orelse break :blk false;
+        if (err != error.RecvError) break :blk false;
+        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
+        break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
+    };
+
+    if (effective_err == null or is_conn_close_recv) {
         const status = try msg.conn.getResponseCode();
         if (isRedirectStatus(status)) {
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
@@ -1501,18 +1513,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Transfer is done (success or error). Materialize the response into the
     // transfer's arena, release the conn, and buffer the events — user
     // callbacks run later, from dispatch(), never from here.
-
-    // When the server closes the TLS onnection without a close_notify alert,
-    // BoringSSL reports RecvError. If we already received valid HTTP headers,
-    // this is a normal end-of-body (the connection closure signals the end
-    // of the response per HTTP/1.1 when there is no Content-Length).
-    // We must check this before endTransfer, which may reset the easy handle.
-    const is_conn_close_recv = blk: {
-        const err = effective_err orelse break :blk false;
-        if (err != error.RecvError) break :blk false;
-        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
-        break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
-    };
 
     if (effective_err != null and !is_conn_close_recv) {
         self.removeConn(msg.conn);
@@ -2761,7 +2761,7 @@ pub const Transfer = struct {
                     res.callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                res.buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
+                res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
             }
         }
 

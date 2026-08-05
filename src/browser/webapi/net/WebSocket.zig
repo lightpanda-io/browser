@@ -901,7 +901,7 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
         if (meta.len > self._http_client.max_response_size) {
             return error.MessageTooLarge;
         }
-        try self._recv_buffer.ensureTotalCapacity(self._arena.allocator(), meta.len);
+        try self._recv_buffer.ensureTotalCapacityPrecise(self._arena.allocator(), meta.len);
     }
 
     try self._recv_buffer.appendSlice(self._arena.allocator(), data);

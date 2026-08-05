@@ -34,6 +34,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
@@ -331,6 +332,9 @@ _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
 _http_headers: std.ArrayList(HttpHeader) = .empty,
 
+_referrer: ?[]const u8 = null,
+referrer_policy: referrer.Policy = .default,
+
 pub const HttpHeader = struct {
     name: []const u8,
     value: []const u8,
@@ -593,8 +597,9 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 // Add common headers for a request:
 // * referer
 pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
-    if (std.mem.startsWith(u8, self.url, "http")) {
-        try transfer.addHeader("Referer", self.url, .{});
+    const arena = transfer.arena.allocator();
+    if (try referrer.compute(arena, self.referrer_policy, self.url, transfer.req.url)) |ref| {
+        try transfer.addHeader("Referer", ref, .{});
     }
 }
 
@@ -742,6 +747,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     self._http_status = null;
     self._http_headers = .empty;
 
+    self._referrer = null;
+    self.referrer_policy = .default;
+
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk try self.arena.dupeZ(u8, request_url);
@@ -793,6 +801,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         }
         if (opts.referer) |ref| {
             try transfer.addHeader("Referer", ref, .{});
+            self._referrer = try self.arena.dupe(u8, ref);
         }
     }
 
@@ -951,20 +960,15 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
-    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
-    // into the QueuedNavigation arena which outlives that tear-down.
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so
+    // allocate from the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
     if (std.mem.startsWith(u8, originator.url, "http")) {
-        // The same dup feeds two purposes: Referer header (subject to
-        // Referrer-Policy in the future) and SameSite computation (which
-        // must use the real initiator regardless of policy). We share the
-        // same allocation for both.
-        const dup = try arena.dupeZ(u8, originator.url);
         if (nav_opts.referer == null) {
-            nav_opts.referer = dup;
+            nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, originator.url, resolved_url);
         }
         if (nav_opts.initiator_url == null) {
-            nav_opts.initiator_url = dup;
+            nav_opts.initiator_url = try arena.dupeZ(u8, originator.url);
         }
     }
     if (nav_opts.initiator_origin == null) {
@@ -1274,6 +1278,11 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
         });
+        if (std.ascii.eqlIgnoreCase(hdr.name, "referrer-policy")) {
+            if (referrer.parseHeader(hdr.value)) |rp| {
+                self.referrer_policy = rp;
+            }
+        }
     }
 
     if (self._navigated_options) |no| {
@@ -1843,13 +1852,14 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const was_sorted = self.child_frames_sorted;
     self.child_frames_sorted = false;
 
-    // Iframe's initial src request carries the parent's URL as Referer and
-    // as the SameSite initiator. Parent frame outlives this navigate()
-    // call, so the slice is safe.
+    // Iframe's initial src request carries the parent's URL as Referer
+    // (subject to the parent's Referrer-Policy) and as the SameSite
+    // initiator. Parent frame outlives this navigate() call, so the slice
+    // is safe; navigate dupes what it keeps.
     const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, self.url, "http")) self.url else null;
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
-        .referer = parent_url,
+        .referer = try referrer.compute(self.call_arena, self.referrer_policy, self.url, url),
         .initiator_url = parent_url,
         .initiator_origin = self.origin,
     }) catch |err| {

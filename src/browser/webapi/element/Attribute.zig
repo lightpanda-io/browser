@@ -353,7 +353,7 @@ pub const List = struct {
 
     pub fn getNames(self: *const List, allocator: Allocator) ![][]const u8 {
         var arr: std.ArrayList([]const u8) = .empty;
-        try arr.ensureTotalCapacity(allocator, self._len);
+        try arr.ensureTotalCapacityPrecise(allocator, self._len);
         for (self.entries()) |*e| {
             arr.appendAssumeCapacity(e.name());
         }

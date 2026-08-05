@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
@@ -47,64 +48,99 @@ _type: Type,
 _tag_name: String, // Svg elements are case-preserving
 _proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 
-pub const Type = union(enum) {
-    graphics: *Graphics,
-    view: *View,
-    title: *Title,
-    desc: *Desc,
-    metadata: *Metadata,
-    gradient: *GradientElement,
-    clip_path: *ClipPath,
-    marker: *Marker,
-    mask: *Mask,
-    pattern: *Pattern,
-    stop: *Stop,
-    generic: *Generic,
+pub const Type = enum(u8) {
+    graphics,
+    view,
+    title,
+    desc,
+    metadata,
+    gradient,
+    clip_path,
+    marker,
+    mask,
+    pattern,
+    stop,
+    generic,
 };
 
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .graphics => Graphics,
+        .view => View,
+        .title => Title,
+        .desc => Desc,
+        .metadata => Metadata,
+        .gradient => GradientElement,
+        .clip_path => ClipPath,
+        .marker => Marker,
+        .mask => Mask,
+        .pattern => Pattern,
+        .stop => Stop,
+        .generic => Generic,
+    };
+}
+
+pub fn subtype(self: *const Svg, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, Svg);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
+
 pub fn is(self: *Svg, comptime T: type) ?*T {
-    inline for (@typeInfo(Type).@"union".fields) |field| {
-        if (@field(Type, field.name) == self._type) {
-            if (field.type == *T) {
-                return @field(self._type, field.name);
+    switch (self._type) {
+        inline else => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
             }
-        }
+        },
     }
     if (self._type == .graphics) {
-        return self._type.graphics.is(T);
+        return self.subtype(Graphics).is(T);
     }
     if (self._type == .gradient) {
-        return self._type.gradient.is(T);
+        return self.subtype(GradientElement).is(T);
     }
     return null;
 }
 
 pub fn getTag(self: *const Svg) Element.Tag {
     return switch (self._type) {
-        .graphics => |g| switch (g._type) {
-            .svg => .svg,
-            .g => .g,
-            // No dedicated Element.Tag values; tag-name matching falls back
-            // to _tag_name, like it does for generic SVG elements.
-            .a, .use, .image, .defs, .symbol, .switch_element, .foreign_object => .unknown,
-            .text_content => |content| switch (content._type) {
-                .positioning => |positioning| switch (positioning._type) {
-                    .text => .text,
-                    .tspan => .unknown,
+        .graphics => blk: {
+            const g = self.subtype(Graphics);
+            break :blk switch (g._type) {
+                .svg => .svg,
+                .g => .g,
+                // No dedicated Element.Tag values; tag-name matching falls back
+                // to _tag_name, like it does for generic SVG elements.
+                .a, .use, .image, .defs, .symbol, .switch_element, .foreign_object => .unknown,
+                .text_content => tc: {
+                    const content = g.subtype(Graphics.TextContent);
+                    break :tc switch (content._type) {
+                        .positioning => switch (content.subtype(Graphics.TextContent.TextPositioning)._type) {
+                            .text => .text,
+                            .tspan => .unknown,
+                        },
+                        .text_path => .unknown,
+                    };
                 },
-                .text_path => .unknown,
-            },
-            .geometry => |geo| switch (geo._type) {
-                .rect => .rect,
-                .circle => .circle,
-                .ellipse => .ellipse,
-                .line => .line,
-                .path => .path,
-                .polygon => .polygon,
-                .polyline => .polyline,
-            },
+                .geometry => switch (g.subtype(Graphics.Geometry)._type) {
+                    .rect => .rect,
+                    .circle => .circle,
+                    .ellipse => .ellipse,
+                    .line => .line,
+                    .path => .path,
+                    .polygon => .polygon,
+                    .polyline => .polyline,
+                },
+            };
         },
-        .generic => |g| g._tag,
+        .generic => self.subtype(Generic)._tag,
         .title => .title,
         .view, .desc, .metadata, .gradient, .clip_path, .marker, .mask, .pattern, .stop => .unknown,
     };

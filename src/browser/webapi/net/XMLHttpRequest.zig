@@ -541,7 +541,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     self._response_status = transfer.responseStatus().?;
     if (transfer.getContentLength()) |cl| {
         self._response_len = cl;
-        try self._response_data.ensureTotalCapacity(self._arena.allocator(), cl);
+        try self._response_data.ensureTotalCapacityPrecise(self._arena.allocator(), cl);
     }
     self._response_url = try self._arena.dupeZ(u8, transfer.req.url);
 

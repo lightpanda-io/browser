@@ -100,7 +100,7 @@ pub fn init() KeyValueList {
 }
 
 pub fn ensureTotalCapacity(self: *KeyValueList, allocator: Allocator, n: usize) !void {
-    return self._entries.ensureTotalCapacity(allocator, n);
+    return self._entries.ensureTotalCapacityPrecise(allocator, n);
 }
 
 pub fn get(self: *const KeyValueList, name: []const u8) ?[]const u8 {

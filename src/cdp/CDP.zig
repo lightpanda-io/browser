@@ -714,6 +714,18 @@ pub const BrowserContext = struct {
     }
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
+        // The name is the world's identity (matching Chrome). Clients re-issue
+        // this call after every navigation; appending a duplicate each time
+        // would grow the per-page context count without bound.
+        for (self.isolated_worlds.items) |world| {
+            if (std.mem.eql(u8, world.name, world_name)) {
+                if (world.grant_universal_access != grant_universal_access) {
+                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+                }
+                return world;
+            }
+        }
+
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer arena.release();
@@ -1110,7 +1122,7 @@ pub const BrowserContext = struct {
         const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
         var buf: std.ArrayList(u8) = .empty;
-        buf.ensureTotalCapacity(allocator, message_len) catch |err| {
+        buf.ensureTotalCapacityPrecise(allocator, message_len) catch |err| {
             log.err(.cdp, "inspector buffer", .{ .err = err });
             return;
         };

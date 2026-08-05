@@ -115,15 +115,35 @@ _attributes: Attribute.List = .{},
 // work to resolve the proto).
 _proto_canary: if (lp.IS_DEBUG) *Node else void = undefined,
 
-pub const Type = union(enum) {
-    html: *Html,
-    svg: *Svg,
+pub const Type = enum(u8) {
+    html,
+    svg,
 };
+
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .html => Html,
+        .svg => Svg,
+    };
+}
+
+pub fn subtype(self: *const Element, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, Element);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
 
 pub fn is(self: *Element, comptime T: type) ?*T {
     const type_name = @typeName(T);
     switch (self._type) {
-        .html => |el| {
+        .html => {
+            const el = self.subtype(Html);
             if (T == Html) {
                 return el;
             }
@@ -131,7 +151,8 @@ pub fn is(self: *Element, comptime T: type) ?*T {
                 return el.is(T);
             }
         },
-        .svg => |svg| {
+        .svg => {
+            const svg = self.subtype(Svg);
             if (T == Svg) {
                 return svg;
             }
@@ -178,177 +199,183 @@ pub fn isEqualNode(self: *Element, other: *Element) bool {
 
 pub fn getTagNameLower(self: *const Element) []const u8 {
     switch (self._type) {
-        .html => |he| switch (he._type) {
-            .custom => |ce| {
-                @branchHint(.unlikely);
-                return ce._tag_name.str();
-            },
-            else => return switch (he._type) {
-                .anchor => "a",
-                .area => "area",
-                .base => "base",
-                .body => "body",
-                .br => "br",
-                .button => "button",
-                .canvas => "canvas",
-                .custom => |e| e._tag_name.str(),
-                .data => "data",
-                .datalist => "datalist",
-                .details => "details",
-                .dialog => "dialog",
-                .directory => "dir",
-                .div => "div",
-                .dl => "dl",
-                .embed => "embed",
-                .fieldset => "fieldset",
-                .font => "font",
-                .frameset => "frameset",
-                .form => "form",
-                .generic => |e| e._tag_name.str(),
-                .heading => |e| e._tag_name.str(),
-                .head => "head",
-                .html => "html",
-                .hr => "hr",
-                .iframe => "iframe",
-                .img => "img",
-                .input => "input",
-                .label => "label",
-                .legend => "legend",
-                .li => "li",
-                .link => "link",
-                .map => "map",
-                .marquee => "marquee",
-                .media => |m| switch (m._type) {
-                    .audio => "audio",
-                    .video => "video",
-                    .generic => "media",
+        .html => {
+            const he = self.subtype(Html);
+            switch (he._type) {
+                .custom => {
+                    @branchHint(.unlikely);
+                    return he.subtype(Html.Custom)._tag_name.str();
                 },
-                .meta => "meta",
-                .meter => "meter",
-                .mod => |e| e._tag_name.str(),
-                .object => "object",
-                .ol => "ol",
-                .optgroup => "optgroup",
-                .option => "option",
-                .output => "output",
-                .p => "p",
-                .picture => "picture",
-                .param => "param",
-                .pre => "pre",
-                .progress => "progress",
-                .quote => |e| e._tag_name.str(),
-                .script => "script",
-                .select => "select",
-                .slot => "slot",
-                .source => "source",
-                .span => "span",
-                .style => "style",
-                .table => "table",
-                .table_caption => "caption",
-                .table_cell => |e| e._tag_name.str(),
-                .table_col => |e| e._tag_name.str(),
-                .table_row => "tr",
-                .table_section => |e| e._tag_name.str(),
-                .template => "template",
-                .textarea => "textarea",
-                .time => "time",
-                .title => "title",
-                .track => "track",
-                .ul => "ul",
-                .unknown => |e| e._tag_name.str(),
-            },
+                else => return switch (he._type) {
+                    .anchor => "a",
+                    .area => "area",
+                    .base => "base",
+                    .body => "body",
+                    .br => "br",
+                    .button => "button",
+                    .canvas => "canvas",
+                    .custom => he.subtype(Html.Custom)._tag_name.str(),
+                    .data => "data",
+                    .datalist => "datalist",
+                    .details => "details",
+                    .dialog => "dialog",
+                    .directory => "dir",
+                    .div => "div",
+                    .dl => "dl",
+                    .embed => "embed",
+                    .fieldset => "fieldset",
+                    .font => "font",
+                    .frameset => "frameset",
+                    .form => "form",
+                    .generic => he.subtype(Html.Generic)._tag_name.str(),
+                    .heading => he.subtype(Html.Heading)._tag_name.str(),
+                    .head => "head",
+                    .html => "html",
+                    .hr => "hr",
+                    .iframe => "iframe",
+                    .img => "img",
+                    .input => "input",
+                    .label => "label",
+                    .legend => "legend",
+                    .li => "li",
+                    .link => "link",
+                    .map => "map",
+                    .marquee => "marquee",
+                    .media => switch (he.subtype(Html.Media)._type) {
+                        .audio => "audio",
+                        .video => "video",
+                        .generic => "media",
+                    },
+                    .meta => "meta",
+                    .meter => "meter",
+                    .mod => he.subtype(Html.Mod)._tag_name.str(),
+                    .object => "object",
+                    .ol => "ol",
+                    .optgroup => "optgroup",
+                    .option => "option",
+                    .output => "output",
+                    .p => "p",
+                    .picture => "picture",
+                    .param => "param",
+                    .pre => "pre",
+                    .progress => "progress",
+                    .quote => he.subtype(Html.Quote)._tag_name.str(),
+                    .script => "script",
+                    .select => "select",
+                    .slot => "slot",
+                    .source => "source",
+                    .span => "span",
+                    .style => "style",
+                    .table => "table",
+                    .table_caption => "caption",
+                    .table_cell => he.subtype(Html.TableCell)._tag_name.str(),
+                    .table_col => he.subtype(Html.TableCol)._tag_name.str(),
+                    .table_row => "tr",
+                    .table_section => he.subtype(Html.TableSection)._tag_name.str(),
+                    .template => "template",
+                    .textarea => "textarea",
+                    .time => "time",
+                    .title => "title",
+                    .track => "track",
+                    .ul => "ul",
+                    .unknown => he.subtype(Html.Unknown)._tag_name.str(),
+                },
+            }
         },
-        .svg => |svg| return svg._tag_name.str(),
+        .svg => return self.subtype(Svg)._tag_name.str(),
     }
 }
 
 pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
     return switch (self._type) {
-        .html => |he| switch (he._type) {
-            .anchor => "A",
-            .area => "AREA",
-            .base => "BASE",
-            .body => "BODY",
-            .br => "BR",
-            .button => "BUTTON",
-            .canvas => "CANVAS",
-            .custom => |e| upperTagName(&e._tag_name, buf),
-            .data => "DATA",
-            .datalist => "DATALIST",
-            .details => "DETAILS",
-            .dialog => "DIALOG",
-            .directory => "DIR",
-            .div => "DIV",
-            .dl => "DL",
-            .embed => "EMBED",
-            .fieldset => "FIELDSET",
-            .font => "FONT",
-            .frameset => "FRAMESET",
-            .form => "FORM",
-            .generic => |e| upperTagName(&e._tag_name, buf),
-            .heading => |e| upperTagName(&e._tag_name, buf),
-            .head => "HEAD",
-            .html => "HTML",
-            .hr => "HR",
-            .iframe => "IFRAME",
-            .img => "IMG",
-            .input => "INPUT",
-            .label => "LABEL",
-            .legend => "LEGEND",
-            .li => "LI",
-            .link => "LINK",
-            .map => "MAP",
-            .marquee => "MARQUEE",
-            .meta => "META",
-            .media => |m| switch (m._type) {
-                .audio => "AUDIO",
-                .video => "VIDEO",
-                .generic => "MEDIA",
-            },
-            .meter => "METER",
-            .mod => |e| upperTagName(&e._tag_name, buf),
-            .object => "OBJECT",
-            .ol => "OL",
-            .optgroup => "OPTGROUP",
-            .option => "OPTION",
-            .output => "OUTPUT",
-            .p => "P",
-            .picture => "PICTURE",
-            .param => "PARAM",
-            .pre => "PRE",
-            .progress => "PROGRESS",
-            .quote => |e| upperTagName(&e._tag_name, buf),
-            .script => "SCRIPT",
-            .select => "SELECT",
-            .slot => "SLOT",
-            .source => "SOURCE",
-            .span => "SPAN",
-            .style => "STYLE",
-            .table => "TABLE",
-            .table_caption => "CAPTION",
-            .table_cell => |e| upperTagName(&e._tag_name, buf),
-            .table_col => |e| upperTagName(&e._tag_name, buf),
-            .table_row => "TR",
-            .table_section => |e| upperTagName(&e._tag_name, buf),
-            .template => "TEMPLATE",
-            .textarea => "TEXTAREA",
-            .time => "TIME",
-            .title => "TITLE",
-            .track => "TRACK",
-            .ul => "UL",
-            .unknown => |e| switch (self._namespace) {
-                .html => upperTagName(&e._tag_name, buf),
-                .svg, .xml, .mathml, .unknown, .null => e._tag_name.str(),
-            },
+        .html => blk: {
+            const he = self.subtype(Html);
+            break :blk switch (he._type) {
+                .anchor => "A",
+                .area => "AREA",
+                .base => "BASE",
+                .body => "BODY",
+                .br => "BR",
+                .button => "BUTTON",
+                .canvas => "CANVAS",
+                .custom => upperTagName(&he.subtype(Html.Custom)._tag_name, buf),
+                .data => "DATA",
+                .datalist => "DATALIST",
+                .details => "DETAILS",
+                .dialog => "DIALOG",
+                .directory => "DIR",
+                .div => "DIV",
+                .dl => "DL",
+                .embed => "EMBED",
+                .fieldset => "FIELDSET",
+                .font => "FONT",
+                .frameset => "FRAMESET",
+                .form => "FORM",
+                .generic => upperTagName(&he.subtype(Html.Generic)._tag_name, buf),
+                .heading => upperTagName(&he.subtype(Html.Heading)._tag_name, buf),
+                .head => "HEAD",
+                .html => "HTML",
+                .hr => "HR",
+                .iframe => "IFRAME",
+                .img => "IMG",
+                .input => "INPUT",
+                .label => "LABEL",
+                .legend => "LEGEND",
+                .li => "LI",
+                .link => "LINK",
+                .map => "MAP",
+                .marquee => "MARQUEE",
+                .meta => "META",
+                .media => switch (he.subtype(Html.Media)._type) {
+                    .audio => "AUDIO",
+                    .video => "VIDEO",
+                    .generic => "MEDIA",
+                },
+                .meter => "METER",
+                .mod => upperTagName(&he.subtype(Html.Mod)._tag_name, buf),
+                .object => "OBJECT",
+                .ol => "OL",
+                .optgroup => "OPTGROUP",
+                .option => "OPTION",
+                .output => "OUTPUT",
+                .p => "P",
+                .picture => "PICTURE",
+                .param => "PARAM",
+                .pre => "PRE",
+                .progress => "PROGRESS",
+                .quote => upperTagName(&he.subtype(Html.Quote)._tag_name, buf),
+                .script => "SCRIPT",
+                .select => "SELECT",
+                .slot => "SLOT",
+                .source => "SOURCE",
+                .span => "SPAN",
+                .style => "STYLE",
+                .table => "TABLE",
+                .table_caption => "CAPTION",
+                .table_cell => upperTagName(&he.subtype(Html.TableCell)._tag_name, buf),
+                .table_col => upperTagName(&he.subtype(Html.TableCol)._tag_name, buf),
+                .table_row => "TR",
+                .table_section => upperTagName(&he.subtype(Html.TableSection)._tag_name, buf),
+                .template => "TEMPLATE",
+                .textarea => "TEXTAREA",
+                .time => "TIME",
+                .title => "TITLE",
+                .track => "TRACK",
+                .ul => "UL",
+                .unknown => switch (self._namespace) {
+                    .html => upperTagName(&he.subtype(Html.Unknown)._tag_name, buf),
+                    .svg, .xml, .mathml, .unknown, .null => he.subtype(Html.Unknown)._tag_name.str(),
+                },
+            };
         },
-        .svg => |svg| svg._tag_name.str(),
+        .svg => self.subtype(Svg)._tag_name.str(),
     };
 }
 
 pub fn getTagNameDump(self: *const Element) []const u8 {
     switch (self._type) {
         .html => return self.getTagNameLower(),
-        .svg => |svg| return svg._tag_name.str(),
+        .svg => return self.subtype(Svg)._tag_name.str(),
     }
 }
 
@@ -1255,17 +1282,30 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     });
 }
 
-pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, height: f64 } {
-    var width: f64 = 5.0;
-    var height: f64 = 5.0;
+pub const Dimensions = struct {
+    width: f64,
+    height: f64,
+    // if the value is explicit (e.g. inline style, width attribute, ...) or defaulted
+    explicit_width: bool = false,
+    explicit_height: bool = false,
+};
+
+pub fn getElementDimensions(self: *Element, frame: *Frame) Dimensions {
+    var dims: Dimensions = .{ .width = 5.0, .height = 5.0 };
 
     if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame) orelse 5.0;
-        height = CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame) orelse 5.0;
+        if (CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame)) |w| {
+            dims.width = w;
+            dims.explicit_width = true;
+        }
+        if (CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame)) |h| {
+            dims.height = h;
+            dims.explicit_height = true;
+        }
     }
 
-    if (width == 5.0 or height == 5.0) {
+    if (dims.width == 5.0 or dims.height == 5.0) {
         const tag = self.getTag();
 
         // Root containers get large default size to contain descendant positions.
@@ -1273,35 +1313,61 @@ pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, 
         // even very deep trees (100 levels) stay within 10,000px.
         // 100M pixels is plausible for very long documents.
         if (tag == .html or tag == .body) {
-            if (width == 5.0) width = 1920.0;
-            if (height == 5.0) height = 100_000_000.0;
+            if (dims.width == 5.0) dims.width = 1920.0;
+            if (dims.height == 5.0) dims.height = 100_000_000.0;
         } else if (tag == .img or tag == .iframe) {
             if (self.getAttributeSafe(comptime .wrap("width"))) |w| {
-                width = std.fmt.parseFloat(f64, w) catch width;
+                if (std.fmt.parseFloat(f64, w)) |parsed| {
+                    dims.width = parsed;
+                    dims.explicit_width = true;
+                } else |_| {}
             }
             if (self.getAttributeSafe(comptime .wrap("height"))) |h| {
-                height = std.fmt.parseFloat(f64, h) catch height;
+                if (std.fmt.parseFloat(f64, h)) |parsed| {
+                    dims.height = parsed;
+                    dims.explicit_height = true;
+                } else |_| {}
             }
         }
     }
 
-    return .{ .width = width, .height = height };
+    return dims;
 }
 
+// We can't do this correctly without full styles and more rendering. We also
+// can't just ignore the children since some sites append nodes until a certain
+// width / height treshold is reached. If the size isn't explicit, we fallback
+// to contentWidth/contentHeight
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
         return 0.0;
     }
+
     const dims = self.getElementDimensions(frame);
-    return dims.width;
+
+    const tag = self.getTag();
+    if (tag == .html or tag == .body or dims.explicit_width) {
+        return dims.width;
+    }
+
+    return @max(dims.width, self.contentWidth(frame, &visibility_cache));
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
         return 0.0;
     }
+
     const dims = self.getElementDimensions(frame);
-    return dims.height;
+
+    const tag = self.getTag();
+    if (tag == .html or tag == .body or dims.explicit_height) {
+        return dims.height;
+    }
+
+    return @max(dims.height, self.contentHeight(frame, &visibility_cache));
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1916,81 +1982,84 @@ fn upperTagName(tag_name: *String, buf: []u8) []const u8 {
 
 pub fn getTag(self: *const Element) Tag {
     return switch (self._type) {
-        .html => |he| switch (he._type) {
-            .anchor => .anchor,
-            .area => .area,
-            .base => .base,
-            .div => .div,
-            .dl => .dl,
-            .embed => .embed,
-            .form => .form,
-            .p => .p,
-            .custom => .custom,
-            .data => .data,
-            .datalist => .datalist,
-            .details => .details,
-            .dialog => .dialog,
-            .directory => .directory,
-            .iframe => .iframe,
-            .img => .img,
-            .br => .br,
-            .button => .button,
-            .canvas => .canvas,
-            .fieldset => .fieldset,
-            .font => .font,
-            .frameset => .frameset,
-            .heading => |h| h._tag,
-            .label => .label,
-            .legend => .legend,
-            .li => .li,
-            .map => .map,
-            .marquee => .marquee,
-            .ul => .ul,
-            .ol => .ol,
-            .object => .object,
-            .optgroup => .optgroup,
-            .output => .output,
-            .picture => .picture,
-            .param => .param,
-            .pre => .pre,
-            .generic => |g| g._tag,
-            .media => |m| switch (m._type) {
-                .audio => .audio,
-                .video => .video,
-                .generic => .media,
-            },
-            .meter => .meter,
-            .mod => |m| m._tag,
-            .progress => .progress,
-            .quote => |q| q._tag,
-            .script => .script,
-            .select => .select,
-            .slot => .slot,
-            .source => .source,
-            .span => .span,
-            .option => .option,
-            .table => .table,
-            .table_caption => .caption,
-            .table_cell => |tc| tc._tag,
-            .table_col => |tc| tc._tag,
-            .table_row => .tr,
-            .table_section => |ts| ts._tag,
-            .template => .template,
-            .textarea => .textarea,
-            .time => .time,
-            .track => .track,
-            .input => .input,
-            .link => .link,
-            .meta => .meta,
-            .hr => .hr,
-            .style => .style,
-            .title => .title,
-            .body => .body,
-            .html => .html,
-            .head => .head,
-            .unknown => .unknown,
+        .html => blk: {
+            const he = self.subtype(Html);
+            break :blk switch (he._type) {
+                .anchor => .anchor,
+                .area => .area,
+                .base => .base,
+                .div => .div,
+                .dl => .dl,
+                .embed => .embed,
+                .form => .form,
+                .p => .p,
+                .custom => .custom,
+                .data => .data,
+                .datalist => .datalist,
+                .details => .details,
+                .dialog => .dialog,
+                .directory => .directory,
+                .iframe => .iframe,
+                .img => .img,
+                .br => .br,
+                .button => .button,
+                .canvas => .canvas,
+                .fieldset => .fieldset,
+                .font => .font,
+                .frameset => .frameset,
+                .heading => he.subtype(Html.Heading)._tag,
+                .label => .label,
+                .legend => .legend,
+                .li => .li,
+                .map => .map,
+                .marquee => .marquee,
+                .ul => .ul,
+                .ol => .ol,
+                .object => .object,
+                .optgroup => .optgroup,
+                .output => .output,
+                .picture => .picture,
+                .param => .param,
+                .pre => .pre,
+                .generic => he.subtype(Html.Generic)._tag,
+                .media => switch (he.subtype(Html.Media)._type) {
+                    .audio => .audio,
+                    .video => .video,
+                    .generic => .media,
+                },
+                .meter => .meter,
+                .mod => he.subtype(Html.Mod)._tag,
+                .progress => .progress,
+                .quote => he.subtype(Html.Quote)._tag,
+                .script => .script,
+                .select => .select,
+                .slot => .slot,
+                .source => .source,
+                .span => .span,
+                .option => .option,
+                .table => .table,
+                .table_caption => .caption,
+                .table_cell => he.subtype(Html.TableCell)._tag,
+                .table_col => he.subtype(Html.TableCol)._tag,
+                .table_row => .tr,
+                .table_section => he.subtype(Html.TableSection)._tag,
+                .template => .template,
+                .textarea => .textarea,
+                .time => .time,
+                .track => .track,
+                .input => .input,
+                .link => .link,
+                .meta => .meta,
+                .hr => .hr,
+                .style => .style,
+                .title => .title,
+                .body => .body,
+                .html => .html,
+                .head => .head,
+                .unknown => .unknown,
+            };
         },
-        .svg => |se| se.getTag(),
+        .svg => self.subtype(Svg).getTag(),
     };
 }
 
@@ -2353,22 +2422,21 @@ pub const Build = struct {
     // Calls `func_name` with `args` on the most specific type where it is
     // implement. This could be on the Element itself.
     pub fn call(self: *const Element, comptime func_name: []const u8, args: anytype) !bool {
-        inline for (@typeInfo(Element.Type).@"union".fields) |f| {
-            if (@field(Element.Type, f.name) == self._type) {
-                // The inner type implements this function. Call it and we're done.
-                const S = reflect.Struct(f.type);
+        switch (self._type) {
+            inline else => |tag| {
+                const S = Subtype(tag);
                 if (@hasDecl(S, "Build")) {
+                    // The inner type has its own "call" method. Defer to it.
                     if (@hasDecl(S.Build, "call")) {
-                        const sub = @field(self._type, f.name);
-                        return S.Build.call(sub, func_name, args);
+                        return S.Build.call(self.subtype(S), func_name, args);
                     }
 
                     // The inner type implements this function. Call it and we're done.
-                    if (@hasDecl(f.type, func_name)) {
-                        return @call(.auto, @field(f.type, func_name), args);
+                    if (@hasDecl(S, func_name)) {
+                        return @call(.auto, @field(S, func_name), args);
                     }
                 }
-            }
+            },
         }
 
         if (@hasDecl(Element.Build, func_name)) {

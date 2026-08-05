@@ -658,6 +658,8 @@ test "Sqlite: Migrations - basic" {
 }
 
 test "Sqlite: Migrations - removed migration" {
+    testing.expectLog(&.{.storage});
+
     var conn = try Sqlite.Conn.open(":memory:");
     defer conn.close();
 
