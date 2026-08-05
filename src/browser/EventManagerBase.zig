@@ -287,7 +287,7 @@ pub fn dispatchDirect(
     // Call the property handler (e.g., onmessage) if present
     if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
-        var caught: js.TryCatch.Caught = undefined;
+        var caught: js.TryCatch.Caught = .{};
         _ = func.tryCallWithThis(void, target, .{event}, &caught) catch |err| {
             if (err == error.ExecutionTerminated) {
                 return error.ExecutionTerminated;

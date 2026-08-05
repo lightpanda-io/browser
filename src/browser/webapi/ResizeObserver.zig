@@ -183,7 +183,7 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         return;
     }
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

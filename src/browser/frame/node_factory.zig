@@ -32,6 +32,7 @@ const Parser = @import("../parser/Parser.zig");
 const Node = @import("../webapi/Node.zig");
 const CData = @import("../webapi/CData.zig");
 const Element = @import("../webapi/Element.zig");
+const CustomElementDefinition = @import("../webapi/CustomElementDefinition.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -823,54 +824,40 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
             if (has_hyphen and namespace == .html) {
                 const definition = frame.window._custom_elements._definitions.get(name);
-                const node = try createHtmlElementT(frame, Element.Html.Custom, namespace, attribute_iterator, .{
-                    ._proto = undefined,
-                    ._tag_name = tag_name,
-                    ._definition = definition,
-                });
 
                 // Fragment-parse context element. It will not be inserted and
                 // we should not run the custom element's constructor.
-                if (frame._skip_custom_element_upgrade) {
+                //
+                // Undefined elements are created in the "undefined" state and
+                // upgraded later, when a matching definition is registered.
+                if (frame._skip_custom_element_upgrade or definition == null) {
+                    const node = try createHtmlElementT(frame, Element.Html.Custom, namespace, attribute_iterator, .{
+                        ._proto = undefined,
+                        ._tag_name = tag_name,
+                        ._definition = definition,
+                    });
+                    if (frame._skip_custom_element_upgrade == false) {
+                        try frame._undefined_custom_elements.append(frame.arena, node.as(Element).is(Element.Html.Custom).?);
+                    }
                     return node;
                 }
 
-                const def = definition orelse {
-                    const element = node.as(Element);
-                    const custom = element.is(Element.Html.Custom).?;
-                    try frame._undefined_custom_elements.append(frame.arena, custom);
-                    return node;
+                // https://dom.spec.whatwg.org/#concept-create-element, the
+                // synchronous branch. super() has to create its own element
+                const constructed = constructForToken(frame, definition.?, tag_name, from_parser) catch {
+                    // Construction failed, we fallback to  HTMLUnknownElement
+                    return createHtmlElementT(frame, Element.Html.Unknown, namespace, attribute_iterator, .{
+                        ._proto = undefined,
+                        ._tag_name = tag_name,
+                    });
                 };
 
-                // Save and restore upgrading element to allow nested createElement calls
-                const prev_upgrading = frame._upgrading_element;
-                frame._upgrading_element = node;
-                defer frame._upgrading_element = prev_upgrading;
-
-                var ls: JS.Local.Scope = undefined;
-                frame.js.localScope(&ls);
-                defer ls.deinit();
-
-                if (from_parser) {
-                    // There are some things custom elements aren't allowed to do
-                    // when we're parsing.
-                    frame.document._throw_on_dynamic_markup_insertion_counter += 1;
-                }
-                defer if (from_parser) {
-                    frame.document._throw_on_dynamic_markup_insertion_counter -= 1;
-                };
-
-                var caught: JS.TryCatch.Caught = undefined;
-                _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {
-                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = frame._type, .url = frame.url });
-                    return node;
-                };
-
-                // After constructor runs, invoke attributeChangedCallback for initial attributes
-                const element = node.as(Element);
-                for (element.attributeEntries()) |*attr| {
+                // Attributes are applied after construction, so the constructor
+                // observes none of them and each one enqueues its reaction.
+                try populateElementAttributes(frame, constructed, attribute_iterator);
+                for (constructed.attributeEntries()) |*attr| {
                     Element.Html.Custom.enqueueAttributeChangedCallbackOnElement(
-                        element,
+                        constructed,
                         .wrap(attr.name()),
                         null, // old_value is null for initial attributes
                         .wrap(attr.value()),
@@ -879,7 +866,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                     );
                 }
 
-                return node;
+                return constructed.asNode();
             }
 
             return createHtmlElementT(frame, Element.Html.Unknown, namespace, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name });
@@ -958,6 +945,61 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             return createHtmlElementT(frame, Element.Html.Unknown, namespace, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name });
         },
     }
+}
+
+// Runs a custom element constructor for a token being created (parser or
+// createElement), and validates the result against the post-conditions.
+fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_name: String, comptime from_parser: bool) !*Element {
+
+    // This is a creation, not an upgrade. super() ha to build a new element
+    const prev_upgrading = frame._upgrading_element;
+    frame._upgrading_element = null;
+    defer frame._upgrading_element = prev_upgrading;
+
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    if (from_parser) {
+        // There are some things custom elements aren't allowed to do
+        // when we're parsing.
+        frame.document._throw_on_dynamic_markup_insertion_counter += 1;
+    }
+    defer if (from_parser) {
+        frame.document._throw_on_dynamic_markup_insertion_counter -= 1;
+    };
+
+    const name = tag_name.str();
+    var caught: JS.TryCatch.Caught = .{};
+    const object = ls.toLocal(definition.constructor).newInstance(&caught) catch |err| {
+        log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = frame._type, .url = frame.url });
+        return err;
+    };
+
+    const reason: []const u8 = blk: {
+        // validate the result
+        const node = object.toZig(*Node) catch break :blk "not a node";
+        const element = node.is(Element) orelse break :blk "not an element";
+        if (element._namespace != .html) {
+            break :blk "wrong namespace";
+        }
+        if (node._parent != null) {
+            break :blk "has a parent";
+        }
+        if (node.firstChild() != null) {
+            break :blk "has children";
+        }
+        if (element._attributes.isEmpty() == false) {
+            break :blk "has attributes";
+        }
+        if (std.mem.eql(u8, element.getTagNameLower(), name) == false) {
+            break :blk "wrong local name";
+        }
+        return element;
+    };
+
+    log.warn(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
+    return error.CustomElementConstructionFailed;
 }
 
 fn createHtmlElementT(frame: *Frame, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype, html_element: E) !*Node {

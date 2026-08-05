@@ -205,7 +205,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     _ = ls.toLocal(definition.constructor).newInstance(&caught) catch |err| {
         log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
         return error.CustomElementUpgradeFailed;

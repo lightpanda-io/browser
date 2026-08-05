@@ -962,7 +962,7 @@ pub const Script = struct {
             log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
 
-        if (!success and frame.js.env.isExecutionTerminating()) {
+        if (!success and frame.js.env.terminatePending()) {
             return;
         }
 

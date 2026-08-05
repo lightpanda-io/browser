@@ -141,7 +141,7 @@ fn invokeTool(cmd: *CDP.Command) !void {
 
     const callback = local.toLocal(tool.execute);
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     const result = callback.tryCall(js.Value, .{ input_value, ModelContextClient{} }, &caught) catch {
         const msg = caught.exception orelse "tool threw";
         try respondError(cmd.cdp, bc, invocation, msg);

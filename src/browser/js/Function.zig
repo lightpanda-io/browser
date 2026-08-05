@@ -66,7 +66,7 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
     }
 
     // See _tryCallWithThis for why a pending termination blocks V8 entry.
-    if (v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle)) {
+    if (local.ctx.env.terminatePending()) {
         return error.ExecutionTerminated;
     }
 
@@ -77,7 +77,7 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
     const handle = v8.v8__Function__NewInstance(self.handle, local.handle, 0, null) orelse {
-        if (v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle)) {
+        if (local.ctx.env.terminatePending()) {
             return error.ExecutionTerminated;
         }
         caught.* = try_catch.caughtOrError(local.call_arena, error.Unknown);
@@ -91,7 +91,7 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
 }
 
 pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, self.getThis(), args, &caught, .{}) catch |err| {
         log.warn(.js, "call caught", .{ .err = err, .caught = caught });
         return err;
@@ -99,7 +99,7 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
 }
 
 pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, self.getThis(), args, &caught, .{ .rethrow = true }) catch |err| {
         if (err != error.TryCatchRethrow) {
             // error.TryCatchRethrow is a control flow (sorry!), not an actual
@@ -111,7 +111,7 @@ pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
 }
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, this, args, &caught, .{}) catch |err| {
         log.warn(.js, "callWithThis caught", .{ .err = err, .caught = caught });
         return err;
@@ -122,7 +122,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 // TryCatch, so an enclosing TryCatch of the caller can observe the exception
 // value itself (e.g. to report it to window.onerror).
 pub fn callWithThisRethrow(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     return self._tryCallWithThis(T, this, args, &caught, .{ .rethrow = true });
 }
 
@@ -138,7 +138,6 @@ const CallOpts = struct {
     rethrow: bool = false,
 };
 fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught, comptime opts: CallOpts) !T {
-    caught.* = .{};
     const local = self.local;
 
     if (comptime lp.IS_DEBUG == false) {
@@ -158,7 +157,7 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     // A pending termination (watchdog / CDP-disconnect kill) must not be
     // followed by another V8 entry. Callers must treat ExecutionTerminated as
     // stop running JS and unwind".
-    if (v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle)) {
+    if (local.ctx.env.terminatePending()) {
         return error.ExecutionTerminated;
     }
 
@@ -212,7 +211,7 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     defer try_catch.deinit();
 
     const handle = v8.v8__Function__Call(self.handle, local.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
-        if (v8.v8__Isolate__IsExecutionTerminating(local.isolate.handle)) {
+        if (local.ctx.env.terminatePending()) {
             // Terminated mid-call, not a JS throw: no rethrow, no reporting.
             return error.ExecutionTerminated;
         }
@@ -265,7 +264,7 @@ pub fn persistWithThis(self: *const Function, value: anytype) !Global {
 }
 
 const testing = @import("../../testing.zig");
-test "Function: termination is classified and blocks re-entry" {
+test "Function: requested termination is classified and blocks re-entry" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -284,9 +283,10 @@ test "Function: termination is classified and blocks re-entry" {
         probe_ran: bool = false,
         kill_err: ?anyerror = null,
         probe_err: ?anyerror = null,
+        nested_probe_err: ?anyerror = null,
 
         fn kill(self: *@This()) void {
-            self.env.terminate();
+            self.env.requestTerminate();
         }
 
         fn probed(self: *@This()) void {
@@ -297,12 +297,12 @@ test "Function: termination is classified and blocks re-entry" {
         // termination pending, and the follow-up call must refuse to enter V8
         // (running it would silently clear the pending termination).
         fn nested(self: *@This()) void {
-            var caught: js.TryCatch.Caught = undefined;
+            var caught: js.TryCatch.Caught = .{};
             _ = self.f_kill.?.tryCall(void, .{}, &caught) catch |err| {
                 self.kill_err = err;
             };
             _ = self.f_probe.?.tryCall(void, .{}, &caught) catch |err| {
-                self.probe_err = err;
+                self.nested_probe_err = err;
             };
         }
     };
@@ -319,9 +319,16 @@ test "Function: termination is classified and blocks re-entry" {
     const driver = try local.exec("(function(n){ n(); })", null);
     const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, .{nested_cb}, &caught));
     try testing.expectEqual(error.ExecutionTerminated, state.kill_err.?);
+    try testing.expectEqual(error.ExecutionTerminated, state.nested_probe_err.?);
+    try testing.expectEqual(true, env.terminatePending());
+    try testing.expectEqual(false, v8.v8__Isolate__IsExecutionTerminating(env.isolate.handle));
+
+    _ = state.f_probe.?.tryCall(void, .{}, &caught) catch |err| {
+        state.probe_err = err;
+    };
     try testing.expectEqual(error.ExecutionTerminated, state.probe_err.?);
     try testing.expectEqual(false, state.probe_ran);
 

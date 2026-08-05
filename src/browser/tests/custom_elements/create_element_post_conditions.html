@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="uses_constructor_return_value">
+    {
+        // https://dom.spec.whatwg.org/#concept-create-element -- creation does
+        // not push onto the construction stack, so super() mints its own
+        // element and the element we keep is whatever the constructor returns.
+        let returned = null;
+        class ReturnsAnother extends HTMLElement {
+            constructor() {
+                super();
+                if (returned === null) {
+                    returned = document.createElement('div');
+                    // A div is not a valid result for this token, so keep it
+                    // simple: return a second instance of ourselves instead.
+                    returned = Reflect.construct(HTMLElement, [], ReturnsAnother);
+                    return returned;
+                }
+            }
+        }
+        customElements.define('ce-returns-another', ReturnsAnother);
+
+        const el = document.createElement('ce-returns-another');
+        testing.expectEqual(true, el === returned);
+    }
+</script>
+
+<script id="rejects_element_with_children">
+    {
+        class AddsChild extends HTMLElement {
+            constructor() {
+                super();
+                this.appendChild(document.createElement('span'));
+            }
+        }
+        customElements.define('ce-adds-child', AddsChild);
+
+        const el = document.createElement('ce-adds-child');
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
+        testing.expectEqual('ce-adds-child', el.localName);
+    }
+</script>
+
+<script id="allows_child_added_then_removed">
+    {
+        // The post-condition is on the final state, not on what the
+        // constructor touched along the way.
+        class AddsAndRemoves extends HTMLElement {
+            constructor() {
+                super();
+                this.appendChild(document.createElement('span'));
+                this.removeChild(this.firstChild);
+            }
+        }
+        customElements.define('ce-adds-and-removes', AddsAndRemoves);
+
+        const el = document.createElement('ce-adds-and-removes');
+        testing.expectEqual(true, el instanceof AddsAndRemoves);
+    }
+</script>
+
+<script id="rejects_element_with_attribute">
+    {
+        class AddsAttribute extends HTMLElement {
+            constructor() {
+                super();
+                this.setAttribute('id', 'nope');
+            }
+        }
+        customElements.define('ce-adds-attribute', AddsAttribute);
+
+        testing.expectEqual(true, document.createElement('ce-adds-attribute') instanceof HTMLUnknownElement);
+    }
+</script>
+
+<script id="rejects_parented_element">
+    {
+        // The case that crashed the parser: a constructor that attaches its own
+        // element leaves a node with a parent, which the tree builder would
+        // then try to append a second time.
+        const host = document.createElement('div');
+        class AttachesSelf extends HTMLElement {
+            constructor() {
+                super();
+                host.appendChild(this);
+            }
+        }
+        customElements.define('ce-attaches-self', AttachesSelf);
+
+        const el = document.createElement('ce-attaches-self');
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
+        testing.expectEqual(null, el.parentNode);
+    }
+</script>
+
+<script id="parser_falls_back_without_crashing">
+    {
+        // Same thing, but driven through the fragment parser rather than
+        // createElement: the fallback element is what gets inserted.
+        const host = document.createElement('div');
+        class ParserAttachesSelf extends HTMLElement {
+            constructor() {
+                super();
+                host.appendChild(this);
+            }
+        }
+        customElements.define('ce-parser-attaches-self', ParserAttachesSelf);
+
+        const container = document.createElement('div');
+        container.innerHTML = '<ce-parser-attaches-self></ce-parser-attaches-self>';
+        testing.expectEqual(1, container.children.length);
+        testing.expectEqual(true, container.firstElementChild instanceof HTMLUnknownElement);
+    }
+</script>
+
+<script id="attributes_applied_after_constructor">
+    {
+        // The constructor must not observe the token's attributes; they are
+        // applied afterwards, which is also what enqueues their reactions.
+        let seen = 'unset';
+        class ObservesAttribute extends HTMLElement {
+            static get observedAttributes() { return ['title']; }
+            constructor() {
+                super();
+                seen = this.getAttribute('title');
+            }
+        }
+        customElements.define('ce-observes-attribute', ObservesAttribute);
+
+        const container = document.createElement('div');
+        container.innerHTML = '<ce-observes-attribute title="after"></ce-observes-attribute>';
+        testing.expectEqual(null, seen);
+        testing.expectEqual('after', container.firstElementChild.getAttribute('title'));
+    }
+</script>

@@ -81,7 +81,7 @@ pub fn getAsString(self: *const DataTransferItem, cb_: ?js.Function) !void {
         .string => |str| str,
         .file => return,
     };
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     cb.tryCall(void, .{s}, &caught) catch {
         log.debug(.js, "getAsString callback", .{ .caught = caught, .source = "DataTransferItem" });
     };

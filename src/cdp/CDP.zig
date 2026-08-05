@@ -193,7 +193,7 @@ pub fn terminateFromNetwork(self: *CDP) void {
 // valid for the duration of dispatch.
 pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
     // Once a terminate is pending, don't dispatch
-    if (self.browser.env.isExecutionTerminating()) {
+    if (self.browser.env.terminatePending()) {
         return;
     }
 

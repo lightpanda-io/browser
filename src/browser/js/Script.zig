@@ -32,12 +32,12 @@ handle: *const v8.Script,
 pub fn run(self: Script) !js.Value {
     // See Function._tryCallWithThis for why a pending termination blocks V8
     // entry and is distinct from a JS throw.
-    const isolate_handle = self.local.isolate.handle;
-    if (v8.v8__Isolate__IsExecutionTerminating(isolate_handle)) {
+    const env = self.local.ctx.env;
+    if (env.terminatePending()) {
         return error.ExecutionTerminated;
     }
     const result = v8.v8__Script__Run(self.handle, self.local.handle) orelse {
-        if (v8.v8__Isolate__IsExecutionTerminating(isolate_handle)) {
+        if (env.terminatePending()) {
             return error.ExecutionTerminated;
         }
         return error.JsException;
