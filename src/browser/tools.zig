@@ -538,7 +538,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000, or 15000 when the page has not reached 'load' yet." }
                     \\  },
                     \\  "required": ["selector"]
                     \\}
@@ -552,7 +552,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "script": { "type": "string", "description": "JS expression evaluated each tick until truthy. Must be an expression (not a statement)." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000, or 15000 when the page has not reached 'load' yet." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -1633,6 +1633,13 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 /// already-loaded page rather than a full navigation (which uses 10000).
 const default_wait_timeout_ms: u32 = 5000;
 
+/// A wait entered before `load` also inherits the nav budget: a post-load
+/// selector keeps the wall time it had when `goto` waited for `load` itself.
+fn defaultWaitTimeout(frame: *const lp.Frame) u32 {
+    if (frame._load_state == .complete) return default_wait_timeout_ms;
+    return default_nav_timeout_ms + default_wait_timeout_ms;
+}
+
 fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: [:0]const u8,
@@ -1642,7 +1649,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     const frame = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
+    const timeout_ms = args.timeout orelse defaultWaitTimeout(frame);
 
     const node = lp.actions.waitForSelector(args.selector, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
@@ -1669,7 +1676,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     const frame = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
+    const timeout_ms = args.timeout orelse defaultWaitTimeout(frame);
 
     lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
