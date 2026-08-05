@@ -1282,17 +1282,30 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     });
 }
 
-pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, height: f64 } {
-    var width: f64 = 5.0;
-    var height: f64 = 5.0;
+pub const Dimensions = struct {
+    width: f64,
+    height: f64,
+    // if the value is explicit (e.g. inline style, width attribute, ...) or defaulted
+    explicit_width: bool = false,
+    explicit_height: bool = false,
+};
+
+pub fn getElementDimensions(self: *Element, frame: *Frame) Dimensions {
+    var dims: Dimensions = .{ .width = 5.0, .height = 5.0 };
 
     if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        width = CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame) orelse 5.0;
-        height = CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame) orelse 5.0;
+        if (CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame)) |w| {
+            dims.width = w;
+            dims.explicit_width = true;
+        }
+        if (CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame)) |h| {
+            dims.height = h;
+            dims.explicit_height = true;
+        }
     }
 
-    if (width == 5.0 or height == 5.0) {
+    if (dims.width == 5.0 or dims.height == 5.0) {
         const tag = self.getTag();
 
         // Root containers get large default size to contain descendant positions.
@@ -1300,35 +1313,61 @@ pub fn getElementDimensions(self: *Element, frame: *Frame) struct { width: f64, 
         // even very deep trees (100 levels) stay within 10,000px.
         // 100M pixels is plausible for very long documents.
         if (tag == .html or tag == .body) {
-            if (width == 5.0) width = 1920.0;
-            if (height == 5.0) height = 100_000_000.0;
+            if (dims.width == 5.0) dims.width = 1920.0;
+            if (dims.height == 5.0) dims.height = 100_000_000.0;
         } else if (tag == .img or tag == .iframe) {
             if (self.getAttributeSafe(comptime .wrap("width"))) |w| {
-                width = std.fmt.parseFloat(f64, w) catch width;
+                if (std.fmt.parseFloat(f64, w)) |parsed| {
+                    dims.width = parsed;
+                    dims.explicit_width = true;
+                } else |_| {}
             }
             if (self.getAttributeSafe(comptime .wrap("height"))) |h| {
-                height = std.fmt.parseFloat(f64, h) catch height;
+                if (std.fmt.parseFloat(f64, h)) |parsed| {
+                    dims.height = parsed;
+                    dims.explicit_height = true;
+                } else |_| {}
             }
         }
     }
 
-    return .{ .width = width, .height = height };
+    return dims;
 }
 
+// We can't do this correctly without full styles and more rendering. We also
+// can't just ignore the children since some sites append nodes until a certain
+// width / height treshold is reached. If the size isn't explicit, we fallback
+// to contentWidth/contentHeight
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
         return 0.0;
     }
+
     const dims = self.getElementDimensions(frame);
-    return dims.width;
+
+    const tag = self.getTag();
+    if (tag == .html or tag == .body or dims.explicit_width) {
+        return dims.width;
+    }
+
+    return @max(dims.width, self.contentWidth(frame, &visibility_cache));
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    var visibility_cache: VisibilityCache = .{};
+    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
         return 0.0;
     }
+
     const dims = self.getElementDimensions(frame);
-    return dims.height;
+
+    const tag = self.getTag();
+    if (tag == .html or tag == .body or dims.explicit_height) {
+        return dims.height;
+    }
+
+    return @max(dims.height, self.contentHeight(frame, &visibility_cache));
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
