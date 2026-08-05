@@ -173,7 +173,6 @@ fn scheduleDelivery(self: *MessagePort, message: js.Value.Global) !void {
 
     try exec.js.scheduler.add(callback, DeliverCallback.run, 0, .{
         .name = "MessagePort.postMessage",
-        .low_priority = false,
         .finalizer = DeliverCallback.cancelled,
     });
 }

@@ -161,7 +161,6 @@ fn scheduleMessage(self: *DedicatedWorkerGlobalScope, cloned_data: ?js.Value.Glo
 
     try wgs.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "WorkerGlobalScope.receiveMessage",
-        .low_priority = false,
         .finalizer = ReceiveMessageCallback.cancelled,
     });
 }

@@ -170,7 +170,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacity(self._script_arena.?.allocator(), cl);
+        try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), cl);
     }
 
     return .proceed;
@@ -365,7 +365,6 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
 
     try frame.js.scheduler.add(callback, ReceiveMessageCallback.run, 0, .{
         .name = "Worker.receiveMessage",
-        .low_priority = false,
         .finalizer = ReceiveMessageCallback.cancelled,
     });
 }

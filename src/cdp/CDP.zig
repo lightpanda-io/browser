@@ -24,6 +24,7 @@ const Inbox = @import("../Inbox.zig");
 const Notification = @import("../Notification.zig");
 
 const WS = @import("../network/WS.zig");
+const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const Transfer = @import("../network/HttpClient.zig").Transfer;
 
@@ -568,7 +569,7 @@ pub const BrowserContext = struct {
     user_agent_changed: bool = false,
 
     // Extra headers to add to all requests.
-    extra_headers: std.ArrayList([*c]const u8) = .empty,
+    extra_headers: std.ArrayList(http.Header) = .empty,
 
     intercept_state: InterceptState,
 
@@ -713,6 +714,18 @@ pub const BrowserContext = struct {
     }
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
+        // The name is the world's identity (matching Chrome). Clients re-issue
+        // this call after every navigation; appending a duplicate each time
+        // would grow the per-page context count without bound.
+        for (self.isolated_worlds.items) |world| {
+            if (std.mem.eql(u8, world.name, world_name)) {
+                if (world.grant_universal_access != grant_universal_access) {
+                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+                }
+                return world;
+            }
+        }
+
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer arena.release();
@@ -1109,7 +1122,7 @@ pub const BrowserContext = struct {
         const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
         var buf: std.ArrayList(u8) = .empty;
-        buf.ensureTotalCapacity(allocator, message_len) catch |err| {
+        buf.ensureTotalCapacityPrecise(allocator, message_len) catch |err| {
             log.err(.cdp, "inspector buffer", .{ .err = err });
             return;
         };
@@ -1481,22 +1494,20 @@ test "cdp: syncRequest short-circuits after disconnect" {
     try testing.expectError(error.ClientDisconnected, client.tick(0));
 
     // A synchronous fetch attempted after the latch returns ClientDisconnected
-    // without starting the request. syncRequest also frees req.headers on this
-    // early-return path (it returns before request() takes ownership); that
-    // free isn't asserted here because curl_slist is C-allocated and escapes the
-    // per-test leak check, so it's verified by review. The latch check returns
-    // before any other req field is read, so the rest are placeholders.
-    const headers = try client.newHeaders();
-    try testing.expectError(error.ClientDisconnected, client.syncRequest(.{
+    // without starting the request: syncRequest consumes (deinits) the
+    // transfer on the early-return path, before any of the callbacks are
+    // installed. The latch check runs before any req field is read, so the
+    // rest are placeholders.
+    const transfer = try client.newRequest(.{
         .frame_id = 0,
         .loader_id = 0,
         .method = .GET,
         .url = "http://127.0.0.1:9582/",
-        .headers = headers,
         .cookie_jar = null,
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
         .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
-    }, undefined));
+    }, null);
+    try testing.expectError(error.ClientDisconnected, client.syncRequest(transfer));
 }

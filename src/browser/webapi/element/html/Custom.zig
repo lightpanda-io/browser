@@ -265,17 +265,18 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
     // (2) called from both V8 callbacks (Local exists) and parser (no Local).
     // Prefer either: requiring *const js.Local parameter, OR always creating
     // Local.Scope upfront.
-    var ls: ?js.Local.Scope = null;
-    var local = blk: {
+    var ls: js.Local.Scope = undefined;
+    var ls_open = false;
+    const local = blk: {
         if (frame.js.local) |l| {
             break :blk l;
         }
-        ls = undefined;
-        frame.js.localScope(&ls.?);
-        break :blk &ls.?.local;
+        frame.js.localScope(&ls);
+        ls_open = true;
+        break :blk &ls.local;
     };
-    defer if (ls) |*_ls| {
-        _ls.deinit();
+    defer if (ls_open) {
+        ls.deinit();
     };
 
     var caught: js.TryCatch.Caught = undefined;

@@ -301,6 +301,12 @@ fn handleHttpRequest(self: *Connection, request: []u8) !HttpResult {
         return .close;
     }
 
+    if (std.mem.eql(u8, url, "/json/protocol") or std.mem.eql(u8, url, "/json/protocol/")) {
+        try self.send(protocol_response);
+        self.shutdown();
+        return .close;
+    }
+
     if (self.metrics_enabled and std.mem.eql(u8, url, "/metrics")) {
         try self.sendMetrics();
         self.shutdown();
@@ -331,6 +337,16 @@ const empty_json_list_response =
     "Connection: Close\r\n" ++
     "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
     "[]";
+
+const protocol_json = @embedFile("../data/protocol.json");
+
+const protocol_response = std.fmt.comptimePrint(
+    "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n",
+    .{protocol_json.len},
+) ++ protocol_json;
 
 // Framing-only iteration over received bytes. processMessages no
 // longer auto-replies pong/close or sends close-on-error — the Network

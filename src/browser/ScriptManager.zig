@@ -97,10 +97,6 @@ pub fn tailHook(base: *ScriptManagerBase) void {
     }
 }
 
-fn getHeaders(self: *ScriptManager) !HttpClient.Headers {
-    return self.base.getHeaders();
-}
-
 // Returns true when a fetch was started: the link's load/error event fires
 // when the fetch settles. false (duplicate hint) = no event will fire.
 // element is null when the hint came from the prescan rather than a <link>.
@@ -140,7 +136,6 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .method = .GET,
         .frame_id = frame._frame_id,
         .loader_id = frame._loader_id,
-        .headers = try self.base.getHeaders(),
         .cookie_jar = &frame._session.cookie_jar,
         .cookie_origin = frame.url,
         .resource_type = .script,
@@ -352,18 +347,22 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
-                const response = try self.base.client.syncRequest(.{
+                const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
                     .frame_id = frame._frame_id,
                     .loader_id = frame._loader_id,
-                    .headers = try self.getHeaders(),
                     .cookie_jar = &frame._session.cookie_jar,
                     .cookie_origin = frame.url,
                     .resource_type = .script,
                     .notification = frame._session.notification,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 }, &frame._http_owner);
+                {
+                    errdefer transfer.deinit();
+                    try frame.headersForRequest(transfer);
+                }
+                const response = try self.base.client.syncRequest(transfer);
 
                 // Take the body's arena rather than releasing it: `source`
                 // has to outlive this call, up to script.deinit().
@@ -400,7 +399,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .method = .GET,
         .frame_id = frame._frame_id,
         .loader_id = frame._loader_id,
-        .headers = try self.getHeaders(),
         .cookie_jar = &frame._session.cookie_jar,
         .cookie_origin = frame.url,
         .resource_type = .script,

@@ -83,7 +83,7 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
     const root: ?*Element = blk: {
         const root_opt = opts.root orelse break :blk null;
         switch (root_opt._type) {
-            .element => |el| break :blk el,
+            .element => break :blk root_opt.subtype(Element),
             .document => {
                 // not strictly correct, `null` means the viewport, not the
                 // entire document, but since we don't render anything, this

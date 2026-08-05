@@ -407,7 +407,7 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         fn isFormControl(el: *Element) bool {
             if (el._type != .html) return false;
-            const html = el._type.html;
+            const html = el.subtype(Element.Html);
             return switch (html._type) {
                 .input, .button, .select, .textarea => true,
                 else => false,

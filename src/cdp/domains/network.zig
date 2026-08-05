@@ -130,21 +130,29 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         const value = header.value_ptr.*;
 
         if (std.mem.indexOfAny(u8, key, "\r\n") != null or std.mem.indexOfAny(u8, value, "\r\n") != null) {
-            log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
             continue;
         }
 
-        const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ key, value }, 0);
-
-        if (Headers.parseHeader(header_string)) |parsed| {
-            if (std.ascii.eqlIgnoreCase(parsed.name, "user-agent")) {
-                Config.validateUserAgent(parsed.value) catch |err| {
-                    log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = parsed.value, .err = err });
-                    continue;
-                };
-            }
+        // A colon in the name would smuggle a different header name onto the
+        // wire once the pair is joined ("User-Agent:Mozilla/5.0 (X" + "Y)"),
+        // bypassing the User-Agent validation below.
+        if (std.mem.indexOfScalar(u8, key, ':') != null) {
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must not contain a colon" });
+            continue;
         }
-        extra_headers.appendAssumeCapacity(header_string);
+
+        if (std.ascii.eqlIgnoreCase(key, "user-agent")) {
+            Config.validateUserAgent(value) catch |err| {
+                log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = value, .err = err });
+                continue;
+            };
+        }
+
+        extra_headers.appendAssumeCapacity(.{
+            .name = try arena.dupe(u8, key),
+            .value = try arena.dupe(u8, value),
+        });
     }
 
     return cmd.sendResult(null, .{});
@@ -346,11 +354,11 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
     const frame_id = req.document_frame_id orelse req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
-    // Modify request with extra CDP headers. Use set (replace by name) so a
-    // caller-supplied header overrides a built-in default of the same name
-    // (e.g. User-Agent) instead of producing a duplicate libcurl drops.
+    // Modify request with extra CDP headers. Use setHeader (replace by name)
+    // so a caller-supplied header overrides a built-in default of the same
+    // name (e.g. User-Agent) instead of producing a duplicate.
     for (bc.extra_headers.items) |extra| {
-        try req.headers.set(extra);
+        try transfer.setHeader(extra.name, extra.value, .{});
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
@@ -464,8 +472,7 @@ pub const RequestWriter = struct {
         {
             try jws.objectField("headers");
             try jws.beginObject();
-            var it = request.headers.iterator();
-            while (it.next()) |hdr| {
+            for (transfer.req_headers.items) |hdr| {
                 try SafeString.writeObjectField(jws, hdr.name);
                 try jws.write(SafeString.wrap(hdr.value));
             }
@@ -652,7 +659,7 @@ test "cdp.network setExtraHTTPHeaders" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.silenceLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -669,11 +676,12 @@ test "cdp.network setExtraHTTPHeaders rejects non-printable User-Agent" {
     });
 
     try testing.expectEqual(bc.extra_headers.items.len, 1);
-    try testing.expectEqual("x-custom: hi", std.mem.span(bc.extra_headers.items[0]));
+    try testing.expectEqual("x-custom", bc.extra_headers.items[0].name);
+    try testing.expectEqual("hi", bc.extra_headers.items[0].value);
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.silenceLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -707,15 +715,15 @@ test "cdp.network setExtraHTTPHeaders accepts valid User-Agent" {
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via a colon in the key" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.silenceLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
 
     _ = try ctx.loadBrowserContext(.{ .id = "NID-UA4", .session_id = "NESI-UA4" });
 
-    // A colon in the key desyncs the raw key from the first-colon parse that
-    // req.headers.set/libcurl use: "User-Agent:Mozilla/5.0 (X: Y)" parses to
+    // A colon in the key would desync the stored name from what lands on the
+    // wire once the pair is joined: "User-Agent:Mozilla/5.0 (X: Y)" parses to
     // name="User-Agent", value="Mozilla/5.0 (X: Y)" on the wire.
     try ctx.processMessage(.{
         .id = 3,
@@ -728,7 +736,7 @@ test "cdp.network setExtraHTTPHeaders rejects a Mozilla User-Agent smuggled via 
 }
 
 test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
-    testing.silenceLog(&.{.not_implemented});
+    testing.silenceLog(&.{.cdp});
 
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -747,7 +755,8 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
     });
 
     try testing.expectEqual(bc.extra_headers.items.len, 1);
-    try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
+    try testing.expectEqual("x-keep", bc.extra_headers.items[0].name);
+    try testing.expectEqual("ok", bc.extra_headers.items[0].value);
 }
 
 test "cdp.Network: cookies" {

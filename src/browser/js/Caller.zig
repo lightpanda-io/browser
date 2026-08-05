@@ -530,7 +530,7 @@ fn errorLocal(comptime T: type, local: *const Local, info: anytype) Local {
     const node = protoNode(T, instance);
 
     const doc: *Document = node.ownerDocument(frame) orelse switch (node._type) {
-        .document => |d| d,
+        .document => node.subtype(Document),
         else => return local.*,
     };
     const doc_frame = doc._frame orelse return local.*;
