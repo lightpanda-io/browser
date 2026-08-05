@@ -1453,7 +1453,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
-                    transfer.restoreInterceptHeaders();
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                         log.warn(.http, "blocked url", .{ .url = transfer.req.url });
@@ -1464,23 +1463,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     }
 
                     if (!transfer.req.internal) lp.metrics.http_redirects.incr();
-
-                    if (self.serve_mode) {
-                        var wait_for_interception = false;
-                        transfer.req.notification.dispatch(.http_request_intercept, &.{
-                            .transfer = transfer,
-                            .wait_for_interception = &wait_for_interception,
-                        });
-                        if (wait_for_interception) {
-                            self.removeConn(msg.conn);
-                            transfer._conn = null;
-                            transfer.reset();
-                            transfer.state = .created;
-                            self.intercepted += 1;
-                            transfer.park(.intercept_request);
-                            return false;
-                        }
-                    }
 
                     const conn = transfer._conn.?;
 
@@ -1930,9 +1912,6 @@ pub const Transfer = struct {
     // incremented by reset func.
     _tries: u8 = 0,
     _redirect_count: u8 = 0,
-
-    // Fetch.continueRequest header overrides apply to one network hop.
-    _intercept_original_headers: ?[]const RequestHeader = null,
 
     // Linked into client.pending_queue while .queued; reused to link the
     // retired transfer into client.graveyard (deinit unlinks it from the
@@ -2531,13 +2510,6 @@ pub const Transfer = struct {
         }
     }
 
-    fn restoreInterceptHeaders(self: *Transfer) void {
-        const headers = self._intercept_original_headers orelse return;
-        self.req_headers.clearRetainingCapacity();
-        self.req_headers.appendSliceAssumeCapacity(headers);
-        self._intercept_original_headers = null;
-    }
-
     pub fn reset(self: *Transfer) void {
         // Note: do NOT reset _auth_challenge or _redirect_count here. They
         // span retries — _auth_challenge tells makeRequest whether to use
@@ -2737,8 +2709,6 @@ pub const Transfer = struct {
     // CDP Fetch.continueRequest: the intercepting client supplies the
     // complete header set, replacing whatever the request carried.
     pub fn replaceRequestHeaders(self: *Transfer, headers: []const http.Header) !void {
-        lp.assert(self._intercept_original_headers == null, "Transfer.replaceRequestHeaders", .{ .id = self.id });
-        self._intercept_original_headers = try self.arena.allocator().dupe(RequestHeader, self.req_headers.items);
         self.req_headers.clearRetainingCapacity();
         try self.seedHeaders();
         for (headers) |hdr| {
@@ -3168,29 +3138,6 @@ test "HttpClient: isFetchInterceptionMethod rejects unrelated methods" {
     try testing.expect(!isFetchInterceptionMethod("Fetch.continueReq"));
     // trailing space, etc.
     try testing.expect(!isFetchInterceptionMethod("Fetch.continueRequest "));
-}
-
-test "HttpClient: Fetch header overrides restore after one hop" {
-    const original = [_]Transfer.RequestHeader{
-        .{ .name = "User-Agent", .value = "original" },
-        .{ .name = "X-Original", .value = "yes" },
-    };
-    var overridden = [_]Transfer.RequestHeader{
-        .{ .name = "User-Agent", .value = "override" },
-        .{ .name = "X-Override", .value = "yes" },
-    };
-
-    var transfer: Transfer = undefined;
-    transfer.req_headers = .{ .items = &overridden, .capacity = overridden.len };
-    transfer._intercept_original_headers = &original;
-    transfer.restoreInterceptHeaders();
-
-    try testing.expectEqual(2, transfer.req_headers.items.len);
-    try testing.expectString("User-Agent", transfer.req_headers.items[0].name);
-    try testing.expectString("original", transfer.req_headers.items[0].value);
-    try testing.expectString("X-Original", transfer.req_headers.items[1].name);
-    try testing.expectString("yes", transfer.req_headers.items[1].value);
-    try testing.expectEqual(null, transfer._intercept_original_headers);
 }
 
 test "HttpClient: allowDuringSyncWait allows ping/close/disconnect" {

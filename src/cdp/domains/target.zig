@@ -246,6 +246,16 @@ fn attachToTarget(cmd: *CDP.Command) !void {
         return error.UnknownTargetId;
     }
 
+    // The first attach becomes the page's primary session, which all
+    // Page/Network/... events are emitted to. Later attaches — e.g.
+    // Playwright's browserContext.newCDPSession(page), sent through its
+    // browser session while the page session is live — get a distinct
+    // auxiliary session so they don't collide with the primary one.
+    if (bc.session_id == null) {
+        try doAttachtoTarget(cmd, target_id);
+        return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
+    }
+
     const parent_id = if (cmd.input.session_id) |session_id|
         cmd.cdp.resolveSessionId(session_id) orelse return error.UnknownSessionId
     else
@@ -806,11 +816,12 @@ test "cdp.target: attachToTarget" {
     }
 
     {
+        // the first attach becomes the primary session
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
-        const session_id = bc.attached_sessions.items[0].id;
+        const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
         try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
-        try testing.expectEqual(null, bc.session_id);
+        try testing.expectEqual(0, bc.attached_sessions.items.len);
     }
 }
 
@@ -912,7 +923,7 @@ test "cdp.target: issue#474: attach to just created target" {
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
 
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
-        const session_id = bc.attached_sessions.items[0].id;
+        const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
     }
 }
@@ -923,17 +934,37 @@ test "cdp.target: detachFromTarget" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
     try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
-    const session_id = bc.attached_sessions.items[0].id;
+    const session_id = bc.session_id.?;
 
     try ctx.processMessage(.{ .id = 12, .method = "Target.detachFromTarget", .params = .{ .sessionId = session_id } });
 
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
-    try testing.expectEqual(0, bc.attached_sessions.items.len);
+    try testing.expectEqual(null, bc.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
 
     try ctx.processMessage(.{ .id = 13, .method = "Target.attachToTarget", .params = .{ .targetId = bc.target_id.? } });
-    try testing.expect(!std.mem.eql(u8, session_id, bc.attached_sessions.items[0].id));
-    try ctx.expectSentResult(.{ .sessionId = bc.attached_sessions.items[0].id }, .{ .id = 13 });
+    try testing.expect(!std.mem.eql(u8, session_id, bc.session_id.?));
+    try ctx.expectSentResult(.{ .sessionId = bc.session_id.? }, .{ .id = 13 });
+}
+
+test "cdp.target: detachFromTarget auxiliary session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{
+        .id = "BID-9",
+        .session_id = "SID-PRIMARY",
+        .target_id = "TID-000000000B".*,
+    });
+
+    try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
+    const session_id = bc.attached_sessions.items[0].id;
+    try testing.expect(!std.mem.eql(u8, session_id, bc.session_id.?));
+
+    try ctx.processMessage(.{ .id = 11, .method = "Target.detachFromTarget", .params = .{ .sessionId = session_id } });
+    try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
+    try testing.expectEqual(0, bc.attached_sessions.items.len);
+    try testing.expectEqual(true, bc.session_id != null);
+    try ctx.expectSentResult(null, .{ .id = 11 });
 }
 
 test "cdp.target: detachFromTarget without session" {
