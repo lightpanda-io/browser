@@ -1465,6 +1465,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     try transfer.handleRedirect(location.value);
+                    transfer.restoreInterceptHeaders();
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                         log.warn(.http, "blocked url", .{ .url = transfer.req.url });
@@ -1475,6 +1476,28 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     }
 
                     if (!transfer.req.internal) lp.metrics.http_redirects.incr();
+
+                    if (self.serve_mode) { // e.g. cdp
+                        var wait_for_interception = false;
+                        transfer.req.notification.dispatch(.http_request_intercept, &.{
+                            .transfer = transfer,
+                            .wait_for_interception = &wait_for_interception,
+                        });
+
+                        if (wait_for_interception) {
+                            transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+
+                            // Same shape as the auth-interception park above:
+                            // give up the connection, wait for the CDP client.
+                            self.removeConn(msg.conn);
+                            transfer._conn = null;
+                            transfer.reset();
+                            transfer.state = .created;
+                            self.intercepted += 1;
+                            transfer.park(.intercept_request);
+                            return false;
+                        }
+                    }
 
                     const conn = transfer._conn.?;
 
@@ -1912,6 +1935,10 @@ pub const Transfer = struct {
     // incremented by reset func.
     _tries: u8 = 0,
     _redirect_count: u8 = 0,
+
+    // Fetch.continueRequest header overrides apply to a single network hop. We
+    // need to restore (and hence capture) the original headers.
+    _intercept_original_headers: ?[]const RequestHeader = null,
 
     // Linked into client.pending_queue while .queued; reused to link the
     // retired transfer into client.graveyard (deinit unlinks it from the
@@ -2709,11 +2736,22 @@ pub const Transfer = struct {
     // CDP Fetch.continueRequest: the intercepting client supplies the
     // complete header set, replacing whatever the request carried.
     pub fn replaceRequestHeaders(self: *Transfer, headers: []const http.Header) !void {
+        lp.assert(self._intercept_original_headers == null, "Transfer.replaceRequestHeaders", .{ .id = self.id });
+        self._intercept_original_headers = try self.arena.allocator().dupe(RequestHeader, self.req_headers.items);
         self.req_headers.clearRetainingCapacity();
         try self.seedHeaders();
         for (headers) |hdr| {
             try self.setHeader(hdr.name, hdr.value, .{});
         }
+    }
+
+    fn restoreInterceptHeaders(self: *Transfer) void {
+        const headers = self._intercept_original_headers orelse return;
+        self.req_headers.clearRetainingCapacity();
+        // _intercept_original_headers.items.len MIGHT be larger than self.req_headers.items.len
+        // but the capacity never shrank from when _intercept_original_headers WAS req_headers.
+        self.req_headers.appendSliceAssumeCapacity(headers);
+        self._intercept_original_headers = null;
     }
 
     // abortAuthChallenge is called when an auth challenge interception is
@@ -3371,6 +3409,33 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
     try testing.expectEqual(.author, headers[1].source);
     try testing.expectEqual("X-New", headers[2].name);
     try testing.expectEqual("yes", headers[2].value);
+}
+
+test "HttpClient: Fetch header overrides restore after one hop" {
+    const original = [_]Transfer.RequestHeader{
+        .{ .name = "User-Agent", .value = "original" },
+        .{ .name = "X-Original", .value = "yes" },
+    };
+    var overridden = [_]Transfer.RequestHeader{
+        .{ .name = "User-Agent", .value = "override" },
+        .{ .name = "X-Override", .value = "yes" },
+    };
+
+    var transfer: Transfer = undefined;
+    transfer.req_headers = .{ .items = &overridden, .capacity = overridden.len };
+    transfer._intercept_original_headers = &original;
+    transfer.restoreInterceptHeaders();
+
+    try testing.expectEqual(2, transfer.req_headers.items.len);
+    try testing.expectEqual("User-Agent", transfer.req_headers.items[0].name);
+    try testing.expectEqual("original", transfer.req_headers.items[0].value);
+    try testing.expectEqual("X-Original", transfer.req_headers.items[1].name);
+    try testing.expectEqual("yes", transfer.req_headers.items[1].value);
+    try testing.expectEqual(null, transfer._intercept_original_headers);
+
+    // idempotent once restored
+    transfer.restoreInterceptHeaders();
+    try testing.expectEqual(2, transfer.req_headers.items.len);
 }
 
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {
