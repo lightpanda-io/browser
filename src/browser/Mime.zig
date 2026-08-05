@@ -550,7 +550,7 @@ pub fn serialize(arena: Allocator, input: []const u8) ![]const u8 {
 
     // The serialized output is the input length plus quoting overhead; reserve
     // the input length so the common (no-escape) case appends without growing.
-    try out.ensureTotalCapacity(arena, trimmed.len);
+    try out.ensureTotalCapacityPrecise(arena, trimmed.len);
 
     // Lowercased names already emitted, for first-wins dedupe.
     var seen: std.ArrayList([]const u8) = .empty;

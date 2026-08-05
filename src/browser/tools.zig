@@ -2170,7 +2170,7 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
     // before its full match is found, leaking a suffix into the recording.
     const Pair = struct { name: []const u8, value: []const u8 };
     var pairs: std.ArrayList(Pair) = .empty;
-    try pairs.ensureTotalCapacity(arena, env_names.len);
+    try pairs.ensureTotalCapacityPrecise(arena, env_names.len);
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;

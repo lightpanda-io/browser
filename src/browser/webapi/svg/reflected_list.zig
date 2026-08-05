@@ -175,7 +175,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
             self._snapshot.clearRetainingCapacity();
             try self._snapshot.appendSlice(frame.arena, raw);
             try retireAll(self, frame);
-            try self._items.ensureTotalCapacity(frame.arena, parsed.items.len);
+            try self._items.ensureTotalCapacityPrecise(frame.arena, parsed.items.len);
             for (parsed.items) |item| {
                 self._items.appendAssumeCapacity(item);
                 hooks.attach(self, item);

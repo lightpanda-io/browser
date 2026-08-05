@@ -214,7 +214,7 @@ const RobotsContext = struct {
         }
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
         if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacity(self.arena.allocator(), cl);
+            try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), cl);
         }
         return .proceed;
     }
