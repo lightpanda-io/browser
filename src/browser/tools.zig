@@ -1635,7 +1635,8 @@ const default_wait_timeout_ms: u32 = 5000;
 
 /// A wait entered before `load` also inherits the nav budget: a post-load
 /// selector keeps the wall time it had when `goto` waited for `load` itself.
-fn defaultWaitTimeout(frame: *const lp.Frame) u32 {
+/// Shared with CDP's `LP.waitForSelector`, which fronts the same action.
+pub fn defaultWaitTimeout(frame: *const lp.Frame) u32 {
     if (frame._load_state == .complete) return default_wait_timeout_ms;
     return default_nav_timeout_ms + default_wait_timeout_ms;
 }
