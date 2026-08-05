@@ -342,7 +342,7 @@ pub const Tool = enum {
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
                     \\    "waitUntil": { "type": "string", "enum":
                 ++ lp.Config.tagJsonArray(lp.Config.WaitUntil) ++
-                    \\, "description": "Event that completes the navigation. Defaults to 'load'. Prefer 'domcontentloaded' followed by waitForSelector on pages whose late scripts (ads) hold 'load' back." }
+                    \\, "description": "Event that completes the navigation. Defaults to 'load'. Prefer 'domcontentloaded' followed by waitForSelector on pages whose late scripts (ads) hold 'load' back. Avoid 'done' (full quiescence): on pages with constant background activity it is the slowest choice and can run to the timeout." }
                     \\  },
                     \\  "required": ["url"]
                     \\}
