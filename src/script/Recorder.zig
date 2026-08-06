@@ -38,6 +38,17 @@ content: std.Io.Writer.Allocating,
 buf: std.Io.Writer.Allocating,
 /// Reset per write — backs short-lived scrub allocations.
 arena: std.heap.ArenaAllocator,
+/// The just-emitted `goto` line stays rewritable for exactly one step: a
+/// readiness wait recorded next (`Tool.waitsForReadiness`) swaps it for its
+/// `waitUntil: "domcontentloaded"` variant; anything else closes the window.
+pending_goto: ?PendingGoto,
+
+const PendingGoto = struct {
+    /// `content` length just before the emitted goto line.
+    start: usize,
+    /// Scrubbed replacement line; null when the call carried an explicit waitUntil.
+    downgraded: ?[]u8,
+};
 
 pub fn init(allocator: std.mem.Allocator) Recorder {
     return .{
@@ -47,20 +58,25 @@ pub fn init(allocator: std.mem.Allocator) Recorder {
         .content = .init(allocator),
         .buf = .init(allocator),
         .arena = .init(allocator),
+        .pending_goto = null,
     };
 }
 
 pub fn deinit(self: *Recorder) void {
+    self.freePendingGoto();
     self.content.deinit();
     self.buf.deinit();
     self.arena.deinit();
 }
 
 pub fn bytes(self: *Recorder) []const u8 {
+    // A snapshot may be persisted verbatim — its goto line must not change afterwards.
+    self.freePendingGoto();
     return self.content.written();
 }
 
 pub fn reset(self: *Recorder) void {
+    self.freePendingGoto();
     self.lines = 0;
     self.page_declared = false;
     self.content.clearRetainingCapacity();
@@ -70,32 +86,84 @@ pub fn reset(self: *Recorder) void {
 
 pub fn record(self: *Recorder, cmd: Command) !void {
     if (!cmd.isRecorded()) return;
-    self.buf.clearRetainingCapacity();
-    _ = self.arena.reset(.retain_capacity);
-    // `isRecorded` guarantees `.tool_call`. The page is born once, up front; every
-    // recorded call is then a method on it — `goto` async, the rest sync.
+    // `isRecorded` guarantees `.tool_call`.
+    const tool = cmd.tool_call.tool;
+    if (self.pending_goto) |pending| {
+        if (tool.waitsForReadiness()) try self.downgradePendingGoto(pending);
+        self.freePendingGoto();
+    }
+
+    // The page is born once, up front; every recorded call is then a method
+    // on it — `goto` async, the rest sync.
     if (!self.page_declared) {
-        try self.buf.writer.writeAll("const page = new Page();\n");
+        try self.content.writer.writeAll("const page = new Page();\n");
+        self.lines += 1;
         self.page_declared = true;
     }
-    if (cmd.tool_call.tool.isAsync()) try self.buf.writer.writeAll("await ");
-    try self.buf.writer.writeAll("page.");
-    try cmd.formatJs(self.arena.allocator(), &self.buf.writer);
-    try self.buf.writer.writeByte('\n');
+
+    self.buf.clearRetainingCapacity();
+    _ = self.arena.reset(.retain_capacity);
+    try self.renderCall(cmd, &self.buf.writer);
+
+    const start = self.content.written().len;
     try self.appendScrubbed();
+
+    if (tool == .goto) {
+        self.pending_goto = .{ .start = start, .downgraded = try self.renderDowngradedGoto(cmd) };
+    }
 }
 
 pub fn recordComment(self: *Recorder, comment: []const u8) !void {
+    self.freePendingGoto();
     self.buf.clearRetainingCapacity();
     try writeCommentLines(&self.buf.writer, comment);
     try self.appendScrubbed();
 }
 
 pub fn recordRaw(self: *Recorder, line: []const u8) !void {
+    self.freePendingGoto();
     self.buf.clearRetainingCapacity();
     try self.buf.writer.writeAll(line);
     try self.buf.writer.writeByte('\n');
     try self.appendScrubbed();
+}
+
+fn renderCall(self: *Recorder, cmd: Command, w: *std.Io.Writer) !void {
+    if (cmd.tool_call.tool.isAsync()) try w.writeAll("await ");
+    try w.writeAll("page.");
+    try cmd.formatJs(self.arena.allocator(), w);
+    try w.writeByte('\n');
+}
+
+/// Rendered and scrubbed up front — the command's args die with the caller.
+/// Null when there's nothing to downgrade (explicit waitUntil, non-object args).
+fn renderDowngradedGoto(self: *Recorder, cmd: Command) !?[]u8 {
+    // `isRecorded` guaranteed the required `url` arg.
+    const args = cmd.tool_call.args.?;
+    if (args != .object) return null;
+    if (args.object.get("waitUntil") != null) return null;
+
+    const aa = self.arena.allocator();
+    var cloned = try args.object.clone(aa);
+    try cloned.put(aa, "waitUntil", .{ .string = @tagName(lp.Config.WaitUntil.domcontentloaded) });
+
+    self.buf.clearRetainingCapacity();
+    try self.renderCall(.fromToolCall(.goto, .{ .object = cloned }), &self.buf.writer);
+    const scrubbed = try lp.tools.reverseSubstituteEnvVars(aa, self.buf.written());
+    return try self.allocator.dupe(u8, scrubbed);
+}
+
+fn downgradePendingGoto(self: *Recorder, pending: PendingGoto) !void {
+    const line = pending.downgraded orelse return;
+    // Both variants are exactly one line, so `lines` needs no adjustment.
+    self.content.shrinkRetainingCapacity(pending.start);
+    try self.content.writer.writeAll(line);
+}
+
+fn freePendingGoto(self: *Recorder) void {
+    const pending = self.pending_goto orelse return;
+    if (pending.downgraded) |d| self.allocator.free(d);
+    self.pending_goto = null;
 }
 
 fn appendScrubbed(self: *Recorder) !void {
@@ -211,6 +279,72 @@ test "recordComment scrubs literal LP_* values back to placeholders" {
 
     try std.testing.expectEqualStrings(
         "// a user noted that their password is $LP_RECORDER_COMMENT_TEST\n",
+        recorder.bytes(),
+    );
+}
+
+test "record downgrades goto before waitForSelector to domcontentloaded" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"domcontentloaded\" });\npage.waitForSelector(\".story\");\n",
+        recorder.bytes(),
+    );
+}
+
+test "record keeps the load wait when goto is followed by extract" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try recorder.record(parseLine(aa, "/extract '{\"title\": \"h1\"}'"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\npage.extract({ title: \"h1\" });\n",
+        recorder.bytes(),
+    );
+}
+
+test "record preserves an explicit waitUntil on goto" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com waitUntil=networkidle"));
+    try recorder.record(parseLine(aa, "/waitForSelector .story"));
+
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto({ url: \"https://example.com\", waitUntil: \"networkidle\" });\npage.waitForSelector(\".story\");\n",
+        recorder.bytes(),
+    );
+}
+
+test "trailing goto is flushed unmodified by bytes" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var recorder: Recorder = .init(std.testing.allocator);
+    defer recorder.deinit();
+
+    try recorder.record(parseLine(aa, "/goto https://example.com"));
+    try std.testing.expectEqualStrings(
+        "const page = new Page();\nawait page.goto(\"https://example.com\");\n",
         recorder.bytes(),
     );
 }
