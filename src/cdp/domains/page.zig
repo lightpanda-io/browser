@@ -542,11 +542,12 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
         _ = try isolated_world.createContext(frame);
     }
 
-    if (!in_commit) {
+    if (in_commit == false) {
         // Only retain captured responses until a navigation event. In CDP
         // terms, this is called a "renderer" and the cache-duration can be
         // controlled via Network.configureDurableMessages (which we don't
         // support).
+        bc.captured_requests = .empty;
         bc.captured_responses = .empty;
     }
 }
