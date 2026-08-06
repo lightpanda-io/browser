@@ -189,10 +189,22 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
+
+/// `.load`, not `.done`: pages with constant background activity never go
+/// quiescent, so `.done` just rides the `wait_ms` cap. A lone
+/// `wait_selector`/`wait_script` is itself the wait, so no level applies
+/// unless given explicitly.
+fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
+    if (opts.wait_until) |wu| return wu;
+    if (opts.wait_selector == null and opts.wait_script == null) return .load;
+    return null;
+}
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// Errors:
-///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
+///   - `error.Timeout` if the deadline expires while a `wait_selector` or
+///     `wait_script` is still unmet. The `wait_until` phase never raises it:
+///     when the budget runs out the page is dumped as-is.
 ///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
 ///     that returned true during the wait. The hook is opt-in via
 ///     `session.cancel_hook = .{...}`; without it, this error never fires.
@@ -239,13 +251,8 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
     var timer: std.Io.Timestamp = .now(io, .boot);
 
-    if (opts.wait_until) |wu| {
+    if (resolveWaitUntil(opts)) |wu| {
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
-    } else if (opts.wait_selector == null and opts.wait_script == null) {
-        // We default to .done if both wait_selector and wait_script are null
-        // This allows the caller to ONLY --wait-selector or ONLY --wait-script
-        // or combine --wait-until WITH --wait-selector/script
-        try runner.waitForAll(opts.wait_ms, .{ .until = .done });
     }
 
     if (opts.wait_selector) |selector| {
@@ -506,6 +513,17 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
         .dump = "html",
         .content = "<html><body>hello</body></html>",
     }, aw.written());
+}
+
+test "fetch: resolveWaitUntil" {
+    try testing.expectEqual(.load, resolveWaitUntil(.{ .dump = .{} }));
+    try testing.expectEqual(.done, resolveWaitUntil(.{ .dump = .{}, .wait_until = .done }));
+    try testing.expectEqual(null, resolveWaitUntil(.{ .dump = .{}, .wait_selector = "#main" }));
+    try testing.expectEqual(null, resolveWaitUntil(.{ .dump = .{}, .wait_script = "true" }));
+    try testing.expectEqual(
+        .networkidle,
+        resolveWaitUntil(.{ .dump = .{}, .wait_until = .networkidle, .wait_selector = "#main" }),
+    );
 }
 
 test {
