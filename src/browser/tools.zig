@@ -800,7 +800,13 @@ pub fn call(
     tool_name: []const u8,
     arguments: ?std.json.Value,
 ) ToolError!ToolResult {
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return ToolError.InvalidParams;
+    // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
+    // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
+    // retrying it with different arguments.
+    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
+        .text = try std.fmt.allocPrint(arena, "Unknown tool: {s}", .{tool_name}),
+        .is_error = true,
+    };
     if (diagnoseArgs(arena, arguments)) |msg|
         return .{ .text = msg, .is_error = true };
     // Must run before substituteStringArgs so the `key=="value"` secret-
@@ -2223,6 +2229,17 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
         changed = true;
     }
     return if (changed) current else input;
+}
+
+test "call: unknown tool name surfaces in-band" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Session/registry are never touched on this branch; the name check is
+    // the first thing `call` does.
+    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null);
+    try std.testing.expect(r.is_error);
+    try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
