@@ -197,7 +197,11 @@ pub const Header = struct {
         // Found where header value starts.
         const val_start = cursor.current();
         matchHeaderValue(cursor);
-        const val_end = cursor.current();
+        var val_end = cursor.current();
+        // Trailing OWS is legal on the wire but not part of the field value;
+        // parsers must exclude it (RFC 9112 §5.1). Spaces and HTABs are valid
+        // mid-value, so the scan above can't do this on its own.
+        while (val_end != val_start and ((val_end - 1)[0] == ' ' or (val_end - 1)[0] == '\t')) : (val_end -= 1) {}
 
         // Buffer has been consumed fully without a line ending; the caller
         // can read more data and try to parse again.
@@ -453,7 +457,8 @@ pub const Disposition = struct {
 // `filename*=UTF-8''...`, which real servers emit — are skipped rather than
 // failing the whole parse, matching browser leniency.
 pub fn parseDisposition(value: []const u8) !Disposition {
-    var rest = std.mem.trim(u8, value, " \t");
+    // `Header.parse` already excludes the surrounding OWS from the value.
+    var rest = value;
     if (!std.ascii.startsWithIgnoreCase(rest, "form-data")) {
         return error.InvalidFormData;
     }
@@ -626,16 +631,19 @@ test "header_parser: parse HTTP header" {
     try testing.expectString("def", header.value);
     try testing.expectEqual(true, cursor.reachedEnd());
 
-    // Leading whitespaces of the value — spaces and HTABs — are skipped,
-    // trailing ones are kept.
+    // Leading and trailing whitespace of the value — spaces and HTABs — is
+    // excluded from the field value (RFC 9112 §5.1).
     cursor = initCursor("Key:  \t value \t\r\n");
     try header.parse(&cursor);
-    try testing.expectString("value \t", header.value);
+    try testing.expectString("value", header.value);
 
-    // 0 length values are fine.
+    // 0 length values are fine, including whitespace-only ones.
     cursor = initCursor("Key:\r\n");
     try header.parse(&cursor);
     try testing.expectString("Key", header.key);
+    try testing.expectString("", header.value);
+    cursor = initCursor("Key: \t \r\n");
+    try header.parse(&cursor);
     try testing.expectString("", header.value);
 
     // HTAB is legal field content, including next to spaces.
@@ -721,9 +729,10 @@ test "header_parser: parse Content-Disposition" {
     try testing.expectString("a", d.name.?);
     try testing.expectString("b.txt", d.filename.?);
 
-    // Type and parameter names are case-insensitive; surrounding whitespace
-    // is tolerated.
-    d = try parseDisposition("  Form-Data; NAME=\"x\" ");
+    // Type and parameter names are case-insensitive; whitespace between
+    // parameters is tolerated (the value's surrounding OWS is already
+    // excluded by `Header.parse`).
+    d = try parseDisposition("Form-Data;  NAME=\"x\" ");
     try testing.expectString("x", d.name.?);
     try testing.expectEqual(null, d.filename);
 
