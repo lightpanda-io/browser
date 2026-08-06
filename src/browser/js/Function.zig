@@ -49,6 +49,21 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
 }
 
 pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Object {
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(self.local);
+    defer try_catch.deinit();
+
+    return self.newInstanceThrow() catch |err| {
+        if (err == error.JsConstructorFailed) {
+            caught.* = try_catch.caughtOrError(self.local.call_arena, error.Unknown);
+        }
+        return err;
+    };
+}
+
+// Like newInstance, but with no TryCatch of our own. Gives more flexibility to
+// the caller on how to handle the error (e.g. window.reportError)
+pub fn newInstanceThrow(self: *const Function) !js.Object {
     const local = self.local;
 
     if (comptime lp.IS_DEBUG == false) {
@@ -70,17 +85,12 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
         return error.ExecutionTerminated;
     }
 
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(local);
-    defer try_catch.deinit();
-
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
     const handle = v8.v8__Function__NewInstance(self.handle, local.handle, 0, null) orelse {
         if (local.ctx.env.terminatePending()) {
             return error.ExecutionTerminated;
         }
-        caught.* = try_catch.caughtOrError(local.call_arena, error.Unknown);
         return error.JsConstructorFailed;
     };
 
