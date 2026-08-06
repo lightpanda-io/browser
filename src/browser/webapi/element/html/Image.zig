@@ -1,5 +1,7 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -8,7 +10,8 @@ const HtmlElement = @import("../Html.zig");
 const Image = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
     const node = try Frame.node_factory.createElementNS(frame, .html, "img", null);
@@ -26,10 +29,10 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
 }
 
 pub fn asElement(self: *Image) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Image) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
@@ -130,7 +133,7 @@ pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) return;
 
-    try frame.queueLoad(self._proto);
+    try frame.queueLoad(Factory.protoOf(self));
 }
 
 pub const JsApi = struct {

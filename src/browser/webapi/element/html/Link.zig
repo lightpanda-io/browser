@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -29,7 +31,7 @@ const HtmlElement = @import("../Html.zig");
 const Link = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // Cached CSSStyleSheet for an external `rel=stylesheet` once
 // `Frame.loadExternalStylesheet` has registered it. Re-fetches (href
 // mutated on a connected link) reuse this sheet via `replaceSync` so the
@@ -38,10 +40,10 @@ _proto: *HtmlElement,
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 
 pub fn asElement(self: *Link) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Link) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();
@@ -232,26 +234,26 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.scriptHint(frame, self._proto, href)) {
+            if (Frame.preload.scriptHint(frame, Factory.protoOf(self), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(self._proto);
+        return frame.queueLoad(Factory.protoOf(self));
     }
 
     if (std.mem.eql(u8, rel, "modulepreload")) {
         // "as" defaults to script in this case
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.moduleHint(frame, self._proto, href)) {
+            if (Frame.preload.moduleHint(frame, Factory.protoOf(self), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(self._proto);
+        return frame.queueLoad(Factory.protoOf(self));
     }
 }
 

@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -33,7 +35,7 @@ pub const TextArea = @import("TextArea.zig");
 const Form = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 // Prevents submission of the form while we're in the process of submitting
 // the form. You can imagine an onsubmit = () => form.submit() endless loop.
@@ -44,13 +46,13 @@ _firing_submission_events: bool = false,
 _constructing_entry_list: bool = false,
 
 pub fn asHtmlElement(self: *Form) *HtmlElement {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 fn asConstElement(self: *const Form) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asElement(self: *Form) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Form) *Node {
     return self.asElement().asNode();
