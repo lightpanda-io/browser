@@ -1364,7 +1364,11 @@ pub fn getElementDimensions(self: *Element, frame: *Frame) Dimensions {
 // to contentWidth/contentHeight
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
     var visibility_cache: VisibilityCache = .{};
-    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+    return self.getClientWidthWithCache(frame, &visibility_cache);
+}
+
+pub fn getClientWidthWithCache(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
+    if (!self.checkVisibilityCached(visibility_cache, frame)) {
         return 0.0;
     }
 
@@ -1375,12 +1379,16 @@ pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
         return dims.width;
     }
 
-    return @max(dims.width, self.contentWidth(frame, &visibility_cache));
+    return @max(dims.width, self.contentWidth(frame, visibility_cache));
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
     var visibility_cache: VisibilityCache = .{};
-    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+    return self.getClientHeightWithCache(frame, &visibility_cache);
+}
+
+pub fn getClientHeightWithCache(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
+    if (!self.checkVisibilityCached(visibility_cache, frame)) {
         return 0.0;
     }
 
@@ -1391,7 +1399,7 @@ pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
         return dims.height;
     }
 
-    return @max(dims.height, self.contentHeight(frame, &visibility_cache));
+    return @max(dims.height, self.contentHeight(frame, visibility_cache));
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {

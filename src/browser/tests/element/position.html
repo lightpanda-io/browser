@@ -168,6 +168,38 @@
 }
 </script>
 
+<script id="computedWidthMarqueeLoop">
+{
+  // The getComputedStyle variant of the marquee idiom (inchurch.com.br's
+  // dynamic-marquee-widget via jQuery .width()): the computed value must
+  // carry the same content fallback as clientWidth or the loop never
+  // terminates.
+  const container = document.createElement('div');
+  const wrap = document.createElement('div');
+  const item = document.createElement('span');
+  wrap.appendChild(item);
+  container.appendChild(wrap);
+  document.body.appendChild(container);
+
+  const width = (el) => parseFloat(getComputedStyle(el).width);
+  const containerWidth = width(container);
+  let guard = 0;
+  while (width(wrap) < containerWidth * 2 && guard < 50) {
+    wrap.appendChild(item.cloneNode(true));
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+
+  // An explicit inline size still wins over the content sum.
+  const pinned = document.createElement('div');
+  pinned.style.width = '40px';
+  pinned.appendChild(document.createElement('span'));
+  pinned.appendChild(document.createElement('span'));
+  document.body.appendChild(pinned);
+  testing.expectEqual('40px', getComputedStyle(pinned).width);
+}
+</script>
+
 <script id="scrollHeightFromContent">
 {
   // An empty element has no content to overflow its box.

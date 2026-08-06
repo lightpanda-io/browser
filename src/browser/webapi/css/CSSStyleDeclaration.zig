@@ -97,9 +97,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                 }
 
                 // Computed width/height must agree with the synthetic layout
-                // metrics (offsetWidth/getBoundingClientRect). Returning ""
-                // makes measurement code see contradictory sizes — jQuery's
-                // "shrink text until it fits" loops then never terminate.
+                // metrics. Returning "" makes measurement code see
+                // contradictory sizes — jQuery's "shrink text until it fits"
+                // loops then never terminate. jQuery's .width() reads this
+                // value, so it must also carry clientWidth's content fallback
+                // or append-until-wide marquee loops never terminate.
                 if (wrapped.eql(comptime .wrap("width"))) {
                     return resolvedDimension(element, .width, frame);
                 }
@@ -115,13 +117,13 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame)) {
+    var visibility_cache: Element.VisibilityCache = .{};
+    if (!element.checkVisibilityCached(&visibility_cache, frame)) {
         return "auto";
     }
-    const dims = element.getElementDimensions(frame);
     const value = switch (dimension) {
-        .width => dims.width,
-        .height => dims.height,
+        .width => element.getClientWidthWithCache(frame, &visibility_cache),
+        .height => element.getClientHeightWithCache(frame, &visibility_cache),
     };
     return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
 }
