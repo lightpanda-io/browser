@@ -19,6 +19,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -31,7 +32,8 @@ const Audio = @This();
 
 pub const Proto = Media;
 
-_proto: *Media,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *Media else void = undefined,
 
 pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
     const node = try Frame.node_factory.createElementNS(frame, .html, "audio", null);
@@ -48,11 +50,11 @@ pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
 }
 
 pub fn asMedia(self: *Audio) *Media {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn asElement(self: *Audio) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asNode(self: *Audio) *Node {

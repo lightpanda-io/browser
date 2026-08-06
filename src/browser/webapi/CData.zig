@@ -77,9 +77,9 @@ pub fn subtype(self: *const CData, comptime T: type) *T {
         // the arithmetic rides on factory-chain contiguity; the stored
         // back-pointer doubles as its canary
         if (comptime T == CDATASection) {
-            std.debug.assert(sub._proto._proto == self);
+            std.debug.assert(sub._proto_canary._proto_canary == self);
         } else {
-            std.debug.assert(sub._proto == self);
+            std.debug.assert(sub._proto_canary == self);
         }
     }
     return sub;

@@ -464,7 +464,7 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            try writer.writeAll(text._proto._data.str());
+            try writer.writeAll(text.asCData()._data.str());
         }
     }
 }
@@ -476,7 +476,7 @@ pub fn childTextContentLen(self: *Node) usize {
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            len += text._proto._data.str().len;
+            len += text.asCData()._data.str().len;
         }
     }
     return len;
@@ -1389,7 +1389,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
             continue;
         };
 
-        if (text_node._proto.getData().len == 0) {
+        if (text_node.asCData().getData().len == 0) {
             frame.removeNode(self, current_node, .{ .will_be_reconnected = false });
             child = next_node;
             continue;
@@ -1407,7 +1407,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
                     next_node = node_to_merge.nextSibling();
                     frame.removeNode(self, to_remove, .{ .will_be_reconnected = false });
                 }
-                text_node._proto._data = try frame.dupeSSO(buffer.items);
+                text_node.asCData()._data = try frame.dupeSSO(buffer.items);
                 buffer.clearRetainingCapacity();
             }
         }

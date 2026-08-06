@@ -133,7 +133,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
             // Existing text sibling without a matching pending_text. Seed the
             // buf from its _data and register pending so subsequent chunks
             // accumulate cheaply.
-            const cdata = tn._proto;
+            const cdata = tn.asCData();
             const existing = cdata.getData().str();
             try self.buf.ensureTotalCapacity(self.arena, existing.len + txt.len);
             self.buf.appendSliceAssumeCapacity(existing);
@@ -149,7 +149,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     try self.frame.appendNew(parent, new_text);
     self.pending_text = .{
         .parent = parent,
-        .text_node = new_text.is(CData.Text).?._proto,
+        .text_node = new_text.is(CData.Text).?.asCData(),
     };
 }
 

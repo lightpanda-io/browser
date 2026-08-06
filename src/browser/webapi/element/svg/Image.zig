@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -28,10 +30,11 @@ const Graphics = @import("Graphics.zig");
 const Image = @This();
 
 pub const Proto = Graphics;
-_proto: *Graphics,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *Graphics else void = undefined,
 
 pub fn asElement(self: *Image) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();

@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -33,7 +35,7 @@ const TextArea = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _value: ?[]const u8 = null,
 
 _selection_start: u32 = 0,
@@ -67,10 +69,10 @@ fn dispatchInputEvent(self: *TextArea, data: ?[]const u8, input_type: []const u8
 }
 
 pub fn asElement(self: *TextArea) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const TextArea) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *TextArea) *Node {
     return self.asElement().asNode();
@@ -102,7 +104,7 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void 
     const node = self.asNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
-            txt._proto._data = try frame.dupeSSO(value);
+            txt.asCData()._data = try frame.dupeSSO(value);
             return;
         }
     }

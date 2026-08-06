@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 
 const CData = @import("../CData.zig");
@@ -24,7 +26,7 @@ const ProcessingInstruction = @This();
 
 pub const Proto = CData;
 
-_proto: *CData,
+_proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 _target: []const u8,
 
 pub fn getTarget(self: *const ProcessingInstruction) []const u8 {

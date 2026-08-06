@@ -1111,7 +1111,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
         else => false,
     };
     if (parsing_html and iframe._src.len > 0) {
-        self.queueElementEvent(iframe._proto, .load) catch |err| {
+        self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
         };
         if (delays_load) {
@@ -2168,7 +2168,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // this feature is disabled by default, and can be turned on via a command
     // line flag or via an CDP command
     if (session.load_external_stylesheets == false) {
-        return self.queueLoad(link._proto);
+        return self.queueLoad(Factory.protoOf(link));
     }
 
     // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.

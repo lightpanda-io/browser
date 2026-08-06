@@ -1,5 +1,7 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -11,7 +13,7 @@ const Slot = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // DOM spec "assigned nodes". Maintained by slotting.assignSlottables; always
 // empty while the slot isn't in a shadow tree.
 _assigned: std.ArrayList(*Node) = .empty,
@@ -20,11 +22,11 @@ _assigned: std.ArrayList(*Node) = .empty,
 _manually_assigned: std.ArrayList(*Node) = .empty,
 
 pub fn asElement(self: *Slot) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asConstElement(self: *const Slot) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asNode(self: *Slot) *Node {
