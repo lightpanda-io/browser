@@ -370,7 +370,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. Render markdown for just that element's subtree." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
@@ -386,7 +386,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -454,7 +454,7 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
                     \\  }
                     \\}
@@ -523,7 +523,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted (or 0), scrolls the window." },
                     \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
                     \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
                     \\  }
@@ -596,7 +596,7 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
                     \\    "selector": { "type": "string", "description": "Optional CSS selector of the element to target. Preferred over backendNodeId." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided." }
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided; 0 is treated as omitted." }
                     \\  },
                     \\  "required": ["key"]
                     \\}
@@ -756,6 +756,16 @@ pub const ToolError = error{
     InternalError,
     OutOfMemory,
 };
+
+/// LLM-facing message for a tool failure. Bare error names leave the model
+/// retrying blind; spell out the recovery for errors it can act on.
+pub fn errorMessage(err: ToolError) []const u8 {
+    return switch (err) {
+        error.NodeNotFound => "NodeNotFound: the selector or backendNodeId matched nothing on the current page. Re-inspect the page (tree/interactiveElements) for fresh node ids, or omit backendNodeId to target the document root.",
+        error.FrameNotLoaded => "FrameNotLoaded: no page is loaded — call goto (or pass a url) first.",
+        else => @errorName(err),
+    };
+}
 
 /// Outcome of running a tool against the page. Operational failures (OOM,
 /// missing page, invalid params) come out as Zig errors on the enclosing
@@ -2076,13 +2086,23 @@ fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8,
 }
 
 pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
-    return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
+    var parsed = std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
         else => {
             log.debug(.browser, "parseValue rejected", .{ .err = @errorName(err), .type = @typeName(T) });
             return error.InvalidParams;
         },
     };
+    // Schema contract: backendNodeId 0 means omitted — registry ids start at 1,
+    // and zero-filling models (gpt-5.x) send 0 for "unset".
+    if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "backendNodeId") and
+        @typeInfo(@FieldType(T, "backendNodeId")) == .optional)
+    {
+        if (parsed.backendNodeId) |nid| {
+            if (nid == 0) parsed.backendNodeId = null;
+        }
+    }
+    return parsed;
 }
 
 /// For tools where every field is optional. Missing args → default `T`;
@@ -2240,6 +2260,35 @@ test "call: unknown tool name surfaces in-band" {
     const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null);
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
+}
+
+test "parseValue: zero-filled optional backendNodeId treated as omitted" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct {
+        backendNodeId: ?CDPNode.Id = null,
+        maxDepth: ?u32 = null,
+    };
+    const zeroed = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":0,"maxDepth":2}
+    , .{});
+    const args = try parseValue(Params, aa, zeroed);
+    try std.testing.expectEqual(@as(?CDPNode.Id, null), args.backendNodeId);
+    try std.testing.expectEqual(@as(?u32, 2), args.maxDepth);
+
+    const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":7}
+    , .{});
+    try std.testing.expectEqual(@as(?CDPNode.Id, 7), (try parseValue(Params, aa, real)).backendNodeId);
+
+    // Non-optional ids (nodeDetails) pass through untouched.
+    const Required = struct { backendNodeId: CDPNode.Id };
+    const zero_required = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":0}
+    , .{});
+    try std.testing.expectEqual(@as(CDPNode.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
 }
 
 test "substituteEnvVars resolves LP_* vars" {
