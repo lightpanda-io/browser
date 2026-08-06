@@ -288,5 +288,6 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: CustomElementRegistry" {
+    testing.expectLog(&.{ .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js });
     try testing.htmlRunner("custom_elements", .{});
 }
