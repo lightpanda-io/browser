@@ -1008,11 +1008,13 @@ pub const BrowserContext = struct {
                 try self.captured_requests.put(self.frame_arena, key, owned_body);
             }
         }
+        defer self.resetNotificationArena();
         try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
@@ -1089,7 +1091,7 @@ pub const BrowserContext = struct {
         const key = keyFromTransfer(msg.transfer);
         const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
-        return resp.data.appendSlice(arena, msg.data);
+        return resp.data.appendSliceAssumeCapacitySlice(arena, msg.data);
     }
 
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {

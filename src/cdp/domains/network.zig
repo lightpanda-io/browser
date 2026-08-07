@@ -659,6 +659,10 @@ fn securityState(url: [:0]const u8) []const u8 {
 }
 
 fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedKey {
+    if (request_id.len < 4) {
+        return error.InvalidParams;
+    }
+
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
 
     return if (std.mem.startsWith(u8, request_id, "LID-"))
