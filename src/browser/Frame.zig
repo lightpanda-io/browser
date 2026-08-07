@@ -601,6 +601,7 @@ pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
     const arena = transfer.arena.allocator();
     if (try referrer.compute(arena, self.referrer_policy, self.url, transfer.req.url)) |ref| {
         try transfer.addHeader("Referer", ref, .{});
+        transfer.req.referrer_policy = self.referrer_policy;
     }
 }
 
@@ -803,6 +804,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         if (opts.referer) |ref| {
             try transfer.addHeader("Referer", ref, .{});
             self._referrer = try self.arena.dupe(u8, ref);
+            transfer.req.referrer_policy = opts.referrer_policy;
         }
     }
 
@@ -967,6 +969,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     if (std.mem.startsWith(u8, originator.url, "http")) {
         if (nav_opts.referer == null) {
             nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, originator.url, resolved_url);
+            nav_opts.referrer_policy = originator.referrer_policy;
         }
         if (nav_opts.initiator_url == null) {
             nav_opts.initiator_url = try arena.dupeZ(u8, originator.url);
@@ -1255,6 +1258,13 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             no.body = null;
             no.header = null;
         }
+
+        // The Referer may have been recomputed at each hop; document.referrer
+        // reports what the final request actually sent.
+        self._referrer = if (transfer.findRequestHeader("referer")) |ref|
+            try self.arena.dupe(u8, ref)
+        else
+            null;
     }
 
     // Init new location.
@@ -1861,6 +1871,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
         .referer = try referrer.compute(self.call_arena, self.referrer_policy, self.url, url),
+        .referrer_policy = self.referrer_policy,
         .initiator_url = parent_url,
         .initiator_origin = self.origin,
     }) catch |err| {
@@ -3117,6 +3128,10 @@ pub const NavigateOpts = struct {
     // anchor click / form submit / location.href navigations carry a Referer.
     // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
     referer: ?[]const u8 = null,
+    // The originating frame's policy, paired with `referer` so redirect hops
+    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
+    // the Referer untouched across redirects.
+    referrer_policy: ?referrer.Policy = null,
     // The URL of the document that initiated this navigation, used as the
     // "site for cookies" when computing SameSite. Distinct from `referer`
     // because a Referrer-Policy can suppress the Referer header without

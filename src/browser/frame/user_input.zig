@@ -204,13 +204,25 @@ fn deltaToScroll(d: f64) i32 {
 // implements.
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
-    const html_element = element.is(Element.Html) orelse return false;
+
+    const html_element = element.is(Element.Html) orelse {
+        if (element.is(Element.Svg.Graphics.A) != null) {
+            return svgAnchorHref(element) != null;
+        }
+        return false;
+    };
+
     return switch (html_element._type) {
         .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
         .input, .button, .select, .textarea, .label => true,
         .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
     };
+}
+
+// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
+fn svgAnchorHref(element: *Element) ?[]const u8 {
+    return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
 }
 
 // Clicks on editable content are for editing: they don't activate the
@@ -325,44 +337,20 @@ const JavascriptUrlTask = struct {
 pub fn handleClick(frame: *Frame, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
+
+    if (element.is(Element.Svg.Graphics.A) != null) {
+        const href = svgAnchorHref(element) orelse return;
+        const target_name = element.getAttributeSafe(comptime .wrap("target")) orelse "";
+        return followLink(frame, target, element, href, target_name);
+    }
+
     const html_element = element.is(Element.Html) orelse return;
 
     switch (html_element._type) {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
-            if (href.len == 0) {
-                return;
-            }
-
-            if (std.mem.startsWith(u8, href, "javascript:")) {
-                // Navigating to a javascript: URL evaluates the script in the
-                // node's frame as a queued task. (A string completion value
-                // would replace the document; we ignore results.)
-                return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
-            }
-
-            if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-                log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
-                return;
-            }
-
-            const target_frame = blk: {
-                const target_name = anchor.getTarget();
-                if (target_name.len == 0) {
-                    break :blk target.ownerFrame(frame);
-                }
-                break :blk frame.resolveTargetFrame(target_name) orelse {
-                    log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-                    return;
-                };
-            };
-
-            try element.focus(frame);
-            try frame.scheduleNavigation(href, .{
-                .reason = .script,
-                .kind = .{ .push = null },
-            }, .{ .anchor = target_frame });
+            return followLink(frame, target, element, href, anchor.getTarget());
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
@@ -412,6 +400,41 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
         },
         else => {},
     }
+}
+
+// Follow a link on activation. Shared by HTML <a> and SVG <a>.
+fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8) !void {
+    if (href.len == 0) {
+        return;
+    }
+
+    if (std.mem.startsWith(u8, href, "javascript:")) {
+        // Navigating to a javascript: URL evaluates the script in the
+        // node's frame as a queued task. (A string completion value
+        // would replace the document; we ignore results.)
+        return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
+    }
+
+    if (try element.hasAttribute(comptime .wrap("download"), frame)) {
+        log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+        return;
+    }
+
+    const target_frame = blk: {
+        if (target_name.len == 0) {
+            break :blk target.ownerFrame(frame);
+        }
+        break :blk frame.resolveTargetFrame(target_name) orelse {
+            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
+            return;
+        };
+    };
+
+    try element.focus(frame);
+    try frame.scheduleNavigation(href, .{
+        .reason = .script,
+        .kind = .{ .push = null },
+    }, .{ .anchor = target_frame });
 }
 
 pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {

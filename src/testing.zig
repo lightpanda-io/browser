@@ -1003,6 +1003,28 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/redirect_same_echo_referer")) {
+        // Same-origin 302 to /echo_referer: the full Referer must survive the hop.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_referer" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_cross_echo_referer")) {
+        // 302 to /echo_referer on the localhost alias — a cross-origin hop, so
+        // the Referer must be recomputed at the redirect (stripped to origin
+        // under the default policy) rather than re-sent in full.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/echo_referer" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect_to_echo")) {
         // 302 to /echo_method. Used by the Page.reload-after-redirect test to
         // confirm a POST→302→GET chain doesn't replay POST on reload.

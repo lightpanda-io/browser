@@ -126,3 +126,44 @@
     });
   }
 </script>
+
+<!-- SVG <a> has the same link activation behavior as HTML <a>. SVGElement has
+     no click(), so activate via a dispatched MouseEvent, bubbling up from the
+     <text> child like a real click on the rendered link. -->
+<iframe name=frame7 id=f7></iframe>
+<svg xmlns="http://www.w3.org/2000/svg">
+  <a href="support/page.html" target=frame7><text id=svgtext y=10>svg link</text></a>
+</svg>
+
+<script id=svg_anchor type=module>
+  {
+    const state = await testing.async();
+    $('#svgtext').dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+    $('#f7').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
+      testing.expectEqual('a-page\n', $('#f7').contentDocument.body.textContent);
+    });
+  }
+</script>
+
+<iframe name=frame8 id=f8></iframe>
+<svg xmlns="http://www.w3.org/2000/svg">
+  <a id=svglink2 xlink:href="support/page.html" target=frame8><text y=10>svg 1.1 link</text></a>
+</svg>
+
+<script id=svg_anchor_xlink type=module>
+  {
+    const state = await testing.async();
+    $('#svglink2').dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+    $('#f8').onload = () => {
+      state.resolve();
+    };
+
+    await state.done(() => {
+      testing.expectEqual('a-page\n', $('#f8').contentDocument.body.textContent);
+    });
+  }
+</script>
