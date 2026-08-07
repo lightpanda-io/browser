@@ -140,8 +140,10 @@ fn evictOverflow(self: *SqliteCache, conn: Conn) !void {
 
     try conn.exec(
         \\ delete from cache
-        \\ where url not in (
-        \\     select url from cache order by stored_at desc limit $1
+        \\ where rowid in (
+        \\     select rowid from cache
+        \\     order by stored_at desc
+        \\     limit -1 offset $1
         \\ )
     , .{@as(i64, @intCast(limit))});
 }
