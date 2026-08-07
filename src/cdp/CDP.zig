@@ -1091,7 +1091,7 @@ pub const BrowserContext = struct {
         const key = keyFromTransfer(msg.transfer);
         const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
-        return resp.data.appendSliceAssumeCapacitySlice(arena, msg.data);
+        return resp.data.appendSlice(arena, msg.data);
     }
 
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
