@@ -1494,7 +1494,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
-            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), browser_tools.errorMessage(err) }) catch "tool failed",
         },
         .is_error = true,
     };
@@ -1927,7 +1927,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
         .{ .content = capToolOutput(allocator, tool_name, result.text), .is_error = result.is_error }
     else |err|
-        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
+        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed", .is_error = true };
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
