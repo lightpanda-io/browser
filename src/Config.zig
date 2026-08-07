@@ -191,7 +191,7 @@ const CommonOptions = .{
     .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
     .{ .name = "user_agent_suffix", .type = ?[]const u8 },
     .{ .name = "http_cache_dir", .type = ?[]const u8 },
-    .{ .name = "http_cache_entry_limit", .type = ?u32 },
+    .{ .name = "http_cache_entry_limit", .type = ?u32, .default = 1000 },
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
@@ -634,7 +634,7 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
 
 pub fn httpCacheEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_entry_limit orelse 1000,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_entry_limit.?,
         else => 1000,
     };
 }

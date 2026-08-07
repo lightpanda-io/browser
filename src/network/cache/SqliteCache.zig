@@ -126,7 +126,7 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u3
         try conn.exec("pragma foreign_keys=on", .{});
     }
 
-    log.info(.cache, "sqlite cache initialized", .{ .path = path, .version = version });
+    log.info(.cache, "sqlite cache initialized", .{ .path = path, .entry_limit = entry_limit, .version = version });
     return .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit };
 }
 
