@@ -114,10 +114,13 @@
     \\          --wait-until condition is met.
     \\  --wait-until <UNTIL>
     \\          Wait until the specified event. Checked before other --wait-* options.
-    \\          Defaults to 'done'. If --wait-selector, --wait-script or
+    \\          Defaults to 'load'. If --wait-selector, --wait-script or
     \\          --wait-script-file specified, defaults to none.
     \\          Allowed values: "load", "domcontentloaded", "networkalmostidle",
     \\          "networkidle", "done".
+    \\          'done' waits for full quiescence (no pending scripts or network);
+    \\          pages with constant background activity never reach it and run
+    \\          to --wait-ms.
     \\  --with-base
     \\          Add a <base> tag in dump.
     \\          Defaults to false.
