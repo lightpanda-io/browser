@@ -98,15 +98,13 @@ pub fn fileExists(path: []const u8) !bool {
 }
 
 pub fn writeContentFile(path: []const u8, content: []const u8, mode: Mode) !void {
-    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = mode != .append });
+    if (mode != .append) return lp.replay.writeScriptFile(path, content);
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = false });
     defer file.close(lp.io);
-    var offset: u64 = 0;
-    if (mode == .append) {
-        offset = try file.length(lp.io);
-        if (offset > 0 and content.len > 0) {
-            try file.writePositionalAll(lp.io, "\n", offset);
-            offset += 1;
-        }
+    var offset: u64 = try file.length(lp.io);
+    if (offset > 0 and content.len > 0) {
+        try file.writePositionalAll(lp.io, "\n", offset);
+        offset += 1;
     }
     try file.writePositionalAll(lp.io, content, offset);
     offset += content.len;
