@@ -20,7 +20,7 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const testing = @import("../testing.zig");
-const CDPNode = @import("../server/cdp/Node.zig");
+const NodeRegistry = @import("../NodeRegistry.zig");
 
 const tools = @import("tools.zig");
 const router = @import("router.zig");
@@ -44,7 +44,7 @@ pub const Session = struct {
     browser: lp.Browser,
     session: *lp.Session,
     notification: *lp.Notification,
-    node_registry: CDPNode.Registry,
+    node_registry: NodeRegistry,
 
     fn isDefault(self: *const Session) bool {
         return std.mem.eql(u8, self.id, default_session_id);
@@ -113,7 +113,7 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
         .browser = undefined,
         .session = undefined,
         .notification = notification,
-        .node_registry = CDPNode.Registry.init(self.allocator),
+        .node_registry = NodeRegistry.init(self.allocator),
     };
     errdefer entry.node_registry.deinit();
 

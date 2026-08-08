@@ -39,7 +39,7 @@ pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
-pub const CDPNode = @import("server/cdp/Node.zig");
+pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const links = @import("browser/links.zig");
 pub const forms = @import("browser/forms.zig");
@@ -331,7 +331,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
         .html => try dump.root(frame.window._document, dump_opts, writer, frame),
         .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
         .semantic_tree, .semantic_tree_text => {
-            var registry = CDPNode.Registry.init(app.allocator);
+            var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
             const st: SemanticTree = .{

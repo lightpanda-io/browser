@@ -502,6 +502,7 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
 pub const BrowserContext = struct {
     const Node = @import("Node.zig");
     const AXNode = @import("AXNode.zig");
+    const NodeRegistry = @import("../../NodeRegistry.zig");
 
     const CapturedResponse = struct {
         must_encode: bool,
@@ -571,8 +572,13 @@ pub const BrowserContext = struct {
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,
-    node_registry: Node.Registry,
+    node_registry: NodeRegistry,
     node_search_list: Node.Search.List,
+
+    // Node ids a DOM.setChildNodes event was already sent for. CDP protocol
+    // bookkeeping; ids are never reused within a registry's lifetime, so
+    // entries evicted by resetFrame can linger harmlessly until reset.
+    set_child_nodes_sent: std.AutoHashMapUnmanaged(NodeRegistry.Id, void) = .empty,
 
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
@@ -634,7 +640,7 @@ pub const BrowserContext = struct {
         const inspector_session = browser.env.inspector.?.startSession(self);
         errdefer browser.env.inspector.?.stopSession();
 
-        var registry = Node.Registry.init(allocator);
+        var registry = NodeRegistry.init(allocator);
         errdefer registry.deinit();
 
         self.* = .{
@@ -716,6 +722,7 @@ pub const BrowserContext = struct {
 
         self.node_registry.deinit();
         self.node_search_list.deinit();
+        self.set_child_nodes_sent.deinit(self.cdp.allocator);
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
@@ -734,6 +741,7 @@ pub const BrowserContext = struct {
     pub fn reset(self: *BrowserContext) void {
         self.node_registry.reset();
         self.node_search_list.reset();
+        self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
@@ -775,7 +783,7 @@ pub const BrowserContext = struct {
         return world;
     }
 
-    pub fn nodeWriter(self: *BrowserContext, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
+    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
         return .{
             .root = root,
             .depth = opts.depth,
@@ -784,7 +792,7 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn axnodeWriter(self: *BrowserContext, temp_arena: *lp.Arena, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
+    pub fn axnodeWriter(self: *BrowserContext, temp_arena: *lp.Arena, root: *const NodeRegistry.Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         // Bind the writer to the frame that owns the root node. Name resolution
         // (`Label.findLabelByFor` against `ownerDocument`) and visibility
         // checks (`frame._style_manager`) are per-frame; getting this wrong on

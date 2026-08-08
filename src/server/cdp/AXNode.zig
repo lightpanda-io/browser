@@ -23,7 +23,7 @@ const Frame = @import("../../browser/Frame.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
-const Node = @import("Node.zig");
+const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const log = lp.log;
 const jsonStringify = std.json.Stringify;
@@ -39,8 +39,8 @@ const scratch_retain_limit = 64 * 1024;
 // its direct children, and sometimes the entire tree.
 // (For now, we only support direct children)
 pub const Writer = struct {
-    root: *const Node,
-    registry: *Node.Registry,
+    root: *const NodeRegistry.Node,
+    registry: *NodeRegistry,
     frame: *Frame,
     visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
@@ -1523,7 +1523,7 @@ test "AXnode: stripWhitespaces" {
 
 const testing = @import("testing.zig");
 test "AXNode: writer" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/dom3.html", .{});
@@ -1615,7 +1615,7 @@ test "AXNode: writer" {
 }
 
 test "AXNode: writer prunes hidden and resolves labels" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
@@ -1750,7 +1750,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
 }
 
 test "AXNode: Writer query filters by role" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
@@ -1791,7 +1791,7 @@ test "AXNode: Writer query filters by role" {
 }
 
 test "AXNode: writer maps password input to textbox" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
@@ -1868,7 +1868,7 @@ test "AXNode: writer maps password input to textbox" {
 }
 
 test "AXNode: Writer query filters by accessible name" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
@@ -1909,7 +1909,7 @@ test "AXNode: Writer query filters by accessible name" {
 }
 
 test "AXNode: Writer query combined role+name filter promotes hidden-input labels" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
@@ -1962,7 +1962,7 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
 }
 
 test "AXNode: Writer query no match returns empty array" {
-    var registry = Node.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/ax_tree.html", .{});
