@@ -26,6 +26,7 @@ const Notification = @import("../Notification.zig");
 const CDP = @import("../cdp/CDP.zig");
 const Watchdog = @import("../Watchdog.zig");
 const URL = @import("../browser/URL.zig");
+const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 
@@ -1464,8 +1465,8 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         if (isRedirectStatus(status)) {
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
-                    try transfer.handleRedirect(location.value);
                     transfer.restoreInterceptHeaders();
+                    try transfer.handleRedirect(location.value);
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                         log.warn(.http, "blocked url", .{ .url = transfer.req.url });
@@ -1657,6 +1658,7 @@ pub const Request = struct {
     cookie_origin: [:0]const u8,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
+    referrer_policy: ?referrer.Policy = null,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
@@ -2604,6 +2606,21 @@ pub const Transfer = struct {
             }
         }
 
+        // A Referrer-Policy header on a redirect response applies to the
+        // remaining hops.
+        if (req.referrer_policy != null) {
+            // referrer-policy is re-applied on every hop.
+            var i: usize = 0;
+            while (conn.getResponseHeader("referrer-policy", i)) |hdr| : (i += 1) {
+                if (referrer.parseHeader(hdr.value)) |policy| {
+                    req.referrer_policy = policy;
+                }
+                if (i >= hdr.amount) {
+                    break;
+                }
+            }
+        }
+
         // base_url and location are owned by curl; applyRedirectTarget resolves a
         // fresh arena-owned copy that gets stored in transfer.req.url.
         const base_url = try conn.getEffectiveUrl();
@@ -2650,6 +2667,21 @@ pub const Transfer = struct {
         if (status == 301 or status == 302 or status == 303) {
             req.method = .GET;
             req.body = null;
+        }
+
+        if (req.referrer_policy) |policy| {
+            // Referer header was applied based on the original target. It
+            // needs to be updated based on the redirect target. A redirect can
+            // only strip it (full -> origin -> none), so we can use whatever
+            // value we have now as the base
+            if (transfer.findRequestHeader("referer")) |current| {
+                const alloc = arena.allocator();
+                if (try referrer.compute(alloc, policy, try alloc.dupeZ(u8, current), req.url)) |value| {
+                    try transfer.setHeader("Referer", value, .{});
+                } else {
+                    transfer.removeHeader("Referer");
+                }
+            }
         }
     }
 
@@ -2700,6 +2732,26 @@ pub const Transfer = struct {
             .value = try arena.dupe(u8, value),
             .source = opts.source,
         });
+    }
+
+    pub fn findRequestHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
+        for (self.req_headers.items) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                return hdr.value;
+            }
+        }
+        return null;
+    }
+
+    fn removeHeader(self: *Transfer, name: []const u8) void {
+        var i: usize = 0;
+        while (i < self.req_headers.items.len) {
+            if (std.ascii.eqlIgnoreCase(self.req_headers.items[i].name, name)) {
+                _ = self.req_headers.orderedRemove(i);
+                continue;
+            }
+            i += 1;
+        }
     }
 
     // Adds, replacing every existing header with the same case-insensitive name
