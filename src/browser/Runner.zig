@@ -230,6 +230,18 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
+    // Outside the condition loop: it skips resolved conditions, but an idle
+    // notification needs a check 500ms+ after the hold starts, and on a quiet
+    // page one tick both starts the hold and resolves the condition. Before
+    // it, so `.networkidle` conditions read fresh state.
+    var page_index: usize = 0;
+    while (page_index < session.pages.items.len) : (page_index += 1) {
+        // Indexed: notifyNetworkIdle dispatches to listeners.
+        const page = session.pages.items[page_index];
+        if (page.replacement != null) continue; // frozen; the replacement is live
+        page.frame.checkIdleNotifications(total_http_activity);
+    }
+
     // _we_ have nothing to run, but v8 is working on background tasks. We'll
     // wait for them. Don't do this for CDP, since new CDP messages can always
     // come in at any time.
@@ -272,8 +284,6 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 }
             },
             .html, .complete => {
-                frame.checkIdleNotifications(total_http_activity);
-
                 const met = switch (condition.until) {
                     .done => is_done,
                     .domcontentloaded => frame._load_state == .load or frame._load_state == .complete,
@@ -296,6 +306,8 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         }
     }
 
+    // Always taken for is_cdp and every exit returns .ok, so _tick never yields
+    // .done to the CDP pump: _wait's .done/is_cdp arm is dormant.
     if ((comptime is_cdp) or want_http_tick) {
         const ms_to_next_task = blk: {
             if (has_runnable_page == false) {
@@ -542,4 +554,32 @@ test "Runner: lazy iframe does not delay the load event" {
     try runner.waitForFrame(page.frame_id, 3000, .{ .until = .done });
     try testing.expectEqual(true, lazy_child._load_state == .complete);
     try testing.expectEqual(true, lazy_child._parent_notified);
+}
+
+test "Runner: idle notifications advance past a resolved condition" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+
+    // What a quiet page looks like one tick in: the hold has started, and the
+    // same tick resolved the wait condition. Seeded past the 500ms hold so the
+    // test doesn't spend it.
+    const held_since = lp.datetime.milliTimestamp(.boot) -| 600;
+    frame._notified_network_idle = .{ .triggered = held_since };
+    frame._notified_network_almost_idle = .{ .triggered = held_since };
+
+    var conditions = [_]WaitCondition{.{
+        .frame_id = page.frame_id,
+        .until = .done,
+        .status = .complete,
+    }};
+
+    // is_cdp mirrors CDP.pageWait, which keeps ticking after the condition
+    // resolves.
+    var runner = page.session.runner(.{});
+    _ = try runner._wait(true, 50, &conditions);
+
+    try testing.expectEqual(true, frame._notified_network_idle == .done);
+    try testing.expectEqual(true, frame._notified_network_almost_idle == .done);
 }
