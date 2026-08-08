@@ -31,6 +31,7 @@ const DOMTokenList = @import("../../collections.zig").DOMTokenList;
 
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
 const IFrame = @This();
 
 pub const Proto = HtmlElement;
@@ -79,6 +80,19 @@ pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
     }
 }
 
+pub fn hasSrcdoc(self: *IFrame) bool {
+    return self.asElement().getAttributeSafe(comptime .wrap("srcdoc")) != null;
+}
+
+pub fn getSrcdoc(self: *IFrame) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("srcdoc")) orelse "";
+}
+
+pub fn setSrcdoc(self: *IFrame, value: []const u8, frame: *Frame) !void {
+    // Build.attributeChange triggers the (re)navigation.
+    try self.asElement().setAttributeSafe(comptime .wrap("srcdoc"), .wrap(value), frame);
+}
+
 pub fn getName(self: *IFrame) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
@@ -105,6 +119,7 @@ pub const JsApi = struct {
     };
 
     pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{ .ce_reactions = true });
+    pub const srcdoc = bridge.accessor(IFrame.getSrcdoc, IFrame.setSrcdoc, .{ .ce_reactions = true });
     pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
@@ -116,5 +131,29 @@ pub const Build = struct {
         const self = node.as(IFrame);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("srcdoc"))) {
+            return;
+        }
+        if (element.asNode().isConnected()) {
+            // like src, setting srcdoc reloads the frame even if the value didn't change
+            const self = element.as(IFrame);
+            self._executed = false;
+            try frame.iframeAddedCallback(self);
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("srcdoc"))) {
+            return;
+        }
+        if (element.asNode().isConnected()) {
+            const self = element.as(IFrame);
+            // removing srcdoc falls back to src (or about:blank)
+            self._executed = false;
+            try frame.iframeAddedCallback(self);
+        }
     }
 };

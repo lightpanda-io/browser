@@ -598,8 +598,8 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
             continue;
         };
 
-        if (qn.is_about_blank) {
-            // Defer about:blank to second pass
+        if (qn.is_about_something) {
+            // Defer about:blank or about:srcdoc to second pass
             try about_blank_queue.append(self.arena.allocator(), frame);
             continue;
         }
@@ -637,7 +637,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
     while (i < new_navigations.items.len) {
         const frame = new_navigations.items[i];
         if (frame._queued_navigation) |qn| {
-            if (qn.is_about_blank) {
+            if (qn.is_about_something) {
                 log.warn(.frame, "recursive about blank", .{});
                 _ = page.queued_navigation.swapRemove(i);
                 continue;
@@ -783,7 +783,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
     // Synthetic navigations (about:blank, blob:) commit instantly — no HTTP,
     // so there is no in-flight window to worry about. Use the optimized
     // immediate-swap path for them.
-    const is_synthetic = qn.is_about_blank or std.mem.startsWith(u8, qn.url, "blob:");
+    const is_synthetic = qn.is_about_something or std.mem.startsWith(u8, qn.url, "blob:");
 
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn
