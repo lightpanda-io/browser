@@ -509,14 +509,14 @@ pub const BrowserContext = struct {
         data: std.ArrayList(u8),
     };
 
-    // Key for `captured_responses`. Documents are keyed by `loader_id`,
-    // everything else by `request_id` — the two id-spaces are independent
-    // counters and overlap numerically (loader 1 / request 1, loader 2 /
-    // request 2, ...), so the map key has to carry the namespace or
-    // entries collide. The wire-format prefix (`LID-` / `REQ-`) provides
-    // the same disambiguation on lookup; see `idFromRequestId` in
-    // domains/network.zig.
-    pub const CapturedResponseKey = struct {
+    // Key for `captured_responses` / `captured_requests`. Documents are
+    // keyed by `loader_id`, everything else by `request_id` — the two
+    // id-spaces are independent counters and overlap numerically (loader 1
+    // / request 1, loader 2 / request 2, ...), so the map key has to carry
+    // the namespace or entries collide. The wire-format prefix (`LID-` /
+    // `REQ-`) provides the same disambiguation on lookup; see
+    // `idFromRequestId` in domains/network.zig.
+    pub const CapturedKey = struct {
         kind: enum { request, loader },
         id: u32,
     };
@@ -592,6 +592,10 @@ pub const BrowserContext = struct {
     intercept_state: InterceptState,
     fetch_session_id: ?[]const u8 = null,
 
+    // Request bodies retained for Network.getRequestPostData, which can be
+    // called after the transfer is gone. Capped at max_post_data_size.
+    captured_requests: std.AutoHashMapUnmanaged(CapturedKey, []const u8),
+
     // When network is enabled, we'll capture the transfer.id -> body
     // This is awfully memory intensive, but our underlying http client and
     // its users (script manager and frame) correctly do not hold the body
@@ -599,7 +603,7 @@ pub const BrowserContext = struct {
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
     // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(CapturedResponseKey, CapturedResponse),
+    captured_responses: std.AutoHashMapUnmanaged(CapturedKey, CapturedResponse),
 
     notification: *Notification,
 
@@ -651,6 +655,7 @@ pub const BrowserContext = struct {
             .arena = cdp.browser_context_arena.allocator(),
             .notification_arena = cdp.notification_arena.allocator(),
             .intercept_state = try InterceptState.init(allocator),
+            .captured_requests = .empty,
             .captured_responses = .empty,
             .notification = notification,
         };
@@ -991,12 +996,26 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/network.zig").httpRequestStart(self, msg);
+        {
+            // capture the request
+            const transfer = msg.transfer;
+            const key = keyFromTransfer(transfer);
+            const body = transfer.req.body orelse "";
+            if (body.len == 0 or body.len > @import("domains/network.zig").max_post_data_size) {
+                _ = self.captured_requests.remove(key);
+            } else {
+                const owned_body = try self.frame_arena.dupe(u8, body);
+                try self.captured_requests.put(self.frame_arena, key, owned_body);
+            }
+        }
+        defer self.resetNotificationArena();
+        try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/fetch.zig").requestIntercept(self, msg);
+        defer self.resetNotificationArena();
+        try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
@@ -1019,7 +1038,7 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedResponseKey {
+    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedKey {
         return if (transfer.req.resource_type == .document)
             .{ .kind = .loader, .id = transfer.req.loader_id }
         else
@@ -1078,7 +1097,7 @@ pub const BrowserContext = struct {
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
-        try @import("domains/fetch.zig").requestAuthRequired(self, data);
+        try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
     }
 
     pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
