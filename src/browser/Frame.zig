@@ -232,6 +232,10 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
 
+// _upgrading_element can be consumed once. A second HTMLElement construction
+// during upgrade is a TypeError.
+_upgrading_consumed: bool = false,
+
 // Set when materializing the fragment parser's context element. The element
 // is never inserted into the tree so if its a custom element ,we must not run
 // its constructor (else we'll end up in an endless loop if the constructor

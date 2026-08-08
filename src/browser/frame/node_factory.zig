@@ -948,11 +948,15 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
 // Runs a custom element constructor for a token being created (parser or
 // createElement), and validates the result against the post-conditions.
 fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_name: String, comptime from_parser: bool) !*Element {
-
     // This is a creation, not an upgrade. super() ha to build a new element
     const prev_upgrading = frame._upgrading_element;
+    const prev_consumed = frame._upgrading_consumed;
     frame._upgrading_element = null;
-    defer frame._upgrading_element = prev_upgrading;
+    frame._upgrading_consumed = false;
+    defer {
+        frame._upgrading_element = prev_upgrading;
+        frame._upgrading_consumed = prev_consumed;
+    }
 
     var ls: JS.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -968,36 +972,62 @@ fn constructForToken(frame: *Frame, definition: *CustomElementDefinition, tag_na
     };
 
     const name = tag_name.str();
-    var caught: JS.TryCatch.Caught = .{};
-    const object = ls.toLocal(definition.constructor).newInstance(&caught) catch |err| {
-        log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = frame._type, .url = frame.url });
+    const local = &ls.local;
+
+    var try_catch: JS.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    const object = ls.toLocal(definition.constructor).newInstanceThrow() catch |err| {
+        if (err != error.ExecutionTerminated) {
+            log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .type = frame._type, .url = frame.url });
+            if (try_catch.exceptionValue()) |exc| {
+                // Spec: report the exception
+                frame.window.reportError(exc, frame) catch {};
+            }
+        }
         return err;
     };
 
-    const reason: []const u8 = blk: {
-        // validate the result
-        const node = object.toZig(*Node) catch break :blk "not a node";
-        const element = node.is(Element) orelse break :blk "not an element";
+    const reason: []const u8, const exc: JS.Value = blk: {
+        // Validate the result. A result that isn't an HTMLElement is a
+        // TypeError; any other violation is a NotSupportedError.
+        const node = object.toZig(*Node) catch break :blk .{ "not a node", typeError(local) };
+        const element = node.is(Element) orelse break :blk .{ "not an element", typeError(local) };
         if (element._namespace != .html) {
-            break :blk "wrong namespace";
+            break :blk .{ "wrong namespace", typeError(local) };
         }
         if (node._parent != null) {
-            break :blk "has a parent";
+            break :blk .{ "has a parent", notSupportedError(local) };
         }
         if (node.firstChild() != null) {
-            break :blk "has children";
+            break :blk .{ "has children", notSupportedError(local) };
         }
         if (element._attributes.isEmpty() == false) {
-            break :blk "has attributes";
+            break :blk .{ "has attributes", notSupportedError(local) };
+        }
+        if (node.ownerDocument(frame) != frame.document) {
+            break :blk .{ "wrong document", notSupportedError(local) };
         }
         if (std.mem.eql(u8, element.getTagNameLower(), name) == false) {
-            break :blk "wrong local name";
+            break :blk .{ "wrong local name", notSupportedError(local) };
         }
         return element;
     };
 
     log.warn(.js, "custom element not usable", .{ .name = name, .reason = reason, .type = frame._type, .url = frame.url });
+    frame.window.reportError(exc, frame) catch {};
     return error.CustomElementConstructionFailed;
+}
+
+fn typeError(local: *const JS.Local) JS.Value {
+    return .{ .local = local, .handle = local.isolate.createTypeError("Invalid custom element constructor return value") };
+}
+
+fn notSupportedError(local: *const JS.Local) JS.Value {
+    const DOMException = @import("../webapi/DOMException.zig");
+    const ex = DOMException.fromError(error.NotSupported).?;
+    return local.zigValueToJs(ex, .{}) catch .{ .local = local, .handle = local.isolate.createError("not supported") };
 }
 
 fn createHtmlElementT(frame: *Frame, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype, html_element: E) !*Node {

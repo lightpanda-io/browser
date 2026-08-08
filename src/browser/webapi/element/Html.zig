@@ -116,6 +116,10 @@ _proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 //    which custom element class was invoked; look it up in the registry.
 pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
     if (frame._upgrading_element) |node| {
+        if (frame._upgrading_consumed) {
+            return error.TypeError;
+        }
+        frame._upgrading_consumed = true;
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
@@ -127,6 +131,10 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
 // constructors routed here.
 pub fn upgradeConstruct(frame: *Frame) !*Element {
     const node = frame._upgrading_element orelse return error.TypeError;
+    if (frame._upgrading_consumed) {
+        return error.TypeError;
+    }
+    frame._upgrading_consumed = true;
     return node.is(Element) orelse return error.TypeError;
 }
 

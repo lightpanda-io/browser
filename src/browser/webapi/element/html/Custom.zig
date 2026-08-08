@@ -41,6 +41,7 @@ _tag_name: String,
 _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
+_upgrade_failed: bool = false, // a failed upgrade is never retried
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
@@ -62,6 +63,9 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     if (element.is(Custom)) |custom| {
         // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
+            if (custom._upgrade_failed) {
+                return;
+            }
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
                 const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
@@ -257,9 +261,14 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     // Invoke constructor
     const prev_upgrading = frame._upgrading_element;
+    const prev_consumed = frame._upgrading_consumed;
     const node = element.asNode();
     frame._upgrading_element = node;
-    defer frame._upgrading_element = prev_upgrading;
+    frame._upgrading_consumed = false;
+    defer {
+        frame._upgrading_element = prev_upgrading;
+        frame._upgrading_consumed = prev_consumed;
+    }
 
     // PERFORMANCE OPTIMIZATION: This pattern is discouraged in general code.
     // Used here because: (1) multiple early returns before needing Local,

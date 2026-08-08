@@ -219,6 +219,7 @@ pub const DispatchError = error{
 pub const DispatchDirectOptions = struct {
     context: []const u8 = "dispatchDirect",
     inject_target: bool = true,
+    run_microtasks: bool = true,
 };
 
 /// Direct dispatch for non-DOM targets. No propagation - just calls the property
@@ -249,7 +250,9 @@ pub fn dispatchDirect(
     var ls: js.Local.Scope = undefined;
     ctx.localScope(&ls);
     defer {
-        ls.local.runMicrotasks();
+        if (comptime opts.run_microtasks) {
+            ls.local.runMicrotasks();
+        }
         ls.deinit();
     }
 

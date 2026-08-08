@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="create_element_reports_thrown_exception">
+    {
+        // https://dom.spec.whatwg.org/#concept-create-element -- a failed
+        // synchronous construction is reported to the global, and the very
+        // exception object must reach window.onerror.
+        const thrown = new Error('from constructor');
+        class ThrowsInConstructor extends HTMLElement {
+            constructor() {
+                super();
+                throw thrown;
+            }
+        }
+        customElements.define('ce-report-throw', ThrowsInConstructor);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        const el = document.createElement('ce-report-throw');
+        window.onerror = null;
+
+        testing.expectEqual(true, reported === thrown);
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
+    }
+</script>
+
+<script id="create_element_reports_type_error_for_bad_return">
+    {
+        class ReturnsObject extends HTMLElement {
+            constructor() {
+                super();
+                return {};
+            }
+        }
+        customElements.define('ce-report-bad-return', ReturnsObject);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        document.createElement('ce-report-bad-return');
+        window.onerror = null;
+
+        testing.expectEqual('TypeError', reported.name);
+    }
+</script>
+
+<script id="create_element_reports_not_supported_for_state_violation">
+    {
+        class AddsAttribute extends HTMLElement {
+            constructor() {
+                super();
+                this.setAttribute('id', 'nope');
+            }
+        }
+        customElements.define('ce-report-attribute', AddsAttribute);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        document.createElement('ce-report-attribute');
+        window.onerror = null;
+
+        testing.expectEqual('NotSupportedError', reported.name);
+    }
+</script>
+
+<script id="create_element_rejects_adoption_into_another_document">
+    {
+        const other = document.implementation.createHTMLDocument();
+        class AdoptsSelf extends HTMLElement {
+            constructor() {
+                super();
+                other.adoptNode(this);
+            }
+        }
+        customElements.define('ce-report-adopts-self', AdoptsSelf);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        const el = document.createElement('ce-report-adopts-self');
+        window.onerror = null;
+
+        testing.expectEqual('NotSupportedError', reported.name);
+        testing.expectEqual(true, el instanceof HTMLUnknownElement);
+    }
+</script>
+
+<script id="upgrade_rejects_constructor_returning_another_element">
+    {
+        // https://html.spec.whatwg.org/#upgrades -- the construction result
+        // must be SameValue with the element being upgraded.
+        const a = document.createElement('ce-report-same-value');
+        const b = document.createElement('ce-report-same-value');
+        document.documentElement.appendChild(a);
+        document.documentElement.appendChild(b);
+
+        class ReturnsOther extends HTMLElement {
+            constructor() {
+                super();
+                if (this === a) {
+                    return b;
+                }
+            }
+        }
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        customElements.define('ce-report-same-value', ReturnsOther);
+        window.onerror = null;
+
+        testing.expectEqual('TypeError', reported.name);
+        // a's failed upgrade must not prevent b's.
+        testing.expectEqual(true, b instanceof ReturnsOther);
+    }
+</script>
+
+<script id="upgrade_rejects_self_instantiation">
+    {
+        // The construction stack's "already constructed" marker: a constructor
+        // instantiating itself during its own upgrade is a TypeError.
+        class InstantiatesItself extends HTMLElement {
+            constructor(stop) {
+                super();
+                if (!stop) {
+                    new InstantiatesItself(true);
+                }
+            }
+        }
+        const el = document.createElement('ce-instantiates-itself');
+        document.documentElement.appendChild(el);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        customElements.define('ce-instantiates-itself', InstantiatesItself);
+        window.onerror = null;
+
+        testing.expectEqual('TypeError', reported.name);
+    }
+</script>
+
+<script id="failed_upgrade_is_not_retried">
+    {
+        let attempts = 0;
+        class FailsToUpgrade extends HTMLElement {
+            constructor() {
+                super();
+                attempts += 1;
+                throw new Error('nope');
+            }
+        }
+        const el = document.createElement('ce-fails-to-upgrade');
+        document.documentElement.appendChild(el);
+
+        window.onerror = () => true;
+        customElements.define('ce-fails-to-upgrade', FailsToUpgrade);
+
+        // Reconnecting a "failed" element must not attempt another upgrade.
+        el.remove();
+        document.documentElement.appendChild(el);
+        window.onerror = null;
+
+        testing.expectEqual(1, attempts);
+    }
+</script>
+
+<script id="parser_reports_constructor_exception">
+    {
+        // The parser's create-element path must report too, and still insert
+        // the HTMLUnknownElement fallback.
+        const thrown = new Error('from parser constructor');
+        class ParserThrows extends HTMLElement {
+            constructor() {
+                super();
+                throw thrown;
+            }
+        }
+        customElements.define('ce-parser-throws', ParserThrows);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        const container = document.createElement('div');
+        container.innerHTML = '<ce-parser-throws></ce-parser-throws>';
+        window.onerror = null;
+
+        testing.expectEqual(true, reported === thrown);
+        testing.expectEqual(1, container.children.length);
+        testing.expectEqual(true, container.firstElementChild instanceof HTMLUnknownElement);
+    }
+</script>
+
+<script id="upgrade_rejects_self_instantiation_before_super">
+    {
+        // The before-super variant: the nested construction consumes the
+        // upgrading element, so the outer super() finds the marker set.
+        class InstantiatesBeforeSuper extends HTMLElement {
+            constructor(stop) {
+                if (!stop) {
+                    new InstantiatesBeforeSuper(true);
+                }
+                super();
+            }
+        }
+        const el = document.createElement('ce-before-super');
+        document.documentElement.appendChild(el);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        customElements.define('ce-before-super', InstantiatesBeforeSuper);
+        window.onerror = null;
+
+        testing.expectEqual('TypeError', reported.name);
+    }
+</script>
+
+<script id="construction_during_upgrade_is_isolated">
+    {
+        // createElement of another custom element inside an upgrading
+        // constructor must not inherit the outer construction's
+        // already-constructed marker.
+        class Inner extends HTMLElement {}
+        customElements.define('ce-marker-inner', Inner);
+
+        let inner = null;
+        class Outer extends HTMLElement {
+            constructor() {
+                super();
+                inner = document.createElement('ce-marker-inner');
+            }
+        }
+        const el = document.createElement('ce-marker-outer');
+        document.documentElement.appendChild(el);
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        customElements.define('ce-marker-outer', Outer);
+        window.onerror = null;
+
+        testing.expectEqual(null, reported);
+        testing.expectEqual(true, inner instanceof Inner);
+        testing.expectEqual(true, el instanceof Outer);
+    }
+</script>
+
+<script id="report_during_report_dispatch_is_not_swallowed">
+    {
+        // Regression test: reportError's event dispatch must not pump the
+        // microtask queue. It used to, and a report fired by a pumped
+        // continuation was silently dropped by the error-reporting-mode
+        // guard.
+        class ThrowsSync extends HTMLElement {
+            constructor() {
+                super();
+                throw new Error('sync');
+            }
+        }
+        class ThrowsNested extends HTMLElement {
+            constructor() {
+                super();
+                throw new Error('nested');
+            }
+        }
+        customElements.define('ce-swallow-sync', ThrowsSync);
+        customElements.define('ce-swallow-nested', ThrowsNested);
+
+        window.__nested_report = null;
+        Promise.resolve().then(() => {
+            window.onerror = (m, u, l, c, error) => { window.__nested_report = error; return true; };
+            document.createElement('ce-swallow-nested');
+            window.onerror = null;
+        });
+
+        let reported = null;
+        window.onerror = (m, u, l, c, error) => { reported = error; return true; };
+        document.createElement('ce-swallow-sync');
+        window.onerror = null;
+        testing.expectEqual('sync', reported.message);
+    }
+</script>
+
+<script id="report_during_report_dispatch_is_not_swallowed_check">
+    {
+        // The continuation queued by the previous block has run by now (the
+        // microtask checkpoint sits between the two script evaluations) and
+        // its report must have been delivered.
+        testing.expectEqual('nested', window.__nested_report.message);
+    }
+</script>

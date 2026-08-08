@@ -639,6 +639,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     // We still dispatch so that addEventListener('error', ...) listeners fire.
     try frame._event_manager.dispatchDirect(target, event, null, .{
         .context = "window.reportError",
+        .run_microtasks = false,
     });
 
     if (comptime lp.IS_TEST == false) {
