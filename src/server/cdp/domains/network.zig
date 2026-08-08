@@ -23,15 +23,15 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const SafeString = @import("../SafeString.zig");
 
-const Config = @import("../../Config.zig");
-const URL = @import("../../browser/URL.zig");
-const Mime = @import("../../browser/Mime.zig");
-const Notification = @import("../../Notification.zig");
+const Config = @import("../../../Config.zig");
+const URL = @import("../../../browser/URL.zig");
+const Mime = @import("../../../browser/Mime.zig");
+const Notification = @import("../../../Notification.zig");
 
-const HttpClient = @import("../../network/HttpClient.zig");
-const Cache = @import("../../network/cache/Cache.zig");
-const Headers = @import("../../network/HttpClient.zig").Headers;
-const Transfer = @import("../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
+const Cache = @import("../../../network/cache/Cache.zig");
+const Headers = @import("../../../network/HttpClient.zig").Headers;
+const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const CdpStorage = @import("storage.zig");
 
@@ -161,7 +161,7 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
+const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
 // Only matches the cookie on provided parameters
 fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {

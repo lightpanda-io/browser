@@ -28,7 +28,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const CDP = @import("cdp/CDP.zig");
+const CDP = @import("server/cdp/CDP.zig");
 
 const DoublyLinkedList = std.DoublyLinkedList;
 

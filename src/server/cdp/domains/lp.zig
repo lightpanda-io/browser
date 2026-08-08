@@ -22,8 +22,8 @@ const lp = @import("lightpanda");
 const CDP = @import("../CDP.zig");
 
 const Node = @import("../Node.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
-const Robots = @import("../../network/Robots.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Robots = @import("../../../network/Robots.zig");
 
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;

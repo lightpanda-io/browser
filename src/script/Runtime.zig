@@ -19,12 +19,12 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const browser_tools = lp.tools;
-const BrowserTool = browser_tools.Tool;
-const CDPNode = @import("../cdp/Node.zig");
 const Schema = @import("Schema.zig");
+const CDPNode = @import("../server/cdp/Node.zig");
 
 const v8 = lp.js.v8;
+const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
 
 const Runtime = @This();
 

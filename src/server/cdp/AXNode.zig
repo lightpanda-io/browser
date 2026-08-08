@@ -19,9 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Frame = @import("../browser/Frame.zig");
-const DOMNode = @import("../browser/webapi/Node.zig");
-const Label = @import("../browser/webapi/element/html/Label.zig");
+const Frame = @import("../../browser/Frame.zig");
+const DOMNode = @import("../../browser/webapi/Node.zig");
+const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const Node = @import("Node.zig");
 

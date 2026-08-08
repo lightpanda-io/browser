@@ -19,8 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Frame = @import("../browser/Frame.zig");
-const DOMNode = @import("../browser/webapi/Node.zig");
+const Frame = @import("../../browser/Frame.zig");
+const DOMNode = @import("../../browser/webapi/Node.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;

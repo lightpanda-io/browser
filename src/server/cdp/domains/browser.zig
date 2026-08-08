@@ -20,11 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
-const Session = @import("../../browser/Session.zig");
-const Notification = @import("../../Notification.zig");
+
+const Session = @import("../../../browser/Session.zig");
+const Notification = @import("../../../Notification.zig");
+const PermissionState = @import("../../../browser/webapi/Permissions.zig").State;
 
 const log = lp.log;
-const PermissionState = @import("../../browser/webapi/Permissions.zig").State;
 
 // TODO: hard coded data
 const PROTOCOL_VERSION = "1.3";

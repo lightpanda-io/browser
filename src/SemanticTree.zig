@@ -26,8 +26,8 @@ const SelectorPath = @import("browser/SelectorPath.zig");
 const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
 const Node = @import("browser/webapi/Node.zig");
-const AXNode = @import("cdp/AXNode.zig");
-const CDPNode = @import("cdp/Node.zig");
+const AXNode = @import("server/cdp/AXNode.zig");
+const CDPNode = @import("server/cdp/Node.zig");
 
 const log = lp.log;
 const Frame = lp.Frame;

@@ -23,16 +23,16 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Node = @import("../Node.zig");
 
-const dump = @import("../../browser/dump.zig");
-const js = @import("../../browser/js/js.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
-const Selector = @import("../../browser/webapi/selector/Selector.zig");
-const xpath = @import("../../browser/xpath/Evaluator.zig");
-const Input = @import("../../browser/webapi/element/html/Input.zig");
-const File = @import("../../browser/webapi/File.zig");
-const Blob = @import("../../browser/webapi/Blob.zig");
-const Factory = @import("../../browser/Factory.zig");
-const Page = @import("../../browser/Page.zig");
+const dump = @import("../../../browser/dump.zig");
+const js = @import("../../../browser/js/js.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Selector = @import("../../../browser/webapi/selector/Selector.zig");
+const xpath = @import("../../../browser/xpath/Evaluator.zig");
+const Input = @import("../../../browser/webapi/element/html/Input.zig");
+const File = @import("../../../browser/webapi/File.zig");
+const Blob = @import("../../../browser/webapi/Blob.zig");
+const Factory = @import("../../../browser/Factory.zig");
+const Page = @import("../../../browser/Page.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;

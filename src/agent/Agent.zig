@@ -32,7 +32,7 @@ const ScriptRuntime = lp.Runtime;
 const Candidate = zenai.provider.Candidate;
 
 const App = @import("../App.zig");
-const CDPNode = @import("../cdp/Node.zig");
+const CDPNode = @import("../server/cdp/Node.zig");
 const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");

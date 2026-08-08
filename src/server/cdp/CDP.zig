@@ -19,23 +19,23 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const App = @import("../App.zig");
-const Inbox = @import("../Inbox.zig");
-const Notification = @import("../Notification.zig");
+const App = @import("../../App.zig");
+const Inbox = @import("../../Inbox.zig");
+const Notification = @import("../../Notification.zig");
 
-const WS = @import("../network/WS.zig");
-const http = @import("../network/http.zig");
-const Network = @import("../network/Network.zig");
-const Transfer = @import("../network/HttpClient.zig").Transfer;
+const WS = @import("../../network/WS.zig");
+const http = @import("../../network/http.zig");
+const Network = @import("../../network/Network.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
 
-const js = @import("../browser/js/js.zig");
-const Browser = @import("../browser/Browser.zig");
-const Session = @import("../browser/Session.zig");
-const Frame = @import("../browser/Frame.zig");
-const Page = @import("../browser/Page.zig");
-const Mime = @import("../browser/Mime.zig");
-const Element = @import("../browser/webapi/Element.zig");
-const Label = @import("../browser/webapi/element/html/Label.zig");
+const js = @import("../../browser/js/js.zig");
+const Browser = @import("../../browser/Browser.zig");
+const Session = @import("../../browser/Session.zig");
+const Frame = @import("../../browser/Frame.zig");
+const Page = @import("../../browser/Page.zig");
+const Mime = @import("../../browser/Mime.zig");
+const Element = @import("../../browser/webapi/Element.zig");
+const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
@@ -101,7 +101,6 @@ pub fn init(
     self: *CDP,
     app: *App,
     socket: posix.socket_t,
-    json_version_response: []const u8,
 ) !void {
     const allocator = app.allocator;
 
@@ -121,7 +120,7 @@ pub fn init(
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
     const http_client = &self.browser.http_client;
 
-    try self.conn.init(app, socket, json_version_response, &http_client.inbox);
+    try self.conn.init(app, socket, &http_client.inbox);
     errdefer self.conn.deinit();
 
     self.link = .{
@@ -1038,7 +1037,7 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedKey {
+    fn keyFromTransfer(transfer: *const HttpClient.Transfer) CDP.BrowserContext.CapturedKey {
         return if (transfer.req.resource_type == .document)
             .{ .kind = .loader, .id = transfer.req.loader_id }
         else
@@ -1554,7 +1553,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
-        .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
+        .shutdown_callback = HttpClient.noopShutdown,
     }, null);
     try testing.expectError(error.ClientDisconnected, client.syncRequest(transfer));
 }

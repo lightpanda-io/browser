@@ -20,7 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
-const Config = @import("../../Config.zig");
+const Config = @import("../../../Config.zig");
 
 const log = lp.log;
 

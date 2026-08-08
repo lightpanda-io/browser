@@ -21,13 +21,12 @@ const lp = @import("lightpanda");
 
 const CDP = @import("CDP.zig");
 
-const App = @import("../App.zig");
-const Inbox = @import("../Inbox.zig");
-const ArenaPool = @import("../ArenaPool.zig");
+const App = @import("../../App.zig");
+const Inbox = @import("../../Inbox.zig");
+const ArenaPool = @import("../../ArenaPool.zig");
 
-const WS = @import("../network/WS.zig");
-const sys_net = @import("../sys/net.zig");
-const header_parser = @import("../network/header_parser.zig");
+const WS = @import("../../network/WS.zig");
+const sys_net = @import("../../sys/net.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -35,25 +34,22 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const Connection = @This();
 
-pub const State = enum { handshaking, live };
+// .starting covers the window until the server registers it with the network thread.
+pub const State = enum { starting, live };
 
 // reference to http_client.inbox
 inbox: *Inbox,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
 socket_flags: usize,
-state: State = .handshaking,
+state: State = .starting,
 reader: WS.Reader(true),
 send_arena: ArenaAllocator,
-metrics_enabled: bool,
-max_http_message_size: usize,
-json_version_response: []const u8,
 
 pub fn init(
     self: *Connection,
     app: *App,
     socket: posix.socket_t,
-    json_version_response: []const u8,
     inbox: *Inbox,
 ) !void {
     const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
@@ -70,11 +66,8 @@ pub fn init(
         .socket = socket,
         .arena_pool = &app.arena_pool,
         .socket_flags = socket_flags,
-        .metrics_enabled = config.metricsEndpointEnabled(),
-        .max_http_message_size = config.cdpMaxHTTPMessageSize(),
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
-        .json_version_response = json_version_response,
     };
 }
 
@@ -164,43 +157,6 @@ pub fn sendJSONRaw(
     return self.send(framed);
 }
 
-pub const HttpResult = enum { more, upgraded, close };
-
-pub fn handshake(self: *Connection) !bool {
-    while (true) {
-        var pfds = [_]posix.pollfd{.{
-            .fd = self.socket,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        }};
-        const n = try posix.poll(&pfds, 5000);
-        if (n == 0) {
-            log.info(.cdp, "CDP handshake timeout", .{});
-            return false;
-        }
-        const read_bytes = self.read() catch |err| {
-            log.warn(.cdp, "CDP read", .{ .err = err });
-            return false;
-        };
-        if (read_bytes == 0) {
-            log.info(.cdp, "CDP disconnect", .{});
-            return false;
-        }
-        const result = self.processHttpRequest() catch return false;
-        switch (result) {
-            .more => continue,
-            .upgraded => return true,
-            .close => return false,
-        }
-    }
-}
-
-pub fn read(self: *Connection) !usize {
-    const n = try posix.read(self.socket, self.reader.readBuf());
-    self.reader.len += n;
-    return n;
-}
-
 // Append as many bytes as fit into the reader's free space. Returns
 // the number of bytes copied. Used post-handshake when the network
 // thread owns socket reads.
@@ -224,130 +180,6 @@ pub fn feedBytes(self: *Connection, data: []const u8) usize {
     self.reader.len += n;
     return n;
 }
-
-fn processHttpRequest(self: *Connection) !HttpResult {
-    lp.assert(self.reader.pos == 0, "Connection.HTTP pos", .{ .pos = self.reader.pos });
-    const request = self.reader.buf[0..self.reader.len];
-
-    if (request.len > self.max_http_message_size) {
-        log.warn(.cdp, "CDP message too big", .{ .type = "HTTP", .len = request.len, .hint = "See the --cdp-max-http-message-size <bytes>" });
-        self.sendHttpError(413, "Request too large");
-        return error.RequestTooLarge;
-    }
-
-    // we're only expecting [body-less] GET requests.
-    if (std.mem.endsWith(u8, request, "\r\n\r\n") == false) {
-        // we need more data, put any more data here
-        return .more;
-    }
-
-    // the next incoming data can go to the front of our buffer
-    defer self.reader.len = 0;
-    return self.handleHttpRequest(request) catch |err| {
-        switch (err) {
-            error.NotFound => self.sendHttpError(404, "Not found"),
-            error.InvalidRequest => self.sendHttpError(400, "Invalid request"),
-            error.InvalidProtocol => self.sendHttpError(400, "Invalid HTTP protocol"),
-            error.MissingHeaders => self.sendHttpError(400, "Missing required header"),
-            error.InvalidUpgradeHeader => self.sendHttpError(400, "Unsupported upgrade type"),
-            error.InvalidVersionHeader => self.sendHttpError(400, "Invalid websocket version"),
-            error.InvalidConnectionHeader => self.sendHttpError(400, "Invalid connection header"),
-            else => {
-                log.err(.app, "server 500", .{ .err = err, .req = request[0..@min(100, request.len)] });
-                self.sendHttpError(500, "Internal Server Error");
-            },
-        }
-        return err;
-    };
-}
-
-fn handleHttpRequest(self: *Connection, request: []u8) !HttpResult {
-    if (request.len < 18) {
-        // 18 is [generously] the smallest acceptable HTTP request
-        return error.InvalidRequest;
-    }
-
-    if (std.mem.eql(u8, request[0..4], "GET ") == false) {
-        return error.NotFound;
-    }
-
-    const url_end = std.mem.indexOfScalarPos(u8, request, 4, ' ') orelse {
-        return error.InvalidRequest;
-    };
-
-    const url = request[4..url_end];
-
-    if (std.mem.eql(u8, url, "/")) {
-        try self.upgrade(request);
-        return .upgraded;
-    }
-
-    if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
-        try self.send(self.json_version_response);
-        // Chromedp (a Go driver) does an http request to /json/version
-        // then to / (websocket upgrade) using a different connection.
-        // Since we only allow 1 connection at a time, the 2nd one (the
-        // websocket upgrade) blocks until the first one times out.
-        // We can avoid that by closing the connection. json_version_response
-        // has a Connection: Close header too.
-        self.shutdown();
-        return .close;
-    }
-
-    if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
-        std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
-    {
-        try self.send(empty_json_list_response);
-        self.shutdown();
-        return .close;
-    }
-
-    if (std.mem.eql(u8, url, "/json/protocol") or std.mem.eql(u8, url, "/json/protocol/")) {
-        try self.send(protocol_response);
-        self.shutdown();
-        return .close;
-    }
-
-    if (self.metrics_enabled and std.mem.eql(u8, url, "/metrics")) {
-        try self.sendMetrics();
-        self.shutdown();
-        return .close;
-    }
-
-    return error.NotFound;
-}
-
-fn sendMetrics(self: *Connection) !void {
-    const allocator = self.send_arena.allocator();
-
-    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
-    lp.metrics.write(&aw.writer);
-    const body = aw.written();
-
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\r\n" ++
-        "{s}", .{ body.len, body });
-    try self.send(response);
-}
-
-const empty_json_list_response =
-    "HTTP/1.1 200 OK\r\n" ++
-    "Content-Length: 2\r\n" ++
-    "Connection: Close\r\n" ++
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-    "[]";
-
-const protocol_json = @embedFile("../data/protocol.json");
-
-const protocol_response = std.fmt.comptimePrint(
-    "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n",
-    .{protocol_json.len},
-) ++ protocol_json;
 
 // Framing-only iteration over received bytes. processMessages no
 // longer auto-replies pong/close or sends close-on-error — the Network
@@ -431,110 +263,6 @@ fn pushCdp(self: *Connection, bytes: []const u8) !bool {
         .input = input,
     } });
     return true;
-}
-
-pub fn upgrade(self: *Connection, request: []u8) !void {
-    // We need to extract the `Sec-WebSocket-Key` value.
-    var sec_websocket_key: []const u8 = "";
-    // We need to make sure that we got all the necessary headers + values;
-    // a bit per required header.
-    const FOUND_UPGRADE: u8 = 1 << 0; // Upgrade: websocket
-    const FOUND_VERSION: u8 = 1 << 1; // Sec-WebSocket-Version: 13
-    const FOUND_CONNECTION: u8 = 1 << 2; // Connection: upgrade
-    const FOUND_KEY: u8 = 1 << 3; // Sec-WebSocket-Key
-    const FOUND_ALL = FOUND_UPGRADE | FOUND_VERSION | FOUND_CONNECTION | FOUND_KEY;
-
-    // A malformed request line maps to a 400 in processHttpRequest.
-    const method, _, const version, var header_iterator = header_parser.parseRequest(request) catch {
-        return error.InvalidProtocol;
-    };
-    if (method != .get or version != .@"1.1") {
-        return error.InvalidProtocol;
-    }
-
-    var found_headers: u8 = 0;
-
-    // A malformed header maps to a 400 in processHttpRequest.
-    while (header_iterator.next() catch return error.InvalidRequest) |header| {
-        const key = header.key;
-        const value = header.value;
-
-        // Header names are case-insensitive; `Header.parse` keeps their
-        // original casing.
-        if (std.ascii.eqlIgnoreCase(key, "upgrade")) {
-            if (!std.ascii.eqlIgnoreCase("websocket", value)) {
-                return error.InvalidUpgradeHeader;
-            }
-            found_headers |= FOUND_UPGRADE;
-        } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-version")) {
-            if (value.len != 2 or value[0] != '1' or value[1] != '3') {
-                return error.InvalidVersionHeader;
-            }
-            found_headers |= FOUND_VERSION;
-        } else if (std.ascii.eqlIgnoreCase(key, "connection")) {
-            // find if connection header has upgrade in it, example header:
-            // Connection: keep-alive, Upgrade
-            if (std.ascii.indexOfIgnoreCase(value, "upgrade") == null) {
-                return error.InvalidConnectionHeader;
-            }
-            found_headers |= FOUND_CONNECTION;
-        } else if (std.ascii.eqlIgnoreCase(key, "sec-websocket-key")) {
-            sec_websocket_key = value;
-            found_headers |= FOUND_KEY;
-        }
-    }
-
-    // Check if we've received all related headers.
-    if (found_headers != FOUND_ALL) {
-        return error.MissingHeaders;
-    }
-
-    // our caller has already made sure this request ended in \r\n\r\n
-    // so it isn't something we need to check again
-
-    const alloc = self.send_arena.allocator();
-
-    const response = blk: {
-        // Response to an upgrade request is always this, with
-        // the Sec-Websocket-Accept value a spacial sha1 hash of the
-        // request "sec-websocket-version" and a magic value.
-
-        const template =
-            "HTTP/1.1 101 Switching Protocols\r\n" ++
-            "Upgrade: websocket\r\n" ++
-            "Connection: upgrade\r\n" ++
-            "Sec-Websocket-Accept: 0000000000000000000000000000\r\n\r\n";
-
-        // The response will be sent via the IO Loop and thus has to have its
-        // own lifetime.
-        const res = try alloc.dupe(u8, template);
-
-        // magic response
-        const key_pos = res.len - 32;
-        var h: [20]u8 = undefined;
-        var hasher = std.crypto.hash.Sha1.init(.{});
-        hasher.update(sec_websocket_key);
-        // websocket spec always used this value
-        hasher.update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-        hasher.final(&h);
-
-        _ = std.base64.standard.Encoder.encode(res[key_pos .. key_pos + 28], h[0..]);
-
-        break :blk res;
-    };
-
-    return self.send(response);
-}
-
-pub fn sendHttpError(self: *Connection, comptime status: u16, comptime body: []const u8) void {
-    const response = std.fmt.comptimePrint(
-        "HTTP/1.1 {d} \r\nConnection: Close\r\nContent-Length: {d}\r\n\r\n{s}",
-        .{ status, body.len, body },
-    );
-
-    // we're going to close this connection anyways, swallowing any
-    // error seems safe
-    self.send(response) catch {};
 }
 
 pub fn getAddress(self: *Connection) !sys_net.IpAddress {

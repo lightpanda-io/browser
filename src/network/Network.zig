@@ -23,7 +23,7 @@ const builtin = @import("builtin");
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 
-const CDP = @import("../cdp/CDP.zig");
+const CDP = @import("../server/cdp/CDP.zig");
 const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
 const crypto = @import("../sys/libcrypto.zig");

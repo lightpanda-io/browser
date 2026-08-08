@@ -20,11 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const App = @import("App.zig");
-const Config = @import("Config.zig");
+const App = @import("../App.zig");
+const Config = @import("../Config.zig");
+const sys_net = @import("../sys/net.zig");
 
 const CDP = @import("cdp/CDP.zig");
-const sys_net = @import("sys/net.zig");
+const Handshake = @import("Handshake.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -177,6 +178,14 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer _ = std.c.close(socket);
 
+    const route = Handshake.run(self.app, socket, self.json_version_response) orelse return;
+    switch (route) {
+        .cdp => self.serveCDP(socket),
+    }
+}
+
+// The socket is an upgraded websocket at this point.
+fn serveCDP(self: *Server, socket: posix.socket_t) void {
     const cdp = blk: {
         const allocator = self.app.allocator;
         self.cdp_mutex.lockUncancelable(lp.io);
@@ -189,7 +198,7 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         self.cdp_pool.destroy(cdp);
     }
 
-    cdp.init(self.app, socket, self.json_version_response) catch |err| {
+    cdp.init(self.app, socket) catch |err| {
         log.err(.app, "CDP init", .{ .err = err });
         return;
     };
@@ -219,23 +228,12 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         }
     }
 
-    const upgraded = cdp.conn.handshake() catch |err| {
-        log.err(.app, "CDP handshake", .{ .err = err });
-        return;
-    };
-
-    if (!upgraded) {
-        return;
-    }
-
-    // only count websocket (i.e. CDP) connections, not HTTP requests like
-    // /json/version probes or /metrics scrapes
     lp.metrics.cdp_connections.incr();
     lp.metrics.cdp_active_connections.incr();
     defer lp.metrics.cdp_active_connections.decr();
 
     {
-        // Transition from .handshake state to .live
+        // Transition from .starting state to .live
         // Lock needed even though the main thread hasn't seen this yet because
         // shutdown could access this from the sighandler thread.
         self.cdp_mutex.lockUncancelable(lp.io);
@@ -312,7 +310,7 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
 
-const testing = @import("testing.zig");
+const testing = @import("../testing.zig");
 test "server: buildJSONVersionResponse" {
     const res = try buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
     defer testing.test_app.allocator.free(res);
@@ -706,7 +704,7 @@ const TestClient = struct {
     buf: [8192]u8 = undefined,
     reader: WS.Reader(false),
 
-    const WS = @import("network/WS.zig");
+    const WS = @import("../network/WS.zig");
 
     fn deinit(self: *TestClient) void {
         _ = std.c.close(self.socket);

@@ -20,13 +20,14 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
+const CDPNode = @import("../server/cdp/Node.zig");
+
+const DOMNode = @import("webapi/Node.zig");
+const Selector = @import("webapi/selector/Selector.zig");
+
 const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
-
-const DOMNode = @import("webapi/Node.zig");
-const CDPNode = @import("../cdp/Node.zig");
-const Selector = @import("webapi/selector/Selector.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
 /// agent prepends this to its own system prompt; the MCP server returns
