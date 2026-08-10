@@ -251,7 +251,7 @@ fn addSegment(self: *HostnameTrie, allocator: Allocator, hostname: []const u8, l
     return .{ .len = @intCast(len), .boundary = false, .offset = @intCast(offset) };
 }
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
 test "adblock.HostnameTrie: exact and subdomain matching" {
     var trie: HostnameTrie = try .init(testing.allocator);
@@ -266,7 +266,7 @@ test "adblock.HostnameTrie: exact and subdomain matching" {
 
     const needle = "metrics.ssl.doubleclick.net";
     const offset = trie.matches(root, needle).?;
-    try testing.expectEqualStrings("doubleclick.net", needle[offset..]);
+    try testing.expectString("doubleclick.net", needle[offset..]);
 
     try testing.expectEqual(null, trie.matches(root, "google.net"));
     try testing.expectEqual(null, trie.matches(root, "evilgoogle.com"));

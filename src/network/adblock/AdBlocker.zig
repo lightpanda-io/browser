@@ -20,16 +20,13 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-const adblock = @import("adblock.zig");
+const Parser = @import("Parser.zig");
 const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
 
 const AdBlocker = @This();
 
-arena: std.heap.ArenaAllocator,
-/// Network filters the tries cannot express: patterns, type/party/domain
-/// constraints, badfilter directives.
-filters: std.ArrayList(NetworkFilter),
+allocator: Allocator,
 trie: HostnameTrie,
 blocked: u32,
 /// $important hostname blocks: they beat exceptions.
@@ -45,8 +42,7 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
     const allowed = try trie.createTrie(allocator);
 
     return .{
-        .arena = std.heap.ArenaAllocator.init(allocator),
-        .filters = .empty,
+        .allocator = allocator,
         .trie = trie,
         .blocked = blocked,
         .blocked_important = blocked_important,
@@ -55,40 +51,38 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
 }
 
 pub fn deinit(self: *AdBlocker) void {
-    self.trie.deinit(self.arena.child_allocator);
-    self.arena.deinit();
+    self.trie.deinit(self.allocator);
 }
 
-pub fn parse(self: *AdBlocker, reader: *Io.Reader) !adblock.ParseStats {
-    var scratch_instance = std.heap.ArenaAllocator.init(self.arena.child_allocator);
+pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
+    var scratch_instance = std.heap.ArenaAllocator.init(self.allocator);
     defer scratch_instance.deinit();
     const scratch = scratch_instance.allocator();
 
-    const arena = self.arena.allocator();
-    var parser: adblock.Parser = .init(reader);
-
-    var parsed: std.ArrayList(NetworkFilter) = .empty;
+    var parser: Parser = .init(reader);
     while (try parser.next(scratch)) |filter| {
-        if (self.trieRoot(&filter)) |root| {
-            // Duplicate and subdomain-of-existing entries drop.
-            self.trie.add(self.arena.child_allocator, root, filter.hostname) catch |err| switch (err) {
-                error.OutOfMemory, error.TrieFull => |e| return e,
-                // The parser never yields a .hostname filter without one.
-                error.InvalidHostname => unreachable,
-            };
-            continue;
-        }
-        try parsed.append(scratch, try filter.dupe(arena));
-    }
+        // Nothing survives the iteration but the trie entry, so the
+        // scratch arena is recycled rather than grown per filter.
+        defer _ = scratch_instance.reset(.retain_capacity);
 
-    try self.filters.appendSlice(arena, parsed.items);
-    return parser.stats;
+        // Filters the tries cannot express (patterns, type/party/domain
+        // constraints, badfilter directives) are dropped: deciding those
+        // needs a request engine we do not have yet, and retaining them
+        // costs tens of MB on a list like EasyList.
+        const root = self.trieRoot(&filter) orelse continue;
+        // Duplicate and subdomain-of-existing entries drop.
+        self.trie.add(self.allocator, root, filter.hostname) catch |err| switch (err) {
+            error.OutOfMemory, error.TrieFull => |e| return e,
+            // The parser never yields a .hostname filter without one.
+            error.InvalidHostname => unreachable,
+        };
+    }
 }
 
 pub const Verdict = enum { none, allowed, blocked };
 
-/// `.none` means no hostname-wide filter applies; the filters kept in `filters` may
-/// still have an opinion once the request engine exists.
+/// `.none` means no hostname-wide filter applies. Filters that need more
+/// than a hostname match are not represented here at all.
 pub fn matchHostname(self: *const AdBlocker, hostname: []const u8) Verdict {
     if (self.trie.matches(self.blocked_important, hostname) != null) return .blocked;
     if (self.trie.matches(self.allowed, hostname) != null) return .allowed;
@@ -97,7 +91,7 @@ pub fn matchHostname(self: *const AdBlocker, hostname: []const u8) Verdict {
 }
 
 /// The trie holding this filter, or null when the filter's behavior is
-/// more than a hostname-wide match and must stay in `filters`.
+/// more than a hostname-wide match.
 fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
     if (filter.kind != .hostname) return null;
     // `||host` without '^' also matches hostnames merely *starting* with
@@ -117,9 +111,9 @@ fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
     return if (filter.important) self.blocked_important else self.blocked;
 }
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
-test "adblock.AdBlocker: parse accumulates filters across lists" {
+test "adblock.AdBlocker: parse accumulates across lists" {
     var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();
 
@@ -129,13 +123,10 @@ test "adblock.AdBlocker: parse accumulates filters across lists" {
         \\@@||cdn.example.com^$script
         \\example.com##.ad-banner
     );
-    const first_stats = try blocker.parse(&first);
+    try blocker.parse(&first);
 
     // The pure-hostname block went into the trie; the $script exception
-    // is type-restricted and stays a filter.
-    try testing.expectEqual(1, blocker.filters.items.len);
-    try testing.expectEqual(2, first_stats.network);
-    try testing.expectEqual(1, first_stats.unsupported); // cosmetic line
+    // is type-restricted, so it is dropped rather than allowing the host.
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
     try testing.expectEqual(.blocked, blocker.matchHostname("sub.ads.example.com"));
     try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
@@ -143,21 +134,11 @@ test "adblock.AdBlocker: parse accumulates filters across lists" {
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
     );
-    const second_stats = try blocker.parse(&second);
+    try blocker.parse(&second);
 
-    try testing.expectEqual(2, blocker.filters.items.len);
-    try testing.expectEqual(1, second_stats.network);
     try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
-
-    // The scratch arena holding each list's text is gone: every retained
-    // string must have been deep-copied.
-    try testing.expect(blocker.filters.items[0].exception);
-    try testing.expectEqualStrings("cdn.example.com", blocker.filters.items[0].hostname);
-    const tracker = blocker.filters.items[1];
-    try testing.expectEqualStrings("tracker.net", tracker.hostname);
-    try testing.expect(!tracker.first_party);
-    try testing.expectEqualStrings("news.com", tracker.domains.included[0].value);
-    try testing.expectEqualStrings("sports.news.com", tracker.domains.excluded[0].value);
+    // The first list's entries survived the second parse.
+    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
 }
 
 test "adblock.AdBlocker: hostname verdict precedence" {
@@ -170,7 +151,7 @@ test "adblock.AdBlocker: hostname verdict precedence" {
         \\||evil.com^$important
         \\@@||evil.com^
     );
-    _ = try blocker.parse(&list);
+    try blocker.parse(&list);
 
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
     // The exception wins over the plain block...
@@ -191,9 +172,8 @@ test "adblock.AdBlocker: trie absorbs every pure-hostname form" {
         \\bare-hostname.example.com
         \\0.0.0.0 hosts-style.example.io
     );
-    _ = try blocker.parse(&list);
+    try blocker.parse(&list);
 
-    try testing.expectEqual(0, blocker.filters.items.len);
     try testing.expectEqual(.blocked, blocker.matchHostname("anchored.example.com"));
     try testing.expectEqual(.blocked, blocker.matchHostname("bare-hostname.example.com"));
     try testing.expectEqual(.blocked, blocker.matchHostname("hosts-style.example.io"));
@@ -211,9 +191,8 @@ test "adblock.AdBlocker: constrained filters stay out of the trie" {
         \\||bad.example.com^$badfilter
         \\@@||cosmetic.example.com^$generichide
     );
-    _ = try blocker.parse(&list);
+    try blocker.parse(&list);
 
-    try testing.expectEqual(6, blocker.filters.items.len);
     try testing.expectEqual(.none, blocker.matchHostname("no-caret.example.com"));
     try testing.expectEqual(.none, blocker.matchHostname("typed.example.com"));
     try testing.expectEqual(.none, blocker.matchHostname("party.example.com"));

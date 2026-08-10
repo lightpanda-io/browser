@@ -281,23 +281,14 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     return filter;
 }
 
-/// Deep-copies the filter so it outlives the list text and arena it was
-/// parsed from (parsed slices may alias both).
-pub fn dupe(self: *const NetworkFilter, arena: std.mem.Allocator) std.mem.Allocator.Error!NetworkFilter {
-    var out = self.*;
-    out.pattern = try arena.dupe(u8, self.pattern);
-    out.hostname = try arena.dupe(u8, self.hostname);
-    out.domains = try self.domains.dupe(arena);
-    return out;
-}
-
 /// uBO allows a trailing "  # comment" on lines containing whitespace.
 fn stripInlineComment(line: []const u8) []const u8 {
-    var i: usize = 1;
-    while (i < line.len) : (i += 1) {
-        if (line[i] == '#' and std.ascii.isWhitespace(line[i - 1])) {
-            return std.mem.trimEnd(u8, line[0..i], &std.ascii.whitespace);
+    var start: usize = 1;
+    while (std.mem.indexOfScalarPos(u8, line, start, '#')) |pos| {
+        if (std.ascii.isWhitespace(line[pos - 1])) {
+            return std.mem.trimEnd(u8, line[0..pos], &std.ascii.whitespace);
         }
+        start = pos + 1;
     }
     return line;
 }
@@ -682,7 +673,7 @@ fn isRedirectHostName(host: []const u8) bool {
     return false;
 }
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
 fn testParse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilter {
     return parse(arena, line);
@@ -696,7 +687,7 @@ test "adblock.NetworkFilter: pure hostname forms" {
     // The single most common rule shape: `||host^`.
     var f = try testParse(arena, "||ads.example.com^");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectEqualStrings("ads.example.com", f.hostname);
+    try testing.expectString("ads.example.com", f.hostname);
     try testing.expect(f.require_separator);
     try testing.expect(!f.exception);
     // Implicit "strict" blocking: documents included.
@@ -712,13 +703,13 @@ test "adblock.NetworkFilter: pure hostname forms" {
     // Bare hostname line == ||host^ (uBO divergence from ABP).
     f = try testParse(arena, "tracker.example.net");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectEqualStrings("tracker.example.net", f.hostname);
+    try testing.expectString("tracker.example.net", f.hostname);
     try testing.expect(f.require_separator);
 
     // Raw IPv4 lines (URLhaus style).
     f = try testParse(arena, "101.126.11.168");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectEqualStrings("101.126.11.168", f.hostname);
+    try testing.expectString("101.126.11.168", f.hostname);
 }
 
 test "adblock.NetworkFilter: hosts-file lines" {
@@ -728,11 +719,11 @@ test "adblock.NetworkFilter: hosts-file lines" {
 
     var f = try testParse(arena, "0.0.0.0 ads.tracker.com");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectEqualStrings("ads.tracker.com", f.hostname);
+    try testing.expectString("ads.tracker.com", f.hostname);
     try testing.expectEqual(ResourceTypes.all.bits(), f.types.bits());
 
     f = try testParse(arena, "127.0.0.1 AdServer.Example.com # inline comment");
-    try testing.expectEqualStrings("adserver.example.com", f.hostname);
+    try testing.expectString("adserver.example.com", f.hostname);
 
     // Hosts noise is silently ignored, not an error.
     try testing.expectError(error.Ignored, testParse(arena, "127.0.0.1 localhost"));
@@ -748,27 +739,27 @@ test "adblock.NetworkFilter: anchors and pattern kinds" {
 
     var f = try testParse(arena, "/banner/ads.");
     try testing.expectEqual(.plain, f.kind);
-    try testing.expectEqualStrings("/banner/ads.", f.pattern);
+    try testing.expectString("/banner/ads.", f.pattern);
 
     // Starting AND ending with '/' means regex, not path substring — lists
     // write "*/banner/" or "/banner/*" to force substring semantics.
     f = try testParse(arena, "/banner/ads/");
     try testing.expectEqual(.regex, f.kind);
-    try testing.expectEqualStrings("banner/ads", f.pattern);
+    try testing.expectString("banner/ads", f.pattern);
 
     f = try testParse(arena, "|https://ads.");
     try testing.expectEqual(.plain, f.kind);
     try testing.expect(f.left_anchor);
-    try testing.expectEqualStrings("https://ads.", f.pattern);
+    try testing.expectString("https://ads.", f.pattern);
 
     f = try testParse(arena, "-Ad-300x250.gif|");
     try testing.expect(f.right_anchor);
-    try testing.expectEqualStrings("-ad-300x250.gif", f.pattern);
+    try testing.expectString("-ad-300x250.gif", f.pattern);
 
     f = try testParse(arena, "||example.com/ads/*.js");
     try testing.expectEqual(.wildcard, f.kind);
-    try testing.expectEqualStrings("example.com", f.hostname);
-    try testing.expectEqualStrings("/ads/*.js", f.pattern);
+    try testing.expectString("example.com", f.hostname);
+    try testing.expectString("/ads/*.js", f.pattern);
 
     f = try testParse(arena, "/ads/banner^");
     try testing.expectEqual(.wildcard, f.kind);
@@ -777,19 +768,19 @@ test "adblock.NetworkFilter: anchors and pattern kinds" {
     f = try testParse(arena, "*-ads-*|");
     try testing.expectEqual(.plain, f.kind);
     try testing.expect(!f.right_anchor);
-    try testing.expectEqualStrings("-ads-", f.pattern);
+    try testing.expectString("-ads-", f.pattern);
 
     // A pattern that trims down to a bare hostname shape gets promoted
     // (uBO flavor rules), even a single label.
     f = try testParse(arena, "*ads*|");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectEqualStrings("ads", f.hostname);
+    try testing.expectString("ads", f.hostname);
 
     // '||' hostname region containing '*' stays a generic pattern.
     f = try testParse(arena, "||example.*/ads");
     try testing.expectEqual(.wildcard, f.kind);
     try testing.expect(f.hostname_anchor);
-    try testing.expectEqualStrings("", f.hostname);
+    try testing.expectString("", f.hostname);
 }
 
 test "adblock.NetworkFilter: regex literals" {
@@ -799,12 +790,12 @@ test "adblock.NetworkFilter: regex literals" {
 
     var f = try testParse(arena, "/banner\\d+/");
     try testing.expectEqual(.regex, f.kind);
-    try testing.expectEqualStrings("banner\\d+", f.pattern);
+    try testing.expectString("banner\\d+", f.pattern);
 
     // '$' inside a regex must not be mistaken for an options separator.
     f = try testParse(arena, "/ads\\$/");
     try testing.expectEqual(.regex, f.kind);
-    try testing.expectEqualStrings("ads\\$", f.pattern);
+    try testing.expectString("ads\\$", f.pattern);
 
     // ... but a real options list after a regex still splits.
     f = try testParse(arena, "/^https?:.*banner/$image");
@@ -891,7 +882,7 @@ test "adblock.NetworkFilter: domain option" {
     const f = try testParse(arena, "||ads.com^$script,domain=news.com|~sports.news.com|google.*");
     try testing.expectEqual(2, f.domains.included.len);
     try testing.expectEqual(1, f.domains.excluded.len);
-    try testing.expectEqualStrings("news.com", f.domains.included[0].value);
+    try testing.expectString("news.com", f.domains.included[0].value);
     try testing.expect(f.domains.included[1].entity);
 
     try testing.expectError(error.InvalidOption, testParse(arena, "||ads.com^$domain="));
@@ -931,7 +922,7 @@ test "adblock.NetworkFilter: unsupported and modifier options" {
     // $redirect keeps its blocking half; the directive itself is ignored.
     var f = try testParse(arena, "||ads.com/ad.js$script,redirect=noopjs");
     try testing.expect(f.types.script);
-    try testing.expectEqualStrings("ads.com", f.hostname);
+    try testing.expectString("ads.com", f.hostname);
 
     f = try testParse(arena, "||ads.com/v.mp4$mp4");
     try testing.expect(f.types.media);
@@ -972,7 +963,7 @@ test "adblock.NetworkFilter: uppercase patterns are normalized" {
     const arena = arena_state.allocator();
 
     const f = try testParse(arena, "||Ads.Example.COM^");
-    try testing.expectEqualStrings("ads.example.com", f.hostname);
+    try testing.expectString("ads.example.com", f.hostname);
 
     // Option names are lowercase in the wild; uppercase names are unknown.
     try testing.expectError(error.UnknownOption, testParse(arena, "||ads.com^$Script"));
