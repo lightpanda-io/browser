@@ -33,21 +33,6 @@ pub const List = struct {
     pub fn isEmpty(self: *const List) bool {
         return self.included.len == 0 and self.excluded.len == 0;
     }
-
-    /// Deep-copies the list so it outlives the arena it was parsed from.
-    pub fn dupe(self: *const List, arena: std.mem.Allocator) std.mem.Allocator.Error!List {
-        return .{
-            .included = try dupeDomains(arena, self.included),
-            .excluded = try dupeDomains(arena, self.excluded),
-        };
-    }
-
-    fn dupeDomains(arena: std.mem.Allocator, domains: []const Domain) ![]const Domain {
-        if (domains.len == 0) return &.{};
-        const out = try arena.dupe(Domain, domains);
-        for (out) |*d| d.value = try arena.dupe(u8, d.value);
-        return out;
-    }
 };
 
 /// All allocations are made from `arena` and are never individually freed.
@@ -130,7 +115,7 @@ pub fn lowered(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
     return s;
 }
 
-const testing = std.testing;
+const testing = @import("../../testing.zig");
 
 test "adblock.domain: plain, negated and entity entries" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -140,11 +125,11 @@ test "adblock.domain: plain, negated and entity entries" {
     const list = try parse(arena, "example.com|~sub.Example.com|google.*", '|');
     try testing.expectEqual(2, list.included.len);
     try testing.expectEqual(1, list.excluded.len);
-    try testing.expectEqualStrings("example.com", list.included[0].value);
+    try testing.expectString("example.com", list.included[0].value);
     try testing.expect(!list.included[0].entity);
-    try testing.expectEqualStrings("google", list.included[1].value);
+    try testing.expectString("google", list.included[1].value);
     try testing.expect(list.included[1].entity);
-    try testing.expectEqualStrings("sub.example.com", list.excluded[0].value);
+    try testing.expectString("sub.example.com", list.excluded[0].value);
 }
 
 test "adblock.domain: comma separator (cosmetic prefixes)" {
