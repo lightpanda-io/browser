@@ -36,6 +36,7 @@ const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
 const SqliteCache = @import("cache/SqliteCache.zig");
+const AdBlocker = @import("adblock/AdBlocker.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -90,6 +91,9 @@ config: *const Config,
 x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
+/// Hostname dictionaries built from `--adblock-lists`. Parsed once here and
+/// never mutated afterwards, so every HttpClient can share this one copy.
+adblocker: ?AdBlocker,
 
 connections: []http.Connection,
 available: DoublyLinkedList = .{},
@@ -229,6 +233,10 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         try WebBotAuth.fromConfig(allocator, &wba_cfg)
     else
         null;
+    errdefer if (web_bot_auth) |wba| wba.deinit(allocator);
+
+    var adblocker = try initAdBlocker(allocator, config);
+    errdefer if (adblocker) |*blocker| blocker.deinit();
 
     const cache = if (config.httpCacheDir()) |cache_dir_path|
         Cache{
@@ -268,6 +276,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .cache = cache,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .adblocker = adblocker,
 
         .ws_pool = .empty,
         .ws_max = config.wsMaxConcurrent(),
@@ -301,6 +310,8 @@ pub fn deinit(self: *Network) void {
         wba.deinit(self.allocator);
     }
 
+    if (self.adblocker) |*blocker| blocker.deinit();
+
     if (self.cache) |*cache| cache.deinit();
 
     if (self.ip_filter) |f| {
@@ -309,6 +320,41 @@ pub fn deinit(self: *Network) void {
     }
 
     globalDeinit();
+}
+
+/// Read buffer for filter lists, and therefore the longest line we can see.
+/// Real-world rules are well under 1KB; the parser skips anything longer.
+const ADBLOCK_LINE_MAX = 8 * 1024;
+
+fn initAdBlocker(allocator: Allocator, config: *const Config) !?AdBlocker {
+    var paths = config.adblockLists() orelse return null;
+
+    var adblocker: ?AdBlocker = null;
+    errdefer if (adblocker) |*blocker| blocker.deinit();
+
+    const buf = try allocator.alloc(u8, ADBLOCK_LINE_MAX);
+    defer allocator.free(buf);
+
+    while (paths.next()) |path| {
+        if (path.len == 0) continue;
+        if (adblocker == null) adblocker = try AdBlocker.init(allocator);
+        loadAdblockList(&adblocker.?, path, buf) catch |err| {
+            log.err(.app, "adblock list load failed", .{ .path = path, .err = err });
+            return err;
+        };
+    }
+    return adblocker;
+}
+
+/// Streams `path` into `blocker`. The list is consumed line by line, so a
+/// 100MB list never needs 100MB of memory.
+fn loadAdblockList(blocker: *AdBlocker, path: []const u8, buf: []u8) !void {
+    const file = try std.Io.Dir.cwd().openFile(lp.io, path, .{});
+    defer file.close(lp.io);
+
+    var file_reader = file.reader(lp.io, buf);
+    try blocker.parse(&file_reader.interface);
+    log.info(.app, "adblock list loaded", .{ .path = path });
 }
 
 pub fn bind(

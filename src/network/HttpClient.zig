@@ -35,8 +35,9 @@ const Network = @import("Network.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
+const AdBlocker = @import("adblock/AdBlocker.zig");
+
 pub const BlockPattern = UrlBlocklist.Pattern;
-const AdBlocker = @import("../adblock/AdBlocker.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -186,8 +187,10 @@ obey_robots: bool,
 
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
-/// Hostname dictionaries built from `--adblock-lists` filter files.
-adblocker: ?AdBlocker,
+/// Hostname dictionaries built from `--adblock-lists`. Owned by Network,
+/// parsed once at startup and read-only from here on, so every client
+/// shares the one copy.
+adblocker: ?*const AdBlocker,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
     var handles = try http.Handles.init(network.config);
@@ -210,20 +213,6 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
     }
     errdefer if (url_blocklist) |*blocklist| blocklist.deinit();
 
-    var adblocker: ?AdBlocker = null;
-    errdefer if (adblocker) |*blocker| blocker.deinit();
-    if (network.config.adblockLists()) |initial_paths| {
-        var it = initial_paths;
-        while (it.next()) |path| {
-            if (path.len == 0) continue;
-            if (adblocker == null) adblocker = try AdBlocker.init(allocator);
-            loadAdblockList(allocator, &adblocker.?, path) catch |err| {
-                log.err(.http, "adblock list load failed", .{ .path = path, .err = err });
-                return err;
-            };
-        }
-    }
-
     self.* = Client{
         .handles = handles,
         .network = network,
@@ -241,7 +230,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .obey_robots = network.config.obeyRobots(),
         .robots = .{ .allocator = allocator, .network = network },
         .url_blocklist = url_blocklist,
-        .adblocker = adblocker,
+        .adblocker = if (network.adblocker) |*blocker| blocker else null,
         .arena_pool = &network.app.arena_pool,
     };
 }
@@ -271,7 +260,6 @@ pub fn deinit(self: *Client) void {
     }
 
     self.clearUrlBlocklist();
-    if (self.adblocker) |*blocker| blocker.deinit();
     self.robots.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
@@ -394,29 +382,9 @@ fn isUrlBlocked(self: *const Client, url: []const u8, internal: bool) bool {
     return blocklist.isBlocked(url);
 }
 
-fn loadAdblockList(allocator: Allocator, blocker: *AdBlocker, path: []const u8) !void {
-    const text = try std.Io.Dir.cwd().readFileAllocOptions(
-        lp.io,
-        path,
-        allocator,
-        .limited(64 * 1024 * 1024),
-        .of(u8),
-        null,
-    );
-    defer allocator.free(text);
-
-    var reader: std.Io.Reader = .fixed(text);
-    const stats = try blocker.parse(&reader);
-    log.info(.http, "adblock list loaded", .{
-        .path = path,
-        .filters = stats.network,
-        .invalid = stats.invalid,
-    });
-}
-
 fn isHostAdblocked(self: *const Client, url: [:0]const u8, internal: bool) bool {
     if (internal) return false;
-    const blocker: *const AdBlocker = if (self.adblocker) |*b| b else return false;
+    const blocker = self.adblocker orelse return false;
     const host = URL.getHostname(url);
     if (host.len == 0 or host.len > 253) return false;
     // The trie expects normalized (lowercase) hostnames; URLs aren't
@@ -424,11 +392,6 @@ fn isHostAdblocked(self: *const Client, url: [:0]const u8, internal: bool) bool 
     var buf: [253]u8 = undefined;
     const hostname = std.ascii.lowerString(&buf, host);
     return blocker.matchHostname(hostname) == .blocked;
-}
-
-pub fn newHeaders(self: *const Client) !http.Headers {
-    const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
-    return http.Headers.init(ua_header);
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
@@ -3479,13 +3442,14 @@ test "HttpClient: adblock verdicts apply per request hostname" {
     var client: Client = undefined;
     initTestClient(&client, &pool);
 
-    client.adblocker = try AdBlocker.init(testing.allocator);
-    defer if (client.adblocker) |*blocker| blocker.deinit();
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
     var list: std.Io.Reader = .fixed(
         \\||ads.example.com^
         \\@@||good.ads.example.com^
     );
-    _ = try client.adblocker.?.parse(&list);
+    try blocker.parse(&list);
+    client.adblocker = &blocker;
 
     try testing.expect(client.isHostAdblocked("https://ads.example.com/pixel.gif", false));
     // Hostnames are matched case-insensitively and without the port.
