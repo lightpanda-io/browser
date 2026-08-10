@@ -345,6 +345,9 @@
     \\          Directory used as a filesystem cache for network resources. Omitting
     \\          this disables caching.
     \\          Defaults to no caching.
+    \\  --http-cache-entry-limit <INT>
+    \\          Maximum number of entries that can be stored in the HTTP cache. 0 means no limit.
+    \\          Defaults to 1000.
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
