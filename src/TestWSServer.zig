@@ -87,6 +87,10 @@ fn runImpl(self: *TestWSServer, wg: *lp.WaitGroup) !void {
 fn handleClient(client: posix.socket_t) void {
     defer _ = std.c.close(client);
 
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        posix.setsockopt(client, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
+    }
+
     var buf: [4096]u8 = undefined;
     const n = posix.read(client, &buf) catch return;
 
