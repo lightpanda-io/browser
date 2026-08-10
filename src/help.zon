@@ -299,6 +299,10 @@
     ,
     .common_options =
     \\common options:
+    \\  --adblock-lists <LIST>
+    \\          EasyList-syntax filter files to load, comma-separated. Requests
+    \\          to a hostname blocked by any list are failed before they leave.
+    \\          e.g. --adblock-lists easylist.txt,easyprivacy.txt
     \\  --block-cidrs <LIST>
     \\          Additional CIDR ranges to block, comma-separated.
     \\          Prefix with '-' to allow (exempt from blocking).
