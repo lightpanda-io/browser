@@ -621,6 +621,3 @@ fn unionFieldName(comptime T: type, comptime V: type) []const u8 {
     }
     @compileError(@typeName(V) ++ " is not a valid type for " ++ @typeName(T) ++ ".type");
 }
-
-
-
