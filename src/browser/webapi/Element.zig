@@ -2416,6 +2416,7 @@ pub const JsApi = struct {
     pub const previousElementSibling = bridge.accessor(Element.previousElementSibling, null, .{});
     pub const childElementCount = bridge.accessor(Element.getChildElementCount, null, .{});
     pub const matches = bridge.function(Element.matches, .{});
+    pub const webkitMatchesSelector = bridge.function(Element.matches, .{});
     pub const querySelector = bridge.function(Element.querySelector, .{});
     pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{});
     pub const closest = bridge.function(Element.closest, .{});

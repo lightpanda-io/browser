@@ -62,6 +62,26 @@
 }
 </script>
 
+<script id=webkitMatchesSelector>
+{
+  // Legacy alias of matches(): same behaviour, including error handling.
+  const container = $('#test-container');
+  const span = $('#special');
+
+  testing.expectEqual(true, container.webkitMatchesSelector('#test-container'));
+  testing.expectEqual(true, container.webkitMatchesSelector('.container.main'));
+  testing.expectEqual(true, container.webkitMatchesSelector('*'));
+  testing.expectEqual(false, container.webkitMatchesSelector('p'));
+
+  testing.expectEqual(true, span.webkitMatchesSelector('span#special.wrapper'));
+  testing.expectEqual(false, span.webkitMatchesSelector('div'));
+
+  testing.expectError("SyntaxError", () => container.webkitMatchesSelector(''));
+
+  testing.expectEqual(1, Element.prototype.webkitMatchesSelector.length);
+}
+</script>
+
 <script id=errorHandling>
 {
   const container = $('#test-container');
