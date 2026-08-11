@@ -53,6 +53,9 @@ selector_cache: Selector.Cache,
 // Pinned-arena bytes we haven't told v8 about yet
 arena_account: lp.Arena.Account = .{},
 
+// Our isolate's heap size as of the last reportJsHeap().
+last_reported_js_bytes: usize = 0,
+
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
 // by navigator.permissions.query(). Scoped to the Browser so it persists
@@ -139,6 +142,10 @@ pub fn deinit(self: *Browser) void {
     const allocator = self.allocator;
 
     self.closeSession();
+
+    lp.metrics.js_heap_physical_bytes.add(-@as(i64, @intCast(self.last_reported_js_bytes)));
+    self.last_reported_js_bytes = 0;
+
     // After this returns, the watchdog thread holds no reference to our env
     // or http_client — required before either is torn down.
     self.app.watchdog.unregister(&self.watchdog_entry);
@@ -208,6 +215,12 @@ pub fn flushArenaMemory(self: *Browser) void {
     }
     self.arena_account.pending = 0;
     self.env.isolate.adjustAmountOfExternalAllocatedMemory(delta);
+}
+
+pub fn reportJsHeap(self: *Browser) void {
+    const bytes = self.env.isolate.getHeapStatistics().total_physical_size;
+    lp.metrics.js_heap_physical_bytes.add(@as(i64, @intCast(bytes)) - @as(i64, @intCast(self.last_reported_js_bytes)));
+    self.last_reported_js_bytes = bytes;
 }
 
 pub fn runMicrotasks(self: *Browser) void {
