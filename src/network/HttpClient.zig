@@ -1478,7 +1478,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         // Chromium announces each redirect hop before pausing it
                         // for Fetch interception. Playwright uses redirectResponse
                         // to pair the new pause with a new Request.
-                        transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+                        transfer.req.notification.dispatch(.http_request_start, &.{
+                            .transfer = transfer,
+                            .redirect_response = true,
+                        });
                     }
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {

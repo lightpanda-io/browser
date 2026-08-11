@@ -385,7 +385,7 @@ pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const N
         .documentURL = frame.url,
         .request = RequestWriter.init(arena, transfer),
         .initiator = .{ .type = "other" },
-        .redirectResponse = if (transfer._redirect_count > 0)
+        .redirectResponse = if (msg.redirect_response)
             ResponseWriter.init(arena, transfer)
         else
             null,
