@@ -282,9 +282,13 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
-    if (std.mem.eql(u8, host, "0.0.0.0")) {
-        log.info(.cdp, "unreachable advertised host", .{
-            .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
+    if (app.config.bindIsWildcard()) {
+        // Serve is bound to INADDR_ANY but no --advertise-host was given;
+        // advertiseHost() falls back to 127.0.0.1 so clients can still
+        // connect locally. Surface the trade-off so users running
+        // outside the same host know they have to opt in.
+        log.note(.cdp, "advertising loopback for wildcard bind", .{
+            .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
         });
     }
     const body_format =
