@@ -276,6 +276,16 @@ pub const Tool = enum {
         };
     }
 
+    /// Waits for page readiness on its own, letting the recorder downgrade a
+    /// preceding `goto` to `domcontentloaded`. Exhaustive like the sibling
+    /// predicates so a new wait tool makes an explicit choice here.
+    pub fn waitsForReadiness(self: Tool) bool {
+        return switch (self) {
+            .waitForSelector, .waitForScript, .waitForState => true,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+        };
+    }
+
     /// A read tool that navigates when handed a `url`. The read isn't recorded,
     /// but the navigation is, so the recorder captures it as a `goto`. Excludes
     /// `evaluate` (carries its own `url`), `search` (derived engine URL), and
@@ -329,7 +339,10 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
+                    \\    "waitUntil": { "type": "string", "enum":
+                ++ lp.Config.tagJsonArray(lp.Config.WaitUntil) ++
+                    \\, "description": "Event that completes the navigation. Defaults to 'load'. Prefer 'domcontentloaded' followed by waitForSelector on pages whose late scripts (ads) hold 'load' back. Avoid 'done' (full quiescence): on pages with constant background activity it is the slowest choice and can run to the timeout." }
                     \\  },
                     \\  "required": ["url"]
                     \\}
@@ -357,7 +370,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. Render markdown for just that element's subtree." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
@@ -373,7 +386,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -441,7 +454,7 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID to get the tree for a specific element instead of the document root. 0 is treated as omitted." },
                     \\    "maxDepth": { "type": "integer", "description": "Optional maximum depth of the tree to return. Useful for exploring high-level structure first." }
                     \\  }
                     \\}
@@ -510,7 +523,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted, scrolls the window." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted (or 0), scrolls the window." },
                     \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
                     \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
                     \\  }
@@ -525,7 +538,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "The CSS selector to wait for." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000, or 15000 when the page has not reached 'load' yet." }
                     \\  },
                     \\  "required": ["selector"]
                     \\}
@@ -539,7 +552,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "script": { "type": "string", "description": "JS expression evaluated each tick until truthy. Must be an expression (not a statement)." },
-                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000." }
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 5000, or 15000 when the page has not reached 'load' yet." }
                     \\  },
                     \\  "required": ["script"]
                     \\}
@@ -583,7 +596,7 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "key": { "type": "string", "description": "The key to press (e.g. 'Enter', 'Tab', 'a')." },
                     \\    "selector": { "type": "string", "description": "Optional CSS selector of the element to target. Preferred over backendNodeId." },
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided." }
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID of the element to target. Defaults to the document when neither selector nor backendNodeId is provided; 0 is treated as omitted." }
                     \\  },
                     \\  "required": ["key"]
                     \\}
@@ -744,6 +757,16 @@ pub const ToolError = error{
     OutOfMemory,
 };
 
+/// LLM-facing message for a tool failure. Bare error names leave the model
+/// retrying blind; spell out the recovery for errors it can act on.
+pub fn errorMessage(err: ToolError) []const u8 {
+    return switch (err) {
+        error.NodeNotFound => "NodeNotFound: the selector or backendNodeId matched nothing on the current page. Re-inspect the page (tree/interactiveElements) for fresh node ids, or omit backendNodeId to target the document root.",
+        error.FrameNotLoaded => "FrameNotLoaded: no page is loaded — call goto (or pass a url) first.",
+        else => @errorName(err),
+    };
+}
+
 /// Outcome of running a tool against the page. Operational failures (OOM,
 /// missing page, invalid params) come out as Zig errors on the enclosing
 /// `!ToolResult`; `is_error = true` is the in-band signal for a JS-level
@@ -758,6 +781,7 @@ pub const ToolResult = struct {
 pub const GotoParams = struct {
     url: [:0]const u8,
     timeout: ?u32 = null,
+    waitUntil: lp.Config.WaitUntil = default_nav_wait,
 };
 
 pub const UrlParams = struct {
@@ -786,7 +810,13 @@ pub fn call(
     tool_name: []const u8,
     arguments: ?std.json.Value,
 ) ToolError!ToolResult {
-    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return ToolError.InvalidParams;
+    // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
+    // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
+    // retrying it with different arguments.
+    const tool = std.meta.stringToEnum(Tool, tool_name) orelse return .{
+        .text = try std.fmt.allocPrint(arena, "Unknown tool: {s}", .{tool_name}),
+        .is_error = true,
+    };
     if (diagnoseArgs(arena, arguments)) |msg|
         return .{ .text = msg, .is_error = true };
     // Must run before substituteStringArgs so the `key=="value"` secret-
@@ -936,7 +966,7 @@ const schema_walker_suffix = ")";
 
 fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
-    return switch (try performGoto(session, registry, args.url, args.timeout)) {
+    return switch (try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil })) {
         .completed => "Navigated successfully.",
         .timeout => "Navigation started but the page did not finish loading before the timeout.",
     };
@@ -988,7 +1018,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
         .{encoded},
         0,
     ) catch return ToolError.OutOfMemory;
-    _ = try performGoto(session, registry, ddg_url, args.timeout);
+    _ = try performGoto(session, registry, ddg_url, .{ .timeout = args.timeout });
     const ddg_frame = try requireFrame(session);
     return .{ .text = try renderFrameMarkdown(arena, ddg_frame) };
 }
@@ -1619,6 +1649,14 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 /// already-loaded page rather than a full navigation (which uses 10000).
 const default_wait_timeout_ms: u32 = 5000;
 
+/// A wait entered before `load` also inherits the nav budget: a post-load
+/// selector keeps the wall time it had when `goto` waited for `load` itself.
+/// Shared with CDP's `LP.waitForSelector`, which fronts the same action.
+pub fn defaultWaitTimeout(frame: *const lp.Frame) u32 {
+    if (frame._load_state == .complete) return default_wait_timeout_ms;
+    return default_nav_timeout_ms + default_wait_timeout_ms;
+}
+
 fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: [:0]const u8,
@@ -1628,7 +1666,7 @@ fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry:
 
     const frame = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
+    const timeout_ms = args.timeout orelse defaultWaitTimeout(frame);
 
     const node = lp.actions.waitForSelector(args.selector, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.InvalidSelector => return ToolError.InvalidParams,
@@ -1655,7 +1693,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     const frame = try requireFrame(session);
 
-    const timeout_ms = args.timeout orelse default_wait_timeout_ms;
+    const timeout_ms = args.timeout orelse defaultWaitTimeout(frame);
 
     lp.actions.waitForScript(args.script, timeout_ms, frame._frame_id, session) catch |err| switch (err) {
         error.Cancelled => return ToolError.Cancelled,
@@ -1921,7 +1959,7 @@ fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const
         if (session.currentFrame()) |frame| {
             if (std.mem.eql(u8, frame.url, u)) return frame;
         }
-        _ = try performGoto(session, registry, u, timeout);
+        _ = try performGoto(session, registry, u, .{ .timeout = timeout });
     }
     return session.currentFrame() orelse ToolError.FrameNotLoaded;
 }
@@ -1937,6 +1975,7 @@ const default_nav_timeout_ms: u32 = 10000;
 pub const StartedGoto = struct {
     frame_id: u32,
     timeout_ms: u32,
+    until: lp.Config.WaitUntil,
 };
 
 /// Open a fresh top-level page and start its navigation. The frame is non-null
@@ -1971,10 +2010,19 @@ pub fn startGoto(
         }
     }
     const page = try openPage(session, args.url);
-    return .{ .frame_id = page.frame_id, .timeout_ms = args.timeout orelse default_nav_timeout_ms };
+    return .{
+        .frame_id = page.frame_id,
+        .timeout_ms = args.timeout orelse default_nav_timeout_ms,
+        .until = args.waitUntil,
+    };
 }
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, timeout: ?u32) ToolError!lp.Session.Runner.WaitResult {
+const PerformGotoOpts = struct {
+    timeout: ?u32 = null,
+    wait_until: lp.Config.WaitUntil = default_nav_wait,
+};
+
+fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, opts: PerformGotoOpts) ToolError!lp.Session.Runner.WaitResult {
     if (session.primaryPage()) |old_page| {
         registry.reset();
         old_page.close();
@@ -1982,9 +2030,9 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     const page = try openPage(session, url);
 
     var runner = session.runner(.{});
-    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = default_nav_wait };
+    const condition = lp.Session.Runner.WaitCondition{ .frame_id = page.frame_id, .until = opts.wait_until };
     var conditions = [_]lp.Session.Runner.WaitCondition{condition};
-    const result = runner.waitResult(timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
+    const result = runner.waitResult(opts.timeout orelse default_nav_timeout_ms, &conditions) catch |err| {
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
     };
 
@@ -2038,13 +2086,23 @@ fn formatEnumError(arena: std.mem.Allocator, field: []const u8, got: []const u8,
 }
 
 pub fn parseValue(comptime T: type, arena: std.mem.Allocator, value: std.json.Value) ParseArgsError!T {
-    return std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
+    var parsed = std.json.parseFromValueLeaky(T, arena, value, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
         else => {
             log.debug(.browser, "parseValue rejected", .{ .err = @errorName(err), .type = @typeName(T) });
             return error.InvalidParams;
         },
     };
+    // Schema contract: backendNodeId 0 means omitted — registry ids start at 1,
+    // and zero-filling models (gpt-5.x) send 0 for "unset".
+    if (comptime @typeInfo(T) == .@"struct" and @hasField(T, "backendNodeId") and
+        @typeInfo(@FieldType(T, "backendNodeId")) == .optional)
+    {
+        if (parsed.backendNodeId) |nid| {
+            if (nid == 0) parsed.backendNodeId = null;
+        }
+    }
+    return parsed;
 }
 
 /// For tools where every field is optional. Missing args → default `T`;
@@ -2170,7 +2228,7 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
     // before its full match is found, leaking a suffix into the recording.
     const Pair = struct { name: []const u8, value: []const u8 };
     var pairs: std.ArrayList(Pair) = .empty;
-    try pairs.ensureTotalCapacity(arena, env_names.len);
+    try pairs.ensureTotalCapacityPrecise(arena, env_names.len);
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;
@@ -2191,6 +2249,46 @@ pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) err
         changed = true;
     }
     return if (changed) current else input;
+}
+
+test "call: unknown tool name surfaces in-band" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Session/registry are never touched on this branch; the name check is
+    // the first thing `call` does.
+    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null);
+    try std.testing.expect(r.is_error);
+    try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
+}
+
+test "parseValue: zero-filled optional backendNodeId treated as omitted" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const Params = struct {
+        backendNodeId: ?CDPNode.Id = null,
+        maxDepth: ?u32 = null,
+    };
+    const zeroed = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":0,"maxDepth":2}
+    , .{});
+    const args = try parseValue(Params, aa, zeroed);
+    try std.testing.expectEqual(@as(?CDPNode.Id, null), args.backendNodeId);
+    try std.testing.expectEqual(@as(?u32, 2), args.maxDepth);
+
+    const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":7}
+    , .{});
+    try std.testing.expectEqual(@as(?CDPNode.Id, 7), (try parseValue(Params, aa, real)).backendNodeId);
+
+    // Non-optional ids (nodeDetails) pass through untouched.
+    const Required = struct { backendNodeId: CDPNode.Id };
+    const zero_required = try std.json.parseFromSliceLeaky(std.json.Value, aa,
+        \\{"backendNodeId":0}
+    , .{});
+    try std.testing.expectEqual(@as(CDPNode.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
 }
 
 test "substituteEnvVars resolves LP_* vars" {

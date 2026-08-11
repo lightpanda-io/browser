@@ -451,3 +451,20 @@
     });
   }
 </script>
+
+<!-- Referer across redirects: a same-origin hop keeps the full referrer; a
+     cross-origin hop (localhost alias) recomputes it at the redirect, which
+     the default policy (strict-origin-when-cross-origin) strips to origin. -->
+<script id=fetch_redirect_referer type=module>
+  {
+    const state = await testing.async();
+    const same = await (await fetch('/redirect_same_echo_referer')).text();
+    const cross = await (await fetch('/redirect_cross_echo_referer')).text();
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual(`<html><body>referer=${location.href}</body></html>`, same);
+      testing.expectEqual('<html><body>referer=http://127.0.0.1:9582/</body></html>', cross);
+    });
+  }
+</script>

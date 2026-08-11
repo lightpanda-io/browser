@@ -364,7 +364,7 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
                 // records browsers do (one for the split-off node, one for
                 // the inserted node).
                 const second = try t.splitText(offset, frame);
-                _ = try parent.insertBefore(node, second._proto.asNode(), frame);
+                _ = try parent.insertBefore(node, second.asCData().asNode(), frame);
             } else {
                 _ = try parent.insertBefore(node, container.nextSibling(), frame);
             }

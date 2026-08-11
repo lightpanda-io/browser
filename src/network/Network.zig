@@ -233,7 +233,11 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     const cache = if (config.httpCacheDir()) |cache_dir_path|
         Cache{
             .kind = .{
-                .sqlite = SqliteCache.init(allocator, .{ .path = cache_dir_path }) catch |e| {
+                .sqlite = SqliteCache.init(
+                    allocator,
+                    .{ .path = cache_dir_path },
+                    config.httpCacheEntryLimit(),
+                ) catch |e| {
                     log.err(.cache, "failed to init", .{
                         .kind = "SqliteCache",
                         .path = cache_dir_path,

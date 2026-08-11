@@ -50,15 +50,15 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }
 }
 
-// Stored in CDP. Holds *transfer ids* (not *Transfer pointers) of paused
-// transfers waiting for CDP continueRequest/fulfillRequest/failRequest/
-// continueWithAuth. Anyone resolving an entry must look the transfer up via
-// `Client.findTransfer(id)` — if the transfer has been destroyed out-of-band
-// (e.g. frame shutdown), the lookup returns null and the CDP command should
-// no-op rather than UAF.
+// Stored in CDP. Maps intercept ids to *transfer ids* (not *Transfer
+// pointers) of paused transfers waiting for CDP continueRequest/
+// fulfillRequest/failRequest/continueWithAuth. Anyone resolving an entry must
+// look the transfer up via `Client.findTransfer(id)` — if the transfer has been
+// destroyed out-of-band (e.g. frame shutdown), the lookup returns null.
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u32, void),
+    next_id: u32 = 1,
+    waiting: std.AutoArrayHashMapUnmanaged(u32, u32),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -67,17 +67,17 @@ pub const InterceptState = struct {
         };
     }
 
-    pub fn empty(self: *const InterceptState) bool {
-        return self.waiting.count() == 0;
+    pub fn put(self: *InterceptState, transfer_id: u32) !u32 {
+        const intercept_id = self.next_id;
+        try self.waiting.put(self.allocator, intercept_id, transfer_id);
+        self.next_id +%= 1;
+        return intercept_id;
     }
 
-    pub fn put(self: *InterceptState, transfer_id: u32) !void {
-        return self.waiting.put(self.allocator, transfer_id, {});
-    }
-
-    // Returns true if the id was present and removed, false otherwise.
-    pub fn remove(self: *InterceptState, transfer_id: u32) bool {
-        return self.waiting.swapRemove(transfer_id);
+    // Returns the transfer id if the intercept id was present and removed.
+    pub fn remove(self: *InterceptState, intercept_id: u32) ?u32 {
+        const entry = self.waiting.fetchSwapRemove(intercept_id) orelse return null;
+        return entry.value;
     }
 
     pub fn deinit(self: *InterceptState) void {
@@ -85,7 +85,7 @@ pub const InterceptState = struct {
     }
 
     pub fn pendingIntercepts(self: *const InterceptState) []u32 {
-        return self.waiting.keys();
+        return self.waiting.values();
     }
 };
 
@@ -143,9 +143,16 @@ const ErrorReason = enum {
     BlockedByResponse,
 };
 
+fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
+    if (cmd.input.session_id) |session_id| {
+        return cmd.cdp.resolveSessionId(session_id) orelse error.UnknownSessionId;
+    }
+    return bc.session_id orelse error.UnknownSessionId;
+}
+
 fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    bc.fetchDisable();
+    bc.fetchDisableForSession(try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }
 
@@ -157,7 +164,7 @@ fn enable(cmd: *CDP.Command) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try bc.fetchEnable(params.handleAuthRequests);
+    try bc.fetchEnable(params.handleAuthRequests, try commandSessionId(cmd, bc));
 
     return cmd.sendResult(null, .{});
 }
@@ -188,22 +195,21 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
     return true;
 }
 
-pub fn requestIntercept(bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = bc.session_id orelse return;
+pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *const Notification.RequestIntercept) !void {
+    // The session that enabled Fetch owns its interception events.
+    const session_id = bc.fetch_session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
     const transfer = intercept.transfer;
-    try bc.intercept_state.put(transfer.id);
-    errdefer _ = bc.intercept_state.remove(transfer.id);
+    const intercept_id = try bc.intercept_state.put(transfer.id);
+    errdefer _ = bc.intercept_state.remove(intercept_id);
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
-        .requestId = &id.toInterceptId(transfer.id),
+        .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(transfer.req.frame_id),
-        .request = network.RequestWriter.init(transfer),
+        .request = network.RequestWriter.init(arena, transfer),
         .resourceType = transfer.req.resource_type.string(),
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
@@ -235,9 +241,9 @@ fn continueRequest(cmd: *CDP.Command) !void {
 
     const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const transfer_id = try idFromRequestId(params.requestId);
+    const intercept_id = try idFromRequestId(params.requestId);
 
-    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
     // Transfer may have been destroyed out-of-band between pause and now
     // (e.g. frame shutdown). Treat as a no-op rather than an error — the CDP
     // client's view of "this request still exists" is just stale.
@@ -298,9 +304,9 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
 
     const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const transfer_id = try idFromRequestId(params.requestId);
+    const intercept_id = try idFromRequestId(params.requestId);
 
-    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
     const transfer = client.findTransfer(transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "auth" });
         return cmd.sendResult(null, .{});
@@ -356,9 +362,9 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
 
     const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const transfer_id = try idFromRequestId(params.requestId);
+    const intercept_id = try idFromRequestId(params.requestId);
 
-    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
     const transfer = client.findTransfer(transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fulfill" });
         return cmd.sendResult(null, .{});
@@ -393,9 +399,9 @@ fn failRequest(cmd: *CDP.Command) !void {
 
     const client = &bc.cdp.browser.http_client;
     var intercept_state = &bc.intercept_state;
-    const transfer_id = try idFromRequestId(params.requestId);
+    const intercept_id = try idFromRequestId(params.requestId);
 
-    if (!intercept_state.remove(transfer_id)) return error.RequestNotFound;
+    const transfer_id = intercept_state.remove(intercept_id) orelse return error.RequestNotFound;
     const transfer = client.findTransfer(transfer_id) orelse {
         log.debug(.cdp, "intercept lookup miss", .{ .id = transfer_id, .op = "fail" });
         return cmd.sendResult(null, .{});
@@ -412,26 +418,24 @@ fn failRequest(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestAuthRequired(bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
-    // detachTarget could be called, in which case, we still have a frame doing
-    // things, but no session.
-    const session_id = bc.session_id orelse return;
+pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept: *const Notification.RequestAuthRequired) !void {
+    const session_id = bc.fetch_session_id orelse return;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
     // TODO: What to do when receiving replies for a previous frame's requests?
 
     const transfer = intercept.transfer;
-    try bc.intercept_state.put(transfer.id);
-    errdefer _ = bc.intercept_state.remove(transfer.id);
+    const intercept_id = try bc.intercept_state.put(transfer.id);
+    errdefer _ = bc.intercept_state.remove(intercept_id);
     const request = &transfer.req;
 
     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
-        .requestId = &id.toInterceptId(transfer.id),
+        .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(request.frame_id),
-        .request = network.RequestWriter.init(transfer),
+        .request = network.RequestWriter.init(arena, transfer),
         .resourceType = request.resource_type.string(),
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.
@@ -458,4 +462,56 @@ fn idFromRequestId(request_id: []const u8) !u32 {
         return error.InvalidParams;
     }
     return std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
+}
+
+const testing = @import("../testing.zig");
+test "cdp.Fetch: interception events belong to the enabling session" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{
+        .session_id = "SID-PRIMARY",
+        .target_id = "TID-000000000B".*,
+    });
+    try bc.attached_sessions.append(bc.arena, .{
+        .id = "SID-AUX",
+        .parent_id = null,
+    });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Fetch.enable",
+        .sessionId = "SID-AUX",
+    });
+    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = "SID-AUX" });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Fetch.disable",
+        .sessionId = "SID-PRIMARY",
+    });
+    try testing.expect(std.mem.eql(u8, "SID-AUX", bc.fetch_session_id.?));
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Fetch.disable",
+        .sessionId = "SID-AUX",
+    });
+    try testing.expectEqual(null, bc.fetch_session_id);
+}
+
+test "cdp.Fetch: InterceptState issues a fresh id per pause" {
+    var state = try InterceptState.init(testing.allocator);
+    defer state.deinit();
+
+    const first = try state.put(7);
+    const second = try state.put(7);
+    try testing.expectEqual(false, first == second);
+    try testing.expectEqual(2, state.pendingIntercepts().len);
+    try testing.expectEqual(7, state.pendingIntercepts()[0]);
+
+    try testing.expectEqual(7, state.remove(first).?);
+    try testing.expectEqual(null, state.remove(first));
+    try testing.expectEqual(7, state.remove(second).?);
+    try testing.expectEqual(null, state.remove(second));
 }

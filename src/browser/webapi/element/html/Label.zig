@@ -1,5 +1,7 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -10,10 +12,11 @@ const Label = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Label) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Label) *Node {
     return self.asElement().asNode();
@@ -49,7 +52,7 @@ fn isLabelable(el: *Element) bool {
     const html = el.is(HtmlElement) orelse return false;
     return switch (html._type) {
         .button, .meter, .output, .progress, .select, .textarea => true,
-        .input => |input| input._input_type != .hidden,
+        .input => html.subtype(HtmlElement.Input)._input_type != .hidden,
         else => false,
     };
 }

@@ -464,7 +464,7 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            try writer.writeAll(text._proto._data.str());
+            try writer.writeAll(text.asCData()._data.str());
         }
     }
 }
@@ -476,7 +476,7 @@ pub fn childTextContentLen(self: *Node) usize {
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            len += text._proto._data.str().len;
+            len += text.asCData()._data.str().len;
         }
     }
     return len;
@@ -636,15 +636,15 @@ pub fn isEqualChildren(a: *Node, b: *Node) bool {
     return a_count == b_count;
 }
 
+// The shadow root whose tree this node belongs to, or null when it belongs to
+// a document tree or a detached one. Inclusive: a shadow root is in its own
+// tree.
+pub fn containingShadowRoot(self: *Node) ?*ShadowRoot {
+    return self.getRootNode(.{}).is(ShadowRoot);
+}
+
 pub fn isInShadowTree(self: *Node) bool {
-    var node = self._parent;
-    while (node) |n| {
-        if (n.is(ShadowRoot) != null) {
-            return true;
-        }
-        node = n._parent;
-    }
-    return false;
+    return self.containingShadowRoot() != null;
 }
 
 pub fn isConnected(self: *const Node) bool {
@@ -1209,6 +1209,10 @@ const CloneError = error{
     ExecutionTerminated,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
+    if (self.is(ShadowRoot) != null) {
+        return error.NotSupported;
+    }
+
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => {
@@ -1389,7 +1393,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
             continue;
         };
 
-        if (text_node._proto.getData().len == 0) {
+        if (text_node.asCData().getData().len == 0) {
             frame.removeNode(self, current_node, .{ .will_be_reconnected = false });
             child = next_node;
             continue;
@@ -1407,7 +1411,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
                     next_node = node_to_merge.nextSibling();
                     frame.removeNode(self, to_remove, .{ .will_be_reconnected = false });
                 }
-                text_node._proto._data = try frame.dupeSSO(buffer.items);
+                text_node.asCData()._data = try frame.dupeSSO(buffer.items);
                 buffer.clearRetainingCapacity();
             }
         }

@@ -1,5 +1,7 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -9,13 +11,14 @@ const Source = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Source) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Source) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Source) *Node {
     return self.asElement().asNode();

@@ -37,6 +37,7 @@ const CdpStorage = @import("storage.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
+pub const max_post_data_size = 64 * 1024;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -55,6 +56,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getCookies,
         getAllCookies,
         getResponseBody,
+        getRequestPostData,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -73,6 +75,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getCookies => return getCookies(cmd),
         .getAllCookies => return getAllCookies(cmd),
         .getResponseBody => return getResponseBody(cmd),
+        .getRequestPostData => return getRequestPostData(cmd),
     }
 }
 
@@ -322,6 +325,18 @@ fn getResponseBody(cmd: *CDP.Command) !void {
     }, .{});
 }
 
+fn getRequestPostData(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        requestId: []const u8, // "REQ-{d}" or "LID-{d}"
+    })) orelse return error.InvalidParams;
+
+    const key = try keyFromRequestId(params.requestId);
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const body = bc.captured_requests.get(key) orelse return error.RequestNotFound;
+
+    return cmd.sendResult(.{ .postData = SafeString.wrap(body) }, .{});
+}
+
 pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
@@ -344,7 +359,7 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const Notification.RequestStart) !void {
     // detachTarget could be called, in which case, we still have a frame doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
@@ -368,7 +383,7 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
         .documentURL = frame.url,
-        .request = RequestWriter.init(transfer),
+        .request = RequestWriter.init(arena, transfer),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
@@ -418,10 +433,12 @@ pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.Req
 }
 
 pub const RequestWriter = struct {
+    arena: Allocator,
     transfer: *Transfer,
 
-    pub fn init(transfer: *Transfer) RequestWriter {
+    pub fn init(arena: Allocator, transfer: *Transfer) RequestWriter {
         return .{
+            .arena = arena,
             .transfer = transfer,
         };
     }
@@ -456,6 +473,22 @@ pub const RequestWriter = struct {
         {
             try jws.objectField("hasPostData");
             try jws.write(request.body != null);
+        }
+
+        if (request.body) |body| {
+            if (body.len <= max_post_data_size) {
+                try jws.objectField("postData");
+                try jws.write(SafeString.wrap(body));
+
+                // postDataEntries is the binary-safe representation
+                // (postData is lossy for non-UTF-8 bodies).
+                const encoder = std.base64.standard.Encoder;
+                const encoded = try self.arena.alloc(u8, encoder.calcSize(body.len));
+                try jws.objectField("postDataEntries");
+                try jws.write(&[_]struct { bytes: []const u8 }{
+                    .{ .bytes = encoder.encode(encoded, body) },
+                });
+            }
         }
 
         {
@@ -625,7 +658,11 @@ fn securityState(url: [:0]const u8) []const u8 {
     return "unknown";
 }
 
-fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedResponseKey {
+fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedKey {
+    if (request_id.len < 4) {
+        return error.InvalidParams;
+    }
+
     const key = std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
 
     return if (std.mem.startsWith(u8, request_id, "LID-"))
@@ -1076,6 +1113,64 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .blockedReason = "inspector",
     }, .{ .session_id = "SID-BLOCK" });
     try testing.expectEqual(error.UrlBlocked, error_context.err.?);
+}
+
+test "cdp.Network: POST body exposed as postData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PD", .session_id = "SID-PD" });
+    const page = try bc.session.createPage();
+    const client = &bc.cdp.browser.http_client;
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.enable" });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    var request_id: [14]u8 = undefined;
+    _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+    // \xE9 exercises the Latin-1 -> UTF-8 transcode in postData;
+    // postDataEntries carry the raw bytes in base64.
+    const body = "name=Zig&note=caf\xE9";
+
+    try client.request(.{
+        .frame_id = page.frame_id,
+        .loader_id = 1,
+        .method = .POST,
+        .url = "http://127.0.0.1:9582/echo_body",
+        .body = body,
+        .cookie_jar = null,
+        .cookie_origin = "http://127.0.0.1:9582/",
+        .resource_type = .fetch,
+        .notification = bc.session.notification,
+        .shutdown_callback = HttpClient.noopShutdown,
+    }, null);
+
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .requestId = &request_id,
+        .request = .{
+            .method = "POST",
+            .hasPostData = true,
+            .postData = "name=Zig&note=café",
+            .postDataEntries = &[_]struct { bytes: []const u8 }{
+                .{ .bytes = "bmFtZT1aaWcmbm90ZT1jYWbp" },
+            },
+        },
+    }, .{ .session_id = "SID-PD" });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getRequestPostData",
+        .params = .{ .requestId = &request_id },
+    });
+    try ctx.expectSentResult(.{ .postData = "name=Zig&note=café" }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getRequestPostData",
+        .params = .{ .requestId = "REQ-4294967295" },
+    });
+    try ctx.expectSentError(-31998, "RequestNotFound", .{ .id = 3 });
 }
 
 test "cdp.Network: worker requests emit network events" {

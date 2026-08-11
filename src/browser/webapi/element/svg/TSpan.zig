@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 
 const Node = @import("../../Node.zig");
@@ -26,10 +28,11 @@ const TextPositioning = @import("TextPositioning.zig");
 const TSpan = @This();
 
 pub const Proto = TextPositioning;
-_proto: *TextPositioning,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *TextPositioning else void = undefined,
 
 pub fn asElement(self: *TSpan) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *TSpan) *Node {
     return self.asElement().asNode();

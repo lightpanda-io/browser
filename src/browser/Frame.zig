@@ -34,6 +34,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
@@ -135,9 +136,10 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 // that actually access these features via JavaScript, saving 24 bytes per element.
 _element_styles: Element.StyleLookup = .empty,
 // Computed-style views handed out by window.getComputedStyle. The computed
-// variant is a stateless lazy view, so one per element suffices — and Chrome
-// returns the same object for repeated calls, so identity is also conformance.
-_element_computed_styles: Element.StyleLookup = .empty,
+// variant is a stateless lazy view, so one per (element, pseudo-element)
+// suffices — and Chrome returns the same object for repeated calls, so
+// identity is also conformance.
+_element_computed_styles: Element.ComputedStyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,
@@ -229,6 +231,10 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // This is set when an element is being upgraded (constructor is called).
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
+
+// _upgrading_element can be consumed once. A second HTMLElement construction
+// during upgrade is a TypeError.
+_upgrading_consumed: bool = false,
 
 // Set when materializing the fragment parser's context element. The element
 // is never inserted into the tree so if its a custom element ,we must not run
@@ -330,6 +336,9 @@ _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 _http_status: ?u16 = null,
 _http_headers: std.ArrayList(HttpHeader) = .empty,
+
+_referrer: ?[]const u8 = null,
+referrer_policy: referrer.Policy = .default,
 
 pub const HttpHeader = struct {
     name: []const u8,
@@ -569,6 +578,16 @@ pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
+fn referrerSource(self: *const Frame) [:0]const u8 {
+    var frame = self;
+    while (std.mem.startsWith(u8, frame.url, "about:")) {
+        // about:blank and about:srcdoc documents aren't valid referrer sources,
+        // use the parents
+        frame = frame.parent orelse return frame.url;
+    }
+    return frame.url;
+}
+
 pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
         return try html_doc.getTitle(self);
@@ -593,8 +612,10 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 // Add common headers for a request:
 // * referer
 pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
-    if (std.mem.startsWith(u8, self.url, "http")) {
-        try transfer.addHeader("Referer", self.url, .{});
+    const arena = transfer.arena.allocator();
+    if (try referrer.compute(arena, self.referrer_policy, self.referrerSource(), transfer.req.url)) |ref| {
+        try transfer.addHeader("Referer", ref, .{});
+        transfer.req.referrer_policy = self.referrer_policy;
     }
 }
 
@@ -635,11 +656,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     const http_client = &session.browser.http_client;
 
-    // Handle synthetic navigations: about:blank and blob: URLs
+    // Handle synthetic navigations: about:blank, about:srcdoc and blob: URLs
     const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
-    const is_blob = !is_about_blank and std.mem.startsWith(u8, request_url, "blob:");
+    const is_srcdoc = !is_about_blank and std.mem.eql(u8, "about:srcdoc", request_url);
+    const is_blob = !is_about_blank and !is_srcdoc and std.mem.startsWith(u8, request_url, "blob:");
 
-    if (is_about_blank or is_blob) {
+    if (is_about_blank or is_srcdoc or is_blob) {
         if (is_blob) {
             if (!Blob.urlBelongsToOrigin(request_url, opts.initiator_origin)) {
                 log.warn(.js, "invalid blob", .{ .url = request_url });
@@ -647,7 +669,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             }
         }
 
-        self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
+        self.url = if (is_about_blank)
+            "about:blank"
+        else if (is_srcdoc)
+            "about:srcdoc"
+        else
+            try self.arena.dupeZ(u8, request_url);
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -664,13 +691,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
-            if (is_about_blank) {
+            if (is_about_blank or is_srcdoc) {
                 self.base_url = parent.base();
+                // about:blank and about:srcdoc documents inherit their
+                // creator's policy container, including the referrer policy
+                self.referrer_policy = parent.referrer_policy;
             }
         } else if (self.window._opener) |opener| {
             self.origin = opener._frame.origin;
             if (is_about_blank) {
                 self.base_url = opener._frame.base();
+                self.referrer_policy = opener._frame.referrer_policy;
             }
         } else {
             self.origin = null;
@@ -695,6 +726,30 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             const html = try parse_arena.dupe(u8, blob._slice);
             var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
             parser.parse(html);
+        } else if (is_srcdoc) {
+            // The "response body" is the iframe's srcdoc attribute. Only an
+            // iframe can navigate here (e.g. location = 'about:srcdoc' on a
+            // root frame ends up with an empty document, like Chrome).
+            const content = blk: {
+                const iframe = self.iframe orelse break :blk "";
+                break :blk iframe.asElement().getAttributeSafe(comptime .wrap("srcdoc")) orelse "";
+            };
+            if (content.len == 0) {
+                // the parser emits nothing for an empty input; commit the
+                // same html/head/body scaffolding an empty srcdoc implies
+                self.document.injectBlank(self) catch |err| {
+                    log.err(.browser, "inject blank", .{ .err = err });
+                    return error.InjectBlankFailed;
+                };
+            } else {
+                const parse_arena = try self.getArena(content.len, "Frame.parseSrcdoc");
+                defer parse_arena.release();
+                // A script executed mid-parse can rewrite the srcdoc attribute,
+                // freeing the value under the parser; parse a copy.
+                const html = try parse_arena.dupe(u8, content);
+                var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
+                parser.parse(html);
+            }
         } else {
             self.document.injectBlank(self) catch |err| {
                 log.err(.browser, "inject blank", .{ .err = err });
@@ -741,6 +796,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     self._http_status = null;
     self._http_headers = .empty;
+
+    self._referrer = null;
+    self.referrer_policy = .default;
 
     self.url = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
@@ -793,6 +851,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         }
         if (opts.referer) |ref| {
             try transfer.addHeader("Referer", ref, .{});
+            self._referrer = try self.arena.dupe(u8, ref);
+            transfer.req.referrer_policy = opts.referrer_policy;
         }
     }
 
@@ -859,7 +919,7 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 // might change inside the function. So the code should be explicit about the
 // frame that it's acting on.
 fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
-    const resolved_url, const is_about_blank = blk: {
+    const resolved_url, const is_about_something = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk .{ try arena.dupeZ(u8, request_url), false };
         }
@@ -867,6 +927,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         if (std.mem.eql(u8, request_url, "about:blank")) {
             // navigate will handle this special case
             break :blk .{ "about:blank", true };
+        }
+
+        if (std.mem.eql(u8, request_url, "about:srcdoc")) {
+            // like about:blank, a synchronous navigation handled by navigate
+            break :blk .{ "about:srcdoc", true };
         }
 
         // request_url isn't a "complete" URL, so it has to be resolved with the
@@ -951,20 +1016,17 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     // Capture the originating frame's URL as the Referer for this
     // navigation. The originator's frame may be torn down before navigate()
-    // runs (processRootQueuedNavigation rebuilds the Page in-place), so dup
-    // into the QueuedNavigation arena which outlives that tear-down.
+    // runs (processRootQueuedNavigation rebuilds the Page in-place), so
+    // allocate from the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
-    if (std.mem.startsWith(u8, originator.url, "http")) {
-        // The same dup feeds two purposes: Referer header (subject to
-        // Referrer-Policy in the future) and SameSite computation (which
-        // must use the real initiator regardless of policy). We share the
-        // same allocation for both.
-        const dup = try arena.dupeZ(u8, originator.url);
+    const referrer_source = originator.referrerSource();
+    if (std.mem.startsWith(u8, referrer_source, "http")) {
         if (nav_opts.referer == null) {
-            nav_opts.referer = dup;
+            nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, referrer_source, resolved_url);
+            nav_opts.referrer_policy = originator.referrer_policy;
         }
         if (nav_opts.initiator_url == null) {
-            nav_opts.initiator_url = dup;
+            nav_opts.initiator_url = try arena.dupeZ(u8, referrer_source);
         }
     }
     if (nav_opts.initiator_origin == null) {
@@ -978,7 +1040,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
-        .is_about_blank = is_about_blank,
+        .is_about_something = is_about_something,
         .navigation_type = std.meta.activeTag(nt),
     };
 
@@ -1105,8 +1167,8 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
         .html => true,
         else => false,
     };
-    if (parsing_html and iframe._src.len > 0) {
-        self.queueElementEvent(iframe._proto, .load) catch |err| {
+    if (parsing_html and (iframe._src.len > 0 or iframe.hasSrcdoc())) {
+        self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
         };
         if (delays_load) {
@@ -1250,6 +1312,13 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             no.body = null;
             no.header = null;
         }
+
+        // The Referer may have been recomputed at each hop; document.referrer
+        // reports what the final request actually sent.
+        self._referrer = if (transfer.findRequestHeader("referer")) |ref|
+            try self.arena.dupe(u8, ref)
+        else
+            null;
     }
 
     // Init new location.
@@ -1274,6 +1343,11 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             .name = try self.arena.dupe(u8, hdr.name),
             .value = try self.arena.dupe(u8, hdr.value),
         });
+        if (std.ascii.eqlIgnoreCase(hdr.name, "referrer-policy")) {
+            if (referrer.parseHeader(hdr.value)) |rp| {
+                self.referrer_policy = rp;
+            }
+        }
     }
 
     if (self._navigated_options) |no| {
@@ -1773,15 +1847,23 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         return;
     }
 
-    var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
-    if (src.len == 0) {
-        src = "about:blank";
-    }
+    const src = blk: {
+        if (iframe.hasSrcdoc()) {
+            // srcdoc takes precedence over src, even when empty
+            break :blk "about:srcdoc";
+        }
 
-    if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
-        // per spec, if we can't parse the URL, we should load about:blank
-        src = "about:blank";
-    }
+        var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
+        if (src.len == 0) {
+            src = "about:blank";
+        }
+
+        if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
+            // per spec, if we can't parse the URL, we should load about:blank
+            src = "about:blank";
+        }
+        break :blk src;
+    };
 
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
@@ -1825,6 +1907,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         if (std.mem.eql(u8, src, "about:blank")) {
             break :blk "about:blank"; // navigate will handle this special case
         }
+        if (std.mem.eql(u8, src, "about:srcdoc")) {
+            break :blk "about:srcdoc"; // navigate will handle this special case
+        }
         break :blk try URL.resolve(
             self.call_arena, // ok to use, frame.navigate dupes this
             self.base(),
@@ -1843,13 +1928,17 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const was_sorted = self.child_frames_sorted;
     self.child_frames_sorted = false;
 
-    // Iframe's initial src request carries the parent's URL as Referer and
-    // as the SameSite initiator. Parent frame outlives this navigate()
-    // call, so the slice is safe.
-    const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, self.url, "http")) self.url else null;
+    // Iframe's initial src request carries the parent's URL as Referer
+    // (subject to the parent's Referrer-Policy) and as the SameSite
+    // initiator. When this frame is itself an about: document, the nearest
+    // ancestor's URL is the referrer source. Parent frame outlives this
+    // navigate() call, so the slice is safe; navigate dupes what it keeps.
+    const referrer_source = self.referrerSource();
+    const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, referrer_source, "http")) referrer_source else null;
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
-        .referer = parent_url,
+        .referer = try referrer.compute(self.call_arena, self.referrer_policy, referrer_source, url),
+        .referrer_policy = self.referrer_policy,
         .initiator_url = parent_url,
         .initiator_origin = self.origin,
     }) catch |err| {
@@ -2157,7 +2246,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // this feature is disabled by default, and can be turned on via a command
     // line flag or via an CDP command
     if (session.load_external_stylesheets == false) {
-        return self.queueLoad(link._proto);
+        return self.queueLoad(Factory.protoOf(link));
     }
 
     // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
@@ -2489,6 +2578,15 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         return;
     }
 
+    // Focus goes with the removed subtree. The focused element can be inside a
+    // shadow tree hanging off it, which the walk below doesn't descend into,
+    // so ask it directly whether it's still in the document.
+    if (self.document._active_element) |active| {
+        if (active.asNode().isConnected() == false) {
+            self.document._active_element = null;
+        }
+    }
+
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
     // the ID map and invoking disconnectedCallback for custom elements
@@ -2720,7 +2818,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         return;
     }
 
-    const parent_in_shadow = parent.is(ShadowRoot) != null or parent.isInShadowTree();
+    const parent_in_shadow = parent.containingShadowRoot() != null;
 
     if (!parent_in_shadow and !parent_is_connected) {
         return;
@@ -3106,6 +3204,10 @@ pub const NavigateOpts = struct {
     // anchor click / form submit / location.href navigations carry a Referer.
     // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
     referer: ?[]const u8 = null,
+    // The originating frame's policy, paired with `referer` so redirect hops
+    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
+    // the Referer untouched across redirects.
+    referrer_policy: ?referrer.Policy = null,
     // The URL of the document that initiated this navigation, used as the
     // "site for cookies" when computing SameSite. Distinct from `referer`
     // because a Referrer-Policy can suppress the Referer header without
@@ -3144,7 +3246,7 @@ pub const QueuedNavigation = struct {
     arena: *lp.Arena,
     url: [:0]const u8,
     opts: NavigateOpts,
-    is_about_blank: bool,
+    is_about_something: bool, // about:blank or about:srcdoc
     navigation_type: NavigationType,
 };
 

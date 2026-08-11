@@ -639,6 +639,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     // We still dispatch so that addEventListener('error', ...) listeners fire.
     try frame._event_manager.dispatchDirect(target, event, null, .{
         .context = "window.reportError",
+        .run_microtasks = false,
     });
 
     if (comptime lp.IS_TEST == false) {
@@ -661,16 +662,15 @@ pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQue
 }
 
 pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
-    if (pseudo_element) |pe| {
-        if (pe.len != 0) {
-            log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
-            // Chrome hands out a distinct object per pseudo-element, so these
-            // can't share the per-element cache entry.
-            return CSSStyleProperties.init(element, true, frame);
-        }
-    }
-    const gop = try frame._element_computed_styles.getOrPut(frame.arena, element);
+    // :before/:after get their own cache entry and no warning: our answer
+    // (the element's own computed style) is a reasonable default for the
+    // common probes
+    const pseudo = Element.PseudoElement.parse(pseudo_element orelse "");
+    const gop = try frame._element_computed_styles.getOrPut(frame.arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
+        if (pseudo == .other) {
+            log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
+        }
         gop.value_ptr.* = try CSSStyleProperties.init(element, true, frame);
     }
     return gop.value_ptr.*;

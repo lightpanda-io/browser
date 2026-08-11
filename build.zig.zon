@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/508ae5ef169b7202886decd751ccbde1f872e0cb.tar.gz",
-            .hash = "v8-0.0.0-xddH62D1AgDOizgZ_Il7HVloE_bAK3H4oQnxLcgeKGyW",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/db264d2c4d70c09e102167799e99cebb8a74713f.tar.gz",
+            .hash = "v8-0.0.0-xddH6wsDAwA_VE-G-JbVC9XnMTGzeuYmzGPmxHpj0KIF",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
@@ -36,8 +36,8 @@
             .hash = "sqlite3-3.53.2-DMxLWuAOAAA_Px0arJOIOaP4AKEu5prbsQgPMA35W1zz",
         },
         .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#dcf17cf1c944c8b16e5ecb7419374b134cf47df3",
-            .hash = "zenai-0.0.0-iOY_VH4NBgA-zH-jOigwD0H4QTUSq1Tvm5qH99XNqd7a",
+            .url = "git+https://github.com/lightpanda-io/zenai.git#f721fd4171afb95c65182923554d0f1de10d99bf",
+            .hash = "zenai-0.0.0-iOY_VNgmBgBok23JrHb7N0U67VKSSqRb0BJWIpMMcnoy",
         },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline?ref=lightpanda#832a9fe25f5f4458fcc47b5acc7c21db669c2f47",

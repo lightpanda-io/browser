@@ -81,7 +81,7 @@ fn camelToKebab(arena: Allocator, camel: String) !String {
 
     // Fallback: allocate for longer strings
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(arena, output_len);
+    try result.ensureTotalCapacityPrecise(arena, output_len);
     result.appendSliceAssumeCapacity("data-");
 
     for (camel_str, 0..) |c, i| {
@@ -110,7 +110,7 @@ fn kebabToCamel(arena: Allocator, kebab: []const u8) !?[]const u8 {
     const data_part = kebab[5..]; // Skip "data-"
 
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(arena, data_part.len);
+    try result.ensureTotalCapacityPrecise(arena, data_part.len);
 
     var i: usize = 0;
     while (i < data_part.len) : (i += 1) {

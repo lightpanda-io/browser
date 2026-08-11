@@ -26,6 +26,7 @@ const Notification = @import("../Notification.zig");
 const CDP = @import("../cdp/CDP.zig");
 const Watchdog = @import("../Watchdog.zig");
 const URL = @import("../browser/URL.zig");
+const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 
@@ -1071,7 +1072,7 @@ const SyncContext = struct {
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
         if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacity(try self.bodyAllocator(cl), cl);
+            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(cl), cl);
         }
         return .proceed;
     }
@@ -1447,11 +1448,24 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Handle redirects: reuse the same connection to preserve TCP state.
     // A redirect status without a Location header is not a redirect, it's a
     // final response and falls through so its body is delivered.
-    if (effective_err == null) {
+    // When the server closes the TLS connection without a close_notify alert,
+    // BoringSSL reports RecvError. If we already received valid HTTP headers,
+    // this is a normal end-of-body (the connection closure signals the end
+    // of the response per HTTP/1.1 when there is no Content-Length).
+    // We must check this before endTransfer, which may reset the easy handle.
+    const is_conn_close_recv = blk: {
+        const err = effective_err orelse break :blk false;
+        if (err != error.RecvError) break :blk false;
+        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
+        break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
+    };
+
+    if (effective_err == null or is_conn_close_recv) {
         const status = try msg.conn.getResponseCode();
         if (isRedirectStatus(status)) {
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
+                    transfer.restoreInterceptHeaders();
                     try transfer.handleRedirect(location.value);
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
@@ -1463,6 +1477,28 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     }
 
                     if (!transfer.req.internal) lp.metrics.http_redirects.incr();
+
+                    if (self.serve_mode) { // e.g. cdp
+                        var wait_for_interception = false;
+                        transfer.req.notification.dispatch(.http_request_intercept, &.{
+                            .transfer = transfer,
+                            .wait_for_interception = &wait_for_interception,
+                        });
+
+                        if (wait_for_interception) {
+                            transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+
+                            // Same shape as the auth-interception park above:
+                            // give up the connection, wait for the CDP client.
+                            self.removeConn(msg.conn);
+                            transfer._conn = null;
+                            transfer.reset();
+                            transfer.state = .created;
+                            self.intercepted += 1;
+                            transfer.park(.intercept_request);
+                            return false;
+                        }
+                    }
 
                     const conn = transfer._conn.?;
 
@@ -1501,18 +1537,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // Transfer is done (success or error). Materialize the response into the
     // transfer's arena, release the conn, and buffer the events — user
     // callbacks run later, from dispatch(), never from here.
-
-    // When the server closes the TLS onnection without a close_notify alert,
-    // BoringSSL reports RecvError. If we already received valid HTTP headers,
-    // this is a normal end-of-body (the connection closure signals the end
-    // of the response per HTTP/1.1 when there is no Content-Length).
-    // We must check this before endTransfer, which may reset the easy handle.
-    const is_conn_close_recv = blk: {
-        const err = effective_err orelse break :blk false;
-        if (err != error.RecvError) break :blk false;
-        const hdr = msg.conn.getResponseHeader("connection", 0) orelse break :blk true;
-        break :blk std.ascii.eqlIgnoreCase(hdr.value, "close");
-    };
 
     if (effective_err != null and !is_conn_close_recv) {
         self.removeConn(msg.conn);
@@ -1634,6 +1658,7 @@ pub const Request = struct {
     cookie_origin: [:0]const u8,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
+    referrer_policy: ?referrer.Policy = null,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
     timeout_ms: u32 = 0,
@@ -1912,6 +1937,10 @@ pub const Transfer = struct {
     // incremented by reset func.
     _tries: u8 = 0,
     _redirect_count: u8 = 0,
+
+    // Fetch.continueRequest header overrides apply to a single network hop. We
+    // need to restore (and hence capture) the original headers.
+    _intercept_original_headers: ?[]const RequestHeader = null,
 
     // Linked into client.pending_queue while .queued; reused to link the
     // retired transfer into client.graveyard (deinit unlinks it from the
@@ -2577,6 +2606,21 @@ pub const Transfer = struct {
             }
         }
 
+        // A Referrer-Policy header on a redirect response applies to the
+        // remaining hops.
+        if (req.referrer_policy != null) {
+            // referrer-policy is re-applied on every hop.
+            var i: usize = 0;
+            while (conn.getResponseHeader("referrer-policy", i)) |hdr| : (i += 1) {
+                if (referrer.parseHeader(hdr.value)) |policy| {
+                    req.referrer_policy = policy;
+                }
+                if (i >= hdr.amount) {
+                    break;
+                }
+            }
+        }
+
         // base_url and location are owned by curl; applyRedirectTarget resolves a
         // fresh arena-owned copy that gets stored in transfer.req.url.
         const base_url = try conn.getEffectiveUrl();
@@ -2623,6 +2667,21 @@ pub const Transfer = struct {
         if (status == 301 or status == 302 or status == 303) {
             req.method = .GET;
             req.body = null;
+        }
+
+        if (req.referrer_policy) |policy| {
+            // Referer header was applied based on the original target. It
+            // needs to be updated based on the redirect target. A redirect can
+            // only strip it (full -> origin -> none), so we can use whatever
+            // value we have now as the base
+            if (transfer.findRequestHeader("referer")) |current| {
+                const alloc = arena.allocator();
+                if (try referrer.compute(alloc, policy, try alloc.dupeZ(u8, current), req.url)) |value| {
+                    try transfer.setHeader("Referer", value, .{});
+                } else {
+                    transfer.removeHeader("Referer");
+                }
+            }
         }
     }
 
@@ -2675,6 +2734,26 @@ pub const Transfer = struct {
         });
     }
 
+    pub fn findRequestHeader(self: *const Transfer, name: []const u8) ?[]const u8 {
+        for (self.req_headers.items) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                return hdr.value;
+            }
+        }
+        return null;
+    }
+
+    fn removeHeader(self: *Transfer, name: []const u8) void {
+        var i: usize = 0;
+        while (i < self.req_headers.items.len) {
+            if (std.ascii.eqlIgnoreCase(self.req_headers.items[i].name, name)) {
+                _ = self.req_headers.orderedRemove(i);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
     // Adds, replacing every existing header with the same case-insensitive name
     pub fn setHeader(self: *Transfer, name: []const u8, value: []const u8, opts: HeaderOpts) !void {
         var found = false;
@@ -2709,11 +2788,22 @@ pub const Transfer = struct {
     // CDP Fetch.continueRequest: the intercepting client supplies the
     // complete header set, replacing whatever the request carried.
     pub fn replaceRequestHeaders(self: *Transfer, headers: []const http.Header) !void {
+        lp.assert(self._intercept_original_headers == null, "Transfer.replaceRequestHeaders", .{ .id = self.id });
+        self._intercept_original_headers = try self.arena.allocator().dupe(RequestHeader, self.req_headers.items);
         self.req_headers.clearRetainingCapacity();
         try self.seedHeaders();
         for (headers) |hdr| {
             try self.setHeader(hdr.name, hdr.value, .{});
         }
+    }
+
+    fn restoreInterceptHeaders(self: *Transfer) void {
+        const headers = self._intercept_original_headers orelse return;
+        self.req_headers.clearRetainingCapacity();
+        // _intercept_original_headers.items.len MIGHT be larger than self.req_headers.items.len
+        // but the capacity never shrank from when _intercept_original_headers WAS req_headers.
+        self.req_headers.appendSliceAssumeCapacity(headers);
+        self._intercept_original_headers = null;
     }
 
     // abortAuthChallenge is called when an auth challenge interception is
@@ -2761,7 +2851,7 @@ pub const Transfer = struct {
                     res.callback_error = error.ResponseTooLarge;
                     return http.writefunc_error;
                 }
-                res.buffer.ensureTotalCapacity(transfer.arena.allocator(), cl) catch {};
+                res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
             }
         }
 
@@ -3371,6 +3461,33 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
     try testing.expectEqual(.author, headers[1].source);
     try testing.expectEqual("X-New", headers[2].name);
     try testing.expectEqual("yes", headers[2].value);
+}
+
+test "HttpClient: Fetch header overrides restore after one hop" {
+    const original = [_]Transfer.RequestHeader{
+        .{ .name = "User-Agent", .value = "original" },
+        .{ .name = "X-Original", .value = "yes" },
+    };
+    var overridden = [_]Transfer.RequestHeader{
+        .{ .name = "User-Agent", .value = "override" },
+        .{ .name = "X-Override", .value = "yes" },
+    };
+
+    var transfer: Transfer = undefined;
+    transfer.req_headers = .{ .items = &overridden, .capacity = overridden.len };
+    transfer._intercept_original_headers = &original;
+    transfer.restoreInterceptHeaders();
+
+    try testing.expectEqual(2, transfer.req_headers.items.len);
+    try testing.expectEqual("User-Agent", transfer.req_headers.items[0].name);
+    try testing.expectEqual("original", transfer.req_headers.items[0].value);
+    try testing.expectEqual("X-Original", transfer.req_headers.items[1].name);
+    try testing.expectEqual("yes", transfer.req_headers.items[1].value);
+    try testing.expectEqual(null, transfer._intercept_original_headers);
+
+    // idempotent once restored
+    transfer.restoreInterceptHeaders();
+    try testing.expectEqual(2, transfer.req_headers.items.len);
 }
 
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {

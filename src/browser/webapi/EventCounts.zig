@@ -116,7 +116,7 @@ pub fn forEach(self: *EventCounts, cb_: js.Function, js_this_: ?js.Object) !void
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
     for (tracked_event_types, self._counts) |event_type, count| {
-        var caught: js.TryCatch.Caught = undefined;
+        var caught: js.TryCatch.Caught = .{};
         cb.tryCall(void, .{ count, event_type, self }, &caught) catch {
             log.debug(.js, "forEach callback", .{ .caught = caught, .source = "EventCounts" });
         };

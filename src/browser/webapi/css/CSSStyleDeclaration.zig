@@ -97,9 +97,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
                 }
 
                 // Computed width/height must agree with the synthetic layout
-                // metrics (offsetWidth/getBoundingClientRect). Returning ""
-                // makes measurement code see contradictory sizes — jQuery's
-                // "shrink text until it fits" loops then never terminate.
+                // metrics. Returning "" makes measurement code see
+                // contradictory sizes — jQuery's "shrink text until it fits"
+                // loops then never terminate. jQuery's .width() reads this
+                // value, so it must also carry clientWidth's content fallback
+                // or append-until-wide marquee loops never terminate.
                 if (wrapped.eql(comptime .wrap("width"))) {
                     return resolvedDimension(element, .width, frame);
                 }
@@ -115,13 +117,13 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame)) {
+    var visibility_cache: Element.VisibilityCache = .{};
+    if (!element.checkVisibilityCached(&visibility_cache, frame)) {
         return "auto";
     }
-    const dims = element.getElementDimensions(frame);
     const value = switch (dimension) {
-        .width => dims.width,
-        .height => dims.height,
+        .width => element.getClientWidthWithCache(frame, &visibility_cache),
+        .height => element.getClientHeightWithCache(frame, &visibility_cache),
     };
     return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
 }
@@ -802,8 +804,8 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, name: String) []con
 
 fn getDefaultDisplay(element: *const Element) []const u8 {
     switch (element._type) {
-        .html => |html| {
-            return switch (html._type) {
+        .html => {
+            return switch (element.subtype(Element.Html)._type) {
                 .anchor, .br, .span, .label, .time, .font, .mod, .quote => "inline",
                 .body, .div, .dl, .p, .heading, .form, .button, .canvas, .details, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .frameset, .legend, .map, .marquee, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .source, .table, .table_caption, .table_cell, .table_col, .table_row, .table_section, .track => "block",
                 .generic, .custom, .unknown, .data => blk: {
@@ -835,8 +837,8 @@ fn isInlineTag(tag_name: []const u8) bool {
 
 fn getDefaultColor(element: *const Element) []const u8 {
     switch (element._type) {
-        .html => |html| {
-            return switch (html._type) {
+        .html => {
+            return switch (element.subtype(Element.Html)._type) {
                 .anchor => "rgb(0, 0, 238)", // blue
                 else => "rgb(0, 0, 0)",
             };

@@ -116,6 +116,10 @@ _proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 //    which custom element class was invoked; look it up in the registry.
 pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
     if (frame._upgrading_element) |node| {
+        if (frame._upgrading_consumed) {
+            return error.TypeError;
+        }
+        frame._upgrading_consumed = true;
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
@@ -127,90 +131,176 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
 // constructors routed here.
 pub fn upgradeConstruct(frame: *Frame) !*Element {
     const node = frame._upgrading_element orelse return error.TypeError;
+    if (frame._upgrading_consumed) {
+        return error.TypeError;
+    }
+    frame._upgrading_consumed = true;
     return node.is(Element) orelse return error.TypeError;
 }
 
-pub const Type = union(enum) {
-    anchor: *Anchor,
-    area: *Area,
-    base: *Base,
-    body: *Body,
-    br: *BR,
-    button: *Button,
-    canvas: *Canvas,
-    custom: *Custom,
-    data: *Data,
-    datalist: *DataList,
-    details: *Details,
-    dialog: *Dialog,
-    directory: *Directory,
-    div: *Div,
-    dl: *DList,
-    embed: *Embed,
-    fieldset: *FieldSet,
-    font: *Font,
-    form: *Form,
-    frameset: *FrameSet,
-    generic: *Generic,
-    heading: *Heading,
-    head: *Head,
-    html: *Html,
-    hr: *HR,
-    img: *Image,
-    iframe: *IFrame,
-    input: *Input,
-    label: *Label,
-    legend: *Legend,
-    li: *LI,
-    link: *Link,
-    map: *Map,
-    marquee: *Marquee,
-    media: *Media,
-    meta: *Meta,
-    meter: *Meter,
-    mod: *Mod,
-    object: *Object,
-    ol: *OL,
-    optgroup: *OptGroup,
-    option: *Option,
-    output: *Output,
-    p: *Paragraph,
-    picture: *Picture,
-    param: *Param,
-    pre: *Pre,
-    progress: *Progress,
-    quote: *Quote,
-    script: *Script,
-    select: *Select,
-    slot: *Slot,
-    source: *Source,
-    span: *Span,
-    style: *Style,
-    table: *Table,
-    table_caption: *TableCaption,
-    table_cell: *TableCell,
-    table_col: *TableCol,
-    table_row: *TableRow,
-    table_section: *TableSection,
-    template: *Template,
-    textarea: *TextArea,
-    time: *Time,
-    title: *Title,
-    track: *Track,
-    ul: *UL,
-    unknown: *Unknown,
+pub const Type = enum(u8) {
+    anchor,
+    area,
+    base,
+    body,
+    br,
+    button,
+    canvas,
+    custom,
+    data,
+    datalist,
+    details,
+    dialog,
+    directory,
+    div,
+    dl,
+    embed,
+    fieldset,
+    font,
+    form,
+    frameset,
+    generic,
+    heading,
+    head,
+    html,
+    hr,
+    img,
+    iframe,
+    input,
+    label,
+    legend,
+    li,
+    link,
+    map,
+    marquee,
+    media,
+    meta,
+    meter,
+    mod,
+    object,
+    ol,
+    optgroup,
+    option,
+    output,
+    p,
+    picture,
+    param,
+    pre,
+    progress,
+    quote,
+    script,
+    select,
+    slot,
+    source,
+    span,
+    style,
+    table,
+    table_caption,
+    table_cell,
+    table_col,
+    table_row,
+    table_section,
+    template,
+    textarea,
+    time,
+    title,
+    track,
+    ul,
+    unknown,
 };
 
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .anchor => Anchor,
+        .area => Area,
+        .base => Base,
+        .body => Body,
+        .br => BR,
+        .button => Button,
+        .canvas => Canvas,
+        .custom => Custom,
+        .data => Data,
+        .datalist => DataList,
+        .details => Details,
+        .dialog => Dialog,
+        .directory => Directory,
+        .div => Div,
+        .dl => DList,
+        .embed => Embed,
+        .fieldset => FieldSet,
+        .font => Font,
+        .form => Form,
+        .frameset => FrameSet,
+        .generic => Generic,
+        .heading => Heading,
+        .head => Head,
+        .html => Html,
+        .hr => HR,
+        .img => Image,
+        .iframe => IFrame,
+        .input => Input,
+        .label => Label,
+        .legend => Legend,
+        .li => LI,
+        .link => Link,
+        .map => Map,
+        .marquee => Marquee,
+        .media => Media,
+        .meta => Meta,
+        .meter => Meter,
+        .mod => Mod,
+        .object => Object,
+        .ol => OL,
+        .optgroup => OptGroup,
+        .option => Option,
+        .output => Output,
+        .p => Paragraph,
+        .picture => Picture,
+        .param => Param,
+        .pre => Pre,
+        .progress => Progress,
+        .quote => Quote,
+        .script => Script,
+        .select => Select,
+        .slot => Slot,
+        .source => Source,
+        .span => Span,
+        .style => Style,
+        .table => Table,
+        .table_caption => TableCaption,
+        .table_cell => TableCell,
+        .table_col => TableCol,
+        .table_row => TableRow,
+        .table_section => TableSection,
+        .template => Template,
+        .textarea => TextArea,
+        .time => Time,
+        .title => Title,
+        .track => Track,
+        .ul => UL,
+        .unknown => Unknown,
+    };
+}
+
+pub fn subtype(self: *const HtmlElement, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, HtmlElement);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
+
 pub fn is(self: *HtmlElement, comptime T: type) ?*T {
-    inline for (@typeInfo(Type).@"union".fields) |f| {
-        if (@field(Type, f.name) == self._type) {
-            if (f.type == T) {
-                return &@field(self._type, f.name);
+    switch (self._type) {
+        inline else => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
             }
-            if (f.type == *T) {
-                return @field(self._type, f.name);
-            }
-        }
+        },
     }
     return null;
 }
@@ -304,8 +394,8 @@ pub fn insertAdjacentHTML(
 
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
     switch (self._type) {
-        inline .button, .input, .textarea, .select => |i| {
-            if (i.getDisabled()) {
+        inline .button, .input, .textarea, .select => |tag| {
+            if (self.subtype(Subtype(tag)).getDisabled()) {
                 return;
             }
         },
@@ -330,8 +420,8 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     if (event._prevent_default == false) {
         // toggle the popover_target
         const explicit: ?*Element = switch (self._type) {
-            .button => |b| b._popover_target,
-            .input => |i| i._popover_target,
+            .button => self.subtype(Button)._popover_target,
+            .input => self.subtype(Input)._popover_target,
             else => null,
         };
         try popover.runInvokerActivation(self, explicit, frame);
@@ -543,7 +633,7 @@ fn setAttributeListener(
 ) !void {
     if (comptime lp.IS_DEBUG) {
         log.debug(.event, "Html.setAttributeListener", .{
-            .type = std.meta.activeTag(self._type),
+            .type = self._type,
             .listener_type = listener_type,
         });
     }
@@ -1492,14 +1582,14 @@ fn collectInnerText(self: *HtmlElement, state: *InnerTextState) std.Io.Writer.Er
                 const e = child.subtype(Node.Element);
                 switch (e._type) {
                     .svg => {},
-                    .html => |he| {
+                    .html => {
                         const tag = e.getTag();
                         switch (child_filter) {
                             .none => {},
                             .select => if (tag != .option and tag != .optgroup) continue,
                             .optgroup => if (tag != .option) continue,
                         }
-                        try handleChildElement(he, tag, state, &saw_cell, &saw_row);
+                        try handleChildElement(e.subtype(HtmlElement), tag, state, &saw_cell, &saw_row);
                     },
                 }
             },
@@ -1870,17 +1960,17 @@ pub const Build = struct {
     // Calls `func_name` with `args` on the most specific type where it is
     // implement. This could be on the HtmlElement itself.
     pub fn call(self: *const HtmlElement, comptime func_name: []const u8, args: anytype) !bool {
-        inline for (@typeInfo(HtmlElement.Type).@"union".fields) |f| {
-            if (@field(HtmlElement.Type, f.name) == self._type) {
+        switch (self._type) {
+            inline else => |tag| {
+                const S = Subtype(tag);
                 // The inner type implements this function. Call it and we're done.
-                const S = reflect.Struct(f.type);
                 if (@hasDecl(S, "Build")) {
                     if (@hasDecl(S.Build, func_name)) {
                         try @call(.auto, @field(S.Build, func_name), args);
                         return true;
                     }
                 }
-            }
+            },
         }
 
         if (@hasDecl(HtmlElement.Build, func_name)) {

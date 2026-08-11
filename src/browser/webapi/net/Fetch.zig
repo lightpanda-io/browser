@@ -152,7 +152,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const arena = self._response._arena;
     if (transfer.getContentLength()) |cl| {
-        try self._buf.ensureTotalCapacity(arena.allocator(), cl);
+        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
     }
 
     const res = self._response;

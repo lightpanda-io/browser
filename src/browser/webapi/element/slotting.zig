@@ -23,7 +23,6 @@ const Frame = @import("../../Frame.zig");
 
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
-const ShadowRoot = @import("../ShadowRoot.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 
 const Text = @import("../cdata/Text.zig");
@@ -93,7 +92,7 @@ fn assignSlottables(slot: *Slot, frame: *Frame) void {
 
 fn _assignSlottables(slot: *Slot, frame: *Frame) !void {
     var slottables: std.ArrayList(*Node) = .empty;
-    if (slot.asNode().getRootNode(.{}).is(ShadowRoot)) |shadow_root| {
+    if (slot.asNode().containingShadowRoot()) |shadow_root| {
         const host = shadow_root.getHost();
         if (shadow_root._slot_assignment == .manual) {
             // manual assignment preserves the assign(...) order, not tree order
@@ -184,7 +183,7 @@ pub fn insertionSteps(parent: *Node, child: *Node, in_fragment_parse: bool, fram
     // assignment they were parsed with.
     if (in_fragment_parse == false) {
         if (parent.is(Slot)) |parent_slot| {
-            if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
+            if (parent_slot._assigned.items.len == 0 and parent.containingShadowRoot() != null) {
                 frame.signalSlotChange(parent_slot);
             }
         }
@@ -192,9 +191,8 @@ pub fn insertionSteps(parent: *Node, child: *Node, in_fragment_parse: bool, fram
 
     // A subtree containing slots was inserted into a shadow tree.
     if (subtreeHasSlot(child)) {
-        const root = child.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            assignSlottablesForTree(root, frame);
+        if (child.containingShadowRoot()) |shadow_root| {
+            assignSlottablesForTree(shadow_root.asNode(), frame);
         }
     }
 }
@@ -213,7 +211,7 @@ pub fn removalSteps(parent: *Node, child: *Node, frame: *Frame) void {
 
     // Fallback content was removed from a slot that renders its fallback.
     if (parent.is(Slot)) |parent_slot| {
-        if (parent_slot._assigned.items.len == 0 and parent.getRootNode(.{}).is(ShadowRoot) != null) {
+        if (parent_slot._assigned.items.len == 0 and parent.containingShadowRoot() != null) {
             frame.signalSlotChange(parent_slot);
         }
     }
@@ -221,9 +219,8 @@ pub fn removalSteps(parent: *Node, child: *Node, frame: *Frame) void {
     // A subtree containing slots was removed: update assignments in the old
     // tree, and clear assignments held by slots in the detached subtree.
     if (subtreeHasSlot(child)) {
-        const root = parent.getRootNode(.{});
-        if (root.is(ShadowRoot) != null) {
-            assignSlottablesForTree(root, frame);
+        if (parent.containingShadowRoot()) |shadow_root| {
+            assignSlottablesForTree(shadow_root.asNode(), frame);
         }
         assignSlottablesForTree(child, frame);
     }
@@ -248,8 +245,7 @@ pub fn nameAttributeChanged(slot: *Slot, old_value: []const u8, value: []const u
     if (std.mem.eql(u8, old_value, value)) {
         return;
     }
-    const root = slot.asNode().getRootNode(.{});
-    if (root.is(ShadowRoot) != null) {
-        assignSlottablesForTree(root, frame);
+    if (slot.asNode().containingShadowRoot()) |shadow_root| {
+        assignSlottablesForTree(shadow_root.asNode(), frame);
     }
 }

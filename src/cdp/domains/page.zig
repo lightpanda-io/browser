@@ -244,6 +244,17 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
+
+    // An existing world already has a live, inspector-registered context for
+    // the current document: return its id without re-registering.
+    if (world.context) |js_context| {
+        var ls: js.Local.Scope = undefined;
+        js_context.localScope(&ls);
+        defer ls.deinit();
+        const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+        return cmd.sendResult(.{ .executionContextId = context_id }, .{});
+    }
+
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const js_context = try world.createContext(frame);
@@ -531,11 +542,12 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
         _ = try isolated_world.createContext(frame);
     }
 
-    if (!in_commit) {
+    if (in_commit == false) {
         // Only retain captured responses until a navigation event. In CDP
         // terms, this is called a "renderer" and the cache-duration can be
         // controlled via Network.configureDurableMessages (which we don't
         // support).
+        bc.captured_requests = .empty;
         bc.captured_responses = .empty;
     }
 }
@@ -1125,6 +1137,36 @@ test "cdp.frame: getFrameTree" {
             },
         }, .{ .id = 12 });
     }
+}
+
+test "cdp.frame: createIsolatedWorld is idempotent per name" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    try ctx.processMessage(.{ .id = 20, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = "FID-000000000X",
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try testing.expectEqual(1, bc.isolated_worlds.items.len);
+    const world_context = bc.isolated_worlds.items[0].context.?;
+
+    try ctx.processMessage(.{ .id = 21, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = "FID-000000000X",
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try testing.expectEqual(1, bc.isolated_worlds.items.len);
+    try testing.expectEqual(world_context, bc.isolated_worlds.items[0].context.?);
+
+    try ctx.processMessage(.{ .id = 22, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = "FID-000000000X",
+        .worldName = "other",
+        .grantUniveralAccess = true,
+    } });
+    try testing.expectEqual(2, bc.isolated_worlds.items.len);
 }
 
 test "cdp.frame: child frame metadata" {

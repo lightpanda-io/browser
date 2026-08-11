@@ -760,7 +760,7 @@ pub const Script = struct {
 
         var buffer: std.ArrayList(u8) = .empty;
         if (content_length) |cl| {
-            try buffer.ensureTotalCapacity(self.sourceAllocator(), cl);
+            try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), cl);
         }
         self.source = .{ .remote = buffer };
         return .proceed;
@@ -962,7 +962,7 @@ pub const Script = struct {
             log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
 
-        if (!success and frame.js.env.isExecutionTerminating()) {
+        if (!success and frame.js.env.terminatePending()) {
             return;
         }
 

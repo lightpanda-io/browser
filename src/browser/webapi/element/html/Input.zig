@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -80,7 +81,7 @@ pub const Type = enum {
     }
 };
 
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _default_value: ?[]const u8 = null,
 _default_checked: bool = false,
 _value: ?[]const u8 = null,
@@ -122,10 +123,10 @@ fn dispatchInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, f
 }
 
 pub fn asElement(self: *Input) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Input) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Input) *Node {
     return self.asElement().asNode();
@@ -891,6 +892,20 @@ pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
+pub fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
+    switch (self._input_type) {
+        .hidden, .password, .checkbox, .radio, .file, .submit, .image, .reset, .button => return null,
+        else => {},
+    }
+
+    const element = self.asElement();
+    const list_id = element.getAttributeSafe(comptime .wrap("list")) orelse return null;
+
+    // list= resolves in the input's own tree (shadow root or document).
+    const target = frame.getElementByIdFromNode(element.asNode(), list_id) orelse return null;
+    return target.is(HtmlElement.DataList);
+}
+
 pub fn getForm(self: *Input, frame: *Frame) ?*Form {
     const element = self.asElement();
 
@@ -1426,6 +1441,7 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{ .ce_reactions = true });
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{ .ce_reactions = true });
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const list = bridge.accessor(Input.getList, null, .{});
     pub const formAction = bridge.accessor(Input.getFormAction, Input.setFormAction, .{});
     pub const formEnctype = bridge.accessor(Input.getFormEnctype, Input.setFormEnctype, .{});
     pub const formMethod = bridge.accessor(Input.getFormMethod, Input.setFormMethod, .{});

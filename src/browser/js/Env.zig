@@ -41,6 +41,8 @@ const Allocator = std.mem.Allocator;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
+const GC_HINT_FLOOR = 1 * 1024 * 1024;
+
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -412,10 +414,7 @@ pub fn runMicrotasks(self: *Env) void {
 
         const v8_isolate = self.isolate.handle;
 
-        // terminatePending: once a forcible terminate is requested (and not
-        // canceled), refuse to start new work — IsExecutionTerminating alone
-        // goes false again as soon as the killed script finishes unwinding.
-        if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate) or self.terminatePending()) {
+        if (self.terminatePending()) {
             return;
         }
 
@@ -433,7 +432,7 @@ pub fn runMicrotasks(self: *Env) void {
 }
 
 pub fn runMacrotasks(self: *Env) !void {
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle) or self.terminatePending()) {
+    if (self.terminatePending()) {
         return;
     }
 
@@ -512,10 +511,12 @@ pub fn runIdleTasks(self: *const Env) void {
 // a Context, it's managed by the garbage collector. We use the
 // `memoryPressureNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
-// The level indicates the aggressivity of the GC required:
-// moderate speeds up incremental GC
-// critical runs one full GC
+// Skips if there's little to reclaim
 pub fn memoryPressureNotification(self: *Env, level: Isolate.MemoryPressureLevel) void {
+    const stats = self.isolate.getHeapStatistics();
+    if (stats.used_heap_size + stats.external_memory < GC_HINT_FLOOR) {
+        return;
+    }
     var handle_scope: js.HandleScope = undefined;
     handle_scope.init(self.isolate);
     defer handle_scope.deinit();
@@ -543,14 +544,11 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
-pub fn isExecutionTerminating(self: *const Env) bool {
-    return v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle);
-}
-
-// Whether a forcible terminate has been requested (and not yet cleared by
-// cancelTerminate). Unlike isExecutionTerminating, this is our own sticky
-// flag, so it stays true after V8 consumes the terminate on the JSEntry
-// unwind. Callers about to enter a fresh eval use it to refuse to run.
+// The single "must not run JS" predicate. We're the only ones who ever call
+// TerminateExecution (here and in terminateInterrupt) and both set this flag,
+// so it's always at least as true as v8__Isolate__IsExecutionTerminating —
+// and it stays true after V8 consumes the terminate on the JSEntry unwind,
+// which is what stops a fresh eval from re-entering mid-teardown.
 pub fn terminatePending(self: *const Env) bool {
     return self.terminate_requested.load(.acquire);
 }
@@ -558,6 +556,7 @@ pub fn terminatePending(self: *const Env) bool {
 pub fn terminate(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
+    self.terminate_requested.store(true, .release);
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
@@ -632,7 +631,7 @@ pub fn cancelTerminate(self: *Env) void {
 pub fn performIsolateMicrotasks(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
-    if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) return;
+    if (self.terminatePending()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }
 

@@ -193,7 +193,7 @@ pub fn terminateFromNetwork(self: *CDP) void {
 // valid for the duration of dispatch.
 pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
     // Once a terminate is pending, don't dispatch
-    if (self.browser.env.isExecutionTerminating()) {
+    if (self.browser.env.terminatePending()) {
         return;
     }
 
@@ -440,15 +440,28 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
     return error.UnknownDomain;
 }
 
-fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+pub fn resolveSessionId(self: *const CDP, input_session_id: []const u8) ?[]const u8 {
     if (self.browser_session_id) |browser_session_id| {
         if (std.mem.eql(u8, browser_session_id, input_session_id)) {
-            return true;
+            return browser_session_id;
         }
     }
-    const browser_context = &(self.browser_context orelse return false);
-    const session_id = browser_context.session_id orelse return false;
-    return std.mem.eql(u8, session_id, input_session_id);
+    const browser_context = &(self.browser_context orelse return null);
+    if (browser_context.session_id) |session_id| {
+        if (std.mem.eql(u8, session_id, input_session_id)) {
+            return session_id;
+        }
+    }
+    for (browser_context.attached_sessions.items) |session| {
+        if (std.mem.eql(u8, session.id, input_session_id)) {
+            return session.id;
+        }
+    }
+    return null;
+}
+
+fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    return self.resolveSessionId(input_session_id) != null;
 }
 
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
@@ -496,18 +509,22 @@ pub const BrowserContext = struct {
         data: std.ArrayList(u8),
     };
 
-    // Key for `captured_responses`. Documents are keyed by `loader_id`,
-    // everything else by `request_id` — the two id-spaces are independent
-    // counters and overlap numerically (loader 1 / request 1, loader 2 /
-    // request 2, ...), so the map key has to carry the namespace or
-    // entries collide. The wire-format prefix (`LID-` / `REQ-`) provides
-    // the same disambiguation on lookup; see `idFromRequestId` in
-    // domains/network.zig.
-    pub const CapturedResponseKey = struct {
+    // Key for `captured_responses` / `captured_requests`. Documents are
+    // keyed by `loader_id`, everything else by `request_id` — the two
+    // id-spaces are independent counters and overlap numerically (loader 1
+    // / request 1, loader 2 / request 2, ...), so the map key has to carry
+    // the namespace or entries collide. The wire-format prefix (`LID-` /
+    // `REQ-`) provides the same disambiguation on lookup; see
+    // `idFromRequestId` in domains/network.zig.
+    pub const CapturedKey = struct {
         kind: enum { request, loader },
         id: u32,
     };
 
+    pub const AttachedSession = struct {
+        id: []const u8,
+        parent_id: ?[]const u8,
+    };
     id: []const u8,
     cdp: *CDP,
 
@@ -550,6 +567,7 @@ pub const BrowserContext = struct {
     // if we get a request with a sessionId that doesn't match the current one
     // we should reject it.
     session_id: ?[]const u8,
+    attached_sessions: std.ArrayList(AttachedSession) = .empty,
 
     security_origin: []const u8,
     page_life_cycle_events: bool,
@@ -572,6 +590,11 @@ pub const BrowserContext = struct {
     extra_headers: std.ArrayList(http.Header) = .empty,
 
     intercept_state: InterceptState,
+    fetch_session_id: ?[]const u8 = null,
+
+    // Request bodies retained for Network.getRequestPostData, which can be
+    // called after the transfer is gone. Capped at max_post_data_size.
+    captured_requests: std.AutoHashMapUnmanaged(CapturedKey, []const u8),
 
     // When network is enabled, we'll capture the transfer.id -> body
     // This is awfully memory intensive, but our underlying http client and
@@ -580,7 +603,7 @@ pub const BrowserContext = struct {
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
     // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(CapturedResponseKey, CapturedResponse),
+    captured_responses: std.AutoHashMapUnmanaged(CapturedKey, CapturedResponse),
 
     notification: *Notification,
 
@@ -632,6 +655,7 @@ pub const BrowserContext = struct {
             .arena = cdp.browser_context_arena.allocator(),
             .notification_arena = cdp.notification_arena.allocator(),
             .intercept_state = try InterceptState.init(allocator),
+            .captured_requests = .empty,
             .captured_responses = .empty,
             .notification = notification,
         };
@@ -714,6 +738,18 @@ pub const BrowserContext = struct {
     }
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
+        // The name is the world's identity (matching Chrome). Clients re-issue
+        // this call after every navigation; appending a duplicate each time
+        // would grow the per-page context count without bound.
+        for (self.isolated_worlds.items) |world| {
+            if (std.mem.eql(u8, world.name, world_name)) {
+                if (world.grant_universal_access != grant_universal_access) {
+                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+                }
+                return world;
+            }
+        }
+
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer arena.release();
@@ -820,17 +856,26 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_request_served_from_cache, self);
     }
 
-    pub fn fetchEnable(self: *BrowserContext, authRequests: bool) !void {
+    pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
         self.fetchDisable(); //in case of multiple calls
+        self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
     }
 
+    pub fn fetchDisableForSession(self: *BrowserContext, session_id: []const u8) void {
+        const active_session_id = self.fetch_session_id orelse return;
+        if (std.mem.eql(u8, active_session_id, session_id)) {
+            self.fetchDisable();
+        }
+    }
+
     pub fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
+        self.fetch_session_id = null;
     }
 
     pub fn lifecycleEventsEnable(self: *BrowserContext) !void {
@@ -951,12 +996,26 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/network.zig").httpRequestStart(self, msg);
+        {
+            // capture the request
+            const transfer = msg.transfer;
+            const key = keyFromTransfer(transfer);
+            const body = transfer.req.body orelse "";
+            if (body.len == 0 or body.len > @import("domains/network.zig").max_post_data_size) {
+                _ = self.captured_requests.remove(key);
+            } else {
+                const owned_body = try self.frame_arena.dupe(u8, body);
+                try self.captured_requests.put(self.frame_arena, key, owned_body);
+            }
+        }
+        defer self.resetNotificationArena();
+        try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/fetch.zig").requestIntercept(self, msg);
+        defer self.resetNotificationArena();
+        try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
@@ -979,7 +1038,7 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedResponseKey {
+    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedKey {
         return if (transfer.req.resource_type == .document)
             .{ .kind = .loader, .id = transfer.req.loader_id }
         else
@@ -1038,7 +1097,7 @@ pub const BrowserContext = struct {
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
-        try @import("domains/fetch.zig").requestAuthRequired(self, data);
+        try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
     }
 
     pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
@@ -1110,7 +1169,7 @@ pub const BrowserContext = struct {
         const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
         var buf: std.ArrayList(u8) = .empty;
-        buf.ensureTotalCapacity(allocator, message_len) catch |err| {
+        buf.ensureTotalCapacityPrecise(allocator, message_len) catch |err| {
             log.err(.cdp, "inspector buffer", .{ .err = err });
             return;
         };

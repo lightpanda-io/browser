@@ -344,7 +344,7 @@ fn waitForSelector(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const timeout_ms = params.timeout orelse 5000;
+    const timeout_ms = params.timeout orelse lp.tools.defaultWaitTimeout(frame);
     const selector_z = try cmd.arena.dupeZ(u8, params.selector);
 
     const node = lp.actions.waitForSelector(selector_z, timeout_ms, frame._frame_id, bc.session) catch |err| {

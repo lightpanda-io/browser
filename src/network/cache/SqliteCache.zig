@@ -41,6 +41,7 @@ pub const SqliteCache = @This();
 
 allocator: std.mem.Allocator,
 pool: Pool,
+entry_limit: u32,
 
 const cache_migrations: []const Migration = &.{
     .{ .sql =
@@ -67,6 +68,7 @@ const cache_migrations: []const Migration = &.{
     \\ ) strict
     },
     .{ .sql = "create index header_url on header(url)" },
+    .{ .sql = "create index cache_stored_at on cache(stored_at)" },
 };
 
 pub const SqliteCachePath = union(enum) {
@@ -85,7 +87,7 @@ pub const SqliteCachePath = union(enum) {
     }
 };
 
-pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath) !SqliteCache {
+pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath, entry_limit: u32) !SqliteCache {
     var pool = switch (path) {
         .memory => try Pool.init(allocator, ":memory:"),
         .path => |cache_dir| blk: {
@@ -124,12 +126,26 @@ pub fn init(allocator: std.mem.Allocator, path: SqliteCachePath) !SqliteCache {
         try conn.exec("pragma foreign_keys=on", .{});
     }
 
-    log.info(.cache, "sqlite cache initialized", .{ .path = path, .version = version });
-    return .{ .allocator = allocator, .pool = pool };
+    log.info(.cache, "sqlite cache initialized", .{ .path = path, .entry_limit = entry_limit, .version = version });
+    return .{ .allocator = allocator, .pool = pool, .entry_limit = entry_limit };
 }
 
 pub fn deinit(self: *SqliteCache) void {
     self.pool.deinit(self.allocator);
+}
+
+fn evictOverflow(self: *SqliteCache, conn: Conn) !void {
+    const limit = self.entry_limit;
+    if (limit == 0) return;
+
+    try conn.exec(
+        \\ delete from cache
+        \\ where rowid in (
+        \\     select rowid from cache
+        \\     order by stored_at desc
+        \\     limit -1 offset $1
+        \\ )
+    , .{@as(i64, @intCast(limit))});
 }
 
 pub fn get(self: *SqliteCache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
@@ -270,6 +286,7 @@ pub fn put(self: *SqliteCache, req: CachePutRequest, body: []const u8) !void {
         );
     }
 
+    try self.evictOverflow(conn);
     try conn.commit();
 
     log.debug(.cache, "put", .{ .url = req.url, .body_len = body.len });
@@ -376,7 +393,7 @@ pub fn renew(self: *SqliteCache, _: std.mem.Allocator, req: RenewResponse) !void
 const testing = std.testing;
 
 fn setupCache(allocator: std.mem.Allocator) !Cache {
-    return Cache{ .kind = .{ .sqlite = try .init(allocator, .memory) } };
+    return Cache{ .kind = .{ .sqlite = try .init(allocator, .memory, 0) } };
 }
 
 test "SqliteCache: Migrations" {
@@ -899,4 +916,51 @@ test "SqliteCache: renew preserves body" {
     );
     try testing.expect(result == .hit);
     try testing.expectEqualStrings("original body", result.hit.data.buffer);
+}
+
+test "SqliteCache: evicts oldest entries over the limit" {
+    var cache = Cache{ .kind = .{ .sqlite = try .init(testing.allocator, .memory, 3) } };
+    defer cache.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const now: u64 = @intCast(std.Io.Timestamp.now(testing.io, .boot).toSeconds());
+
+    const urls = [_][:0]const u8{
+        "https://example.com/a",
+        "https://example.com/b",
+        "https://example.com/c",
+        "https://example.com/d",
+    };
+
+    for (urls, 0..) |url, i| {
+        try cache.put(.{
+            .url = url,
+            .content_type = "text/html",
+            .status = 200,
+            .stored_at = now + i,
+            .age_at_store = 0,
+            .cache_control = .{ .max_age = 600 },
+            .headers = &.{},
+            .vary_headers = &.{},
+        }, url);
+    }
+
+    const evicted = try cache.get(arena.allocator(), .{
+        .url = "https://example.com/a",
+        .timestamp = now,
+        .request_headers = &.{},
+    });
+    try testing.expect(evicted == .miss);
+
+    for (urls[1..]) |url| {
+        const hit = try cache.get(arena.allocator(), .{
+            .url = url,
+            .timestamp = now + urls.len,
+            .request_headers = &.{},
+        });
+        try testing.expect(hit == .hit);
+        try testing.expectEqualStrings(url, hit.hit.data.buffer);
+    }
 }

@@ -1,17 +1,18 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
-const ShadowRoot = @import("../../ShadowRoot.zig");
 const slotting = @import("../slotting.zig");
 
 const Slot = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // DOM spec "assigned nodes". Maintained by slotting.assignSlottables; always
 // empty while the slot isn't in a shadow tree.
 _assigned: std.ArrayList(*Node) = .empty,
@@ -20,11 +21,11 @@ _assigned: std.ArrayList(*Node) = .empty,
 _manually_assigned: std.ArrayList(*Node) = .empty,
 
 pub fn asElement(self: *Slot) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asConstElement(self: *const Slot) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asNode(self: *Slot) *Node {
@@ -74,7 +75,7 @@ fn CollectionType(comptime elements: bool) type {
 
 // DOM spec "find flattened slottables"
 fn collectFlattened(self: *Slot, comptime elements: bool, coll: CollectionType(elements), frame: *Frame) error{OutOfMemory}!void {
-    if (self.asNode().getRootNode(.{}).is(ShadowRoot) == null) {
+    if (self.asNode().containingShadowRoot() == null) {
         return;
     }
 
@@ -99,7 +100,7 @@ fn appendFlattened(comptime elements: bool, coll: CollectionType(elements), node
     if (node.is(Slot)) |nested| {
         // a slottable (or fallback child) that is itself a slot in a shadow
         // tree flattens to its own flattened slottables
-        if (nested.asNode().getRootNode(.{}).is(ShadowRoot) != null) {
+        if (nested.asNode().containingShadowRoot() != null) {
             return nested.collectFlattened(elements, coll, frame);
         }
     }
@@ -151,9 +152,8 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
         try self._manually_assigned.append(frame.arena, node);
     }
 
-    const root = self.asNode().getRootNode(.{});
-    if (root.is(ShadowRoot) != null) {
-        slotting.assignSlottablesForTree(root, frame);
+    if (self.asNode().containingShadowRoot()) |shadow_root| {
+        slotting.assignSlottablesForTree(shadow_root.asNode(), frame);
     }
 }
 

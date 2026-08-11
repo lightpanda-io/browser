@@ -16,11 +16,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const std = @import("std");
+
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const referrer = @import("../../../referrer.zig");
 
 const Meta = @This();
 
@@ -29,10 +34,11 @@ pub const Proto = HtmlElement;
 // Create a different alias we can use when in such ambiguous cases.
 const MetaElement = Meta;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Meta) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Meta) *Node {
     return self.asElement().asNode();
@@ -77,6 +83,21 @@ pub fn getScheme(self: *Meta) []const u8 {
 pub fn setScheme(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("scheme"), .wrap(value), frame);
 }
+
+pub const Build = struct {
+    // <meta name=referrer> sets the document's referrer policy.
+    pub fn created(node: *Node, frame: *Frame) !void {
+        const el = node.as(Element);
+        const name = el.getAttributeSafe(comptime .wrap("name")) orelse return;
+        if (std.ascii.eqlIgnoreCase(name, "referrer") == false) {
+            return;
+        }
+        const content = el.getAttributeSafe(comptime .wrap("content")) orelse return;
+        if (referrer.parseMeta(content)) |rp| {
+            frame.referrer_policy = rp;
+        }
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MetaElement);

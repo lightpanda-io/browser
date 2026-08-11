@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -27,14 +29,14 @@ const HtmlElement = @import("../Html.zig");
 const Style = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _sheet: ?*CSSStyleSheet = null,
 
 pub fn asElement(self: *Style) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Style) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Style) *Node {
     return self.asElement().asNode();
@@ -116,7 +118,7 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
         return;
     }
 
-    try frame.queueLoad(self._proto);
+    try frame.queueLoad(Factory.protoOf(self));
 }
 
 pub const JsApi = struct {

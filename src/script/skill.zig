@@ -28,7 +28,7 @@ const browser_tools = lp.tools;
 const Schema = @import("Schema.zig");
 
 pub const name = "pandascript";
-pub const description = "Write PandaScript agent scripts (.js) — Lightpanda's replayable browser-automation format, run token-free with `lightpanda agent script.js`.";
+pub const description = "Write PandaScript agent scripts (.js) — Lightpanda's replayable browser-automation format, run token-free with `lightpanda run script.js`.";
 
 /// Semantics summary for the agent's default system prompt, so the agent
 /// answers user questions about PandaScript from these rules instead of
@@ -210,7 +210,7 @@ const prose_head =
     \\Run with:
     \\
     \\```console
-    \\./lightpanda agent script.js
+    \\./lightpanda run script.js
     \\```
     \\
     \\## Mental model (get this right first)

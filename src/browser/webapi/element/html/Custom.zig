@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -35,14 +36,15 @@ const String = lp.String;
 const Custom = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _tag_name: String,
 _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
+_upgrade_failed: bool = false, // a failed upgrade is never retried
 
 pub fn asElement(self: *Custom) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
@@ -61,6 +63,9 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     if (element.is(Custom)) |custom| {
         // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
+            if (custom._upgrade_failed) {
+                return;
+            }
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
                 const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
@@ -256,29 +261,35 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     // Invoke constructor
     const prev_upgrading = frame._upgrading_element;
+    const prev_consumed = frame._upgrading_consumed;
     const node = element.asNode();
     frame._upgrading_element = node;
-    defer frame._upgrading_element = prev_upgrading;
+    frame._upgrading_consumed = false;
+    defer {
+        frame._upgrading_element = prev_upgrading;
+        frame._upgrading_consumed = prev_consumed;
+    }
 
     // PERFORMANCE OPTIMIZATION: This pattern is discouraged in general code.
     // Used here because: (1) multiple early returns before needing Local,
     // (2) called from both V8 callbacks (Local exists) and parser (no Local).
     // Prefer either: requiring *const js.Local parameter, OR always creating
     // Local.Scope upfront.
-    var ls: ?js.Local.Scope = null;
-    var local = blk: {
+    var ls: js.Local.Scope = undefined;
+    var ls_open = false;
+    const local = blk: {
         if (frame.js.local) |l| {
             break :blk l;
         }
-        ls = undefined;
-        frame.js.localScope(&ls.?);
-        break :blk &ls.?.local;
+        frame.js.localScope(&ls);
+        ls_open = true;
+        break :blk &ls.local;
     };
-    defer if (ls) |*_ls| {
-        _ls.deinit();
+    defer if (ls_open) {
+        ls.deinit();
     };
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
         log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;

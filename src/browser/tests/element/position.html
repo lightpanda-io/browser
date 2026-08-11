@@ -53,7 +53,8 @@
 
   box.appendChild(document.createElement('span'));
   testing.expectTrue(box.scrollWidth > oneChild);
-  testing.expectTrue(box.scrollWidth > box.clientWidth);
+  // An unsized box shrink-wraps: clientWidth tracks the same content sum.
+  testing.expectEqual(box.scrollWidth, box.clientWidth);
 
   // Text contributes nothing, however long. Estimating a run from its length
   // would need a per-character advance that tracks font-size, and would report
@@ -133,6 +134,72 @@
 }
 </script>
 
+<script id="clientWidthMarqueeLoop">
+{
+  // The clientWidth variant of the marquee idiom (amivoice.com): clone items
+  // into an unsized wrap until it is twice the width of its container.
+  // clientWidth of the wrap has to respond to the insertion, while the
+  // container — whose direct child is the wrap, not the items — must not
+  // grow in lockstep or the loop still never terminates.
+  const container = document.createElement('div');
+  const wrap = document.createElement('div');
+  const item = document.createElement('span');
+  wrap.appendChild(item);
+  container.appendChild(wrap);
+  document.body.appendChild(container);
+
+  const containerBefore = container.clientWidth;
+  let guard = 0;
+  while (wrap.clientWidth < container.clientWidth * 2 && guard < 50) {
+    wrap.appendChild(item.cloneNode(true));
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+  testing.expectEqual(containerBefore, container.clientWidth);
+
+  // An explicit inline size pins the box regardless of content.
+  const pinned = document.createElement('div');
+  pinned.style.width = '40px';
+  pinned.appendChild(document.createElement('span'));
+  pinned.appendChild(document.createElement('span'));
+  pinned.appendChild(document.createElement('span'));
+  document.body.appendChild(pinned);
+  testing.expectEqual(40, pinned.clientWidth);
+}
+</script>
+
+<script id="computedWidthMarqueeLoop">
+{
+  // The getComputedStyle variant of the marquee idiom (inchurch.com.br's
+  // dynamic-marquee-widget via jQuery .width()): the computed value must
+  // carry the same content fallback as clientWidth or the loop never
+  // terminates.
+  const container = document.createElement('div');
+  const wrap = document.createElement('div');
+  const item = document.createElement('span');
+  wrap.appendChild(item);
+  container.appendChild(wrap);
+  document.body.appendChild(container);
+
+  const width = (el) => parseFloat(getComputedStyle(el).width);
+  const containerWidth = width(container);
+  let guard = 0;
+  while (width(wrap) < containerWidth * 2 && guard < 50) {
+    wrap.appendChild(item.cloneNode(true));
+    guard++;
+  }
+  testing.expectTrue(guard < 50);
+
+  // An explicit inline size still wins over the content sum.
+  const pinned = document.createElement('div');
+  pinned.style.width = '40px';
+  pinned.appendChild(document.createElement('span'));
+  pinned.appendChild(document.createElement('span'));
+  document.body.appendChild(pinned);
+  testing.expectEqual('40px', getComputedStyle(pinned).width);
+}
+</script>
+
 <script id="scrollHeightFromContent">
 {
   // An empty element has no content to overflow its box.
@@ -149,7 +216,8 @@
 
   box.appendChild(document.createElement('div'));
   testing.expectTrue(box.scrollHeight > oneChild);
-  testing.expectTrue(box.scrollHeight > box.clientHeight);
+  // An unsized box shrink-wraps: clientHeight tracks the same content sum.
+  testing.expectEqual(box.scrollHeight, box.clientHeight);
 
   // Text contributes no height, as it contributes no width: a text child's
   // line box is what the element's own size already stands in for.

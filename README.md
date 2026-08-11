@@ -164,7 +164,7 @@ The output of an agent session is a
 [PandaScript](https://lightpanda.io/docs/usage/pandascript): vanilla JavaScript
 with a small set of native browser primitives built directly into Lightpanda.
 Run `/save` to export one from your current session, then replay it with
-`lightpanda agent <script>.js`. Scripts are deterministic and token-free, so
+`lightpanda run <script>.js`. Scripts are deterministic and token-free, so
 you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
@@ -178,7 +178,7 @@ reference.
 ./lightpanda agent                                    # auto-detects API key from env
 ./lightpanda agent --task "top story on news.ycombinator.com?"
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
-./lightpanda agent session.js                         # run a recorded script
+./lightpanda run session.js                           # run a recorded script
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
 VERTEX_API_KEY=... ./lightpanda agent --provider vertex             # Vertex AI, express mode
 GOOGLE_CLOUD_PROJECT=my-proj ./lightpanda agent --provider vertex   # Vertex AI, token via gcloud auth
