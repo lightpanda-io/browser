@@ -36,12 +36,39 @@ const Build = blk: {
 };
 
 pub fn build(b: *Build) !void {
-    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // The three settings below only work as a set, so they get one knob rather
+    // than three defaults: the self-hosted backend needs the shared V8 (it
+    // cannot apply the CREL relocations in the archive) and needs zig's own CRT
+    // (a system crt1.o with SFrame unwind data has relocations its linker does
+    // not handle). Debug-only, opt-in, and a good deal faster to rebuild.
+    const dev_fast = b.option(bool, "dev_fast", "Linux debug builds: shared V8 + self-hosted backend. Implies -Dshared_v8, -Duse_llvm=false and a bundled-CRT target") orelse false;
+
+    const target = if (dev_fast) b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .linux,
+        .abi = .gnu,
+        // https://codeberg.org/ziglang/zig/issues/31272
+        .glibc_version = .{ .major = 2, .minor = 43, .patch = 0 },
+    }) else b.standardTargetOptions(.{});
+
+    if (dev_fast) {
+        if (builtin.os.tag != .linux) {
+            std.debug.print("-Ddev_fast is Linux-only (host is {s})\n", .{@tagName(builtin.os.tag)});
+            return error.DevFastUnsupportedHost;
+        }
+        if (optimize != .Debug) {
+            std.debug.print("-Ddev_fast is Debug-only (optimize is {s})\n", .{@tagName(optimize)});
+            return error.DevFastRequiresDebug;
+        }
+    }
 
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
+    const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse dev_fast;
+    const use_llvm = b.option(bool, "use_llvm", "Use the LLVM backend") orelse !dev_fast;
 
     const version = resolveVersion(b);
     std.debug.print("Lightpanda {f}\n", .{version});
@@ -83,7 +110,7 @@ pub fn build(b: *Build) !void {
         // Set default behavior
         b.default_step.dependOn(fmt_step);
 
-        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
         try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
@@ -112,7 +139,7 @@ pub fn build(b: *Build) !void {
         // browser
         const exe = b.addExecutable(.{
             .name = "lightpanda",
-            .use_llvm = true,
+            .use_llvm = use_llvm,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
@@ -149,7 +176,7 @@ pub fn build(b: *Build) !void {
         // snapshot creator
         const exe = b.addExecutable(.{
             .name = "lightpanda-snapshot-creator",
-            .use_llvm = true,
+            .use_llvm = use_llvm,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main_snapshot_creator.zig"),
                 .target = target,
@@ -179,7 +206,7 @@ pub fn build(b: *Build) !void {
         // skills generator
         const exe = b.addExecutable(.{
             .name = "lightpanda-skills",
-            .use_llvm = true,
+            .use_llvm = use_llvm,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main_skills.zig"),
                 .target = target,
@@ -211,7 +238,7 @@ pub fn build(b: *Build) !void {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
-            .use_llvm = true,
+            .use_llvm = use_llvm,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
         const run_tests = b.addRunArtifact(tests);
@@ -226,6 +253,7 @@ fn linkV8(
     is_asan: bool,
     is_tsan: bool,
     prebuilt_v8_path: ?[]const u8,
+    shared_v8: bool,
 ) !void {
     const target = mod.resolved_target.?;
 
@@ -238,6 +266,7 @@ fn linkV8(
         .v8_enable_sandbox = is_tsan,
         .cache_root = b.pathFromRoot(".lp-cache"),
         .prebuilt_v8_path = prebuilt_v8_path,
+        .shared_v8 = shared_v8,
     });
     mod.addImport("v8", dep.module("v8"));
 }
