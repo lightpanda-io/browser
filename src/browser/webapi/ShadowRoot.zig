@@ -124,6 +124,23 @@ pub fn setOnSlotChange(self: *ShadowRoot, callback: ?js.Function.Global, frame: 
     }
 }
 
+pub fn getActiveElement(self: *ShadowRoot, frame: *Frame) ?*Element {
+    const root = self.asNode();
+    const document = root.ownerDocument(frame) orelse frame.document;
+
+    // This is answering two questions:
+    // 1 - is the active element contained by me (if not, return null)
+    // 2 - if it is, is there 1+ other shadowroot between us
+    //     a - if there is, return the nearest (to self) shadowroot's host
+    //     b - if there isn't, return the active element
+    var candidate = document._active_element orelse return null;
+    while (candidate.asNode().getRootNode(.{}) != root) {
+        const shadow = candidate.asNode().containingShadowRoot() orelse return null;
+        candidate = shadow._host;
+    }
+    return candidate;
+}
+
 pub fn getElementById(self: *ShadowRoot, id: []const u8, frame: *Frame) ?*Element {
     if (id.len == 0) {
         return null;
@@ -177,6 +194,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const activeElement = bridge.accessor(ShadowRoot.getActiveElement, null, .{});
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
     pub const delegatesFocus = bridge.accessor(ShadowRoot.getDelegatesFocus, null, .{});

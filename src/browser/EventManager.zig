@@ -134,18 +134,24 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
-    {
-        const et = target.asEventTarget();
-        event._target = et;
-        event._dispatch_target = et; // Store original target for composedPath()
+    const target_et = target.asEventTarget();
+    event._target = target_et;
+    event._dispatch_target = target_et; // Store original target for composedPath()
 
-        // Retarget the relatedTarget against the dispatch target up front
-        // (DOM dispatch step 4); listeners observe the retargeted value and
-        // it survives the dispatch.
-        if (event.relatedTargetPtr()) |related_ptr| {
-            if (related_ptr.*) |related| {
-                related_ptr.* = getAdjustedTarget(related, et);
-            }
+    // The relatedTarget as authored. Every invocation sees it retargeted
+    // against its own currentTarget (DOM dispatch step 5.7), so the event
+    // keeps the unadjusted value between invocations.
+    const original_related: ?*EventTarget = if (event.relatedTargetPtr()) |p| p.* else null;
+    event._dispatch_related_target = original_related;
+    if (original_related) |related| {
+        if (rootIsShadowRoot(related)) {
+            event._needs_retargeting = true;
+        }
+        // DOM dispatch step 5: an event whose relatedTarget retargets onto the
+        // target itself isn't dispatched at all.
+        const adjusted = getAdjustedTarget(related, target_et);
+        if (adjusted == target_et and related != target_et) {
+            return;
         }
     }
 
@@ -193,8 +199,12 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 related_ptr.* = null;
             }
         } else if (event._needs_retargeting and node_path_len > 0) {
-            const adjusted = getAdjustedTarget(event._dispatch_target, path_buffer[node_path_len - 1]);
+            const last = path_buffer[node_path_len - 1];
+            const adjusted = getAdjustedTarget(event._dispatch_target, last);
             event._target = if (rootIsShadowRoot(adjusted)) null else adjusted;
+            if (event.relatedTargetPtr()) |related_ptr| {
+                related_ptr.* = getAdjustedTarget(original_related, last);
+            }
         }
         // Handle checkbox/radio activation rollback or commit
         if (activation_state) |state| {
@@ -222,38 +232,12 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         }
     }
 
-    const target_root = target.getRootNode(.{});
-    var node: ?*Node = target;
-    while (node) |n| {
-        if (path_len >= path_buffer.len) break;
-        path_buffer[path_len] = n.asEventTarget();
-        path_len += 1;
-
-        // Check if this node is a shadow root
-        if (n.is(ShadowRoot)) |shadow| {
-            event._needs_retargeting = true;
-
-            // A non-composed event stops at its own tree's root.
-            if (!event._composed and n == target_root) {
-                break;
-            }
-
-            // Otherwise, jump to the shadow host and continue
-            node = shadow._host.asNode();
-            continue;
-        }
-
-        // an assigned slottable's event-path parent is its assigned slot,
-        // routing the event into the slot's shadow tree
-        if (frame._assigned_slots.get(n)) |slot| {
-            node = slot.asNode();
-            continue;
-        }
-
-        node = n._parent;
-    }
-
+    const built = buildEventPath(target, event, frame, &path_buffer);
+    path_len = built.len;
     node_path_len = path_len;
+    if (built.crosses_shadow_root) {
+        event._needs_retargeting = true;
+    }
 
     // Even though the window isn't part of the DOM, most events propagate
     // through it in the capture phase. It only participates when the tree's
@@ -308,7 +292,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     // Phase 2: At target
     if (event._stop_propagation) return;
     event._event_phase = .at_target;
-    const target_et = target.asEventTarget();
 
     blk: {
         // Get inline handler (e.g., onclick property) for this target
@@ -319,6 +302,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             const prev_current_event = window._current_event;
             window._current_event = currentEventForTarget(target_et, event);
             defer window._current_event = prev_current_event;
+
+            const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, target_et) else null;
 
             // Inline handlers (e.g. onclick property) follow the same "report,
             // don't propagate" rule as addEventListener listeners — see Listener.run.
@@ -332,6 +317,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 break :ret null;
             };
             processHandlerReturnValue(event, handler_return);
+
+            if (adjusted) |a| {
+                a.restore(event);
+            }
 
             if (event._stop_propagation) {
                 return;
@@ -377,10 +366,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 window._current_event = currentEventForTarget(current_target, event);
                 defer window._current_event = prev_current_event;
 
-                const original_target = event._target;
-                if (event._needs_retargeting) {
-                    event._target = getAdjustedTarget(original_target, current_target);
-                }
+                const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, current_target) else null;
 
                 var caught: js.TryCatch.Caught = .{};
                 const handler_return: ?js.Value = ls.toLocal(inline_handler).tryCallWithThis(js.Value, current_target, .{event}, &caught) catch |err| ret: {
@@ -393,8 +379,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 };
                 processHandlerReturnValue(event, handler_return);
 
-                if (event._needs_retargeting) {
-                    event._target = original_target;
+                if (adjusted) |a| {
+                    a.restore(event);
                 }
 
                 if (event._stop_propagation) {
@@ -493,19 +479,15 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         event._current_target = current_target;
         event._in_passive_listener = listener.passive;
 
-        // Compute adjusted target for shadow DOM retargeting (only if needed)
-        const original_target = event._target;
-        if (event._needs_retargeting) {
-            event._target = getAdjustedTarget(original_target, current_target);
-        }
+        // Compute adjusted targets for shadow DOM retargeting (only if needed)
+        const adjusted: ?AdjustedTargets = if (event._needs_retargeting) .apply(event, current_target) else null;
 
         try listener.run(frame.call_arena, local, event, "listener");
 
         event._in_passive_listener = false;
 
-        // Restore original target (only if we changed it)
-        if (event._needs_retargeting) {
-            event._target = original_target;
+        if (adjusted) |a| {
+            a.restore(event);
         }
 
         if (event._stop_immediate_propagation) {
@@ -545,6 +527,113 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
         log.warn(.event, "inline html callback", .{ .type = handler_type, .err = err });
         return null;
     };
+}
+
+// An invocation sees the target and the relatedTarget retargeted against its
+// own currentTarget (DOM dispatch step 5.7). The event carries the unadjusted
+// values in between, so each invocation adjusts and then restores them.
+const AdjustedTargets = struct {
+    target: ?*EventTarget,
+    related: ?*EventTarget,
+    related_ptr: ?*?*EventTarget,
+
+    fn apply(event: *Event, current_target: *EventTarget) AdjustedTargets {
+        const related_ptr = event.relatedTargetPtr();
+        const original: AdjustedTargets = .{
+            .target = event._target,
+            .related = if (related_ptr) |p| p.* else null,
+            .related_ptr = related_ptr,
+        };
+
+        event._target = getAdjustedTarget(original.target, current_target);
+        if (related_ptr) |p| {
+            p.* = getAdjustedTarget(original.related, current_target);
+        }
+        return original;
+    }
+
+    fn restore(self: AdjustedTargets, event: *Event) void {
+        event._target = self.target;
+        if (self.related_ptr) |p| {
+            p.* = self.related;
+        }
+    }
+};
+
+pub const EventPath = struct {
+    len: usize,
+    // Whether a shadow root sits on the path, i.e. whether an invocation can
+    // see a target other than the one the event was dispatched at.
+    crosses_shadow_root: bool,
+};
+
+// Builds the node portion of an event's propagation path (DOM dispatch step
+// 5.7) into `buffer`. Window, which follows the document at the end of the
+// path, is left to the caller: the rules for including it differ between
+// dispatch and composedPath().
+pub fn buildEventPath(target: *Node, event: *Event, frame: ?*Frame, buffer: []*EventTarget) EventPath {
+    if (buffer.len == 0) {
+        return .{ .len = 0, .crosses_shadow_root = false };
+    }
+
+    const target_root = target.getRootNode(.{});
+    const related = event._dispatch_related_target;
+
+    // The root of the spec's `target` variable, which moves to each host we
+    // cross on the way out. A node it still contains is inside the current
+    // target's tree, where the event always propagates; the first node beyond
+    // it is where the relatedTarget can cut the path short.
+    var scope_root = target_root;
+
+    buffer[0] = target.asEventTarget();
+    var path: EventPath = .{ .len = 1, .crosses_shadow_root = target.is(ShadowRoot) != null };
+
+    var node = eventPathParent(target, event, target_root, frame);
+    while (node) |n| {
+        if (path.len == buffer.len) {
+            break;
+        }
+
+        const et = n.asEventTarget();
+        if (!isShadowIncludingInclusiveAncestor(scope_root, n)) {
+            // DOM dispatch step 5.7: the path stops at the relatedTarget.
+            if (related != null and getAdjustedTarget(related, et) == et) {
+                break;
+            }
+            scope_root = n.getRootNode(.{});
+        }
+
+        if (n.is(ShadowRoot) != null) {
+            path.crosses_shadow_root = true;
+        }
+        buffer[path.len] = et;
+        path.len += 1;
+
+        node = eventPathParent(n, event, target_root, frame);
+    }
+
+    return path;
+}
+
+// DOM spec "get the parent" for a node on the event path: an assigned
+// slottable's parent is its slot, routing the event into the slot's shadow
+// tree, and a shadow root's is its host — except for a non-composed event,
+// which stops at the root of the tree it was dispatched in.
+fn eventPathParent(node: *Node, event: *Event, target_root: *Node, frame: ?*Frame) ?*Node {
+    if (node.is(ShadowRoot)) |shadow| {
+        if (!event._composed and node == target_root) {
+            return null;
+        }
+        return shadow._host.asNode();
+    }
+
+    if (frame) |f| {
+        if (f._assigned_slots.get(node)) |slot| {
+            return slot.asNode();
+        }
+    }
+
+    return node._parent;
 }
 
 // DOM spec "retarget": walk original_target out of shadow trees until the
@@ -589,14 +678,10 @@ fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
 // shadow root. Used for the spec's post-dispatch "clear targets" step.
 fn rootIsShadowRoot(target_: ?*EventTarget) bool {
     const target = target_ orelse return false;
-    var current: *Node = switch (target._type) {
-        .node => |n| n,
-        else => return false,
+    return switch (target._type) {
+        .node => |n| n.containingShadowRoot() != null,
+        else => false,
     };
-    while (current._parent) |p| {
-        current = p;
-    }
-    return current.is(ShadowRoot) != null;
 }
 
 // Check if ancestor is an ancestor of (or the same as) node
