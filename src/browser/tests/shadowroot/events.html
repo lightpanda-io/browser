@@ -326,3 +326,141 @@
     host.remove();
 }
 </script>
+
+<script id="related_target_stops_path">
+{
+    // DOM dispatch: the path stops at the node the relatedTarget retargets
+    // onto, so the event never reaches the host or anything above it.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('span');
+    shadow.appendChild(target);
+
+    const seen = [];
+    const watch = (node, name) => node.addEventListener('my-event', () => seen.push(name));
+    watch(target, 'target');
+    watch(shadow, 'shadow');
+    watch(host, 'host');
+    watch(document.body, 'body');
+    watch(document, 'document');
+
+    target.dispatchEvent(new MouseEvent('my-event', {
+        bubbles: true,
+        composed: true,
+        relatedTarget: host,
+    }));
+
+    testing.expectEqual('target,shadow', seen.join(','));
+
+    host.remove();
+}
+</script>
+
+<script id="related_target_equal_to_target_skips_dispatch">
+{
+    // When the relatedTarget retargets onto the target itself, the event is
+    // not dispatched at all.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('span');
+    shadow.appendChild(inner);
+
+    let hostCalled = false;
+    host.addEventListener('my-event', () => hostCalled = true);
+
+    // relatedTarget lives in host's own shadow tree, so it retargets to host.
+    host.dispatchEvent(new MouseEvent('my-event', {
+        bubbles: true,
+        composed: true,
+        relatedTarget: inner,
+    }));
+
+    testing.expectEqual(false, hostCalled);
+
+    host.remove();
+}
+</script>
+
+<script id="related_target_retargeted_per_listener">
+{
+    // Each listener sees the relatedTarget retargeted against its own
+    // currentTarget: the slot is inside the shadow tree and sees the real
+    // node, everything in the document tree sees the host.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const slot = document.createElement('slot');
+    const related = document.createElement('i');
+    shadow.appendChild(slot);
+    shadow.appendChild(related);
+
+    const target = document.createElement('span');
+    host.appendChild(target);
+
+    const seen = [];
+    const watch = (node, name) => node.addEventListener('my-event', (e) => {
+        seen.push(name + '=' + (e.relatedTarget === related ? 'related' : (e.relatedTarget === host ? 'host' : '?')));
+    });
+    watch(target, 'target');
+    watch(slot, 'slot');
+    watch(host, 'host');
+
+    target.dispatchEvent(new MouseEvent('my-event', {
+        bubbles: true,
+        composed: true,
+        relatedTarget: related,
+    }));
+
+    testing.expectEqual('target=host,slot=related,host=host', seen.join(','));
+
+    host.remove();
+}
+</script>
+
+<script id="related_target_post_dispatch">
+{
+    // Post-dispatch the relatedTarget is left retargeted against the outermost
+    // node the event reached, or cleared when it would expose a shadow tree.
+    const makeHost = (tag) => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const shadow = host.attachShadow({ mode: 'open' });
+        const inner = document.createElement(tag);
+        shadow.appendChild(inner);
+        return { host: host, inner: inner };
+    };
+
+    // target and relatedTarget in different shadow trees: each is exposed as
+    // its own host.
+    const a = makeHost('span');
+    const b = makeHost('i');
+    const across = new MouseEvent('my-event', {
+        bubbles: true,
+        composed: true,
+        relatedTarget: b.inner,
+    });
+    a.inner.dispatchEvent(across);
+    testing.expectEqual(a.host, across.target);
+    testing.expectEqual(b.host, across.relatedTarget);
+
+    // target and relatedTarget in the same shadow tree: the event never leaves
+    // it, so both are cleared rather than leaking a shadow node.
+    const c = makeHost('span');
+    const sibling = document.createElement('i');
+    c.inner.parentNode.appendChild(sibling);
+    const within = new MouseEvent('my-event', {
+        bubbles: true,
+        composed: true,
+        relatedTarget: sibling,
+    });
+    c.inner.dispatchEvent(within);
+    testing.expectEqual(null, within.target);
+    testing.expectEqual(null, within.relatedTarget);
+
+    a.host.remove();
+    b.host.remove();
+    c.host.remove();
+}
+</script>

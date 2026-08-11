@@ -636,15 +636,15 @@ pub fn isEqualChildren(a: *Node, b: *Node) bool {
     return a_count == b_count;
 }
 
+// The shadow root whose tree this node belongs to, or null when it belongs to
+// a document tree or a detached one. Inclusive: a shadow root is in its own
+// tree.
+pub fn containingShadowRoot(self: *Node) ?*ShadowRoot {
+    return self.getRootNode(.{}).is(ShadowRoot);
+}
+
 pub fn isInShadowTree(self: *Node) bool {
-    var node = self._parent;
-    while (node) |n| {
-        if (n.is(ShadowRoot) != null) {
-            return true;
-        }
-        node = n._parent;
-    }
-    return false;
+    return self.containingShadowRoot() != null;
 }
 
 pub fn isConnected(self: *const Node) bool {
@@ -1209,6 +1209,10 @@ const CloneError = error{
     ExecutionTerminated,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
+    if (self.is(ShadowRoot) != null) {
+        return error.NotSupported;
+    }
+
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => {

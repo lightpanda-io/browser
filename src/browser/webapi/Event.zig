@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const EventManager = @import("../EventManager.zig");
 
 const Node = @import("Node.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -40,6 +41,7 @@ _type_string: String,
 _target: ?*EventTarget = null,
 _current_target: ?*EventTarget = null,
 _dispatch_target: ?*EventTarget = null, // Original target for composedPath()
+_dispatch_related_target: ?*EventTarget = null,
 _prevent_default: bool = false,
 _stop_propagation: bool = false,
 _stop_immediate_propagation: bool = false,
@@ -325,111 +327,59 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
         else => return &.{},
     };
 
-    // Build the path by walking up from target
-    var path_len: usize = 0;
-    var path_buffer: [128]*EventTarget = undefined;
-    var stopped_at_shadow_boundary = false;
-
-    // Track closed shadow boundaries (position in path and host position)
-    var closed_shadow_boundary: ?struct { shadow_end: usize, host_start: usize } = null;
-
     const frame_ = switch (exec.js.global) {
         .frame => |frame| frame,
         else => null,
     };
 
-    const target_root = target_node.getRootNode(.{});
-    var node: ?*Node = target_node;
-    while (node) |n| {
-        if (path_len >= path_buffer.len) {
-            break;
-        }
-        path_buffer[path_len] = n.asEventTarget();
-        path_len += 1;
-
-        // Check if this node is a shadow root
-        if (n._type == .document_fragment) {
-            const df = n.subtype(Node.DocumentFragment);
-            if (df._type == .shadow_root) {
-                const shadow = df._type.shadow_root;
-
-                if (!self._composed and n == target_root) {
-                    stopped_at_shadow_boundary = true;
-                    break;
-                }
-
-                // Track the first closed shadow boundary we encounter
-                if (shadow._mode == .closed and closed_shadow_boundary == null) {
-                    // Mark where the shadow root is in the path
-                    // The next element will be the host
-                    closed_shadow_boundary = .{
-                        .shadow_end = path_len - 1, // index of shadow root
-                        .host_start = path_len, // index where host will be
-                    };
-                }
-
-                // Jump to the shadow host and continue
-                node = shadow._host.asNode();
-                continue;
-            }
-        }
-
-        // an assigned slottable's event-path parent is its assigned slot,
-        // routing the event into the slot's shadow tree
-        if (frame_) |frame| {
-            if (frame._assigned_slots.get(n)) |slot| {
-                node = slot.asNode();
-                continue;
-            }
-        }
-
-        node = n._parent;
+    var path_buffer: [128]*EventTarget = undefined;
+    var path_len = EventManager.buildEventPath(target_node, self, frame_, &path_buffer).len;
+    if (path_len == 0) {
+        return &.{};
     }
 
-    // Add window at the end. It only participates when propagation did not stop
-    // at a shadow boundary...
-    if (stopped_at_shadow_boundary == false) {
-        // ... AND when the tree's root is a document
-        const root_is_document = path_len > 0 and switch (path_buffer[path_len - 1]._type) {
-            .node => |n| n._type == .document,
-            else => false,
+    // Window follows the document at the end of the path. A path that stopped
+    // early — at a shadow boundary, or at the relatedTarget — doesn't end on
+    // the document and so doesn't reach it.
+    const root_is_document = switch (path_buffer[path_len - 1]._type) {
+        .node => |n| n._type == .document,
+        else => false,
+    };
+    if (root_is_document and path_len < path_buffer.len) {
+        if (frame_) |frame| {
+            path_buffer[path_len] = frame.window.asEventTarget();
+            path_len += 1;
+        }
+    }
+
+    // The host of the first closed shadow root on the path. Everything before
+    // it is inside that root and hidden from a currentTarget outside it.
+    var closed_host_index: ?usize = null;
+    for (path_buffer[0..path_len], 0..) |entry, i| {
+        const node = switch (entry._type) {
+            .node => |n| n,
+            else => continue,
         };
-        if (root_is_document) {
-            if (path_len < path_buffer.len) {
-                switch (exec.js.global) {
-                    .worker => {},
-                    .frame => |frame| {
-                        path_buffer[path_len] = frame.window.asEventTarget();
-                        path_len += 1;
-                    },
-                }
-            }
+        const shadow = node.is(Node.ShadowRoot) orelse continue;
+        if (shadow._mode == .closed) {
+            closed_host_index = i + 1;
+            break;
         }
     }
 
     // Determine visible path based on current_target and closed shadow boundaries
     var visible_start_index: usize = 0;
 
-    if (closed_shadow_boundary) |boundary| {
-        // Check if current_target is outside the closed shadow
-        // If current_target is null or is at/after the host position, hide shadow internals
-        const current_target = self._current_target;
-
-        if (current_target) |ct| {
-            // Find current_target in the path
-            var ct_index: ?usize = null;
+    if (closed_host_index) |host_index| {
+        // Find current_target in the path; if it's at or after the host, it's
+        // outside the closed shadow and must not see the nodes inside it.
+        if (self._current_target) |ct| {
             for (path_buffer[0..path_len], 0..) |elem, i| {
                 if (elem == ct) {
-                    ct_index = i;
+                    if (i >= host_index) {
+                        visible_start_index = host_index;
+                    }
                     break;
-                }
-            }
-
-            // If current_target is at or after the host (outside the closed shadow),
-            // hide everything from target up to the host
-            if (ct_index) |idx| {
-                if (idx >= boundary.host_start) {
-                    visible_start_index = boundary.host_start;
                 }
             }
         }

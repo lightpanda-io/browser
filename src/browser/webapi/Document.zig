@@ -728,7 +728,15 @@ pub fn getReadyState(self: *const Document) []const u8 {
 
 pub fn getActiveElement(self: *Document) ?*Element {
     if (self._active_element) |el| {
-        return el;
+        // A focused element inside a shadow tree is exposed as its outermost
+        // host; one in a detached tree isn't exposed at all.
+        var candidate = el;
+        while (candidate.asNode().containingShadowRoot()) |shadow| {
+            candidate = shadow._host;
+        }
+        if (candidate.asNode().getRootNode(.{}) == self.asNode()) {
+            return candidate;
+        }
     }
 
     // Default to body if it exists
@@ -764,6 +772,9 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
 pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
+    }
+    if (node.is(Node.ShadowRoot) != null) {
+        return error.HierarchyError;
     }
 
     const old_owner = node.ownerDocument(frame) orelse frame.document;
