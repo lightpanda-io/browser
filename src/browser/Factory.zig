@@ -68,7 +68,7 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
 
     const event_ptr = chain.get(0);
     event_ptr.* = .{
-        ._type = unionInit(EventTarget.Type, chain.get(1)),
+        ._type = typeInit(EventTarget, chain.get(1)),
     };
     chain.setLeaf(1, child);
 
@@ -621,3 +621,6 @@ fn unionFieldName(comptime T: type, comptime V: type) []const u8 {
     }
     @compileError(@typeName(V) ++ " is not a valid type for " ++ @typeName(T) ++ ".type");
 }
+
+
+

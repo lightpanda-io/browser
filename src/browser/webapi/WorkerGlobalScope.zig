@@ -143,7 +143,7 @@ pub fn init(
 
     const factory = frame._factory;
     const leaf = try Factory.chainedWithAllocator(arena, .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .worker_global_scope },
         WorkerGlobalScope{
             .url = url,
             .arena = arena,
@@ -173,7 +173,6 @@ pub fn init(
     });
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
-    self._proto._type = .{ .worker_global_scope = self };
 
     self._http_owner = .init(&frame._page.blob_urls, &self.origin);
 
