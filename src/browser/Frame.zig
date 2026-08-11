@@ -472,6 +472,11 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
             }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .blocks_done = false });
         }
     }
+
+    if (parent == null) {
+        // no point reporting this for each child page
+        session.browser.reportJsHeap();
+    }
 }
 
 pub fn deinit(self: *Frame) void {
@@ -543,6 +548,9 @@ pub fn deinit(self: *Frame) void {
     const browser = page.session.browser;
 
     browser.http_client.abortOwner(&self._http_owner);
+    if (self.parent == null) {
+        browser.reportJsHeap();
+    }
 
     browser.env.destroyContext(self.js);
 
@@ -1228,6 +1236,10 @@ pub fn documentIsComplete(self: *Frame) void {
         error.JsException => {}, // already logged
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
+
+    if (self.parent == null) {
+        self._session.browser.reportJsHeap();
+    }
 }
 
 fn _documentIsComplete(self: *Frame) !void {

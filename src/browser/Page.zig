@@ -206,6 +206,7 @@ pub fn deinit(self: *Page) void {
 
     const session = self.session;
     lp.metrics.js_heap_size_bytes.observe(session.browser.env.isolate.getHeapStatistics().total_physical_size);
+    session.browser.reportJsHeap();
     defer session.browser.env.memoryPressureNotification(.moderate);
 
     self.identity.deinit();
