@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+Pins the main thread and a worker to the same GPU story. The worker used to be
+unable to get a WebGL context from an OffscreenCanvas at all, so it reported no
+GPU while this document reported a full vendor and renderer. Detectors flag
+that disagreement directly (deviceandbrowserinfo's `hasInconsistentWorkerValues`
+was our only bot flag, and it fired even with the Chrome-compatible identity).
+-->
+<title>webgl worker fixture</title>
+<canvas id="c" width="256" height="256"></canvas>
+<script src="testing.js"></script>
+
+<script id=worker-webgl-matches-main-thread type=module>
+  {
+    const state = await testing.async();
+
+    const gl = document.getElementById('c').getContext('webgl');
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const main = {
+      vendor: gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL),
+      renderer: gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL),
+      extensions: gl.getSupportedExtensions().length,
+    };
+
+    const worker = new Worker('./webgl-worker.js');
+    worker.onmessage = (e) => {
+      if (e.data && e.data.ready) {
+        worker.postMessage({});
+        return;
+      }
+      state.resolve(e.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok);
+
+      // The worker can see a GPU at all — this is what used to be false.
+      testing.expectEqual(main.vendor, data.vendor);
+      testing.expectEqual(main.renderer, data.renderer);
+      testing.expectEqual(main.extensions, data.extensions);
+
+      // Both WebGL versions reachable off the main thread, and `.canvas`
+      // reports the OffscreenCanvas that made the context rather than a
+      // document canvas the worker cannot have.
+      testing.expectTrue(data.has_webgl2);
+      testing.expectTrue(data.canvas_is_offscreen);
+
+      // A blank vendor would satisfy the equality checks above while still
+      // telling a detector we have no GPU.
+      testing.expectTrue(main.vendor.length > 0);
+    });
+  }
+</script>

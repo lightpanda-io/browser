@@ -20,7 +20,11 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
+const ImageBitmap = @import("ImageBitmap.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const webgl = @import("WebGLRenderingContext.zig");
+const WebGLRenderingContext = webgl.WebGLRenderingContext;
+const WebGL2RenderingContext = webgl.WebGL2RenderingContext;
 
 const Execution = js.Execution;
 
@@ -36,6 +40,8 @@ _height: u32,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
+    webgl2: *WebGL2RenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -61,10 +67,33 @@ pub fn setHeight(self: *OffscreenCanvas, value: u32) void {
     self._height = value;
 }
 
-pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
         const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{});
         return .{ .@"2d" = ctx };
+    }
+
+    // Same fingerprint-grade WebGL stub the main-thread canvas hands out, and
+    // seeded identically. A worker that answered null here reported no GPU
+    // while the document reported a full vendor/renderer, and that
+    // disagreement is itself the bot signal — real browsers never contradict
+    // themselves across threads.
+    const noise = exec.session.browser.app.config.fingerprint_profile.noise_seed;
+
+    if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+        const ctx = try exec._factory.create(WebGLRenderingContext{
+            ._canvas = .{ .offscreen = self },
+            ._fp_seed = noise,
+        });
+        return .{ .webgl = ctx };
+    }
+
+    if (std.mem.eql(u8, context_type, "webgl2")) {
+        const ctx = try exec._factory.create(WebGL2RenderingContext{
+            ._canvas = .{ .offscreen = self },
+            ._fp_seed = noise,
+        });
+        return .{ .webgl2 = ctx };
     }
 
     return null;
@@ -77,10 +106,10 @@ pub fn convertToBlob(_: *OffscreenCanvas, exec: *Execution) !js.Promise {
     return exec.js.local.?.resolvePromise(blob);
 }
 
-/// Returns an ImageBitmap with the rendered content (stub).
-pub fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
-    // ImageBitmap not implemented yet, return null
-    return null;
+/// Returns an ImageBitmap sized like the canvas. There are no pixels to carry
+/// over, but consumers throw on a null return.
+pub fn transferToImageBitmap(self: *OffscreenCanvas, exec: *Execution) !*ImageBitmap {
+    return ImageBitmap.init(self._width, self._height, exec);
 }
 
 pub const JsApi = struct {

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=OfflineAudioContext type=module>
+{
+  const state = await testing.async();
+  testing.expectEqual("function", typeof OfflineAudioContext);
+  testing.expectEqual("function", typeof AudioContext);
+
+  const ctx = new OfflineAudioContext(1, 44100, 44100);
+  testing.expectEqual(44100, ctx.sampleRate);
+  testing.expectEqual(44100, ctx.length);
+  testing.expectEqual(true, ctx.destination != null);
+
+  const osc = ctx.createOscillator();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(10000, ctx.currentTime);
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -50;
+  compressor.knee.value = 40;
+  compressor.ratio.value = 12;
+  compressor.attack.value = 0;
+  compressor.release.value = 0.25;
+  osc.connect(compressor);
+  compressor.connect(ctx.destination);
+  osc.start(0);
+
+  const buf = await ctx.startRendering();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, buf instanceof AudioBuffer);
+    testing.expectEqual(44100, buf.length);
+    const data = buf.getChannelData(0);
+    testing.expectEqual(true, data instanceof Float32Array);
+    let sum = 0;
+    for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
+    testing.expectEqual(true, sum > 0);
+  });
+}
+</script>
+
+<script id=OfflineAudioContext#stability type=module>
+{
+  const state = await testing.async();
+
+  async function renderedSampleSum() {
+    const ctx = new OfflineAudioContext(1, 44100, 44100);
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+    osc.frequency.value = 10000;
+    const comp = ctx.createDynamicsCompressor();
+    osc.connect(comp);
+    comp.connect(ctx.destination);
+    osc.start(0);
+    const buf = await ctx.startRendering();
+    const data = buf.getChannelData(0);
+    let sum = 0;
+    for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
+    return sum;
+  }
+
+  const a = await renderedSampleSum();
+  const b = await renderedSampleSum();
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(true, a > 0);
+    testing.expectEqual(a, b);
+  });
+}
+</script>
+
+<script id=AudioContext>
+{
+  const ctx = new AudioContext();
+  testing.expectEqual(true, ctx.sampleRate > 0);
+  testing.expectEqual("running", ctx.state);
+  const g = ctx.createGain();
+  testing.expectEqual(1, g.gain.value);
+  const a = ctx.createAnalyser();
+  testing.expectEqual(true, typeof a.getFloatFrequencyData === "function");
+}
+</script>

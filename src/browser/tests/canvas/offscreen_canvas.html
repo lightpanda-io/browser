@@ -1,6 +1,50 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<script id=ImageBitmap_transferToImageBitmap>
+{
+  const canvas = new OffscreenCanvas(64, 32);
+  const bitmap = canvas.transferToImageBitmap();
+  testing.expectEqual(true, bitmap instanceof ImageBitmap);
+  testing.expectEqual(64, bitmap.width);
+  testing.expectEqual(32, bitmap.height);
+
+  // close() releases the (non-existent) pixels; dimensions read back as 0.
+  bitmap.close();
+  testing.expectEqual(0, bitmap.width);
+  testing.expectEqual(0, bitmap.height);
+}
+</script>
+
+<script id=ImageBitmap_createImageBitmap type=module>
+{
+  // Sites break outright if createImageBitmap rejects or resolves to null,
+  // even though there are no pixels behind the result.
+  const fromCanvas = await createImageBitmap(new OffscreenCanvas(20, 10));
+  testing.expectEqual(true, fromCanvas instanceof ImageBitmap);
+  testing.expectEqual(20, fromCanvas.width);
+  testing.expectEqual(10, fromCanvas.height);
+
+  const fromImageData = await createImageBitmap(new ImageData(8, 4));
+  testing.expectEqual(8, fromImageData.width);
+  testing.expectEqual(4, fromImageData.height);
+
+  // The crop rectangle sets the result's size.
+  const cropped = await createImageBitmap(new OffscreenCanvas(20, 10), 2, 2, 5, 6);
+  testing.expectEqual(5, cropped.width);
+  testing.expectEqual(6, cropped.height);
+
+  // An options dictionary in the second slot is ignored, not mistaken for sx.
+  const withOptions = await createImageBitmap(new OffscreenCanvas(20, 10), { imageOrientation: 'flipY' });
+  testing.expectEqual(20, withOptions.width);
+
+  // A source we can't measure still resolves; it just has no dimensions.
+  const fromBlob = await createImageBitmap(new Blob(['x'], { type: 'image/png' }));
+  testing.expectEqual(true, fromBlob instanceof ImageBitmap);
+  testing.expectEqual(0, fromBlob.width);
+}
+</script>
+
 <script id=OffscreenCanvas>
 {
   const canvas = new OffscreenCanvas(256, 256);

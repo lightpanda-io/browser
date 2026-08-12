@@ -155,7 +155,63 @@
   const ctx = element.getContext('2d');
 
   testing.expectTrue(ctx === element.getContext('2d'));
+  // Once a 2d context is bound, webgl returns null (spec).
   testing.expectEqual(null, element.getContext('webgl'));
+}
+</script>
+
+<script id="CanvasRenderingContext2D#measureText">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.font = "14px Arial";
+  const arial = ctx.measureText("Hello");
+  testing.expectEqual(true, arial instanceof TextMetrics);
+  testing.expectEqual(true, arial.width > 0);
+  ctx.font = "14px Courier New";
+  const courier = ctx.measureText("Hello");
+  // Different font families must yield different widths (font fingerprint).
+  testing.expectEqual(true, arial.width !== courier.width);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#createRadialGradient">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  const g = ctx.createRadialGradient(0, 0, 10, 50, 50, 100);
+  testing.expectEqual(true, g instanceof CanvasGradient);
+  g.addColorStop(0, "red");
+  g.addColorStop(1, "blue");
+  const lin = ctx.createLinearGradient(0, 0, 100, 0);
+  testing.expectEqual(true, lin instanceof CanvasGradient);
+}
+</script>
+
+<script id="HTMLCanvasElement#toDataURL">
+{
+  const c = document.createElement('canvas');
+  c.width = 200; c.height = 50;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = "#f60";
+  ctx.fillRect(125, 1, 62, 20);
+  ctx.fillStyle = "#069";
+  ctx.font = "14px Arial";
+  ctx.fillText("Cwm fjordbank", 2, 15);
+  const url1 = c.toDataURL();
+  const url2 = c.toDataURL();
+  // No fingerprint profile in tests (--no-stealth, no --fingerprint): honest "data:,".
+  // The seeded-PNG path is covered by the Zig unit test in Canvas.zig.
+  testing.expectEqual("data:,", url1);
+  testing.expectEqual(url1, url2);
+  // Second canvas with same ops → same fingerprint.
+  const c2 = document.createElement('canvas');
+  c2.width = 200; c2.height = 50;
+  const ctx2 = c2.getContext('2d');
+  ctx2.fillStyle = "#f60";
+  ctx2.fillRect(125, 1, 62, 20);
+  ctx2.fillStyle = "#069";
+  ctx2.font = "14px Arial";
+  ctx2.fillText("Cwm fjordbank", 2, 15);
+  testing.expectEqual(url1, c2.toDataURL());
 }
 </script>
 
@@ -169,5 +225,23 @@
   ctx.drawImage(img, 0, 0);
   ctx.drawImage(src, 0, 0, 10, 10);
   testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
+}
+</script>
+
+<script id="CanvasRenderingContext2D#drawImage does not invent opaque pixels">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  const img = new Image();
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQYV2NgAAIAAAUAAarVyFEAAAAASUVORK5CYII=';
+  ctx.drawImage(img, 0, 0);
+
+  // Image decoding belongs to the client renderer. Returning transparent
+  // black is honest; returning seeded opaque pixels is observably impossible
+  // for this transparent source and is flagged by bot scanners.
+  const pixel = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(0, pixel[0]);
+  testing.expectEqual(0, pixel[1]);
+  testing.expectEqual(0, pixel[2]);
+  testing.expectEqual(0, pixel[3]);
 }
 </script>

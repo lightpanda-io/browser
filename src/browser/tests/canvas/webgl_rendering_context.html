@@ -70,8 +70,18 @@
   testing.expectEqual(UNMASKED_VENDOR_WEBGL, 0x9245);
   testing.expectEqual(UNMASKED_RENDERER_WEBGL, 0x9246);
 
-  testing.expectEqual("", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
-  testing.expectEqual("", ctx.getParameter(UNMASKED_RENDERER_WEBGL));
+  const vendor = ctx.getParameter(UNMASKED_VENDOR_WEBGL);
+  const renderer = ctx.getParameter(UNMASKED_RENDERER_WEBGL);
+  testing.expectEqual(true, typeof vendor === "string" && vendor.length > 0);
+  testing.expectEqual(true, typeof renderer === "string" && renderer.length > 0);
+  testing.expectEqual(false, /swiftshader|llvmpipe/i.test(vendor + renderer));
+  // The pair comes from the active fingerprint profile, so the exact GPU
+  // varies with the seed. What must hold for every profile is that the two
+  // agree: the vendor's brand ("Google Inc. (NVIDIA)" -> NVIDIA, "Intel Inc."
+  // -> Intel) also appears in the renderer string.
+  const brand = (vendor.match(/\(([^)]+)\)/)?.[1] ?? vendor.replace(/\s+Inc\.$/, "")).trim();
+  testing.expectEqual(true, brand.length > 0);
+  testing.expectEqual(true, renderer.includes(brand));
 }
 
 // WEBGL_lose_context
@@ -93,5 +103,39 @@
 
   testing.expectTrue(ctx === element.getContext('webgl'));
   testing.expectEqual(null, element.getContext('2d'));
+}
+</script>
+
+<script id=WebGLRenderingContext#readPixels>
+{
+  const element = document.createElement('canvas');
+  const ctx = element.getContext('webgl');
+  const RGBA = 0x1908;
+
+  const a = new Uint8Array(4 * 4 * 4);
+  const b = new Uint8Array(4 * 4 * 4);
+  ctx.readPixels(0, 0, 4, 4, RGBA, ctx.UNSIGNED_BYTE, a);
+  ctx.readPixels(0, 0, 4, 4, RGBA, ctx.UNSIGNED_BYTE, b);
+
+  // An all-zero buffer is the headless tell we are avoiding.
+  testing.expectEqual(false, a.every((v) => v === 0));
+  // Same probe => byte-identical, and pixels vary.
+  testing.expectEqual(a.join(), b.join());
+  testing.expectEqual(false, a.slice(0, 4).join() === a.slice(4, 8).join());
+  // Opaque, like a real render.
+  testing.expectEqual(255, a[3]);
+  testing.expectEqual(255, a[a.length - 1]);
+
+  // A different rect gives different bytes.
+  const c = new Uint8Array(4 * 4 * 4);
+  ctx.readPixels(2, 3, 4, 4, RGBA, ctx.UNSIGNED_BYTE, c);
+  testing.expectEqual(false, a.join() === c.join());
+
+  // With --no-stealth and no --fingerprint there is no profile and toDataURL keeps
+  // the honest "data:," (see Canvas.toDataURL); with a profile it is a real
+  // PNG, never a blank one. Either way it has to be stable across calls.
+  const url = element.toDataURL();
+  testing.expectEqual(true, url === 'data:,' || url.startsWith('data:image/png;base64,'));
+  testing.expectEqual(url, element.toDataURL());
 }
 </script>

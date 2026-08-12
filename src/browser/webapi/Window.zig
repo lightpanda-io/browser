@@ -47,6 +47,7 @@ const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
+const ImageBitmap = @import("canvas/ImageBitmap.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 const Timers = @import("Timers.zig");
@@ -889,6 +890,10 @@ pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.
     return .{ .bytes = decoded };
 }
 
+pub fn createImageBitmap(_: *const Window, source: js.Value, sx: ?js.Value, sy: ?js.Value, sw: ?js.Value, sh: ?js.Value, exec: *const Execution) !js.Promise {
+    return ImageBitmap.create(source, sx, sy, sw, sh, exec);
+}
+
 pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
     // the serializer already threw (e.g. a DataCloneError); keep it
     return value.structuredClone() catch error.TryCatchRethrow;
@@ -1240,6 +1245,7 @@ pub const JsApi = struct {
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
+    pub const createImageBitmap = bridge.function(Window.createImageBitmap, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
     pub const frameElement = bridge.accessor(Window.getFrameElement, null, .{});

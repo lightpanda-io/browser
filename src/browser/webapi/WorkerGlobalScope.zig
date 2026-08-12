@@ -24,6 +24,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const JS = @import("../js/js.zig");
+const ImageBitmap = @import("canvas/ImageBitmap.zig");
 const URL = @import("../URL.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
@@ -362,6 +363,10 @@ pub fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execu
     return .{ .bytes = bytes };
 }
 
+pub fn createImageBitmap(_: *const WorkerGlobalScope, source: JS.Value, sx: ?JS.Value, sy: ?JS.Value, sw: ?JS.Value, sh: ?JS.Value, exec: *const JS.Execution) !JS.Promise {
+    return ImageBitmap.create(source, sx, sy, sw, sh, exec);
+}
+
 pub fn structuredClone(_: *const WorkerGlobalScope, value: JS.Value) !JS.Value {
     return value.structuredClone();
 }
@@ -620,6 +625,7 @@ pub const JsApi = struct {
     pub const btoa = bridge.function(WorkerGlobalScope.btoa, .{});
     pub const atob = bridge.function(WorkerGlobalScope.atob, .{});
     pub const structuredClone = bridge.function(WorkerGlobalScope.structuredClone, .{});
+    pub const createImageBitmap = bridge.function(WorkerGlobalScope.createImageBitmap, .{});
     pub const reportError = bridge.function(WorkerGlobalScope.reportError, .{});
     pub const fetch = bridge.function(WorkerGlobalScope.fetch, .{});
     pub const importScripts = bridge.function(WorkerGlobalScope.importScripts, .{});
