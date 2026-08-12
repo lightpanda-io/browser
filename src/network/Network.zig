@@ -235,7 +235,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         null;
     errdefer if (web_bot_auth) |wba| wba.deinit(allocator);
 
-    var adblocker = try initAdBlocker(allocator, config);
+    var adblocker = try AdBlocker.fromConfig(allocator, config);
     errdefer if (adblocker) |*blocker| blocker.deinit();
 
     const cache = if (config.httpCacheDir()) |cache_dir_path|
@@ -320,41 +320,6 @@ pub fn deinit(self: *Network) void {
     }
 
     globalDeinit();
-}
-
-/// Read buffer for filter lists, and therefore the longest line we can see.
-/// Real-world rules are well under 1KB; the parser skips anything longer.
-const ADBLOCK_LINE_MAX = 8 * 1024;
-
-fn initAdBlocker(allocator: Allocator, config: *const Config) !?AdBlocker {
-    var paths = config.adblockLists() orelse return null;
-
-    var adblocker: ?AdBlocker = null;
-    errdefer if (adblocker) |*blocker| blocker.deinit();
-
-    const buf = try allocator.alloc(u8, ADBLOCK_LINE_MAX);
-    defer allocator.free(buf);
-
-    while (paths.next()) |path| {
-        if (path.len == 0) continue;
-        if (adblocker == null) adblocker = try AdBlocker.init(allocator);
-        loadAdblockList(&adblocker.?, path, buf) catch |err| {
-            log.err(.app, "adblock list load failed", .{ .path = path, .err = err });
-            return err;
-        };
-    }
-    return adblocker;
-}
-
-/// Streams `path` into `blocker`. The list is consumed line by line, so a
-/// 100MB list never needs 100MB of memory.
-fn loadAdblockList(blocker: *AdBlocker, path: []const u8, buf: []u8) !void {
-    const file = try std.Io.Dir.cwd().openFile(lp.io, path, .{});
-    defer file.close(lp.io);
-
-    var file_reader = file.reader(lp.io, buf);
-    try blocker.parse(&file_reader.interface);
-    log.info(.app, "adblock list loaded", .{ .path = path });
 }
 
 pub fn bind(
