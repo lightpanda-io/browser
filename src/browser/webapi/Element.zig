@@ -20,10 +20,11 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
+const reflect = @import("../reflect.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
-const reflect = @import("../reflect.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
@@ -518,7 +519,6 @@ pub fn insertAdjacentHTML(
 }
 
 pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
-    const dump = @import("../dump.zig");
     return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
 
@@ -583,8 +583,11 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
 }
 
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, frame: *Frame) !void {
-    const dump = @import("../dump.zig");
     return dump.children(self.asNode(), .{ .shadow = .skip }, writer, frame);
+}
+
+pub fn getHTML(self: *Element, opts: dump.Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
+    return dump.getHTML(self.asNode(), opts, writer, frame);
 }
 
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
@@ -2331,6 +2334,21 @@ pub const JsApi = struct {
     fn _setInnerHTML(self: *Element, value: js.Value, frame: *Frame) !void {
         // `[LegacyNullToEmptyString] DOMString`: a JS null becomes "", not "null".
         return self.setInnerHTML(if (value.isNull()) "" else try value.toZig([]const u8), frame);
+    }
+
+    pub const getHTML = bridge.function(_getHTML, .{});
+    const GetHTMLOpts = struct {
+        serializableShadowRoots: bool = false,
+        shadowRoots: []const *ShadowRoot = &.{},
+    };
+    fn _getHTML(self: *Element, opts_: ?GetHTMLOpts, frame: *Frame) ![]const u8 {
+        const opts = opts_ orelse GetHTMLOpts{};
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        try self.getHTML(.{
+            .shadow_roots = opts.shadowRoots,
+            .serializable_shadow_roots = opts.serializableShadowRoots,
+        }, &buf.writer, frame);
+        return buf.written();
     }
 
     pub const prefix = bridge.accessor(Element._prefix, null, .{});
