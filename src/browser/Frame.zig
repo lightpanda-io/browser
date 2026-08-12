@@ -52,6 +52,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMNodeIterator = @import("webapi/DOMNodeIterator.zig");
 const Worker = @import("webapi/Worker.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
 const MessagePort = @import("webapi/MessagePort.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -2079,40 +2080,52 @@ pub fn domChanged(self: *Frame) void {
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
 
 fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
-    // Walk up the tree checking for ShadowRoot and tracking the root
-    var current = node;
-    while (true) {
-        if (current.is(ShadowRoot)) |shadow_root| {
-            return .{
-                .lookup = &shadow_root._elements_by_id,
-                .removed_ids = &shadow_root._removed_ids,
-            };
+    return idMapsForRoot(node.getRootNode(.{})) orelse {
+        // Detached nodes should not have IDs registered
+        if (lp.IS_DEBUG) {
+            std.debug.assert(false);
         }
-
-        const parent = current._parent orelse {
-            if (current._type == .document) {
-                const doc = current.subtype(Document);
-                return .{
-                    .lookup = &doc._elements_by_id,
-                    .removed_ids = &doc._removed_ids,
-                };
-            }
-            // Detached nodes should not have IDs registered
-            if (lp.IS_DEBUG) {
-                std.debug.assert(false);
-            }
-            return .{
-                .lookup = &frame.document._elements_by_id,
-                .removed_ids = &frame.document._removed_ids,
-            };
+        return .{
+            .lookup = &frame.document._elements_by_id,
+            .removed_ids = &frame.document._removed_ids,
         };
+    };
+}
 
-        current = parent;
+// Ids are registered per tree scope: a ShadowRoot or a Document each own a
+// map. A root that is neither (a detached tree) has none.
+fn idMapsForRoot(root: *Node) ?ElementIdMaps {
+    if (root.is(ShadowRoot)) |shadow_root| {
+        return .{
+            .lookup = &shadow_root._elements_by_id,
+            .removed_ids = &shadow_root._removed_ids,
+        };
     }
+    if (root._type == .document) {
+        const doc = root.subtype(Document);
+        return .{
+            .lookup = &doc._elements_by_id,
+            .removed_ids = &doc._removed_ids,
+        };
+    }
+    return null;
+}
+
+// Node.isConnected re-walks the ancestor chain; callers here already have the
+// root in hand.
+fn rootIsConnected(root: *Node) bool {
+    if (root._type == .document) {
+        return true;
+    }
+    const shadow_root = root.is(ShadowRoot) orelse return false;
+    return shadow_root._host.asNode().isConnected();
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    var id_maps = self.getElementIdMap(parent);
+    return self.addElementIdWithMaps(self.getElementIdMap(parent), element, id);
+}
+
+fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element, id: []const u8) !void {
     const gop = try id_maps.lookup.getOrPut(self.arena, id);
     if (!gop.found_existing) {
         gop.value_ptr.* = element;
@@ -2152,7 +2165,7 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     }
     // Detached subtree (root is neither a Document nor a ShadowRoot): no id map
     // exists, so scan it.
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
         if (std.mem.eql(u8, element_id, id)) {
@@ -2461,12 +2474,8 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
 // "insert this fully-formed node as a new last child of parent" entry point.
 pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
     lp.assert(child._parent == null, "Frame.appendNew", .{});
-    try self._insertNodeRelative(true, parent, child, .append, .{
-        // this opts has no meaning since we're passing `true` as the first
-        // parameter, which indicates this comes from the parser, and has its
-        // own special processing. Still, set it to be clear.
-        .child_already_connected = false,
-    });
+    // opts is meaningless when from_parser (the first param) is true.
+    try self._insertNodeRelative(true, parent, child, .append, .{});
 }
 
 // called from the parser when the node and all its children have been added
@@ -2533,7 +2542,12 @@ pub fn dupeSSO(self: *Frame, value: []const u8) !String {
 }
 
 const RemoveNodeOpts = struct {
-    will_be_reconnected: bool,
+    // The parent the child is going to be attached to after it is removed. null
+    // if it isn't AND null if the parent is cross-document. Why cross-document?
+    // because a remove + add-to-another-document behaves like a distinct remove
+    // + add. Where as a remove+add-to-the-same-document behaves more like a
+    // "move", e.g. it doesn't require idmap changes NOR disconnectedCallbacks.
+    reconnect_to: ?*Node,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
 };
@@ -2558,10 +2572,10 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         null;
 
     parent.unlink(child);
-    // grab this before we null the parent
-    const was_connected = child.isConnected();
-    // Capture the ID map before disconnecting, so we can remove IDs from the correct document
-    const id_maps = if (was_connected) self.getElementIdMap(child) else null;
+
+    const old_root = child.getRootNode(.{});
+    const was_connected = rootIsConnected(old_root);
+    const old_id_maps = idMapsForRoot(old_root);
 
     child._parent = null;
 
@@ -2577,16 +2591,33 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         observers.notifyChildListChange(self, parent, &.{}, &removed, previous_sibling, next_sibling);
     }
 
-    if (opts.will_be_reconnected) {
-        // We might be removing the node only to re-insert it. If the node will
-        // remain connected, we can skip the expensive process of fully
-        // disconnecting it.
-        return;
+    if (opts.reconnect_to) |dest| {
+        const dest_root = dest.getRootNode(.{});
+        if (dest_root == old_root) {
+            // reconnected under the same root, nothing to do (e.g. if it WAS in the
+            // idmap, it'll stay there)
+            return;
+        }
+        if (rootIsConnected(dest_root)) {
+            // The node is going to be reconnected to a different root which IS
+            // connected, we need to remove it from the old root's idmap.
+            if (old_id_maps) |id_maps| {
+                self.unregisterSubtreeIds(child, id_maps);
+            }
+            // but it isn't a REAL disconnect (more like a move), so there's
+            // nothing else to do, e.g. no disconnectedCallback
+            return;
+        }
+        // The destination is detached: this is a real disconnect.
     }
 
     if (was_connected == false) {
-        // If the child wasn't connected, then there should be nothing left for
-        // us to do
+        // the node wasn't connected, but it could still have lived in a shadow
+        // root's id map
+        if (old_id_maps) |id_maps| {
+            self.unregisterSubtreeIds(child, id_maps);
+        }
+        // and because it wasn't disconnected, there's nothing else to do.
         return;
     }
 
@@ -2602,10 +2633,10 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
     // the ID map and invoking disconnectedCallback for custom elements
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
+    var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
-            self.removeElementIdWithMaps(id_maps.?, id);
+            self.removeElementIdWithMaps(old_id_maps.?, id);
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
@@ -2639,6 +2670,17 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     }
 }
 
+// The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
+// descendants (ids nested under a shadow DOM are owned by that shadow DOM).
+fn unregisterSubtreeIds(self: *Frame, node: *Node, id_maps: ElementIdMaps) void {
+    var tw = TreeWalker.Full.Elements.init(node, .{});
+    while (tw.next()) |el| {
+        if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+            self.removeElementIdWithMaps(id_maps, id);
+        }
+    }
+}
+
 pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, .append, opts);
 }
@@ -2662,26 +2704,27 @@ pub const MoveChildrenNotify = enum { records, silent_parent };
 // pay attention to suppressObservers".
 pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
     self.domChanged();
-    const dest_connected = parent.isConnected();
     const notify = observers.hasMutationObservers(self);
 
     var moved: std.ArrayList(*Node) = .empty;
     const previous_sibling = if (ref_node) |ref| ref.previousSibling() else parent.lastChild();
 
+    // Every child shares source's root, and source itself doesn't move.
+    const previous_root = source.getRootNode(.{});
+
     var it = source.childrenIterator();
     while (it.next()) |child| {
         try moved.append(self.call_arena, child);
-        const child_was_connected = child.isConnected();
-        self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+        self.removeNode(source, child, .{ .reconnect_to = parent, .notify_observers = false });
         if (ref_node) |ref| {
             try self.insertNodeRelative(
                 parent,
                 child,
                 .{ .before = ref },
-                .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false },
+                .{ .previous_root = previous_root, .notify_observers = false, .run_ready = false },
             );
         } else {
-            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false });
+            try self.appendNode(parent, child, .{ .previous_root = previous_root, .notify_observers = false, .run_ready = false });
         }
     }
 
@@ -2715,7 +2758,10 @@ const InsertNodeRelative = union(enum) {
     before: *Node,
 };
 const InsertNodeOpts = struct {
-    child_already_connected: bool = false,
+    // The other half of RemoveNodeOpts.reconnect_to. This is the root (not
+    // parent) of the node before it was moved. This is null when the operation
+    // isn't part of a "move" (remove+add) but was a new/cloned child.
+    previous_root: ?*Node = null,
     adopting_to_new_document: bool = false,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
@@ -2797,7 +2843,8 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         return;
     }
 
-    const parent_is_connected = parent.isConnected();
+    const parent_root = parent.getRootNode(.{});
+    const parent_is_connected = rootIsConnected(parent_root);
 
     // Mutation records queue synchronously at insertion, before any script
     // runs: an inserted script can observe its own record via takeRecords.
@@ -2822,37 +2869,47 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         try self.nodeIsReadySubtree(child);
     }
 
-    if (opts.child_already_connected and !opts.adopting_to_new_document) {
-        // The child is already connected in the same document, we don't have to reconnect it.
-        // On cross-document adoption the child has already fired
-        // disconnectedCallback against the old tree and must re-fire
-        // connectedCallback for the new tree, so we fall through.
+    // nothing to register, and nothing can become connected.
+    const new_id_maps = idMapsForRoot(parent_root) orelse {
+        // The destination has no id scope, it's detached and outside of a
+        // shadow root. There's nothing left to do.
         return;
+    };
+
+    if (!opts.adopting_to_new_document) {
+        if (opts.previous_root) |previous_root| {
+            if (previous_root == parent_root) {
+                // The child already belongs to this scope; nothing to do.
+                return;
+            }
+            if (rootIsConnected(previous_root)) {
+                // The child is being moved to a different scope, but was and
+                // remains connected. We need to move it (and any children)'s
+                // id to the new parent...
+                var tw = TreeWalker.Full.Elements.init(child, .{});
+                while (tw.next()) |el| {
+                    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+                        try self.addElementIdWithMaps(new_id_maps, el, id);
+                    }
+                }
+                // but beause it was and stays connected, we don't trigger
+                // a connectedCallback.
+                return;
+            }
+            // The child was in a detached tree (removeNode already cleaned a
+            // detached-host shadow map, if any): a fresh connect, below.
+        }
     }
 
-    const parent_in_shadow = parent.containingShadowRoot() != null;
+    // The child was not connected or is being adopted. We need to move the id
+    // (of it and its chidlren) and if it is newly becoming connected, invoke
+    // connectedCallback.
+    const should_invoke_connected = parent_is_connected;
 
-    if (!parent_in_shadow and !parent_is_connected) {
-        return;
-    }
-
-    // If we're here, it means either:
-    // 1. A disconnected child became connected (parent.isConnected() == true)
-    // 2. Child is being added to a shadow tree (parent_in_shadow == true)
-    // In both cases, we need to update ID maps and invoke callbacks
-
-    // Only invoke connectedCallback if the root child is transitioning from
-    // disconnected to connected. When that happens, all descendants should also
-    // get connectedCallback invoked (they're becoming connected as a group).
-    // Cross-document adoption also counts as a transition: the element fired
-    // disconnectedCallback against the old tree during removeNode and must
-    // now fire connectedCallback against the new tree.
-    const should_invoke_connected = parent_is_connected and (!opts.child_already_connected or opts.adopting_to_new_document);
-
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
+    var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
-            try self.addElementId(el.asNode()._parent.?, el, id);
+            try self.addElementIdWithMaps(new_id_maps, el, id);
         }
 
         if (should_invoke_connected) {
@@ -2994,7 +3051,7 @@ fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         try elements.append(self.call_arena, el.asNode());
     }
