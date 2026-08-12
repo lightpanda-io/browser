@@ -22,14 +22,15 @@ const domain = @import("domain.zig");
 const NetworkFilter = @This();
 
 kind: PatternKind,
-/// Normalized (lowercased) match pattern. Empty for pure-hostname filters.
-/// For hostname-anchored filters with a path part, this is the remainder
-/// after `hostname` (starting with '/', '^' or '*'). For regex filters, the
-/// body between the slashes, stored raw.
-pattern: []const u8 = "",
+/// Normalized (lowercased) hostname, set for every `||`-anchored filter and
+/// for the bare-hostname and hosts-file forms. Empty when the pattern names
+/// no hostname (`/ads/banner.`, `|https://…`, `/regex/`).
 hostname: []const u8 = "",
 types: ResourceTypes = .none,
-domains: domain.List = .empty,
+/// Whether a `$domain=` list constrains this filter. The entries themselves
+/// are not kept: any of them already makes the filter narrower than the
+/// whole-hostname verdict we can represent.
+has_domains: bool = false,
 exception: bool = false,
 important: bool = false,
 badfilter: bool = false,
@@ -53,7 +54,7 @@ pub const PatternKind = enum {
     plain,
     /// Contains '*' or '^'; needs the wildcard matcher.
     wildcard,
-    /// Whole-pattern /regex/ literal; body kept unvalidated for the engine.
+    /// Whole-pattern /regex/ literal.
     regex,
 };
 
@@ -254,7 +255,7 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     const split = splitOptions(rest);
     var explicit_types = false;
     if (split.options) |options| {
-        try filter.parseOptions(arena, options, &explicit_types);
+        try filter.parseOptions(options, &explicit_types);
     }
 
     if (std.mem.indexOfAny(u8, split.pattern, &std.ascii.whitespace) != null) {
@@ -334,7 +335,6 @@ fn isNoop(name: []const u8) bool {
 
 fn parseOptions(
     self: *NetworkFilter,
-    arena: std.mem.Allocator,
     options: []const u8,
     explicit_types: *bool,
 ) ParseError!void {
@@ -405,7 +405,8 @@ fn parseOptions(
                 if (negated) return error.InvalidOption;
                 const v = value orelse return error.InvalidOption;
                 if (v.len == 0) return error.InvalidOption;
-                self.domains = try domain.parse(arena, v, '|');
+                try domain.validate(v);
+                self.has_domains = true;
             },
             .important => {
                 if (negated) return error.InvalidOption;
@@ -550,7 +551,6 @@ fn parsePattern(
     // Whole-pattern regex literal: /.../ with anything between the slashes.
     if (raw.len > 2 and raw[0] == '/' and raw[raw.len - 1] == '/') {
         self.kind = .regex;
-        self.pattern = raw[1 .. raw.len - 1];
         return;
     }
 
@@ -603,7 +603,6 @@ fn parsePattern(
             // Wildcard inside the hostname region (`||example.*/ads`):
             // no hostname split, the whole thing is a generic pattern.
             self.kind = .wildcard;
-            self.pattern = pattern;
             return;
         }
         if (host_end == 0) return error.InvalidPattern;
@@ -615,7 +614,6 @@ fn parsePattern(
             self.kind = .hostname;
             self.require_separator = true;
         } else {
-            self.pattern = remainder;
             self.kind = if (std.mem.indexOfAny(u8, remainder, "*^") != null) .wildcard else .plain;
         }
         return;
@@ -636,7 +634,6 @@ fn parsePattern(
         return error.InvalidPattern;
     }
 
-    self.pattern = pattern;
     self.kind = if (std.mem.indexOfAny(u8, pattern, "*^") != null) .wildcard else .plain;
 }
 
