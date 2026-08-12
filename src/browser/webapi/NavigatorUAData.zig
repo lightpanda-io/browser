@@ -31,27 +31,27 @@ const Brand = struct {
     version: []const u8,
 };
 
-pub fn getBrands(_: *const NavigatorUAData) []const Brand {
-    return brandList();
+pub fn getBrands(_: *const NavigatorUAData, exec: *const Execution) []const Brand {
+    return brandList(exec);
 }
 
 pub fn getMobile(_: *const NavigatorUAData) bool {
     return false;
 }
 
-pub fn getPlatform(_: *const NavigatorUAData) []const u8 {
-    return uaPlatform();
+pub fn getPlatform(_: *const NavigatorUAData, exec: *const Execution) []const u8 {
+    return platformName(exec);
 }
 
-pub fn toJSON(_: *const NavigatorUAData) struct {
+pub fn toJSON(_: *const NavigatorUAData, exec: *const Execution) struct {
     brands: []const Brand,
     mobile: bool,
     platform: []const u8,
 } {
     return .{
         .mobile = false,
-        .brands = brandList(),
-        .platform = uaPlatform(),
+        .brands = brandList(exec),
+        .platform = platformName(exec),
     };
 }
 
@@ -62,22 +62,37 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 
     _ = hints;
 
+    const stealth = exec.session.browser.app.config.stealth();
+    const fp = exec.session.browser.app.config.fingerprint_profile;
     return exec.js.local.?.resolvePromise(.{
-        .brands = brandList(),
+        .brands = brandList(exec),
         .mobile = false,
-        .platform = uaPlatform(),
+        .platform = platformName(exec),
         .architecture = uaArchitecture(),
         .bitness = uaBitness(),
         .model = "",
-        .platformVersion = "",
-        .uaFullVersion = "1.0.0.0",
-        .fullVersionList = brandList(),
+        .platformVersion = if (stealth) Config.HttpHeaders.secChUaPlatformVersion(fp.platform) else "",
+        .uaFullVersion = if (stealth) Config.HttpHeaders.stealth_ua_full_version else "1.0.0.0",
+        .fullVersionList = brandList(exec),
         .wow64 = false,
         .formFactor = [_][]const u8{"Desktop"},
     });
 }
 
-fn brandList() []const Brand {
+fn brandList(exec: *const Execution) []const Brand {
+    const stealth = exec.session.browser.app.config.stealth();
+    if (stealth) {
+        const out = comptime blk: {
+            const src = &Config.HttpHeaders.brands_stealth;
+            var arr: [src.len]Brand = undefined;
+            for (src, 0..) |b, i| {
+                arr[i] = .{ .brand = b.brand, .version = b.version };
+            }
+            const final = arr;
+            break :blk final;
+        };
+        return &out;
+    }
     const out = comptime blk: {
         const src = &Config.HttpHeaders.brands;
         var arr: [src.len]Brand = undefined;
@@ -88,6 +103,14 @@ fn brandList() []const Brand {
         break :blk final;
     };
     return &out;
+}
+
+fn platformName(exec: *const Execution) []const u8 {
+    return switch (exec.session.browser.app.config.fingerprint_profile.platform) {
+        .windows => "Windows",
+        .macos => "macOS",
+        .linux => "Linux",
+    };
 }
 
 fn uaPlatform() []const u8 {

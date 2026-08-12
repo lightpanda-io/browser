@@ -2725,6 +2725,10 @@ pub const Transfer = struct {
         source: HeaderSource = .user_agent,
     };
 
+    pub fn clearRequestHeaders(self: *Transfer) void {
+        self.req_headers.clearRetainingCapacity();
+    }
+
     pub fn addHeader(self: *Transfer, name: []const u8, value: []const u8, opts: HeaderOpts) !void {
         const arena = self.arena.allocator();
         try self.req_headers.append(arena, .{

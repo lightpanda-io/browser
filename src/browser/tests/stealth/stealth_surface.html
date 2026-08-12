@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=stealth_plugins>
+{
+  testing.expectEqual(true, navigator.plugins.length >= 3);
+  testing.expectEqual(true, navigator.mimeTypes.length >= 1);
+  const names = [...navigator.plugins].map(p => p.name).join(",");
+  testing.expectEqual(true, /PDF/i.test(names));
+}
+</script>
+
+<script id=stealth_webdriver_cdp>
+{
+  testing.expectEqual(false, navigator.webdriver);
+}
+</script>
+
+<script id=stealth_chrome_outer>
+{
+  testing.expectEqual(true, typeof window.chrome === "object" && window.chrome !== null);
+  testing.expectEqual(true, typeof window.chrome.csi === "function");
+  testing.expectEqual(true, typeof window.chrome.loadTimes === "function");
+}
+</script>

@@ -526,6 +526,7 @@ test "tests:beforeAll" {
     const test_allocator = @import("root").tracking_allocator;
 
     test_config = try Config.init(test_allocator, "test", .{ .serve = .{
+        .no_stealth = true,
         .insecure_disable_tls_host_verification = true,
         .user_agent_suffix = "internal-tester",
         .ws_max_concurrent = 50,

@@ -187,7 +187,12 @@ pub fn clearPermissions(self: *Browser) void {
 // The viewport every consumer should read: the runtime override if set,
 // otherwise the compile-time default.
 pub fn getViewport(self: *const Browser) Viewport {
-    return self.viewport_override orelse Viewport.default;
+    if (self.viewport_override) |v| return v;
+    const fp = self.app.config.fingerprint_profile;
+    if (fp.seed != 0) {
+        return Viewport.fromScreen(fp.screen_width, fp.screen_height);
+    }
+    return Viewport.default;
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {

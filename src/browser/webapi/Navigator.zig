@@ -23,7 +23,9 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Execution = js.Execution;
 
-const PluginArray = @import("PluginArray.zig");
+const plugin_mod = @import("PluginArray.zig");
+const PluginArray = plugin_mod.PluginArray;
+const MimeTypeArray = plugin_mod.MimeTypeArray;
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
@@ -32,6 +34,7 @@ const ModelContext = @import("ModelContext.zig");
 const Navigator = @This();
 _pad: bool = false,
 _plugins: PluginArray = .{},
+_mime_types: MimeTypeArray = .{},
 _permissions: Permissions = .{},
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
@@ -74,11 +77,17 @@ pub fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getHardwareConcurrency(_: *const Navigator) u32 {
+pub fn getHardwareConcurrency(_: *const Navigator, exec: *const Execution) u32 {
+    const config = exec.session.browser.app.config;
+    if (config.fingerprint_profile.seed != 0) {
+        return config.fingerprint_profile.hardware_concurrency;
+    }
     return 4;
 }
 
-pub fn getDeviceMemory(_: *const Navigator) f64 {
+pub fn getDeviceMemory(_: *const Navigator, exec: *const Execution) f64 {
+    const fp = exec.session.browser.app.config.fingerprint_profile;
+    if (fp.seed != 0) return fp.device_memory_gb;
     return 8.0;
 }
 
@@ -86,7 +95,8 @@ pub fn getMaxTouchPoints(_: *const Navigator) u32 {
     return 0;
 }
 
-pub fn getVendor(_: *const Navigator) []const u8 {
+pub fn getVendor(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (exec.session.browser.app.config.stealth()) return "Google Inc.";
     return "";
 }
 
@@ -107,7 +117,15 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
     return false;
 }
 
-pub fn getPlatform(_: *const Navigator) []const u8 {
+pub fn getPlatform(_: *const Navigator, exec: *const Execution) []const u8 {
+    const fp = exec.session.browser.app.config.fingerprint_profile;
+    if (fp.seed != 0) {
+        return switch (fp.platform) {
+            .windows => "Win32",
+            .macos => "MacIntel",
+            .linux => "Linux x86_64",
+        };
+    }
     return switch (builtin.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
@@ -131,6 +149,10 @@ pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
 
 pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
+}
+
+pub fn getMimeTypes(self: *Navigator) *MimeTypeArray {
+    return &self._mime_types;
 }
 
 pub fn getPermissions(self: *Navigator) *Permissions {
@@ -253,6 +275,7 @@ pub const JsApi = struct {
 
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
+    pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });

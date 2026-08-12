@@ -34,6 +34,8 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const builtin = @import("builtin");
+const device = @import("webapi/device.zig");
 const referrer = @import("referrer.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
@@ -850,17 +852,97 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
-        if (opts.header) |hdr| {
-            // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
-            if (HttpClient.Header.parse(hdr)) |parsed| {
-                try transfer.addHeader(parsed.name, parsed.value, .{});
+        const config = self._session.browser.app.config;
+        const fetch_site: []const u8 = blk: {
+            const initiator = opts.initiator_origin orelse break :blk "none";
+            const target = self.origin orelse break :blk "cross-site";
+            break :blk if (std.mem.eql(u8, target, initiator)) "same-origin" else "cross-site";
+        };
+        const same_origin = std.mem.eql(u8, fetch_site, "same-origin");
+        const hostname = URL.getHostname(self.url);
+        const google_origin = std.mem.eql(u8, hostname, "google.com") or std.mem.endsWith(u8, hostname, ".google.com");
+
+        if (config.stealth()) {
+            transfer.clearRequestHeaders();
+            const headers = config.http_headers;
+            const noise_seed = config.fingerprint_profile.noise_seed;
+            var downlink_buf: [16]u8 = undefined;
+            var rtt_buf: [16]u8 = undefined;
+
+            if (same_origin) {
+                try transfer.addHeader("RTT", try std.fmt.bufPrint(&rtt_buf, "{d}", .{device.networkRtt(noise_seed)}), .{});
+                try transfer.addHeader("Downlink", try std.fmt.bufPrint(&downlink_buf, "{d}", .{device.networkDownlink(noise_seed)}), .{});
             }
-        }
-        if (opts.referer) |ref| {
-            try transfer.addHeader("Referer", ref, .{});
-            self._referrer = try self.arena.dupe(u8, ref);
-            transfer.req.referrer_policy = opts.referrer_policy;
+            try transfer.addHeader("Sec-Ch-Ua", headers.sec_ch_ua_header, .{});
+            try transfer.addHeader("Sec-Ch-Ua-Mobile", "?0", .{});
+            if (same_origin) {
+                try transfer.addHeader("Sec-Ch-Ua-Full-Version", lp.Config.HttpHeaders.sec_ch_ua_full_version_stealth, .{});
+                try transfer.addHeader("Sec-Ch-Ua-Arch", lp.Config.HttpHeaders.sec_ch_ua_arch, .{});
+            }
+            try transfer.addHeader("Sec-Ch-Ua-Platform", headers.sec_ch_ua_platform_header, .{});
+            if (same_origin) {
+                try transfer.addHeader(
+                    "Sec-Ch-Ua-Platform-Version",
+                    lp.Config.HttpHeaders.secChUaPlatformVersion(config.fingerprint_profile.platform),
+                    .{},
+                );
+                try transfer.addHeader("Sec-Ch-Ua-Model", "\"\"", .{});
+                try transfer.addHeader("Sec-Ch-Ua-Bitness", lp.Config.HttpHeaders.sec_ch_ua_bitness, .{});
+                try transfer.addHeader("Sec-Ch-Ua-Wow64", "?0", .{});
+                try transfer.addHeader("Sec-Ch-Ua-Full-Version-List", lp.Config.HttpHeaders.sec_ch_ua_full_version_list_stealth, .{});
+                try transfer.addHeader("Sec-Ch-Ua-Form-Factors", "\"Desktop\"", .{});
+                try transfer.addHeader("Sec-Ch-Prefers-Color-Scheme", "dark", .{});
+            }
+            try transfer.addHeader("Upgrade-Insecure-Requests", "1", .{});
+            try transfer.addHeader("User-Agent", headers.user_agent, .{});
+            try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+            if (google_origin and config.fingerprint_profile.platform == .macos and builtin.cpu.arch == .aarch64) {
+                try transfer.addHeader("X-Browser-Channel", lp.Config.HttpHeaders.chrome_channel, .{});
+                try transfer.addHeader("X-Browser-Year", "2026", .{});
+                try transfer.addHeader("X-Browser-Validation", lp.Config.HttpHeaders.chrome_validation_macos_arm64, .{});
+                try transfer.addHeader("X-Browser-Copyright", lp.Config.HttpHeaders.chrome_copyright, .{});
+                try transfer.addHeader("X-Client-Data", lp.Config.HttpHeaders.chrome_client_data, .{});
+            }
+            try transfer.addHeader("Sec-Fetch-Site", fetch_site, .{});
+            try transfer.addHeader("Sec-Fetch-Mode", "navigate", .{});
+            if (opts.reason == .address_bar or opts.reason == .anchor or opts.reason == .form) {
+                try transfer.addHeader("Sec-Fetch-User", "?1", .{});
+            }
+            try transfer.addHeader("Sec-Fetch-Dest", "document", .{});
+            if (opts.referer) |ref| {
+                try transfer.addHeader("Referer", ref, .{});
+                self._referrer = try self.arena.dupe(u8, ref);
+                transfer.req.referrer_policy = opts.referrer_policy;
+            }
+            if (opts.header) |hdr| {
+                if (HttpClient.Header.parse(hdr)) |parsed| {
+                    try transfer.addHeader(parsed.name, parsed.value, .{});
+                }
+            }
+            try transfer.addHeader("Accept-Encoding", "gzip, deflate, br", .{});
+            try transfer.addHeader("Accept-Language", lp.Config.HttpHeaders.accept_language, .{});
+            try transfer.addHeader("Priority", "u=0, i", .{});
+        } else {
+            try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+            try transfer.addHeader("Upgrade-Insecure-Requests", "1", .{});
+            try transfer.addHeader("Sec-Fetch-Dest", "document", .{});
+            try transfer.addHeader("Sec-Fetch-Mode", "navigate", .{});
+            try transfer.addHeader("Sec-Fetch-Site", fetch_site, .{});
+            if (opts.reason == .address_bar or opts.reason == .anchor or opts.reason == .form) {
+                try transfer.addHeader("Sec-Fetch-User", "?1", .{});
+            }
+            try transfer.addHeader("Priority", "u=0, i", .{});
+            if (opts.header) |hdr| {
+                // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
+                if (HttpClient.Header.parse(hdr)) |parsed| {
+                    try transfer.addHeader(parsed.name, parsed.value, .{});
+                }
+            }
+            if (opts.referer) |ref| {
+                try transfer.addHeader("Referer", ref, .{});
+                self._referrer = try self.arena.dupe(u8, ref);
+                transfer.req.referrer_policy = opts.referrer_policy;
+            }
         }
     }
 
