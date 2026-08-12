@@ -51,6 +51,12 @@ ZIG_V8_TAG := $(shell awk -F\' '/^  zig-v8:/{f=1} f&&/default:/{print $$2; exit}
 V8_ARCHIVE := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).a
 V8_CACHE   := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/$(V8_ARCHIVE)
 
+# The shared flavor serves -Ddev_fast (Linux x86_64 Debug only). It is cached
+# under the name the exe's DT_NEEDED records, libc_v8.so; the tag directory
+# already keys freshness.
+V8_SO_ASSET := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).so
+V8_SO_CACHE := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/libc_v8.so
+
 # If the prebuilt archive is in place and the caller hasn't set ZIGFLAGS, point
 # the build at it rather than building V8 from source.
 ifeq ($(strip $(ZIGFLAGS)),)
@@ -79,7 +85,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 download-v8-shared run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 archive (skips the 10+ min source build)
 download-v8:
@@ -90,6 +96,16 @@ download-v8:
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_ARCHIVE) \
 		|| (rm -f $(V8_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
 	@printf "\033[33mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
+
+## Download the prebuilt shared V8 used by -Ddev_fast builds (Linux x86_64)
+download-v8-shared:
+	@mkdir -p $(dir $(V8_SO_CACHE))
+	@test -f $(V8_SO_CACHE) || ( \
+		printf "\033[36mDownloading prebuilt shared V8 $(V8_VERSION) ($(ZIG_V8_TAG))...\033[0m\n"; \
+		curl -fL --progress-bar -o $(V8_SO_CACHE) \
+			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_SO_ASSET) \
+		|| (rm -f $(V8_SO_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
+	@printf "\033[33mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
 
 ## Build v8 snapshot
 build-v8-snapshot:
