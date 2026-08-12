@@ -36,9 +36,9 @@ app: *App,
 max_connections: usize,
 json_version_response: []const u8,
 
-// Number of active CDP conns, used to enfore the cdp-max-connections limit.
+// Number of active CDP conns, used to enforce the cdp-max-connections limit.
 active_conns: std.atomic.Value(u32) = .init(0),
-// Number of existing threads, use to deinit correctly.
+// Number of existing threads, used to deinit correctly.
 // It can be higher than active_conns b/c we free conn slots early.
 active_threads: std.atomic.Value(u32) = .init(0),
 
