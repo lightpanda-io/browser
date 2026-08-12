@@ -17,12 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+
+const Config = @import("../../Config.zig");
 
 const Parser = @import("Parser.zig");
 const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
+
+const log = lp.log;
 
 const AdBlocker = @This();
 
@@ -33,6 +39,18 @@ blocked: u32,
 blocked_important: u32,
 /// Pure-hostname `@@` exceptions.
 allowed: u32,
+suppressed: u32,
+/// Rules that reached a trie, across every list parsed so far.
+rules_loaded: usize,
+/// Rules we understood but cannot represent, plus lines that were not valid
+/// filters at all. Only a fraction of a real list survives (see `trieRoot`),
+/// so this is what separates "my rule does nothing" from "my rule was never
+/// loaded".
+rules_skipped: usize,
+
+/// Read buffer for filter lists, and therefore the longest line we can see.
+/// Real-world rules are well under 1KB; the parser skips anything longer.
+const LINE_MAX = 8 * 1024;
 
 pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
     var trie: HostnameTrie = try .init(allocator);
@@ -40,6 +58,7 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
     const blocked = try trie.createTrie(allocator);
     const blocked_important = try trie.createTrie(allocator);
     const allowed = try trie.createTrie(allocator);
+    const suppressed = try trie.createTrie(allocator);
 
     return .{
         .allocator = allocator,
@@ -47,7 +66,49 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
         .blocked = blocked,
         .blocked_important = blocked_important,
         .allowed = allowed,
+        .suppressed = suppressed,
+        .rules_loaded = 0,
+        .rules_skipped = 0,
     };
+}
+
+/// Builds the blocker from `--adblock-lists`, or null when the option is
+/// unset. Lists accumulate into the one instance.
+pub fn fromConfig(allocator: Allocator, config: *const Config) !?AdBlocker {
+    var paths = config.adblockLists() orelse return null;
+
+    var adblocker: ?AdBlocker = null;
+    errdefer if (adblocker) |*blocker| blocker.deinit();
+
+    const buf = try allocator.alloc(u8, LINE_MAX);
+    defer allocator.free(buf);
+
+    while (paths.next()) |path| {
+        if (path.len == 0) continue;
+        if (adblocker == null) adblocker = try AdBlocker.init(allocator);
+        loadList(&adblocker.?, path, buf) catch |err| {
+            log.err(.app, "adblock list load failed", .{ .path = path, .err = err });
+            return err;
+        };
+    }
+
+    if (adblocker) |*blocker| {
+        log.info(.app, "adblock lists loaded", .{
+            .loaded = blocker.rules_loaded,
+            .skipped = blocker.rules_skipped,
+        });
+    }
+    return adblocker;
+}
+
+/// Streams `path` into `blocker`. The list is consumed line by line, so a
+/// 100MB list never needs 100MB of memory.
+fn loadList(blocker: *AdBlocker, path: []const u8, buf: []u8) !void {
+    const file = try std.Io.Dir.cwd().openFile(lp.io, path, .{});
+    defer file.close(lp.io);
+
+    var file_reader = file.reader(lp.io, buf);
+    try blocker.parse(&file_reader.interface);
 }
 
 pub fn deinit(self: *AdBlocker) void {
@@ -66,49 +127,84 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
         defer _ = scratch_instance.reset(.retain_capacity);
 
         // Filters the tries cannot express (patterns, type/party/domain
-        // constraints, badfilter directives) are dropped: deciding those
-        // needs a request engine we do not have yet, and retaining them
-        // costs tens of MB on a list like EasyList.
-        const root = self.trieRoot(&filter) orelse continue;
+        // constraints) are dropped: deciding those needs a request engine
+        // we do not have yet, and retaining them costs tens of MB on a
+        // list like EasyList.
+        const root = self.trieRoot(&filter) orelse {
+            self.rules_skipped += 1;
+            continue;
+        };
         // Duplicate and subdomain-of-existing entries drop.
         self.trie.add(self.allocator, root, filter.hostname) catch |err| switch (err) {
             error.OutOfMemory, error.TrieFull => |e| return e,
-            // The parser never yields a .hostname filter without one.
+            // trieRoot never routes a filter without one.
             error.InvalidHostname => unreachable,
         };
+        self.rules_loaded += 1;
     }
+    self.rules_skipped += parser.skipped;
 }
 
 pub const Verdict = enum { none, allowed, blocked };
 
-/// `.none` means no hostname-wide filter applies. Filters that need more
+/// `.none` means no hostname-wide verdict applies. Filters that need more
 /// than a hostname match are not represented here at all.
 pub fn matchHostname(self: *const AdBlocker, hostname: []const u8) Verdict {
+    // A hostname something might unblock stays undecided, whatever else
+    // matches it.
+    if (self.trie.matches(self.suppressed, hostname) != null) return .none;
     if (self.trie.matches(self.blocked_important, hostname) != null) return .blocked;
     if (self.trie.matches(self.allowed, hostname) != null) return .allowed;
     if (self.trie.matches(self.blocked, hostname) != null) return .blocked;
     return .none;
 }
 
-/// The trie holding this filter, or null when the filter's behavior is
-/// more than a hostname-wide match.
+/// The trie holding this filter, or null when it carries no hostname-wide
+/// meaning we can represent.
 fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
-    if (filter.kind != .hostname) return null;
+    // An exception or a $badfilter can only ever *unblock*. Where one is
+    // narrower than a whole hostname we cannot evaluate it here — but
+    // ignoring it is not neutral either, because the rule it cancels may
+    // well be a plain block we did keep:
+    //
+    //   ||adsafeprotected.com^
+    //   @@||adsafeprotected.com/iasPET.$script,domain=reuters.com|...
+    //
+    // uBO blocks that host everywhere but those sites; keeping only the
+    // first line blocks it on those sites too, and breaks them. So the
+    // hostname goes to `suppressed` and stops being blockable at all. We
+    // lose most of the block's value to save the pages it would break,
+    // which is the direction we want to fail in.
+    if (filter.exception or filter.badfilter) {
+        // Cosmetic-realm exceptions never unblock network requests.
+        if (filter.exception and (filter.generichide or filter.specifichide or filter.elemhide)) {
+            return null;
+        }
+        if (filter.exception and !filter.badfilter and isWholeHostname(filter)) {
+            return self.allowed;
+        }
+        // `@@/ads/^$script` and friends name no hostname to key on: there
+        // is nothing we can do with them until there is an engine.
+        if (filter.hostname.len == 0) return null;
+        return self.suppressed;
+    }
+
+    if (!isWholeHostname(filter)) return null;
+    return if (filter.important) self.blocked_important else self.blocked;
+}
+
+/// Whether the filter's whole effect is "every request to this hostname and
+/// its subdomains", which is all a trie can express.
+fn isWholeHostname(filter: *const NetworkFilter) bool {
+    if (filter.kind != .hostname) return false;
     // `||host` without '^' also matches hostnames merely *starting* with
     // host ("example.com.evil.org"): broader than a suffix match.
-    if (!filter.require_separator) return null;
+    if (!filter.require_separator) return false;
     // `||host^|` pins the URL end to the separator: narrower.
-    if (filter.left_anchor or filter.right_anchor) return null;
-    if (filter.badfilter) return null;
-    if (!filter.first_party or !filter.third_party) return null;
-    if (!filter.domains.isEmpty()) return null;
-    if (filter.types.bits() != NetworkFilter.ResourceTypes.all.bits()) return null;
-    if (filter.exception) {
-        // Cosmetic-realm exceptions never unblock network requests.
-        if (filter.generichide or filter.specifichide or filter.elemhide) return null;
-        return self.allowed;
-    }
-    return if (filter.important) self.blocked_important else self.blocked;
+    if (filter.left_anchor or filter.right_anchor) return false;
+    if (filter.has_domains) return false;
+    if (!filter.first_party or !filter.third_party) return false;
+    return filter.types.bits() == NetworkFilter.ResourceTypes.all.bits();
 }
 
 const testing = @import("../../testing.zig");
