@@ -36,6 +36,10 @@ app: *App,
 max_connections: usize,
 json_version_response: []const u8,
 
+// Number of active CDP conns, used to enfore the cdp-max-connections limit.
+active_conns: std.atomic.Value(u32) = .init(0),
+// Number of existing threads, use to deinit correctly.
+// It can be higher than active_conns b/c we free conn slots early.
 active_threads: std.atomic.Value(u32) = .init(0),
 
 cdps: std.ArrayList(*CDP) = .empty,
@@ -147,7 +151,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
         return error.ShuttingDown;
     }
 
-    // Atomically increment active_threads only if below max_connections.
+    // Atomically increment active_conns only if below max_connections.
     // Uses CAS loop to avoid race between checking the limit and incrementing.
     //
     // cmpxchgWeak may fail for two reasons:
@@ -160,13 +164,16 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     //
     // On failure, cmpxchgWeak returns the actual value, which we reuse to avoid
     // an extra load on the next iteration.
-    var current = self.active_threads.load(.monotonic);
+    var current = self.active_conns.load(.monotonic);
     while (current < self.max_connections) {
-        current = self.active_threads.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
+        current = self.active_conns.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
         lp.metrics.cdp_connection_limit.incr();
         return error.MaxThreadsReached;
     }
+    errdefer _ = self.active_conns.fetchSub(1, .monotonic);
+
+    _ = self.active_threads.fetchAdd(1, .monotonic);
     errdefer _ = self.active_threads.fetchSub(1, .monotonic);
 
     const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, socket });
@@ -174,6 +181,12 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
 }
 
 fn handleConnection(self: *Server, socket: posix.socket_t) void {
+    var active_conns_early_release = false;
+    defer {
+        if (!active_conns_early_release) {
+            _ = self.active_conns.fetchSub(1, .monotonic);
+        }
+    }
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer _ = std.c.close(socket);
 
@@ -278,6 +291,10 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         };
         if (!next) break;
     }
+
+    // try to release the connection as soon as possible.
+    active_conns_early_release = true;
+    _ = self.active_conns.fetchSub(1, .monotonic);
 }
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
