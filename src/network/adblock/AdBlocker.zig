@@ -221,11 +221,15 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     );
     try blocker.parse(&first);
 
-    // The pure-hostname block went into the trie; the $script exception
-    // is type-restricted, so it is dropped rather than allowing the host.
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
     try testing.expectEqual(.blocked, blocker.matchHostname("sub.ads.example.com"));
+    // The type-restricted exception cannot be evaluated, so it suppresses
+    // its hostname instead of allowing it.
     try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
+
+    // The block and the exception; the cosmetic line is the skip.
+    try testing.expectEqual(2, blocker.rules_loaded);
+    try testing.expectEqual(1, blocker.rules_skipped);
 
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
@@ -233,8 +237,35 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     try blocker.parse(&second);
 
     try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
+    // The counts carry across lists, like the entries do.
+    try testing.expectEqual(2, blocker.rules_loaded);
+    try testing.expectEqual(2, blocker.rules_skipped);
     // The first list's entries survived the second parse.
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
+}
+
+test "adblock.AdBlocker: rules that might unblock suppress their hostname" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    var list: Io.Reader = .fixed(
+        // The easylist pair: without the exception we would break reuters.com.
+        \\||adsafeprotected.com^
+        \\@@||adsafeprotected.com/iasPET.$script,domain=independent.co.uk|reuters.com
+        // uBO's unbreak.txt shape: a $badfilter cancelling a block we kept.
+        \\||unbreak.example.com^
+        \\||unbreak.example.com^$badfilter
+        // Suppression outranks $important: we cannot tell which of our
+        // entries the exception cancels.
+        \\||strict.example.com^$important
+        \\@@||strict.example.com^$xhr
+    );
+    try blocker.parse(&list);
+
+    try testing.expectEqual(.none, blocker.matchHostname("adsafeprotected.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("sub.adsafeprotected.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("unbreak.example.com"));
+    try testing.expectEqual(.none, blocker.matchHostname("strict.example.com"));
 }
 
 test "adblock.AdBlocker: hostname verdict precedence" {
@@ -284,7 +315,6 @@ test "adblock.AdBlocker: constrained filters stay out of the trie" {
         \\||typed.example.com^$script
         \\||party.example.com^$third-party
         \\||sited.example.com^$domain=news.com
-        \\||bad.example.com^$badfilter
         \\@@||cosmetic.example.com^$generichide
     );
     try blocker.parse(&list);
