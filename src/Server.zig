@@ -159,7 +159,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     // 2. Spurious failure on some architectures (e.g. ARM)
     //
     // We use Weak instead of Strong because we need a retry loop anyway:
-    // if CAS fails because a thread finished (counter decreased), we should
+    // if CAS fails because a conn slot was freed (counter decreased), we should
     // retry rather than return an error - there may now be room for a new connection.
     //
     // On failure, cmpxchgWeak returns the actual value, which we reuse to avoid
@@ -169,7 +169,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
         current = self.active_conns.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
         lp.metrics.cdp_connection_limit.incr();
-        return error.MaxThreadsReached;
+        return error.MaxConnectionsReached;
     }
     errdefer _ = self.active_conns.fetchSub(1, .monotonic);
 
