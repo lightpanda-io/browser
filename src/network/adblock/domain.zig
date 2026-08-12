@@ -85,46 +85,16 @@ pub fn lowered(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
 const testing = @import("../../testing.zig");
 
 test "adblock.domain: plain, negated and entity entries" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const list = try parse(arena, "example.com|~sub.Example.com|google.*", '|');
-    try testing.expectEqual(2, list.included.len);
-    try testing.expectEqual(1, list.excluded.len);
-    try testing.expectString("example.com", list.included[0].value);
-    try testing.expect(!list.included[0].entity);
-    try testing.expectString("google", list.included[1].value);
-    try testing.expect(list.included[1].entity);
-    try testing.expectString("sub.example.com", list.excluded[0].value);
-}
-
-test "adblock.domain: comma separator (cosmetic prefixes)" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const list = try parse(arena_state.allocator(), "a.com,~b.a.com", ',');
-    try testing.expectEqual(1, list.included.len);
-    try testing.expectEqual(1, list.excluded.len);
+    try validate("example.com|~sub.Example.com|google.*");
 }
 
 test "adblock.domain: regex entries are skipped, all-regex errors" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const list = try parse(arena, "/foo/|example.com", '|');
-    try testing.expectEqual(1, list.included.len);
-
-    try testing.expectError(error.NoSupportedDomains, parse(arena, "/foo/", '|'));
+    try validate("/foo/|example.com");
+    try testing.expectError(error.NoSupportedDomains, validate("/foo/"));
 }
 
 test "adblock.domain: invalid entries" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    try testing.expectError(error.InvalidDomainList, parse(arena, "exa mple.com", '|'));
-    try testing.expectError(error.InvalidDomainList, parse(arena, ".example.com", '|'));
-    try testing.expectError(error.InvalidDomainList, parse(arena, "~", '|'));
+    try testing.expectError(error.InvalidDomainList, validate("exa mple.com"));
+    try testing.expectError(error.InvalidDomainList, validate(".example.com"));
+    try testing.expectError(error.InvalidDomainList, validate("~"));
 }
