@@ -422,6 +422,24 @@ it's useful to build in `releaseFast` mode to make tests faster.
 zig build -Doptimize=ReleaseFast run
 ```
 
+
+## Resource profiles and stealth identity
+
+Lightpanda defaults to a Chrome-compatible JS/network identity. Pass `--no-stealth`
+to identify as Lightpanda. Optional `--fingerprint <seed>` /
+`--fingerprint-platform windows|macos|linux` make the GPU/screen/hardware identity
+deterministic across runs.
+
+`--resource-profile pi` lowers retained memory for shared multi-session servers
+(64 MiB V8 heap, lean V8 flags, tighter HTTP concurrency). `--resource-profile slot`
+keeps those lean V8 defaults but budgets the process for a single live session
+(2 CDP connections) so agent/T3-style pools can run many cheap processes.
+
+```bash
+./zig-out/bin/lightpanda serve --resource-profile slot
+./zig-out/bin/lightpanda fetch --resource-profile pi --fingerprint 42 https://example.com
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](https://github.com/lightpanda-io/browser/blob/main/CONTRIBUTING.md) for guidelines.

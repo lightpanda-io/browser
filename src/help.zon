@@ -26,7 +26,7 @@
     \\          Defaults to --host value.
     \\  --cdp-max-connections <INT>
     \\          Maximum number of simultaneous CDP connections.
-    \\          Defaults to 16.
+    \\          Defaults to 16, or up to 32 with --resource-profile pi, or 2 with slot.
     \\  --cdp-max-http-message-size <INT>
     \\          Maximum allowed HTTP request size
     \\          Defaults to 4096 (maximum allowed: 16383)
@@ -354,14 +354,14 @@
     \\          Defaults to 0.
     \\  --http-max-concurrent <INT>
     \\          Maximum number of concurrent HTTP requests.
-    \\          Defaults to 40.
+    \\          Defaults to 40, or 8 with the pi/slot resource profiles.
     \\  --http-max-host-open <INT>
     \\          Maximum open connections to a given host:port.
-    \\          Defaults to 6.
+    \\          Defaults to 6, or 2 with the pi/slot resource profiles.
     \\  --http-max-response-size <INT>
     \\          Limits the acceptable response size for any request
     \\          e.g. XHR, fetch, script loading.
-    \\          Defaults to 1 GiB.
+    \\          Defaults to 1 GiB, or 32 MiB with the pi/slot resource profiles.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.
@@ -410,6 +410,29 @@
     \\          Unsupported escape hatch: V8 does not validate flags against the
     \\          prebuilt snapshot, so an incompatible flag can misbehave or
     \\          crash at any point.
+    \\  --no-stealth
+    \\          Opt out of the default Chrome-compatible identity and identify
+    \\          as Lightpanda (UA/client hints/JS surfaces).
+    \\  --fingerprint <SEED>
+    \\          Deterministic fingerprint seed. Same seed reproduces the same
+    \\          GPU/screen/hardware identity.
+    \\  --fingerprint-platform <PLATFORM>
+    \\          Platform reported to JS and client hints: windows|macos|linux.
+    \\  --resource-profile <PROFILE>
+    \\          Runtime resource defaults: "standard" (default) or lean profiles
+    \\          "pi" / "slot". Both lean profiles apply V8 --optimize-for-size
+    \\          --no-concurrent-recompilation, a 64 MiB V8 heap, one V8 background
+    \\          thread and disabled V8 idle tasks. "slot" further tightens process
+    \\          concurrency for one-session processes (2 CDP connections / pending).
+    \\          Prefer one slot process per independently concurrent session.
+    \\          Builds with -Dlow_resource_default=true default to "pi".
+    \\  --stealth
+    \\          Accepted as a no-op; Chrome-compatible identity is already default.
+    \\  --disable-v8-idle-tasks
+    \\          Disable V8 background idle work. Implied by --resource-profile pi or slot.
+    \\  --v8-thread-pool-size <INT>
+    \\          Number of V8 background worker threads. 0 lets V8 use the CPU count.
+    \\          Defaults to 0, or 1 with --resource-profile pi or slot.
     \\  --v8-max-heap-mb <INT>
     \\          Maximum V8 heap size in megabytes, per browser instance. Values
     \\          below ~16 are clamped by V8 and all behave the same.
