@@ -235,7 +235,7 @@ test "adblock.Parser: full list" {
             // stays a plain pattern rather than becoming a hostname filter.
             3 => {
                 try testing.expectEqual(.plain, filter.kind);
-                try testing.expectString("-banner-468x60.", filter.pattern);
+                try testing.expectString("", filter.hostname);
             },
             6 => try testing.expectString("desktop-only.example.com", filter.hostname),
             else => {},
