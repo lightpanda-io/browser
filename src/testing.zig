@@ -681,6 +681,31 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/redirect-cross-origin-x-hop")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/echo-x-hop" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/echo-x-hop")) {
+        var it = req.iterateHeaders();
+        var value: []const u8 = "NONE";
+        while (it.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "x-hop")) {
+                value = header.value;
+                break;
+            }
+        }
+        return req.respond(value, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-target")) {
         return req.respond("<!DOCTYPE html><title>landed</title>", .{
             .extra_headers = &.{
