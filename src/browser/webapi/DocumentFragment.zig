@@ -154,7 +154,10 @@ pub fn moveBefore(self: *DocumentFragment, node: js.Value, child: js.Value, fram
 
 pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{ .shadow = .complete }, writer, frame);
+    // Fragment serialization never includes nested shadow trees — a host
+    // inside this fragment (or shadow root) serializes only its light
+    // children, exactly like Element.innerHTML.
+    return dump.children(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
