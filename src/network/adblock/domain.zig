@@ -18,38 +18,20 @@
 
 const std = @import("std");
 
-pub const Domain = struct {
-    /// Lowercase hostname. For entities, stored without the trailing ".*".
-    value: []const u8,
-    entity: bool = false,
-};
-
-pub const List = struct {
-    included: []const Domain = &.{},
-    excluded: []const Domain = &.{},
-
-    pub const empty: List = .{};
-
-    pub fn isEmpty(self: *const List) bool {
-        return self.included.len == 0 and self.excluded.len == 0;
-    }
-};
-
-/// All allocations are made from `arena` and are never individually freed.
-pub fn parse(arena: std.mem.Allocator, raw: []const u8, separator: u8) !List {
-    var included: std.ArrayList(Domain) = .empty;
-    var excluded: std.ArrayList(Domain) = .empty;
-
+/// Checks a `$domain=` value. Nothing keeps the entries: a filter carrying
+/// any of them is narrower than a hostname, which is as much as we can
+/// represent, so only "is it well formed" and "did anything survive" matter.
+pub fn validate(raw: []const u8) error{ InvalidDomainList, NoSupportedDomains }!void {
     var had_entries = false;
-    var it = std.mem.splitScalar(u8, raw, separator);
+    var any_supported = false;
+
+    var it = std.mem.splitScalar(u8, raw, '|');
     while (it.next()) |raw_entry| {
         var entry = std.mem.trim(u8, raw_entry, &std.ascii.whitespace);
         if (entry.len == 0) continue;
         had_entries = true;
 
-        var negated = false;
         if (entry[0] == '~') {
-            negated = true;
             entry = entry[1..];
             if (entry.len == 0) return error.InvalidDomainList;
         }
@@ -57,36 +39,21 @@ pub fn parse(arena: std.mem.Allocator, raw: []const u8, separator: u8) !List {
         // /regex/ entries are valid uBO syntax but unsupported here.
         if (entry[0] == '/') continue;
 
-        var entity = false;
+        // An entity ("google.*") is the hostname without its public suffix.
         if (std.mem.endsWith(u8, entry, ".*")) {
-            entity = true;
             entry = entry[0 .. entry.len - 2];
             if (entry.len == 0) return error.InvalidDomainList;
         }
 
         if (!isValidHost(entry)) return error.InvalidDomainList;
-
-        const domain: Domain = .{
-            .value = try lowered(arena, entry),
-            .entity = entity,
-        };
-        if (negated) {
-            try excluded.append(arena, domain);
-        } else {
-            try included.append(arena, domain);
-        }
+        any_supported = true;
     }
 
-    if (had_entries and included.items.len == 0 and excluded.items.len == 0) {
+    if (had_entries and !any_supported) {
         // Every entry was an unsupported /regex/; the caller must drop the
         // rule rather than let it apply everywhere.
         return error.NoSupportedDomains;
     }
-
-    return .{
-        .included = try included.toOwnedSlice(arena),
-        .excluded = try excluded.toOwnedSlice(arena),
-    };
 }
 
 fn isValidHost(host: []const u8) bool {
