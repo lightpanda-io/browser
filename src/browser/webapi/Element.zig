@@ -557,7 +557,6 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const next_sibling = node.nextSibling();
 
     if (fragment) |frag| {
-        const dest_connected = parent.isConnected();
         var it = frag.childrenIterator();
         while (it.next()) |child| {
             if (node._parent != parent) {
@@ -566,7 +565,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
             if (notify) {
                 try added.append(frame.call_arena, child);
             }
-            frame.removeNode(frag, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+            frame.removeNode(frag, child, .{ .reconnect_to = parent, .notify_observers = false });
             try frame.insertNodeRelative(parent, child, .{ .before = node }, .{ .notify_observers = false });
         }
     }
@@ -574,7 +573,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     if (node._parent != parent) {
         return error.NotFound;
     }
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false, .notify_observers = false });
+    frame.removeNode(parent, node, .{ .reconnect_to = null, .notify_observers = false });
 
     if (notify) {
         const removed = [_]*Node{node};
@@ -1035,8 +1034,6 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
     const parent = ref_node._parent orelse return;
     frame.domChanged();
 
-    const parent_is_connected = parent.isConnected();
-
     // Detect if the ref_node must be removed (by default) or kept.
     // We kept it when ref_node is present into the nodes list.
     var rm_ref_node = true;
@@ -1056,22 +1053,24 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
             continue;
         }
 
+        var previous_root: ?*Node = null;
         if (child._parent) |current_parent| {
-            frame.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            previous_root = child.getRootNode(.{});
+            frame.removeNode(current_parent, child, .{ .reconnect_to = parent });
         }
 
         try frame.insertNodeRelative(
             parent,
             child,
             .{ .before = ref_node },
-            .{ .child_already_connected = child.isConnected() },
+            .{ .previous_root = previous_root },
         );
     }
 
     // Re-check parent after insertNodeRelative since callbacks (e.g. connectedCallback)
     // could have already removed ref_node from parent.
     if (rm_ref_node and ref_node._parent == parent) {
-        frame.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
+        frame.removeNode(parent, ref_node, .{ .reconnect_to = null });
     }
 }
 
@@ -1079,7 +1078,7 @@ pub fn remove(self: *Element, frame: *Frame) void {
     const node = self.asNode();
     const parent = node._parent orelse return;
     frame.domChanged();
-    frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+    frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
 pub fn focus(self: *Element, frame: *Frame) !void {
@@ -1802,7 +1801,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
             var shadow_child_it = shadow.asNode().childrenIterator();
             while (shadow_child_it.next()) |child| {
                 if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                    try frame.appendNode(cloned_shadow_node, cloned_child, .{ .child_already_connected = true });
+                    try frame.appendNode(cloned_shadow_node, cloned_child, .{});
                 }
             }
         }
@@ -1812,10 +1811,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
             if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                // We pass `true` to `child_already_connected` as a hacky optimization
-                // We _know_ this child isn't connected (Because the parent isn't connected)
-                // setting this to `true` skips all connection checks.
-                try frame.appendNode(node, cloned_child, .{ .child_already_connected = true });
+                try frame.appendNode(node, cloned_child, .{});
             }
         }
     }

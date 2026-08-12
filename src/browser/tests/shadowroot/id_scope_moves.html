@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="connected_move_document_to_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const div = document.createElement('div');
+    div.id = 'mover';
+    div.textContent = 'Content';
+    document.body.appendChild(div);
+
+    testing.expectEqual('Content', document.getElementById('mover').textContent);
+
+    // Both host and div are connected, so this move never disconnects div.
+    shadow.appendChild(div);
+
+    testing.expectEqual(null, document.getElementById('mover'));
+    testing.expectEqual(null, document.querySelector('#mover'));
+    testing.expectEqual('Content', shadow.getElementById('mover').textContent);
+    testing.expectEqual('Content', shadow.querySelector('#mover').textContent);
+
+    host.remove();
+}
+</script>
+
+<script id="connected_move_shadow_to_document">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    shadow.innerHTML = '<div id="escapee">Content</div>';
+
+    testing.expectEqual('Content', shadow.getElementById('escapee').textContent);
+
+    const div = shadow.getElementById('escapee');
+    document.body.appendChild(div);
+
+    testing.expectEqual(null, shadow.getElementById('escapee'));
+    testing.expectEqual(null, shadow.querySelector('#escapee'));
+    testing.expectEqual('Content', document.getElementById('escapee').textContent);
+    testing.expectEqual('Content', document.querySelector('#escapee').textContent);
+
+    div.remove();
+    host.remove();
+}
+</script>
+
+<script id="connected_move_shadow_to_shadow">
+{
+    const host1 = document.createElement('div');
+    const shadow1 = host1.attachShadow({ mode: 'open' });
+    const host2 = document.createElement('div');
+    const shadow2 = host2.attachShadow({ mode: 'open' });
+    document.body.appendChild(host1);
+    document.body.appendChild(host2);
+
+    shadow1.innerHTML = '<p id="hopper">Content</p>';
+    const p = shadow1.getElementById('hopper');
+
+    shadow2.appendChild(p);
+
+    testing.expectEqual(null, shadow1.getElementById('hopper'));
+    testing.expectEqual('Content', shadow2.getElementById('hopper').textContent);
+    testing.expectEqual('Content', shadow2.querySelector('#hopper').textContent);
+    testing.expectEqual(null, document.getElementById('hopper'));
+
+    host1.remove();
+    host2.remove();
+}
+</script>
+
+<script id="subtree_ids_move_together">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const wrap = document.createElement('div');
+    wrap.innerHTML = '<span id="inner-a">A</span><span><b id="inner-b">B</b></span>';
+    document.body.appendChild(wrap);
+
+    testing.expectEqual('A', document.getElementById('inner-a').textContent);
+
+    // Moving the wrapper migrates every descendant id, not just the root's.
+    shadow.appendChild(wrap);
+
+    testing.expectEqual(null, document.getElementById('inner-a'));
+    testing.expectEqual(null, document.getElementById('inner-b'));
+    testing.expectEqual('A', shadow.getElementById('inner-a').textContent);
+    testing.expectEqual('B', shadow.getElementById('inner-b').textContent);
+
+    host.remove();
+}
+</script>
+
+<script id="insert_before_across_scopes">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    shadow.innerHTML = '<p>anchor</p>';
+
+    const div = document.createElement('div');
+    div.id = 'before-mover';
+    document.body.appendChild(div);
+
+    shadow.insertBefore(div, shadow.firstChild);
+
+    testing.expectEqual(null, document.getElementById('before-mover'));
+    testing.expectEqual(div, shadow.getElementById('before-mover'));
+
+    host.remove();
+}
+</script>
+
+<script id="move_before_across_scopes">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+    shadow.innerHTML = '<p>anchor</p>';
+
+    const div = document.createElement('div');
+    div.id = 'atomic-mover';
+    document.body.appendChild(div);
+
+    // moveBefore allows moves anywhere within the same shadow-including root.
+    shadow.moveBefore(div, shadow.firstChild);
+
+    testing.expectEqual(null, document.getElementById('atomic-mover'));
+    testing.expectEqual(div, shadow.getElementById('atomic-mover'));
+    testing.expectEqual(div, shadow.querySelector('#atomic-mover'));
+
+    // and back out again
+    document.body.moveBefore(div, null);
+
+    testing.expectEqual(null, shadow.getElementById('atomic-mover'));
+    testing.expectEqual(div, document.getElementById('atomic-mover'));
+
+    div.remove();
+    host.remove();
+}
+</script>
+
+<script id="duplicate_id_left_behind_still_found">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const first = document.createElement('div');
+    first.id = 'dupe';
+    first.textContent = 'First';
+    const second = document.createElement('div');
+    second.id = 'dupe';
+    second.textContent = 'Second';
+    document.body.appendChild(first);
+    document.body.appendChild(second);
+
+    testing.expectEqual('First', document.getElementById('dupe').textContent);
+
+    // Moving the mapped element out must let the remaining duplicate surface.
+    shadow.appendChild(first);
+
+    testing.expectEqual('Second', document.getElementById('dupe').textContent);
+    testing.expectEqual('First', shadow.getElementById('dupe').textContent);
+
+    second.remove();
+    host.remove();
+}
+</script>
+
+<script id="clonable_shadow_root_clone_ids">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open', clonable: true });
+    shadow.innerHTML = '<span id="cloned-id">Original</span>';
+    document.body.appendChild(host);
+
+    const clone = host.cloneNode(true);
+
+    testing.expectEqual('Original', clone.shadowRoot.getElementById('cloned-id').textContent);
+    testing.expectEqual('Original', clone.shadowRoot.querySelector('#cloned-id').textContent);
+
+    // The clone's map is its own: changing the original doesn't affect it.
+    shadow.getElementById('cloned-id').remove();
+    testing.expectEqual(null, shadow.getElementById('cloned-id'));
+    testing.expectEqual('Original', clone.shadowRoot.getElementById('cloned-id').textContent);
+
+    host.remove();
+}
+</script>
+
+<script id="detached_host_shadow_removal">
+{
+    // A shadow tree keeps its id map even while its host is detached; removal
+    // must still unregister.
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="ghost">Boo</div>';
+
+    const div = shadow.getElementById('ghost');
+    testing.expectEqual('Boo', div.textContent);
+
+    div.remove();
+
+    testing.expectEqual(null, shadow.getElementById('ghost'));
+    testing.expectEqual(null, shadow.querySelector('#ghost'));
+}
+</script>
+
+<script id="detached_host_shadow_to_document">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="riser">Content</div>';
+
+    const div = shadow.getElementById('riser');
+    document.body.appendChild(div);
+
+    testing.expectEqual(null, shadow.getElementById('riser'));
+    testing.expectEqual('Content', document.getElementById('riser').textContent);
+
+    div.remove();
+}
+</script>
+
+<script id="replace_children_across_scopes">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const div = document.createElement('div');
+    div.id = 'replaced-in';
+    div.textContent = 'Content';
+    document.body.appendChild(div);
+
+    shadow.replaceChildren(div);
+
+    testing.expectEqual(null, document.getElementById('replaced-in'));
+    testing.expectEqual('Content', shadow.getElementById('replaced-in').textContent);
+
+    host.remove();
+}
+</script>

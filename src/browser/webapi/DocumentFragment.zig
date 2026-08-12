@@ -173,13 +173,10 @@ pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node 
     const fragment_node = fragment.asNode();
 
     if (deep) {
-        const node = self.asNode();
-        const self_is_connected = node.isConnected();
-
-        var child_it = node.childrenIterator();
+        var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
             if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                try frame.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+                try frame.appendNode(fragment_node, cloned_child, .{});
             }
         }
     }

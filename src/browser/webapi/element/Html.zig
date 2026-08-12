@@ -1781,7 +1781,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 
     if (right_node.parentNode()) |p| {
         // remove right node
-        frame.removeNode(p, right_node, .{ .will_be_reconnected = false });
+        frame.removeNode(p, right_node, .{ .reconnect_to = null });
     }
     return true;
 }
