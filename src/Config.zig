@@ -19,6 +19,9 @@
 const std = @import("std");
 const zenai = @import("zenai");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
+const build_config = @import("build_config");
+const Fingerprint = @import("browser/Fingerprint.zig");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
@@ -37,6 +40,55 @@ pub const CDP_KEEPALIVE_CNT: c_int = 3;
 pub const CDP_TCP_USER_TIMEOUT_MS: c_int = 10_000;
 
 const Config = @This();
+
+/// Runtime limits tuned either for desktop throughput or for small ARM boards.
+/// The Pi profile deliberately trades Web API breadth and concurrency for a
+/// lower retained memory and bounded major defaults; clients can still opt
+/// individual features back in through LP.configureLoading after a CDP
+/// session is created.
+///
+/// `slot` keeps the same lean V8 flags and heap floor as `pi`, but concurrency
+/// defaults assume one live virtual-browser process rather than a shared
+/// multi-session server. Use it when scaling out with many one-session
+/// processes (T3 / agent pools).
+pub const ResourceProfile = enum {
+    standard,
+    pi,
+    slot,
+};
+
+/// Marginal RSS a concurrent `serve` session adds to the process. Deriving the
+/// *default* concurrency cap from physical memory makes a small board refuse
+/// the session up front rather than OOM half-way through one. An explicit
+/// --cdp-max-connections / --max-connections / --max-sessions bypasses this
+/// entirely.
+///
+/// Measured with `bench/sessions.sh` (least-squares slope over N = 1,2,4,8,16,32
+/// simultaneous CDP sessions in one process, each holding a 12k-node DOM), pi
+/// profile: 6.0 MiB/session, on a 23.3 MiB fixed intercept. The split by stage
+/// is 1.3 MiB for the isolate itself, +0.5 for an attached about:blank page,
+/// +4.5 for the DOM — V8 costs little per session because all isolates in the
+/// process share one IsolateGroup (read-only heap, pointer-compression cage
+/// and code range), so only the DOM scales.
+///
+/// The old 22 MiB here was the *whole-process* floor of a single `fetch`
+/// (bench/run.sh), which charges every session for fixed overhead that
+/// `reserved_system_memory` already holds back. 12 MiB keeps a ~2x margin over
+/// the measurement for pages heavier than the fixture.
+const session_memory_floor = 12 * 1024 * 1024;
+
+/// Held back for the OS, the shared snapshot mapping and everything that is not
+/// a session.
+/// ponytail: physical memory, not free memory — a co-tenant process is
+/// invisible here. Read /proc/meminfo MemAvailable if that starts to matter.
+const reserved_system_memory = 256 * 1024 * 1024;
+
+fn memoryCappedSessions(default: u16) u16 {
+    const total = std.process.totalSystemMemory() catch return default;
+    const affordable = (total -| reserved_system_memory) / session_memory_floor;
+    if (affordable == 0) return 1;
+    return @min(default, std.math.lossyCast(u16, affordable));
+}
 
 fn logFilterScopesValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(log.FilterRule)) !void {
     const str = args.next() orelse return error.InvalidOption;
@@ -176,6 +228,7 @@ fn caPathValidator(
 
 /// Common CLI args.
 const CommonOptions = .{
+    .{ .name = "resource_profile", .type = ?ResourceProfile },
     .{ .name = "obey_robots", .type = bool },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
@@ -196,6 +249,17 @@ const CommonOptions = .{
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
     .{ .name = "user_agent", .type = ?[]const u8 },
+    // Retained as a no-op so existing invocations do not break now that the
+    // Chrome-compatible identity is the default.
+    .{ .name = "stealth", .type = bool },
+    // Opt out of the default Chrome-compatible identity and identify honestly
+    // as Lightpanda.
+    .{ .name = "no_stealth", .type = bool },
+    // Deterministic fingerprint seed. Same seed → same GPU/screen/hw identity.
+    .{ .name = "fingerprint", .type = ?u64 },
+    // Platform reported to JS: windows|macos|linux. Defaults to host OS on
+    // macOS, windows elsewhere.
+    .{ .name = "fingerprint_platform", .type = ?[]const u8 },
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8 },
     .{ .name = "block_urls", .type = ?[]const u8 },
@@ -206,6 +270,8 @@ const CommonOptions = .{
     .{ .name = "enable_external_stylesheets", .type = bool },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
+    .{ .name = "v8_thread_pool_size", .type = ?u8 },
+    .{ .name = "disable_v8_idle_tasks", .type = bool },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{
         .name = "ca_cert",
@@ -310,9 +376,9 @@ const Commands = cli.Builder(.{
             .{ .name = "port", .type = u16, .default = 9222 },
             .{ .name = "advertise_host", .type = ?[]const u8 },
             .{ .name = "timeout", .type = ?u31 },
-            .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
-            .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
-            .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
+            .{ .name = "cdp_max_connections", .type = ?u16 },
+            .{ .name = "cdp_max_pending_connections", .type = ?u16 },
+            .{ .name = "cdp_max_message_size", .type = ?u32 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
             .{ .name = "disable_metrics", .type = bool },
@@ -401,6 +467,9 @@ mode: Mode,
 command: RunMode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
+/// Seed-derived device identity (GPU/screen/cores/memory). Always set; the
+/// stock profile when --no-stealth is set without --fingerprint.
+fingerprint_profile: Fingerprint.Profile = .stock,
 
 fn modeNeedsHttp(mode: Mode) bool {
     return switch (mode) {
@@ -416,11 +485,30 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .command = std.meta.activeTag(mode),
         .exec_name = exec_name,
         .http_headers = undefined,
+        .fingerprint_profile = .stock,
     };
     if (modeNeedsHttp(mode)) {
+        // Resolved first: the Chrome User-Agent's OS token derives from it.
+        config.fingerprint_profile = resolveFingerprintProfile(&config);
         config.http_headers = try HttpHeaders.init(allocator, &config);
     }
     return config;
+}
+
+/// Build the profile from the identity and fingerprint options.
+fn resolveFingerprintProfile(config: *const Config) Fingerprint.Profile {
+    const seed = config.fingerprintSeed();
+    if (seed == null and !config.stealth()) return .stock;
+
+    const platform: Fingerprint.Platform = blk: {
+        if (config.fingerprintPlatform()) |s| {
+            break :blk Fingerprint.Platform.fromString(s) orelse .windows;
+        }
+        break :blk if (builtin.os.tag == .macos) .macos else .windows;
+    };
+
+    if (seed) |s| return Fingerprint.Profile.fromSeed(s, platform);
+    return Fingerprint.Profile.random(platform);
 }
 
 pub fn deinit(self: *const Config, allocator: Allocator) void {
@@ -461,6 +549,23 @@ pub fn disableSubframes(self: *const Config) bool {
     };
 }
 
+pub fn resourceProfile(self: *const Config) ResourceProfile {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.resource_profile orelse
+            if (build_config.low_resource_default) .pi else .standard,
+        else => unreachable,
+    };
+}
+
+/// `pi` and `slot` share the lean V8/network defaults. `slot` additionally
+/// tightens process-level concurrency for dedicated one-session processes.
+pub fn leanProfile(self: *const Config) bool {
+    return switch (self.resourceProfile()) {
+        .pi, .slot => true,
+        .standard => false,
+    };
+}
+
 pub fn disableWorkers(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_workers,
@@ -471,7 +576,8 @@ pub fn disableWorkers(self: *const Config) bool {
 pub fn watchdogMs(self: *const Config) ?u32 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| {
-            const ms = opts.watchdog_ms orelse 30000;
+            const default_ms: u32 = if (self.leanProfile()) 10_000 else 30_000;
+            const ms = opts.watchdog_ms orelse default_ms;
             return if (ms == 0) null else ms;
         },
         else => unreachable,
@@ -492,9 +598,45 @@ pub fn v8Flags(self: *const Config) ?[]const u8 {
     };
 }
 
+// Memory-oriented V8 flags applied before --v8-flags-unsafe (so a user flag
+// with the same name still wins). Measured on a 1.4 MB DOM + JS page load
+// (peak RSS, median of 7):
+//   --optimize-for-size            68.4 -> 66.4 MB, CPU unchanged
+//   --no-concurrent-recompilation  66.3 -> 61.6 MB, CPU +0.01s
+pub const pi_v8_flags = "--optimize-for-size --no-concurrent-recompilation";
+
+pub fn v8ProfileFlags(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => if (self.leanProfile()) pi_v8_flags else null,
+        else => null,
+    };
+}
+
 pub fn v8MaxHeapMb(self: *const Config) ?u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb,
+        // Keep 64 MiB for both lean profiles. Lower growth caps do not reduce
+        // peak RSS after --optimize-for-size and OOMs common SPAs.
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_max_heap_mb orelse
+            if (self.leanProfile()) 64 else null,
+        else => unreachable,
+    };
+}
+
+pub fn speculativePreloading(self: *const Config) bool {
+    return !self.leanProfile();
+}
+
+pub fn v8ThreadPoolSize(self: *const Config) u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.v8_thread_pool_size orelse
+            if (self.leanProfile()) 1 else 0,
+        else => unreachable,
+    };
+}
+
+pub fn v8IdleTasks(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| !opts.disable_v8_idle_tasks and !self.leanProfile(),
         else => unreachable,
     };
 }
@@ -516,14 +658,16 @@ pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse 40,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_concurrent orelse
+            if (self.leanProfile()) 8 else 40,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse
+            if (self.leanProfile()) 2 else 6,
         else => unreachable,
     };
 }
@@ -550,14 +694,16 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_response_size orelse
+            if (self.leanProfile()) 32 * 1024 * 1024 else null,
         else => unreachable,
     };
 }
 
 pub fn wsMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse 8,
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.ws_max_concurrent orelse
+            if (self.leanProfile()) 2 else 8,
         else => unreachable,
     };
 }
@@ -702,26 +848,46 @@ pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scala
     return std.mem.splitScalar(u8, patterns, ',');
 }
 
+// Dedicated one-session process: keep a second HTTP/CDP slot so health checks
+// or a reconnect can coexist with the live session.
+const pi_max_sessions = 32;
+const slot_max_connections = 2;
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
-        .serve => |opts| opts.cdp_max_connections,
-        .mcp => 16,
-        .fetch, .agent => 0,
+        .serve => |opts| opts.cdp_max_connections orelse switch (self.resourceProfile()) {
+            .slot => slot_max_connections,
+            .pi => memoryCappedSessions(pi_max_sessions),
+            .standard => memoryCappedSessions(16),
+        },
+        .mcp => switch (self.resourceProfile()) {
+            .slot => slot_max_connections,
+            .pi => memoryCappedSessions(pi_max_sessions),
+            .standard => memoryCappedSessions(16),
+        },
         else => unreachable,
     };
 }
 
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
-        .serve => |opts| opts.cdp_max_pending_connections,
-        .mcp => 128,
+        .serve => |opts| opts.cdp_max_pending_connections orelse switch (self.resourceProfile()) {
+            .slot => 2,
+            .pi => 16,
+            .standard => 128,
+        },
+        .mcp => switch (self.resourceProfile()) {
+            .slot => 2,
+            .pi => 16,
+            .standard => 128,
+        },
         else => unreachable,
     };
 }
 
 pub fn cdpMaxMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
-        .serve => |opts| opts.cdp_max_message_size,
+        .serve => |opts| opts.cdp_max_message_size orelse if (self.leanProfile()) 256 * 1024 else 1024 * 1024,
         else => unreachable,
     };
 }
@@ -779,28 +945,109 @@ pub const WaitUntil = enum {
 
 /// HTTP header values shared across Http and Client.
 /// Must be initialized with an allocator that outlives all HTTP connections.
-pub const HttpHeaders = struct {
-    const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+pub fn stealth(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| !opts.no_stealth,
+        else => false,
+    };
+}
 
-    const Brand = struct {
+pub fn fingerprintSeed(self: *const Config) ?u64 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.fingerprint,
+        else => null,
+    };
+}
+
+pub fn fingerprintPlatform(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.fingerprint_platform,
+        else => null,
+    };
+}
+
+pub const HttpHeaders = struct {
+    pub const product_version: [:0]const u8 = "1.0";
+    const user_agent_base: [:0]const u8 = "Lightpanda/" ++ product_version;
+
+    pub const Brand = struct {
         brand: [:0]const u8,
         version: [:0]const u8,
     };
 
-    /// Source of truth for client-hints brand data. Both the Sec-Ch-Ua
-    /// HTTP header and navigator.userAgentData.brands derive from this
-    /// list, so the two sides cannot drift.
     pub const brands = [_]Brand{
         .{ .brand = "Lightpanda", .version = "1" },
     };
+    pub const full_brands = [_]Brand{
+        .{ .brand = "Lightpanda", .version = product_version },
+    };
 
-    pub const sec_ch_ua: [:0]const u8 = blk: {
-        var out: [:0]const u8 = "";
-        for (brands, 0..) |b, i| {
-            const sep = if (i == 0) "" else ", ";
-            out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.version ++ "\"";
+    pub const stealth_chrome_version: [:0]const u8 = "151";
+    pub const stealth_ua_full_version: [:0]const u8 = "151.0.7922.77";
+
+    /// Chrome GREASE + Chromium + Google Chrome brands used by default.
+    pub const brands_stealth = [_]Brand{
+        .{ .brand = "Not=A?Brand", .version = "99" },
+        .{ .brand = "Google Chrome", .version = stealth_chrome_version },
+        .{ .brand = "Chromium", .version = stealth_chrome_version },
+    };
+    pub const full_brands_stealth = [_]Brand{
+        .{ .brand = "Not=A?Brand", .version = "99.0.0.0" },
+        .{ .brand = "Google Chrome", .version = stealth_ua_full_version },
+        .{ .brand = "Chromium", .version = stealth_ua_full_version },
+    };
+
+    /// Chrome-aligned default UA. The OS token has to agree with the
+    /// resolved fingerprint platform: a Windows UA next to a "MacIntel"
+    /// navigator.platform is a louder tell than no stealth at all.
+    pub fn stealthUserAgent(platform: Fingerprint.Platform) [:0]const u8 {
+        const prefix = "Mozilla/5.0 (";
+        // Chrome's reduced UA pins the last three version components to zero;
+        // the real build number only travels over UA-CH.
+        const suffix = ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" ++
+            stealth_chrome_version ++ ".0.0.0 Safari/537.36";
+        return switch (platform) {
+            .windows => prefix ++ "Windows NT 10.0; Win64; x64" ++ suffix,
+            .macos => prefix ++ "Macintosh; Intel Mac OS X 10_15_7" ++ suffix,
+            .linux => prefix ++ "X11; Linux x86_64" ++ suffix,
+        };
+    }
+
+    fn secChUa(comptime brand_list: []const Brand) [:0]const u8 {
+        comptime {
+            var out: [:0]const u8 = "";
+            for (brand_list, 0..) |b, i| {
+                const sep = if (i == 0) "" else ", ";
+                out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.version ++ "\"";
+            }
+            return out;
         }
-        break :blk out;
+    }
+
+    pub const sec_ch_ua: [:0]const u8 = secChUa(&brands);
+    pub const sec_ch_ua_stealth: [:0]const u8 = secChUa(&brands_stealth);
+    pub const sec_ch_ua_full_version_list_stealth: [:0]const u8 = secChUa(&full_brands_stealth);
+    pub const sec_ch_ua_full_version_stealth: [:0]const u8 = "\"" ++ stealth_ua_full_version ++ "\"";
+
+    pub fn secChUaPlatformVersion(platform: Fingerprint.Platform) []const u8 {
+        return switch (platform) {
+            .windows => "\"15.0.0\"",
+            // The reduced User-Agent keeps its frozen 10_15_7 token, but
+            // UA-CH reports the actual OS generation. Chrome 150 cannot run
+            // on Catalina, so pairing it with 10.15.7 is self-contradictory.
+            .macos => "\"26.5.2\"",
+            .linux => "\"6.6.0\"",
+        };
+    }
+
+    pub const sec_ch_ua_arch: []const u8 = switch (builtin.cpu.arch) {
+        .x86, .x86_64 => "\"x86\"",
+        .aarch64, .aarch64_be, .arm, .armeb => "\"arm\"",
+        else => "\"\"",
+    };
+    pub const sec_ch_ua_bitness: []const u8 = switch (builtin.cpu.arch) {
+        .x86_64, .aarch64, .aarch64_be, .powerpc64, .powerpc64le, .riscv64 => "\"64\"",
+        else => "\"32\"",
     };
 
     // Some bot-protection frontends (e.g. Akamai on canada.ca) RST the HTTP/2
@@ -810,20 +1057,40 @@ pub const HttpHeaders = struct {
     pub const accept_language: [:0]const u8 = "en-US,en;q=0.9";
 
     // Document-navigation Accept value Chrome sends.
-    pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+    pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+
+    pub const chrome_channel: []const u8 = "stable";
+    pub const chrome_copyright: []const u8 = "Copyright 2026 Google LLC. All Rights Reserved.";
+    pub const chrome_validation_macos_arm64: []const u8 = "Ujp3LPhx528Wqnzml3jZrVzknis=";
+    pub const chrome_client_data: []const u8 = "CJ6WywE=";
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
+    /// Sec-Ch-Ua header value (brand list), stealth-aware.
+    sec_ch_ua_header: [:0]const u8,
+    /// Quoted low-entropy UA-CH platform value sent on every request.
+    sec_ch_ua_platform_header: []const u8,
+    /// Brand list for navigator.userAgentData (same source as Sec-Ch-Ua).
+    brand_list: []const Brand,
+    /// True when this process presents itself as Chrome.
+    stealth: bool = false,
+    /// False when user_agent is a comptime literal rather than an allocation.
+    user_agent_owned: bool = false,
 
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
+        const is_stealth = config.stealth();
+        const owned = config.userAgent() != null or (!is_stealth and config.userAgentSuffix() != null);
+
         const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
             try allocator.dupeZ(u8, ua)
+        else if (is_stealth)
+            stealthUserAgent(config.fingerprint_profile.platform)
         else if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
+        errdefer if (owned) allocator.free(user_agent);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
@@ -832,6 +1099,15 @@ pub const HttpHeaders = struct {
 
         return .{
             .user_agent = user_agent,
+            .sec_ch_ua_header = if (is_stealth) sec_ch_ua_stealth else sec_ch_ua,
+            .sec_ch_ua_platform_header = switch (config.fingerprint_profile.platform) {
+                .windows => "\"Windows\"",
+                .macos => "\"macOS\"",
+                .linux => "\"Linux\"",
+            },
+            .brand_list = if (is_stealth) &brands_stealth else &brands,
+            .stealth = is_stealth,
+            .user_agent_owned = owned,
             .proxy_bearer_header = proxy_bearer_header,
         };
     }
@@ -840,7 +1116,7 @@ pub const HttpHeaders = struct {
         if (self.proxy_bearer_header) |hdr| {
             allocator.free(hdr);
         }
-        if (self.user_agent.ptr != user_agent_base.ptr) {
+        if (self.user_agent_owned) {
             allocator.free(self.user_agent);
         }
     }
@@ -1018,4 +1294,131 @@ pub fn tagJsonArray(comptime E: type) []const u8 {
         s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
     }
     return s ++ "]";
+}
+
+test "Config: Chrome identity is default and --no-stealth opts out" {
+    var default_config = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+    defer default_config.deinit(std.testing.allocator);
+    try std.testing.expect(default_config.stealth());
+    try std.testing.expect(default_config.fingerprint_profile.seed != 0);
+
+    var honest_config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .no_stealth = true,
+    } });
+    defer honest_config.deinit(std.testing.allocator);
+    try std.testing.expect(!honest_config.stealth());
+    try std.testing.expectEqual(@as(u64, 0), honest_config.fingerprint_profile.seed);
+}
+
+test "Config: CLI accepts identity flags" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--no-stealth" };
+        var config = try parseArgs(std.testing.allocator, .{ .vector = &argv });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expect(!config.stealth());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--stealth", "--fingerprint", "42" };
+        var config = try parseArgs(std.testing.allocator, .{ .vector = &argv });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expect(config.stealth());
+        try std.testing.expectEqual(@as(?u64, 42), config.fingerprintSeed());
+    }
+
+    var seeded = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .fingerprint = 7,
+        .fingerprint_platform = "macos",
+    } });
+    defer seeded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("macos", seeded.fingerprintPlatform().?);
+    try std.testing.expectEqual(Fingerprint.Platform.macos, seeded.fingerprint_profile.platform);
+}
+
+test "Config: pi resource profile bounds expensive defaults" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .resource_profile = .pi,
+    } });
+    defer config.deinit(std.testing.allocator);
+    try std.testing.expectEqual(ResourceProfile.pi, config.resourceProfile());
+    try std.testing.expect(config.leanProfile());
+    try std.testing.expectEqualStrings(pi_v8_flags, config.v8ProfileFlags().?);
+    try std.testing.expectEqual(@as(?u32, 64), config.v8MaxHeapMb());
+    try std.testing.expectEqual(@as(u8, 1), config.v8ThreadPoolSize());
+    try std.testing.expect(!config.v8IdleTasks());
+    try std.testing.expectEqual(@as(u8, 8), config.httpMaxConcurrent());
+    try std.testing.expectEqual(@as(u8, 2), config.httpMaxHostOpen());
+    try std.testing.expectEqual(@as(?usize, 32 * 1024 * 1024), config.httpMaxResponseSize());
+    try std.testing.expectEqual(@as(?u32, 10_000), config.watchdogMs());
+}
+
+test "Config: only lean profiles set V8 memory flags" {
+    var standard = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .resource_profile = .standard,
+    } });
+    defer standard.deinit(std.testing.allocator);
+    try std.testing.expect(standard.v8ProfileFlags() == null);
+    try std.testing.expect(standard.v8MaxHeapMb() == null);
+
+    var pi = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .resource_profile = .pi,
+    } });
+    defer pi.deinit(std.testing.allocator);
+    try std.testing.expect(pi.v8ProfileFlags() != null);
+}
+
+test "Config: slot resource profile is a lean single-session process" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .resource_profile = .slot,
+    } });
+    defer config.deinit(std.testing.allocator);
+    try std.testing.expectEqual(ResourceProfile.slot, config.resourceProfile());
+    try std.testing.expect(config.leanProfile());
+    try std.testing.expectEqualStrings(pi_v8_flags, config.v8ProfileFlags().?);
+    try std.testing.expectEqual(@as(?u32, 64), config.v8MaxHeapMb());
+    try std.testing.expectEqual(@as(u8, 1), config.v8ThreadPoolSize());
+    try std.testing.expectEqual(@as(u16, slot_max_connections), config.maxConnections());
+    try std.testing.expectEqual(@as(u31, 2), config.maxPendingConnections());
+    try std.testing.expectEqual(@as(?u32, 10_000), config.watchdogMs());
+    try std.testing.expectEqual(@as(u32, 256 * 1024), config.cdpMaxMessageSize());
+
+    config.mode.serve.cdp_max_connections = 8;
+    try std.testing.expectEqual(@as(u16, 8), config.maxConnections());
+}
+
+test "Config: CLI parses slot profile" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const argv = [_][*:0]const u8{ "lightpanda", "serve", "--resource-profile", "slot" };
+    var config = try parseArgs(std.testing.allocator, .{ .vector = &argv });
+    defer config.deinit(std.testing.allocator);
+    try std.testing.expectEqual(ResourceProfile.slot, config.resourceProfile());
+}
+
+test "Config: CLI parses pi profile and explicit resource limits" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const argv = [_][*:0]const u8{
+        "lightpanda",
+        "serve",
+        "--resource-profile",
+        "pi",
+        "--cdp-max-connections",
+        "4",
+        "--v8-max-heap-mb",
+        "128",
+    };
+    var config = try parseArgs(std.testing.allocator, .{ .vector = &argv });
+    defer config.deinit(std.testing.allocator);
+    try std.testing.expectEqual(ResourceProfile.pi, config.resourceProfile());
+    try std.testing.expectEqual(@as(u16, 4), config.maxConnections());
+    try std.testing.expectEqual(@as(?u32, 128), config.v8MaxHeapMb());
+}
+
+test "Config: CLI rejects an invalid resource profile" {
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const argv = [_][*:0]const u8{ "lightpanda", "serve", "--resource-profile", "potato" };
+    try std.testing.expectError(
+        error.InvalidArgument,
+        parseArgs(std.testing.allocator, .{ .vector = &argv }),
+    );
 }

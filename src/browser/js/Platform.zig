@@ -21,8 +21,19 @@ const v8 = js.v8;
 
 const Platform = @This();
 handle: *v8.Platform,
+idle_tasks_enabled: bool,
 
 pub fn init(v8_flags: ?[]const u8) !Platform {
+    return initWithOptions(v8_flags, .{});
+}
+
+pub const Options = struct {
+    /// 0 lets V8 size the pool from the host CPU count.
+    thread_pool_size: u8 = 0,
+    idle_task_support: bool = true,
+};
+
+pub fn initWithOptions(v8_flags: ?[]const u8, opts: Options) !Platform {
     if (v8_flags) |flags| {
         v8.v8__V8__SetFlagsFromString(flags.ptr, flags.len);
     }
@@ -30,12 +41,16 @@ pub fn init(v8_flags: ?[]const u8) !Platform {
     if (v8.v8__V8__InitializeICU() == false) {
         return error.FailedToInitializeICU;
     }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
+    const handle = v8.v8__Platform__NewDefaultPlatform(
+        opts.thread_pool_size,
+        @intFromBool(opts.idle_task_support),
+    ).?;
     v8.v8__V8__InitializePlatform(handle);
     v8.v8__V8__Initialize();
-    return .{ .handle = handle };
+    return .{
+        .handle = handle,
+        .idle_tasks_enabled = opts.idle_task_support,
+    };
 }
 
 pub fn deinit(self: Platform) void {

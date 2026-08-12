@@ -45,6 +45,14 @@ pub const Config = struct {
     medium: Config.Bucket = .{ .max = 64, .retain = 16 * 1024 },
     large: Config.Bucket = .{ .max = 32, .retain = 128 * 1024 },
 
+    /// Lean retention ceilings for --resource-profile pi/slot.
+    pub const pi: Config = .{
+        .tiny = .{ .max = 64, .retain = 1024 },
+        .small = .{ .max = 32, .retain = 4 * 1024 },
+        .medium = .{ .max = 8, .retain = 16 * 1024 },
+        .large = .{ .max = 2, .retain = 64 * 1024 },
+    };
+
     const Bucket = struct {
         max: u16,
         retain: usize,
