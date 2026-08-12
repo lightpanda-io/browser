@@ -427,7 +427,22 @@ pub fn runMicrotasks(self: *Env) void {
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+            if (self.terminatePending()) {
+                // A terminate landed inside this checkpoint. Unlike a JS entry,
+                // the checkpoint exit does not clear V8's terminating state, and
+                // leaving it set makes later V8 calls (teardown, inspector) fail
+                // in ways their callers don't expect. Clear the V8 state; the
+                // sticky terminate_requested keeps blocking new JS entries.
+                clearTerminationState(v8_isolate);
+                return;
+            }
         }
+    }
+}
+
+fn clearTerminationState(v8_isolate: *v8.Isolate) void {
+    if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+        v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
     }
 }
 
@@ -633,6 +648,11 @@ pub fn performIsolateMicrotasks(self: *Env) void {
     defer self.terminate_mutex.unlock(lp.io);
     if (self.terminatePending()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
+    if (self.terminatePending()) {
+        // See runMicrotasks: a checkpoint exit doesn't clear V8's terminating
+        // state the way a JS entry unwind does.
+        clearTerminationState(self.isolate.handle);
+    }
 }
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
