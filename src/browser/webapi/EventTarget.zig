@@ -17,49 +17,141 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const Factory = @import("../Factory.zig");
 const EventManager = @import("../EventManager.zig");
 
+const Node = @import("Node.zig");
 const Event = @import("Event.zig");
+const Screen = @import("Screen.zig");
+const Worker = @import("Worker.zig");
+const Window = @import("Window.zig");
 const AbortSignal = @import("AbortSignal.zig");
+const MessagePort = @import("MessagePort.zig");
+const FileReader = @import("FileReader.zig");
+const WebSocket = @import("net/WebSocket.zig");
+const Navigation = @import("navigation/Navigation.zig");
+const Notification = @import("Notification.zig");
+const EventSource = @import("net/EventSource.zig");
+const CookieStore = @import("storage/CookieStore.zig");
+const IDBRequest = @import("storage/idb/IDBRequest.zig");
+const SharedWorker = @import("SharedWorker.zig");
+const FontFaceSet = @import("css/FontFaceSet.zig");
+const IDBDatabase = @import("storage/idb/IDBDatabase.zig");
+const TextTrackCue = @import("media/TextTrackCue.zig");
+const VisualViewport = @import("VisualViewport.zig");
+const MediaQueryList = @import("css/MediaQueryList.zig");
+const IDBTransaction = @import("storage/idb/IDBTransaction.zig");
+const BroadcastChannel = @import("BroadcastChannel.zig");
+const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
+const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
+const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
 
 const RegisterOptions = EventManager.RegisterOptions;
 
 const EventTarget = @This();
 
 pub const _prototype_root = true;
-_type: Type,
 
-pub const Type = union(enum) {
-    generic: void,
-    node: *@import("Node.zig"),
-    window: *@import("Window.zig"),
-    worker: *@import("Worker.zig"),
-    shared_worker: *@import("SharedWorker.zig"),
-    worker_global_scope: *@import("WorkerGlobalScope.zig"),
-    xhr: *@import("net/XMLHttpRequestEventTarget.zig"),
-    abort_signal: *@import("AbortSignal.zig"),
-    media_query_list: *@import("css/MediaQueryList.zig"),
-    message_port: *@import("MessagePort.zig"),
-    broadcast_channel: *@import("BroadcastChannel.zig"),
-    text_track_cue: *@import("media/TextTrackCue.zig"),
-    navigation: *@import("navigation/Navigation.zig"),
-    navigation_history_entry: *@import("navigation/NavigationHistoryEntry.zig"),
-    screen: *@import("Screen.zig"),
-    screen_orientation: *@import("Screen.zig").Orientation,
-    visual_viewport: *@import("VisualViewport.zig"),
-    file_reader: *@import("FileReader.zig"),
-    font_face_set: *@import("css/FontFaceSet.zig"),
-    websocket: *@import("net/WebSocket.zig"),
-    event_source: *@import("net/EventSource.zig"),
-    cookie_store: *@import("storage/CookieStore.zig"),
-    idb_request: *@import("storage/idb/IDBRequest.zig"),
-    idb_database: *@import("storage/idb/IDBDatabase.zig"),
-    idb_transaction: *@import("storage/idb/IDBTransaction.zig"),
-    notification: *@import("Notification.zig"),
+// `global_event_handlers.Key` reuses the low 3 bits of an EventTarget pointer,
+// so the type has to stay 8-byte aligned even though the tag is a single byte.
+// This costs nothing in a chain: EventTarget is always at offset 0 and every
+// subtype that follows it is itself 8-aligned.
+_type: Type align(8),
+
+pub const Type = enum(u8) {
+    generic,
+    node,
+    window,
+    worker,
+    shared_worker,
+    worker_global_scope,
+    xhr,
+    abort_signal,
+    media_query_list,
+    message_port,
+    broadcast_channel,
+    text_track_cue,
+    navigation,
+    navigation_history_entry,
+    screen,
+    screen_orientation,
+    visual_viewport,
+    file_reader,
+    font_face_set,
+    websocket,
+    event_source,
+    cookie_store,
+    idb_request,
+    idb_database,
+    idb_transaction,
+    notification,
 };
+
+// `.generic` maps to EventTarget itself: a standalone `new EventTarget()` has
+// no chain member of its own.
+pub fn Subtype(comptime tag: Type) type {
+    return switch (tag) {
+        .generic => EventTarget,
+        .node => Node,
+        .window => Window,
+        .worker => Worker,
+        .shared_worker => SharedWorker,
+        .worker_global_scope => WorkerGlobalScope,
+        .xhr => XMLHttpRequestEventTarget,
+        .abort_signal => AbortSignal,
+        .media_query_list => MediaQueryList,
+        .message_port => MessagePort,
+        .broadcast_channel => BroadcastChannel,
+        .text_track_cue => TextTrackCue,
+        .navigation => Navigation,
+        .navigation_history_entry => NavigationHistoryEntry,
+        .screen => Screen,
+        .screen_orientation => Screen.Orientation,
+        .visual_viewport => VisualViewport,
+        .file_reader => FileReader,
+        .font_face_set => FontFaceSet,
+        .websocket => WebSocket,
+        .event_source => EventSource,
+        .cookie_store => CookieStore,
+        .idb_request => IDBRequest,
+        .idb_database => IDBDatabase,
+        .idb_transaction => IDBTransaction,
+        .notification => Notification,
+    };
+}
+
+pub fn subtype(self: *const EventTarget, comptime T: type) *T {
+    const offset = comptime Factory.chainOffsetOf(T, T) - Factory.chainOffsetOf(T, EventTarget);
+    const sub: *T = @ptrFromInt(@intFromPtr(self) + offset);
+    if (comptime lp.IS_DEBUG) {
+        // This pointer dance only works because the factory allocates the chain
+        // in a contiguous block of memory. In debug, we assert this holds via
+        // the _proto_canary back pointer.
+        std.debug.assert(Factory.protoOf(sub) == self);
+    }
+    return sub;
+}
+
+// Returns the target as a more specific type, or null if it isn't a `T`.
+pub fn is(self: *EventTarget, comptime T: type) ?*T {
+    switch (self._type) {
+        .generic => {},
+        inline else => |tag| {
+            if (Subtype(tag) == T) {
+                return self.subtype(T);
+            }
+        },
+    }
+    return null;
+}
+
+pub fn as(self: *EventTarget, comptime T: type) *T {
+    return self.is(T).?;
+}
 
 pub fn init(page: *Page) !*EventTarget {
     return page.factory.create(EventTarget{
@@ -121,8 +213,9 @@ fn defaultPassiveValue(self: *EventTarget, typ: []const u8) bool {
 
     switch (self._type) {
         .window => return true,
-        .node => |n| {
+        .node => {
             const Element = @import("Element.zig");
+            const n = self.subtype(Node);
             if (n._type == .document) {
                 return true;
             }
@@ -212,7 +305,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nu
 
 pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
     return switch (self._type) {
-        .node => |n| n.format(writer),
+        .node => self.subtype(Node).format(writer),
         .generic => writer.writeAll("<EventTarget>"),
         .window => writer.writeAll("<Window>"),
         .worker => writer.writeAll("<Worker>"),
@@ -293,6 +386,8 @@ test "WebApi: EventTarget" {
     testing.silenceLog(&.{ .js, .event });
 
     // we create thousands of these per frame. Nothing should bloat it.
-    try testing.expectEqual(16, @sizeOf(EventTarget));
+    // The tag is 1 byte; the rest is the align(8) that `Key.fuse` depends on.
+    try testing.expectEqual(8, @sizeOf(EventTarget));
+    try testing.expectEqual(8, @alignOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
 }

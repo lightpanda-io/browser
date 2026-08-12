@@ -25,9 +25,11 @@ const EventManagerBase = @import("EventManagerBase.zig");
 
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
+const Window = @import("webapi/Window.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
+const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -83,15 +85,15 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     }
 
     switch (target._type) {
-        .node => |node| try self.dispatchNode(node, event),
-        .xhr => |xhr| try self.dispatchDirect(target, event, xhr.inlineHandler(event._type_string), .{ .context = "dispatch" }),
-        .window => |w| try self.dispatchDirect(target, event, windowInlineHandler(w, event._type_string), .{ .context = "dispatch" }),
+        .node => try self.dispatchNode(target.subtype(Node), event),
+        .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
 }
 
 // Resolves the Window's property event handler for the given event type.
-fn windowInlineHandler(window: *@import("webapi/Window.zig"), typ: lp.String) ?js.Function.Global {
+fn windowInlineHandler(window: *Window, typ: lp.String) ?js.Function.Global {
     const global_event_handlers = @import("webapi/global_event_handlers.zig");
     const handler_type = global_event_handlers.fromEventType(typ.str()) orelse return null;
     return switch (handler_type) {
@@ -244,9 +246,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     // root is the document (not for detached trees, and not when propagation
     // stopped at a shadow boundary). The only explicit exception is "load".
     if (event._type_string.eql(comptime .wrap("load")) == false and path_len < path_buffer.len) {
-        const root_is_document = path_len > 0 and switch (path_buffer[path_len - 1]._type) {
-            .node => |n| n._type == .document,
-            else => false,
+        const root_is_document = blk: {
+            if (path_len == 0) break :blk false;
+            const root = path_buffer[path_len - 1].is(Node) orelse break :blk false;
+            break :blk root._type == .document;
         };
         if (root_is_document) {
             path_buffer[path_len] = frame.window.asEventTarget();
@@ -508,17 +511,20 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
 
     // Look up the inline handler for this target
     const html_element = switch (target._type) {
-        .node => |n| n.is(Element.Html) orelse return null,
+        .node => target.subtype(Node).is(Element.Html) orelse return null,
         // The Window stores its event handlers in dedicated fields; an event
         // propagating to the window must fire them too.
-        .window => |w| return switch (handler_type) {
-            .onerror => w._on_error,
-            .onload => w._on_load,
-            .onblur => w._on_blur,
-            .onfocus => w._on_focus,
-            .onresize => w._on_resize,
-            .onscroll => w._on_scroll,
-            else => null,
+        .window => {
+            const w = target.subtype(Window);
+            return switch (handler_type) {
+                .onerror => w._on_error,
+                .onload => w._on_load,
+                .onblur => w._on_blur,
+                .onfocus => w._on_focus,
+                .onresize => w._on_resize,
+                .onscroll => w._on_scroll,
+                else => null,
+            };
         },
         else => return null,
     };
@@ -639,14 +645,8 @@ fn eventPathParent(node: *Node, event: *Event, target_root: *Node, frame: ?*Fram
 // DOM spec "retarget": walk original_target out of shadow trees until the
 // node is visible from current_target's tree.
 fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
-    const orig_node = switch ((original_target orelse return null)._type) {
-        .node => |n| n,
-        else => return original_target,
-    };
-    const curr_node = switch (current_target._type) {
-        .node => |n| n,
-        else => return original_target,
-    };
+    const orig_node = (original_target orelse return null).is(Node) orelse return original_target;
+    const curr_node = current_target.is(Node) orelse return original_target;
 
     var node = orig_node;
     while (true) {
@@ -678,10 +678,8 @@ fn isShadowIncludingInclusiveAncestor(ancestor: *Node, node: *Node) bool {
 // shadow root. Used for the spec's post-dispatch "clear targets" step.
 fn rootIsShadowRoot(target_: ?*EventTarget) bool {
     const target = target_ orelse return false;
-    return switch (target._type) {
-        .node => |n| n.containingShadowRoot() != null,
-        else => false,
-    };
+    const node = target.is(Node) orelse return false;
+    return node.containingShadowRoot() != null;
 }
 
 // Check if ancestor is an ancestor of (or the same as) node
