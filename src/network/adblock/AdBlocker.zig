@@ -42,10 +42,6 @@ allowed: u32,
 suppressed: u32,
 /// Rules that reached a trie, across every list parsed so far.
 rules_loaded: usize,
-/// Rules we understood but cannot represent, plus lines that were not valid
-/// filters at all. Only a fraction of a real list survives (see `trieRoot`),
-/// so this is what separates "my rule does nothing" from "my rule was never
-/// loaded".
 rules_skipped: usize,
 
 /// Read buffer for filter lists, and therefore the longest line we can see.
@@ -142,7 +138,6 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
         };
         self.rules_loaded += 1;
     }
-    self.rules_skipped += parser.skipped;
 }
 
 pub const Verdict = enum { none, allowed, blocked };
@@ -227,9 +222,10 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     // its hostname instead of allowing it.
     try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
 
-    // The block and the exception; the cosmetic line is the skip.
+    // The block and the exception. The cosmetic line never parsed as a
+    // filter, so it is not a rule we dropped.
     try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(1, blocker.rules_skipped);
+    try testing.expectEqual(0, blocker.rules_skipped);
 
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
@@ -239,7 +235,7 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
     // The counts carry across lists, like the entries do.
     try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(2, blocker.rules_skipped);
+    try testing.expectEqual(1, blocker.rules_skipped);
     // The first list's entries survived the second parse.
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
 }
