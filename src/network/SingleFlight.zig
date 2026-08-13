@@ -42,6 +42,8 @@ pub const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
     const gop = try self.pending.getOrPut(self.allocator, key);
+    errdefer _ = self.pending.remove(key);
+
     if (gop.found_existing) {
         const waiting = gop.value_ptr;
         try waiting.append(self.allocator, transfer);
