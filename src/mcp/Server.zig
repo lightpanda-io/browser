@@ -1,15 +1,32 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
-
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const testing = @import("../testing.zig");
+const NodeRegistry = @import("../NodeRegistry.zig");
+
+const tools = @import("tools.zig");
+const router = @import("router.zig");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
-const router = @import("router.zig");
-const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
-const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
 
@@ -27,7 +44,7 @@ pub const Session = struct {
     browser: lp.Browser,
     session: *lp.Session,
     notification: *lp.Notification,
-    node_registry: CDPNode.Registry,
+    node_registry: NodeRegistry,
 
     fn isDefault(self: *const Session) bool {
         return std.mem.eql(u8, self.id, default_session_id);
@@ -96,7 +113,7 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
         .browser = undefined,
         .session = undefined,
         .notification = notification,
-        .node_registry = CDPNode.Registry.init(self.allocator),
+        .node_registry = NodeRegistry.init(self.allocator),
     };
     errdefer entry.node_registry.deinit();
 

@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
-const URL = @import("../../browser/URL.zig");
-const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
+const URL = @import("../../../browser/URL.zig");
+const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
 const log = lp.log;
 const CookieJar = Cookie.Jar;

@@ -32,7 +32,7 @@ const ScriptRuntime = lp.Runtime;
 const Candidate = zenai.provider.Candidate;
 
 const App = @import("../App.zig");
-const CDPNode = @import("../cdp/Node.zig");
+const NodeRegistry = @import("../NodeRegistry.zig");
 const Conversation = @import("Conversation.zig");
 const Terminal = @import("Terminal.zig");
 const SlashCommand = @import("SlashCommand.zig");
@@ -152,7 +152,7 @@ model_completion_arena: std.heap.ArenaAllocator,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
-node_registry: CDPNode.Registry,
+node_registry: NodeRegistry,
 terminal: Terminal,
 save_buffer: Recorder,
 save_path: ?[]u8,

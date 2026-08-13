@@ -24,12 +24,12 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
-const ModelContext = @import("../../browser/webapi/ModelContext.zig");
-const Notification = @import("../../Notification.zig");
-const js = @import("../../browser/js/js.zig");
-const ModelContextClient = ModelContext.ModelContextClient;
+const js = @import("../../../browser/js/js.zig");
+const Notification = @import("../../../Notification.zig");
+const ModelContext = @import("../../../browser/webapi/ModelContext.zig");
 
 const log = lp.log;
+const ModelContextClient = ModelContext.ModelContextClient;
 
 pub const Invocation = struct {
     id: u32,
@@ -345,7 +345,7 @@ test "cdp.WebMCP: register fires toolsAdded after enable" {
     }, .{ .session_id = "SID-M" });
 
     // Register a fresh tool from JS, expect a new toolsAdded event.
-    var ls: @import("../../browser/js/js.zig").Local.Scope = undefined;
+    var ls: js.Local.Scope = undefined;
     bc.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(
@@ -446,7 +446,7 @@ test "cdp.WebMCP: cancelInvocation" {
     try ctx.expectSentEvent("WebMCP.toolsAdded", null, .{ .session_id = "SID-M" });
 
     // Register a never-settling tool so we have an invocation to cancel.
-    var ls: @import("../../browser/js/js.zig").Local.Scope = undefined;
+    var ls: js.Local.Scope = undefined;
     bc.mainFrame().?.js.localScope(&ls);
     defer ls.deinit();
     _ = try ls.local.exec(

@@ -46,7 +46,7 @@ pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
 }
 
 pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
-    const AXNode = @import("../../cdp/AXNode.zig");
+    const AXNode = @import("../../server/cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
     return (try axnode.getName(frame, frame.call_arena)) orelse "";
 }
