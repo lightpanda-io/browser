@@ -342,6 +342,8 @@ pub const ConsoleMessageType = enum {
     @"error",
     fatal,
     trace,
+    dir,
+    dirxml,
 };
 
 pub const ConsoleMessage = struct {

@@ -50,7 +50,7 @@ fn dispatchConsoleMessage(values: []js.Value, console_type: Notification.Console
     });
 }
 
-pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
+pub fn trace(values: []js.Value, exec: *js.Execution) !void {
     logger.debug(.js, "console.trace", .{
         .stack = exec.js.local.?.stackTrace() catch "???",
         .args = ValueWriter{ .values = values },
@@ -58,46 +58,64 @@ pub fn trace(_: *const Console, values: []js.Value, exec: *js.Execution) !void {
     dispatchConsoleMessage(values, .trace, exec);
 }
 
-pub fn debug(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+pub fn debug(values: []js.Value, exec: *js.Execution) void {
     logger.debug(.js, "console.debug", .{ValueWriter{ .values = values }});
     dispatchConsoleMessage(values, .debug, exec);
 }
 
-pub fn info(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+pub fn info(values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.info", .{ValueWriter{ .values = values }});
     dispatchConsoleMessage(values, .info, exec);
 }
 
-pub fn log(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+pub fn log(values: []js.Value, exec: *js.Execution) void {
     logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
     dispatchConsoleMessage(values, .log, exec);
 }
 
-pub fn warn(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+pub fn warn(values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
     dispatchConsoleMessage(values, .warning, exec);
 }
 
-pub fn clear(_: *const Console) void {}
+pub fn clear() void {}
 
-pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, exec: *js.Execution) void {
-    if (assertion.toBool()) {
-        return;
+pub fn assert(assertion_: ?js.Value, values: []js.Value, exec: *js.Execution) void {
+    if (assertion_) |assertion| {
+        if (assertion.toBool()) {
+            return;
+        }
     }
     logger.warn(.js, "console.assert", .{ValueWriter{ .values = values }});
     dispatchConsoleMessage(values, .warning, exec);
 }
 
-pub fn @"error"(_: *const Console, values: []js.Value, exec: *js.Execution) void {
+pub fn @"error"(values: []js.Value, exec: *js.Execution) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .values = values, .stack = exec.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???" }});
     dispatchConsoleMessage(values, .@"error", exec);
 }
 
-pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {
+pub fn table(data: ?js.Value, columns: ?js.Value) void {
     logger.info(.js, "console.table", .{ .data = data, .columns = columns });
 }
 
-pub fn count(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
+pub fn dir(item_: ?js.Value, _: ?js.Value, exec: *js.Execution) void {
+    var buf: [1]js.Value = undefined;
+    const values: []js.Value = if (item_) |item| blk: {
+        buf[0] = item;
+        break :blk buf[0..1];
+    } else buf[0..0];
+    logger.info(.js, "console.dir", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .dir, exec);
+}
+
+pub fn dirxml(values: []js.Value, exec: *js.Execution) void {
+    logger.info(.js, "console.dirxml", .{ValueWriter{ .values = values }});
+    dispatchConsoleMessage(values, .dirxml, exec);
+}
+
+pub fn count(label_: ?[]const u8, exec: *js.Execution) !void {
+    const self = exec.console();
     const label = label_ orelse "default";
     const gop = try self._counts.getOrPut(exec.arena, label);
 
@@ -114,7 +132,8 @@ pub fn count(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
     logger.info(.js, "console.count", .{ .label = label, .count = c });
 }
 
-pub fn countReset(self: *Console, label_: ?[]const u8) !void {
+pub fn countReset(label_: ?[]const u8, exec: *js.Execution) !void {
+    const self = exec.console();
     const label = label_ orelse "default";
     const kv = self._counts.fetchRemove(label) orelse {
         logger.info(.js, "console.countReset", .{ .label = label, .err = "invalid label" });
@@ -123,7 +142,8 @@ pub fn countReset(self: *Console, label_: ?[]const u8) !void {
     logger.info(.js, "console.countReset", .{ .label = label, .count = kv.value });
 }
 
-pub fn time(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
+pub fn time(label_: ?[]const u8, exec: *js.Execution) !void {
+    const self = exec.console();
     const label = label_ orelse "default";
     const gop = try self._timers.getOrPut(exec.arena, label);
 
@@ -135,7 +155,8 @@ pub fn time(self: *Console, label_: ?[]const u8, exec: *js.Execution) !void {
     gop.value_ptr.* = lp.datetime.timestamp(.boot);
 }
 
-pub fn timeLog(self: *Console, label_: ?[]const u8) void {
+pub fn timeLog(label_: ?[]const u8, exec: *js.Execution) void {
+    const self = exec.console();
     const elapsed = lp.datetime.timestamp(.boot);
     const label = label_ orelse "default";
     const start = self._timers.get(label) orelse {
@@ -145,7 +166,8 @@ pub fn timeLog(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeLog", .{ .label = label, .elapsed = elapsed - start });
 }
 
-pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
+pub fn timeEnd(label_: ?[]const u8, exec: *js.Execution) void {
+    const self = exec.console();
     const elapsed = lp.datetime.timestamp(.boot);
     const label = label_ orelse "default";
     const kv = self._timers.fetchRemove(label) orelse {
@@ -156,15 +178,15 @@ pub fn timeEnd(self: *Console, label_: ?[]const u8) void {
     logger.info(.js, "console.timeEnd", .{ .label = label, .elapsed = elapsed - kv.value });
 }
 
-pub fn group(_: *const Console, values: []js.Value) void {
+pub fn group(values: []js.Value) void {
     logger.info(.js, "console.group", .{ValueWriter{ .values = values }});
 }
 
-pub fn groupCollapsed(_: *const Console, values: []js.Value) void {
+pub fn groupCollapsed(values: []js.Value) void {
     logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = values }});
 }
 
-pub fn groupEnd(_: *const Console) void {}
+pub fn groupEnd() void {}
 const ValueWriter = struct {
     values: []js.Value,
     stack: ?[]const u8 = null,
@@ -214,28 +236,35 @@ pub const JsApi = struct {
         // object, so Object.entries(console) returns them.
         pub const own_properties = true;
 
+        pub const class_string = "console";
+
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const trace = bridge.function(Console.trace, .{});
-    pub const debug = bridge.function(Console.debug, .{});
-    pub const info = bridge.function(Console.info, .{});
-    pub const log = bridge.function(Console.log, .{});
-    pub const warn = bridge.function(Console.warn, .{});
-    pub const clear = bridge.function(Console.clear, .{ .noop = true });
-    pub const assert = bridge.function(Console.assert, .{});
-    pub const @"error" = bridge.function(Console.@"error", .{});
-    pub const exception = bridge.function(Console.@"error", .{});
-    pub const table = bridge.function(Console.table, .{});
-    pub const count = bridge.function(Console.count, .{});
-    pub const countReset = bridge.function(Console.countReset, .{});
-    pub const time = bridge.function(Console.time, .{});
-    pub const timeLog = bridge.function(Console.timeLog, .{});
-    pub const timeEnd = bridge.function(Console.timeEnd, .{});
-    pub const group = bridge.function(Console.group, .{});
-    pub const groupCollapsed = bridge.function(Console.groupCollapsed, .{});
-    pub const groupEnd = bridge.function(Console.groupEnd, .{});
+    // Namespace members ignore their receiver (no signature check), so
+    // detached calls like `console.log.apply(other, args)` work. Stateful
+    // members resolve their instance from the global scope via exec.console().
+    pub const trace = bridge.function(Console.trace, .{ .static = true });
+    pub const debug = bridge.function(Console.debug, .{ .static = true });
+    pub const info = bridge.function(Console.info, .{ .static = true });
+    pub const log = bridge.function(Console.log, .{ .static = true });
+    pub const warn = bridge.function(Console.warn, .{ .static = true });
+    pub const clear = bridge.function(Console.clear, .{ .static = true, .noop = true });
+    pub const assert = bridge.function(Console.assert, .{ .static = true });
+    pub const @"error" = bridge.function(Console.@"error", .{ .static = true });
+    pub const exception = bridge.function(Console.@"error", .{ .static = true });
+    pub const table = bridge.function(Console.table, .{ .static = true });
+    pub const dir = bridge.function(Console.dir, .{ .static = true });
+    pub const dirxml = bridge.function(Console.dirxml, .{ .static = true });
+    pub const count = bridge.function(Console.count, .{ .static = true });
+    pub const countReset = bridge.function(Console.countReset, .{ .static = true });
+    pub const time = bridge.function(Console.time, .{ .static = true });
+    pub const timeLog = bridge.function(Console.timeLog, .{ .static = true });
+    pub const timeEnd = bridge.function(Console.timeEnd, .{ .static = true });
+    pub const group = bridge.function(Console.group, .{ .static = true });
+    pub const groupCollapsed = bridge.function(Console.groupCollapsed, .{ .static = true });
+    pub const groupEnd = bridge.function(Console.groupEnd, .{ .static = true });
 };
 
 const testing = @import("../../testing.zig");
