@@ -42,22 +42,22 @@ pub const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
     const gop = try self.pending.getOrPut(self.allocator, key);
-    errdefer _ = self.pending.remove(key);
-
     if (gop.found_existing) {
         const waiting = gop.value_ptr;
         try waiting.append(self.allocator, transfer);
         transfer.park(reason);
         return .queued;
     }
+    errdefer _ = self.pending.remove(key);
 
     const owned_key = try self.allocator.dupe(u8, key);
     errdefer self.allocator.free(owned_key);
-    gop.key_ptr.* = owned_key;
 
     var waiting: std.ArrayList(*Transfer) = .empty;
     errdefer waiting.deinit(self.allocator);
     try waiting.append(self.allocator, transfer);
+
+    gop.key_ptr.* = owned_key;
     gop.value_ptr.* = waiting;
 
     transfer.park(reason);
