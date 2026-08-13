@@ -215,7 +215,7 @@ pub fn getPathname(raw: [:0]const u8) []const u8 {
     return raw[path_start..query_or_hash_start];
 }
 
-pub fn getProtocol(raw: [:0]const u8) []const u8 {
+pub fn getProtocol(raw: []const u8) []const u8 {
     const pos = std.mem.indexOfScalarPos(u8, raw, 0, ':') orelse return "";
     return raw[0 .. pos + 1];
 }
@@ -341,7 +341,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
     return raw[0..authority_end];
 }
 
-pub fn isSameOrigin(url: [:0]const u8, origin: [:0]const u8) bool {
+pub fn isSameOrigin(url: []const u8, origin: []const u8) bool {
     return std.mem.eql(u8, getProtocol(url), getProtocol(origin)) and
         std.mem.eql(u8, getHost(url), getHost(origin));
 }
