@@ -90,21 +90,22 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
     const arena = try client.arena_pool.acquire(.small, "RobotsGate.RobotsContext");
     errdefer arena.release();
 
+    const owned_url = try arena.dupeZ(u8, robots_url);
     const robots_ctx = try arena.create(RobotsContext);
     robots_ctx.* = .{
         .gate = self,
         .buffer = .empty,
         .arena = arena,
         .arena_pool = client.arena_pool,
-        .robots_url = robots_url,
+        .robots_url = owned_url,
     };
 
-    log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+    log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
 
     // Only the parent's frame/loader ids (CDP correlation) and notification
     // carry over — no cookies, credentials, headers, or timeout.
     const fetch_transfer = try client.newRequest(.{
-        .url = robots_url,
+        .url = owned_url,
         .method = .GET,
         .internal = true,
         .resource_type = .fetch,
@@ -113,7 +114,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
         .cookie_jar = null,
-        .cookie_origin = robots_url,
+        .cookie_origin = owned_url,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
