@@ -91,7 +91,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .body = request._body,
+        .body = request.bodyBytes(),
         .resource_type = .fetch,
         .cookies = switch (request._credentials) {
             .omit => false,
