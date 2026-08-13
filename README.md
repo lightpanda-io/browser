@@ -353,7 +353,7 @@ Lightpanda is tested against the standardized [Web Platform
 Tests](https://web-platform-tests.org/).
 
 We use [a fork](https://github.com/lightpanda-io/wpt/tree/fork) including a custom
-[`testharnessreport.js`](https://github.com/lightpanda-io/wpt/commit/01a3115c076a3ad0c84849dbbf77a6e3d199c56f).
+[`testharnessreport.js`](https://github.com/lightpanda-io/wpt/blob/fork/resources/testharnessreport.js). Results are [published](https://perf.lightpanda.io/wpt) daily.
 
 For reference, you can easily execute a WPT test case with your browser via
 [wpt.live](https://wpt.live).
