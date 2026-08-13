@@ -223,7 +223,6 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
         .robots = .{
-            .allocator = allocator,
             .network = network,
             .single_flight = .init(allocator),
         },
@@ -3391,7 +3390,6 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.serve_mode = false;
     client.obey_robots = false;
     client.robots = .{
-        .allocator = testing.allocator,
         .network = undefined,
         .single_flight = .init(testing.allocator),
     };

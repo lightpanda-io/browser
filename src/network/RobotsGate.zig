@@ -39,7 +39,6 @@ const Allocator = std.mem.Allocator;
 const RobotsGate = @This();
 
 network: *Network,
-allocator: Allocator,
 single_flight: SingleFlight,
 
 pub const Result = enum { allowed, blocked, pending };
