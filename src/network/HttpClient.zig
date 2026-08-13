@@ -821,7 +821,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 try wba.signRequest(transfer, authority);
             }
 
-            if (self.serve_mode) {
+            if (self.serve_mode and !transfer.req.internal) {
                 transfer._notify_cdp = true;
                 transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
@@ -1477,7 +1477,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
                     if (!transfer.req.internal) lp.metrics.http_redirects.incr();
 
-                    if (self.serve_mode) { // e.g. cdp
+                    if (self.serve_mode and !transfer.req.internal) { // e.g. cdp
                         // Chromium announces each redirect hop before pausing it
                         // for Fetch interception. Playwright uses redirectResponse
                         // to pair the new pause with a new Request.
@@ -1495,7 +1495,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         return true;
                     }
 
-                    if (self.serve_mode) { // e.g. cdp
+                    if (self.serve_mode and !transfer.req.internal) { // e.g. cdp
                         var wait_for_interception = false;
                         transfer.req.notification.dispatch(.http_request_intercept, &.{
                             .transfer = transfer,
