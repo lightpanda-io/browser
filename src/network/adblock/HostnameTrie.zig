@@ -33,6 +33,20 @@
 //! hostnames are stored. Cells live in one flat array and link through
 //! indices, which keeps the structure position-independent: growth cannot
 //! invalidate links and serialization is a plain byte copy.
+//!
+//! Why a trie and not a hash map of hostnames? A hash map only answers
+//! exact-match queries, so subdomain matching means hashing and looking up
+//! every suffix of the needle in turn ("a.b.ads.example.com" costs five
+//! probes, each over a different slice); the trie consumes the needle once,
+//! byte by byte, and reports the match offset as a side effect of the walk.
+//!
+//! It also uses less memory. A hash map stores every hostname in full, plus
+//! a slice header (and any hash metadata) per key, plus the empty slots the
+//! load factor demands. Here entries share their common suffix: the bytes of
+//! ".com" or ".google.com" are written once and reused by everything ending
+//! in them, `chars` is bump-allocated with no per-entry header, a cell is 12
+//! bytes, and both arrays are packed with no slack. On top of that, `add`
+//! drops any hostname already covered by a shorter stored suffix.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
