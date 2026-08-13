@@ -59,12 +59,6 @@ pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: 
     return .initial;
 }
 
-pub fn abort(self: *SingleFlight, key: []const u8) void {
-    var entry = self.pending.fetchRemove(key) orelse return;
-    self.allocator.free(entry.key);
-    entry.value.deinit(self.allocator);
-}
-
 pub fn remove(self: *SingleFlight, transfer: *Transfer) void {
     var it = self.pending.valueIterator();
     while (it.next()) |waiting| {
@@ -216,30 +210,7 @@ test "SingleFlight: take on an unknown key returns null" {
     try testing.expectEqual(null, sf.take("missing"));
 }
 
-test "SingleFlight: abort drops the pending entry without resolving waiters" {
-    var pool = ArenaPool.init(testing.allocator, .{});
-    defer pool.deinit();
-
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
-
-    var sf = SingleFlight{ .allocator = testing.allocator };
-    defer sf.deinit();
-
-    const arena = try pool.acquire(.small, "test");
-    defer pool.release(arena);
-
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    _ = try sf.enter("key", t1, .robots);
-
-    sf.abort("key");
-
-    try testing.expectEqual(0, sf.count());
-    try testing.expectEqual(null, sf.take("key"));
-}
-
-test "SingleFlight: discard is equivalent to abort for the shutdown path" {
+test "SingleFlight: discard for the shutdown path" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
