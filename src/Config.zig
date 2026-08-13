@@ -689,7 +689,7 @@ fn advertiseHostFallback(host: []const u8) []const u8 {
 // resolvable, but the caller still benefits from emitting a guidance log.
 pub fn bindIsWildcard(self: *const Config) bool {
     return switch (self.mode) {
-        .serve => |opts| isHostWildcard(opts.host),
+        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host),
         else => false,
     };
 }
@@ -1037,7 +1037,8 @@ test "Config: advertiseHost honors explicit --advertise-host override" {
         .advertise_host = "192.168.0.5",
     } });
     defer config.deinit(std.testing.allocator);
-    try std.testing.expect(config.bindIsWildcard());
+    // The explicit --advertise-host silences the wildcard guidance log.
+    try std.testing.expect(!config.bindIsWildcard());
     try std.testing.expectEqualStrings("192.168.0.5", config.advertiseHost());
 }
 
