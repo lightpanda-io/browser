@@ -677,7 +677,7 @@ pub fn advertiseHost(self: *const Config) []const u8 {
 // For remote hosts, users can still pin the URL with --advertise-host.
 // See issue #1922.
 fn advertiseHostFallback(host: []const u8) []const u8 {
-    if (std.mem.eql(u8, host, "0.0.0.0") or std.mem.eql(u8, host, "::")) {
+    if (isHostWildcard(host)) {
         return "127.0.0.1";
     }
     return host;
@@ -689,9 +689,13 @@ fn advertiseHostFallback(host: []const u8) []const u8 {
 // resolvable, but the caller still benefits from emitting a guidance log.
 pub fn bindIsWildcard(self: *const Config) bool {
     return switch (self.mode) {
-        .serve => |opts| std.mem.eql(u8, opts.host, "0.0.0.0") or std.mem.eql(u8, opts.host, "::"),
+        .serve => |opts| isHostWildcard(opts.host),
         else => false,
     };
+}
+
+fn isHostWildcard(host: []const u8) bool {
+    return std.mem.eql(u8, host, "0.0.0.0") or std.mem.eql(u8, host, "::");
 }
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
