@@ -29,6 +29,11 @@ const Parser = @This();
 
 reader: *std.Io.Reader,
 first_line: bool = true,
+/// Rule-shaped lines that never became a filter: syntax outside our subset,
+/// malformed rules, and lines too long to read. Blank lines and comments are
+/// not rules, so they never count. The caller adds this to whatever it drops
+/// afterwards, so that "skipped" means every rule the list has and we do not.
+skipped: usize = 0,
 
 pub const Error = error{ OutOfMemory, ReadFailed };
 
@@ -51,7 +56,8 @@ pub fn next(self: *Parser, arena: Allocator) Error!?NetworkFilter {
         const line = std.mem.trim(u8, stripped, &std.ascii.whitespace);
 
         switch (LineClass.fromLine(line)) {
-            .empty, .comment, .unsupported => {},
+            .empty, .comment => {},
+            .unsupported => self.skipped += 1,
             .network => {
                 if (NetworkFilter.parse(arena, line)) |filter| {
                     return filter;
@@ -59,7 +65,7 @@ pub fn next(self: *Parser, arena: Allocator) Error!?NetworkFilter {
                     error.OutOfMemory => return error.OutOfMemory,
                     // Anything else is a line outside the supported subset
                     // or malformed; either way it is not ours to enforce.
-                    else => {},
+                    else => self.skipped += 1,
                 }
             },
         }
@@ -78,6 +84,9 @@ fn takeLine(self: *Parser) error{ReadFailed}!?[]u8 {
         } else |err| switch (err) {
             error.ReadFailed => return error.ReadFailed,
             error.StreamTooLong => {
+                // Counted without knowing what it was: a line we cannot read
+                // is a line we cannot rule out being a filter.
+                self.skipped += 1;
                 // takeDelimiter leaves the stream untouched on StreamTooLong,
                 // so the oversized line still has to be stepped over.
                 _ = self.reader.discardDelimiterInclusive('\n') catch |e| switch (e) {
@@ -169,6 +178,31 @@ test "adblock.Parser: yields one filter per next() call" {
     try testing.expect(try parser.next(arena) == null);
 }
 
+test "adblock.Parser: only rule-shaped lines count as skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var reader: std.Io.Reader = .fixed(
+        \\[Adblock Plus 2.0]
+        \\! Title: Counted
+        \\
+        \\||ads.example.com^
+        \\example.com##.ad-banner
+        \\||bogus.example.com^$notarealoption
+        \\example.com$$script[data-x]
+    );
+    var parser: Parser = .init(&reader);
+
+    var count: usize = 0;
+    while (try parser.next(arena)) |_| count += 1;
+
+    // The header, the comment and the blank line are not rules.
+    try testing.expectEqual(1, count);
+    // The cosmetic filter, the unknown option and the AdGuard line are.
+    try testing.expectEqual(3, parser.skipped);
+}
+
 test "adblock.Parser: a line too long for the buffer is skipped" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -194,6 +228,8 @@ test "adblock.Parser: a line too long for the buffer is skipped" {
     try testing.expectString("tracker.net", second.hostname);
 
     try testing.expect(try parser.next(arena) == null);
+    // It is still a line we could not load, and it says so.
+    try testing.expectEqual(1, parser.skipped);
 }
 
 test "adblock.Parser: full list" {

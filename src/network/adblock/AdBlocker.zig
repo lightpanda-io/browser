@@ -42,6 +42,8 @@ allowed: u32,
 suppressed: u32,
 /// Rules that reached a trie, across every list parsed so far.
 rules_loaded: usize,
+/// Rules the lists carry and we do not apply, across those same lists: the
+/// ones the parser could not read, plus the ones no trie can express.
 rules_skipped: usize,
 
 /// Read buffer for filter lists, and therefore the longest line we can see.
@@ -117,6 +119,10 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
     const scratch = scratch_instance.allocator();
 
     var parser: Parser = .init(reader);
+    // Lines the parser dropped are rules we did not load just as much as the
+    // ones we drop below, and on a real list they are the bulk of them.
+    defer self.rules_skipped += parser.skipped;
+
     while (try parser.next(scratch)) |filter| {
         // Nothing survives the iteration but the trie entry, so the
         // scratch arena is recycled rather than grown per filter.
@@ -222,10 +228,11 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     // its hostname instead of allowing it.
     try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
 
-    // The block and the exception. The cosmetic line never parsed as a
-    // filter, so it is not a rule we dropped.
+    // The block and the exception loaded; the cosmetic line is a rule the
+    // list carries and we do not apply, so it counts as skipped even though
+    // it never reached a trie.
     try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(0, blocker.rules_skipped);
+    try testing.expectEqual(1, blocker.rules_skipped);
 
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
@@ -235,7 +242,7 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
     // The counts carry across lists, like the entries do.
     try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(1, blocker.rules_skipped);
+    try testing.expectEqual(2, blocker.rules_skipped);
     // The first list's entries survived the second parse.
     try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
 }
