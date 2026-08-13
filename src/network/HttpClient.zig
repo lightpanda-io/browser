@@ -2742,7 +2742,7 @@ pub const Transfer = struct {
     // setHeader/appendHeader let a source overwrite headers from its own or
     // a lower layer, never a higher one. .fixed is hardcoded and can't be
     // changed (Sec-Ch-Ua). For CORS, only script-set headers cause a preflight.
-    pub const HeaderSource = enum { user_agent, author, cdp, fixed };
+    pub const HeaderSource = enum { user_agent, author, cdp, cli, fixed };
 
     pub const HeaderOpts = struct {
         source: HeaderSource = .user_agent,
@@ -2842,6 +2842,12 @@ pub const Transfer = struct {
     fn seedHeaders(self: *Transfer) !void {
         for (self.client.baselineHeaders()) |hdr| {
             try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
+        }
+
+        // --http-header extras; setHeader so a same-name header (e.g.
+        // Accept-Language) overrides the baseline instead of duplicating.
+        for (self.client.network.config.httpHeaders()) |hdr| {
+            try self.setHeader(hdr.name, hdr.value, .{ .source = .cli });
         }
     }
 

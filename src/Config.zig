@@ -24,6 +24,7 @@ const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const HttpHeader = @import("network/http.zig").Header;
 
 const log = lp.log;
 const crypto = @import("sys/libcrypto.zig");
@@ -83,6 +84,29 @@ fn logLevelValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?l
         log.fatal(.app, "invalid option choice", .{ .arg = "--log-level", .value = str });
         return error.InvalidArgument;
     };
+}
+
+fn httpHeaderValidator(allocator: Allocator, args: *std.process.Args.Iterator, list: *std.ArrayList(HttpHeader)) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const header = HttpHeader.parse(str) orelse {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "expected \"Name: Value\"" });
+        return error.InvalidArgument;
+    };
+
+    if (std.ascii.eqlIgnoreCase(header.name, "User-Agent")) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Use --user-agent instead" });
+        return error.InvalidArgument;
+    }
+
+    if (std.ascii.eqlIgnoreCase(header.name, "Sec-Ch-Ua")) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Sec-Ch-Ua is not oevrridable" });
+        return error.InvalidArgument;
+    }
+
+    try list.append(allocator, .{
+        .name = try allocator.dupe(u8, header.name),
+        .value = try allocator.dupe(u8, header.value),
+    });
 }
 
 const Cert = struct {
@@ -183,6 +207,7 @@ const CommonOptions = .{
     .{ .name = "http_max_host_open", .type = ?u8 },
     .{ .name = "http_timeout", .type = ?u31 },
     .{ .name = "http_connect_timeout", .type = ?u31 },
+    .{ .name = "http_header", .type = HttpHeader, .multiple = true, .validator = httpHeaderValidator },
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
@@ -504,6 +529,13 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         .version => null,
         else => unreachable,
+    };
+}
+
+pub fn httpHeaders(self: *const Config) []const HttpHeader {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_header.items,
+        else => &.{},
     };
 }
 
@@ -1063,6 +1095,29 @@ test "Config: validateUserAgent" {
     try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
     try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
+}
+
+test "Config: httpHeaders accessor" {
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(0, config.httpHeaders().len);
+    }
+    {
+        var list: std.ArrayList(HttpHeader) = .empty;
+        defer list.deinit(std.testing.allocator);
+        try list.append(std.testing.allocator, .{ .name = "X-Extra", .value = "1" });
+
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .http_header = list,
+        } });
+        defer config.deinit(std.testing.allocator);
+
+        const headers = config.httpHeaders();
+        try std.testing.expectEqual(1, headers.len);
+        try std.testing.expectEqualStrings("X-Extra", headers[0].name);
+        try std.testing.expectEqualStrings("1", headers[0].value);
+    }
 }
 
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {

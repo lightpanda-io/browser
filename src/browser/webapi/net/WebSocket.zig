@@ -240,7 +240,6 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
     for (http_client.baselineHeaders()) |hdr| {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
-
     if (protocols.len > 0) {
         try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
     }
