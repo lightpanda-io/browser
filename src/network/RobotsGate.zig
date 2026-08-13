@@ -90,6 +90,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
 
     const owned_url = try arena.dupeZ(u8, robots_url);
     const result = try self.single_flight.enter(owned_url, transfer, .robots);
+    errdefer self.single_flight.discard(owned_url);
     if (result == .queued) {
         // Someone else already owns an in-flight fetch for this key
         // (under its own, earlier-allocated owned_url). This arena was
