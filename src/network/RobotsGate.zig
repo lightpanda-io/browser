@@ -143,7 +143,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
 // whose body never got parsed) fails open.
 fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
     var queued = self.single_flight.take(robots_url) orelse return;
-    defer queued.deinit(self.allocator);
+    defer queued.deinit(self.single_flight.allocator);
 
     const robot_entry = self.network.robot_store.get(robots_url);
     for (queued.items) |transfer| {
