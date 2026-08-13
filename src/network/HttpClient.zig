@@ -222,7 +222,10 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
-        .robots = .{ .allocator = allocator, .network = network },
+        .robots = .{
+            .network = network,
+            .single_flight = .init(allocator),
+        },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
@@ -422,7 +425,7 @@ pub fn abort(self: *Client) void {
         std.debug.assert(self.ws_dispatch_queue.first == null);
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
-        std.debug.assert(self.robots.pending.count() == 0);
+        std.debug.assert(self.robots.single_flight.count() == 0);
     }
 }
 
@@ -3386,7 +3389,10 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
-    client.robots = .{ .allocator = testing.allocator, .network = undefined };
+    client.robots = .{
+        .network = undefined,
+        .single_flight = .init(testing.allocator),
+    };
     client.url_blocklist = null;
 }
 
@@ -3578,8 +3584,8 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
 }
 
 test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
-    // Regression: RobotsGate.pending kept a raw *Transfer with nothing
-    // removing it when a parked transfer was aborted out-of-band
+    // Regression: RobotsGate's single-flight map kept a raw *Transfer with
+    // nothing removing it when a parked transfer was aborted out-of-band
     // (xhr.abort(), owner teardown). The robots.txt resolution would then
     // unpark freed memory.
     var pool = ArenaPool.init(testing.allocator, .{});
@@ -3594,7 +3600,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
 
     const robots_url = "http://example.com/robots.txt";
 
-    var waiting: std.ArrayList(*Transfer) = .empty;
+    var transfers: [2]*Transfer = undefined;
     for (0..2) |i| {
         const arena = try pool.acquire(.small, "test");
         const transfer = try arena.create(Transfer);
@@ -3617,21 +3623,22 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .start_time = 0,
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
-        try waiting.append(testing.allocator, transfer);
-        transfer.park(.robots);
+        transfers[i] = transfer;
     }
-    try client.robots.pending.putNoClobber(testing.allocator, robots_url, waiting);
 
-    const t1 = client.robots.pending.get(robots_url).?.items[0];
-    const t2 = client.robots.pending.get(robots_url).?.items[1];
+    _ = try client.robots.single_flight.enter(robots_url, transfers[0], .robots);
+    _ = try client.robots.single_flight.enter(robots_url, transfers[1], .robots);
+
+    const t1 = transfers[0];
+    const t2 = transfers[1];
 
     t1.abort(error.Abort);
-    try testing.expectEqual(1, client.robots.pending.get(robots_url).?.items.len);
-    try testing.expect(client.robots.pending.get(robots_url).?.items[0] == t2);
+    try testing.expectEqual(1, client.robots.single_flight.pending.get(robots_url).?.items.len);
+    try testing.expect(client.robots.single_flight.pending.get(robots_url).?.items[0] == t2);
     try testing.expectEqual(1, client.transfers.count());
 
     t2.abort(error.Abort);
-    try testing.expectEqual(0, client.robots.pending.get(robots_url).?.items.len);
+    try testing.expectEqual(0, client.robots.single_flight.pending.get(robots_url).?.items.len);
     try testing.expectEqual(0, client.transfers.count());
 }
 
