@@ -16,6 +16,10 @@ By default the build compiles V8 from source, which takes several minutes. Run
 [`zig-v8-fork`](https://github.com/lightpanda-io/zig-v8-fork/releases) releases
 instead; later `make build` / `make test` pick it up automatically.
 
+On Linux x86_64, `make download-v8-shared` additionally fetches the shared
+flavor (`libc_v8.so`) that `zig build -Ddev_fast=true` picks up automatically
+for much faster debug rebuilds.
+
 ## Before opening a PR
 
 - [ ] Tests pass (`make test`).

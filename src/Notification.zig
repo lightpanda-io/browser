@@ -223,6 +223,7 @@ pub const FrameLoaded = struct {
 
 pub const RequestStart = struct {
     transfer: *Transfer,
+    redirect_response: bool = false,
 };
 
 pub const RequestIntercept = struct {

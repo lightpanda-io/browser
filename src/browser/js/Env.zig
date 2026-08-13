@@ -427,6 +427,20 @@ pub fn runMicrotasks(self: *Env) void {
         while (i < self.contexts.items.len) : (i += 1) {
             const ctx = self.contexts.items[i];
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+
+            if (self.terminatePending()) {
+                if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+                    for (self.contexts.items) |c| {
+                        if (c.call_depth > 0) {
+                            return;
+                        }
+                    }
+                    // None of the contexts are "entered", it's safe to
+                    // clear the termination flag.
+                    v8.v8__Isolate__CancelTerminateExecution(v8_isolate);
+                }
+                return;
+            }
         }
     }
 }

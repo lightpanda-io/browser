@@ -36,6 +36,10 @@ app: *App,
 max_connections: usize,
 json_version_response: []const u8,
 
+// Number of active CDP conns, used to enforce the cdp-max-connections limit.
+active_conns: std.atomic.Value(u32) = .init(0),
+// Number of existing threads, used to deinit correctly.
+// It can be higher than active_conns b/c we free conn slots early.
 active_threads: std.atomic.Value(u32) = .init(0),
 
 cdps: std.ArrayList(*CDP) = .empty,
@@ -147,7 +151,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
         return error.ShuttingDown;
     }
 
-    // Atomically increment active_threads only if below max_connections.
+    // Atomically increment active_conns only if below max_connections.
     // Uses CAS loop to avoid race between checking the limit and incrementing.
     //
     // cmpxchgWeak may fail for two reasons:
@@ -155,18 +159,21 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     // 2. Spurious failure on some architectures (e.g. ARM)
     //
     // We use Weak instead of Strong because we need a retry loop anyway:
-    // if CAS fails because a thread finished (counter decreased), we should
+    // if CAS fails because a conn slot was freed (counter decreased), we should
     // retry rather than return an error - there may now be room for a new connection.
     //
     // On failure, cmpxchgWeak returns the actual value, which we reuse to avoid
     // an extra load on the next iteration.
-    var current = self.active_threads.load(.monotonic);
+    var current = self.active_conns.load(.monotonic);
     while (current < self.max_connections) {
-        current = self.active_threads.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
+        current = self.active_conns.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
         lp.metrics.cdp_connection_limit.incr();
-        return error.MaxThreadsReached;
+        return error.MaxConnectionsReached;
     }
+    errdefer _ = self.active_conns.fetchSub(1, .monotonic);
+
+    _ = self.active_threads.fetchAdd(1, .monotonic);
     errdefer _ = self.active_threads.fetchSub(1, .monotonic);
 
     const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, socket });
@@ -174,6 +181,12 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
 }
 
 fn handleConnection(self: *Server, socket: posix.socket_t) void {
+    var active_conns_early_release = false;
+    defer {
+        if (!active_conns_early_release) {
+            _ = self.active_conns.fetchSub(1, .monotonic);
+        }
+    }
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer _ = std.c.close(socket);
 
@@ -278,13 +291,21 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         };
         if (!next) break;
     }
+
+    // try to release the connection as soon as possible.
+    active_conns_early_release = true;
+    _ = self.active_conns.fetchSub(1, .monotonic);
 }
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
-    if (std.mem.eql(u8, host, "0.0.0.0")) {
-        log.info(.cdp, "unreachable advertised host", .{
-            .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
+    if (app.config.bindIsWildcard()) {
+        // Serve is bound to INADDR_ANY but no --advertise-host was given;
+        // advertiseHost() falls back to 127.0.0.1 so clients can still
+        // connect locally. Surface the trade-off so users running
+        // outside the same host know they have to opt in.
+        log.note(.cdp, "advertising loopback for wildcard bind", .{
+            .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
         });
     }
     const body_format =

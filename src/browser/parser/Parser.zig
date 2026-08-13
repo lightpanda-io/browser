@@ -684,7 +684,7 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 if (comptime lp.IS_DEBUG) {
                     unreachable;
                 }
-                self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+                self.frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
             }
             try self.frame.appendNew(parent, child);
         },
@@ -757,7 +757,7 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
                 // A custom element constructor may have inserted the node into the
                 // DOM before the parser officially places it (e.g. via foster
                 // parenting). Detach it first so insertNodeRelative's assertion holds.
-                self.frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+                self.frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
             }
             break :blk child;
         },

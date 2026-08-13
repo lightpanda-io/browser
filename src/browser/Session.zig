@@ -161,10 +161,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer arena.release();
 
     const navigation = try Factory.chainedWithAllocator(arena.allocator(), .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .navigation },
         Navigation{ ._proto = undefined },
     });
-    navigation._proto._type = .{ .navigation = navigation };
 
     self.* = .{
         .arena = arena,

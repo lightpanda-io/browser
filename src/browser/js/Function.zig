@@ -347,6 +347,130 @@ test "Function: requested termination is classified and blocks re-entry" {
     try testing.expectEqual(3, try (try local.exec("1 + 2", null)).toI32());
 }
 
+test "Function: nested microtask checkpoint keeps the caller's termination" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *js.Env,
+        local: *const js.Local,
+        resumed: bool = false,
+
+        fn kill(self: *@This()) void {
+            self.env.requestTerminate();
+        }
+
+        // Draining the queue from a native call runs at call depth >= 1, with
+        // the caller's JS still on the stack. A terminate landing in here is
+        // aimed at that caller too, so the checkpoint must not clear it.
+        fn pump(self: *@This()) void {
+            self.local.runMicrotasks();
+        }
+
+        fn markResumed(self: *@This()) void {
+            self.resumed = true;
+        }
+    };
+    var state = State{ .env = env, .local = local };
+
+    const driver = try local.exec(
+        \\(function(kill, pump, resumed) {
+        \\  Promise.resolve().then(function(){ kill(); for(;;){} });
+        \\  pump();
+        \\  resumed();
+        \\})
+    , null);
+    const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
+
+    var caught: js.TryCatch.Caught = .{};
+    const args = .{
+        local.newCallback(State.kill, &state),
+        local.newCallback(State.pump, &state),
+        local.newCallback(State.markResumed, &state),
+    };
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, args, &caught));
+    try testing.expectEqual(false, state.resumed);
+    try testing.expectEqual(true, env.terminatePending());
+}
+
+test "Function: a terminated checkpoint stops the context loop" {
+    const frame = try testing.createFrame();
+    const other = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    // The second context's queue is the one the loop must not go on to reach:
+    // entering a checkpoint on a terminating isolate consumes the termination,
+    // which would let the wedged caller below resume.
+    {
+        var other_ls: js.Local.Scope = undefined;
+        other.js.localScope(&other_ls);
+        defer other_ls.deinit();
+        try other_ls.local.eval(
+            \\window.__ran = false;
+            \\Promise.resolve().then(function(){ window.__ran = true; });
+        , null);
+    }
+
+    const State = struct {
+        env: *js.Env,
+        local: *const js.Local,
+        resumed: bool = false,
+
+        fn kill(self: *@This()) void {
+            self.env.requestTerminate();
+        }
+
+        fn pump(self: *@This()) void {
+            self.local.runMicrotasks();
+        }
+
+        fn markResumed(self: *@This()) void {
+            self.resumed = true;
+        }
+    };
+    var state = State{ .env = env, .local = local };
+
+    const driver = try local.exec(
+        \\(function(kill, pump, resumed) {
+        \\  Promise.resolve().then(function(){ kill(); for(;;){} });
+        \\  pump();
+        \\  resumed();
+        \\})
+    , null);
+    const driver_fn = Function{ .local = local, .handle = @ptrCast(driver.handle) };
+
+    var caught: js.TryCatch.Caught = .{};
+    const args = .{
+        local.newCallback(State.kill, &state),
+        local.newCallback(State.pump, &state),
+        local.newCallback(State.markResumed, &state),
+    };
+    try testing.expectError(error.ExecutionTerminated, driver_fn.tryCall(void, args, &caught));
+    try testing.expectEqual(false, state.resumed);
+
+    env.cancelTerminate();
+    var other_ls: js.Local.Scope = undefined;
+    other.js.localScope(&other_ls);
+    defer other_ls.deinit();
+    try testing.expectEqual(false, (try other_ls.local.exec("window.__ran", null)).toBool());
+}
+
 // A cheap, copyable handle to a persisted function. See js.GlobalSlot.
 pub const Global = struct {
     slot: *js.GlobalSlot,

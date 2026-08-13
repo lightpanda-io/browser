@@ -174,7 +174,7 @@ pub const Build = struct {
         var child_it = source._content.asNode().childrenIterator();
         while (child_it.next()) |child| {
             if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                try frame.appendNode(clone_content, cloned_child, .{ .child_already_connected = true });
+                try frame.appendNode(clone_content, cloned_child, .{});
             }
         }
     }

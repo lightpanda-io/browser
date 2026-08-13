@@ -68,7 +68,7 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
 
     const event_ptr = chain.get(0);
     event_ptr.* = .{
-        ._type = unionInit(EventTarget.Type, chain.get(1)),
+        ._type = typeInit(EventTarget, chain.get(1)),
     };
     chain.setLeaf(1, child);
 

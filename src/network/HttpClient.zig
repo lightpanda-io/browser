@@ -1466,7 +1466,23 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             if (msg.conn.getResponseHeader("location", 0)) |location| switch (transfer.req.redirect) {
                 .follow => {
                     transfer.restoreInterceptHeaders();
+                    // Preserve the completed 3xx response until the redirected
+                    // requestWillBeSent event has been serialized. reset() below
+                    // clears it before the next network attempt.
+                    try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
                     try transfer.handleRedirect(location.value);
+
+                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
+
+                    if (self.serve_mode) { // e.g. cdp
+                        // Chromium announces each redirect hop before pausing it
+                        // for Fetch interception. Playwright uses redirectResponse
+                        // to pair the new pause with a new Request.
+                        transfer.req.notification.dispatch(.http_request_start, &.{
+                            .transfer = transfer,
+                            .redirect_response = true,
+                        });
+                    }
 
                     if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
                         log.warn(.http, "blocked url", .{ .url = transfer.req.url });
@@ -1476,8 +1492,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         return true;
                     }
 
-                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
-
                     if (self.serve_mode) { // e.g. cdp
                         var wait_for_interception = false;
                         transfer.req.notification.dispatch(.http_request_intercept, &.{
@@ -1486,8 +1500,6 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         });
 
                         if (wait_for_interception) {
-                            transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
-
                             // Same shape as the auth-interception park above:
                             // give up the connection, wait for the CDP client.
                             self.removeConn(msg.conn);
@@ -1545,7 +1557,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         return true;
     }
 
-    try transfer.materializeResponse(msg.conn);
+    try transfer.materializeResponse(msg.conn, .{});
 
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
@@ -2433,7 +2445,11 @@ pub const Transfer = struct {
     // Copy everything the response needs out of the conn and into the
     // transfer arena. After this, delivery never touches libcurl state —
     // the conn can be released and reused before the consumer sees a byte.
-    fn materializeResponse(self: *Transfer, conn: *http.Connection) !void {
+    const MaterializeResponseOpts = struct {
+        check_content_length: bool = true,
+    };
+
+    fn materializeResponse(self: *Transfer, conn: *http.Connection, opts: MaterializeResponseOpts) !void {
         if (self.res.stream.started) {
             // Streaming: already materialized at the first delivered chunk.
             return;
@@ -2469,9 +2485,11 @@ pub const Transfer = struct {
             }
         }
 
-        if (self.getContentLength()) |cl| {
-            if (cl > self.client.max_response_size) {
-                return error.ResponseTooLarge;
+        if (opts.check_content_length) {
+            if (self.getContentLength()) |cl| {
+                if (cl > self.client.max_response_size) {
+                    return error.ResponseTooLarge;
+                }
             }
         }
     }
@@ -2594,17 +2612,7 @@ pub const Transfer = struct {
         const req = &transfer.req;
         const conn = transfer._conn.?;
 
-        // retrieve cookies from the redirect's response.
-        if (req.cookie_jar) |jar| {
-            var i: usize = 0;
-            while (conn.getResponseHeader("set-cookie", i)) |ct| : (i += 1) {
-                try jar.populateFromResponse(transfer.req.url, ct.value);
-
-                if (i >= ct.amount) {
-                    break;
-                }
-            }
-        }
+        // Cookies were applied while materializing the redirect response.
 
         // A Referrer-Policy header on a redirect response applies to the
         // remaining hops.
@@ -2901,7 +2909,7 @@ pub const Transfer = struct {
         const res = &self.res;
         if (res.stream.started == false) {
             // we haven't delivered the start/header events yet
-            try self.materializeResponse(conn);
+            try self.materializeResponse(conn, .{});
             try self._events.ensureUnusedCapacity(self.arena.allocator(), 3);
             self._events.appendAssumeCapacity(.start);
             self._events.appendAssumeCapacity(.header);

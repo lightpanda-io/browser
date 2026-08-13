@@ -322,10 +322,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     const target = self._dispatch_target orelse self._target orelse return &.{};
 
     // Only nodes have a propagation path
-    const target_node = switch (target._type) {
-        .node => |n| n,
-        else => return &.{},
-    };
+    const target_node = target.is(Node) orelse return &.{};
 
     const frame_ = switch (exec.js.global) {
         .frame => |frame| frame,
@@ -341,9 +338,9 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Window follows the document at the end of the path. A path that stopped
     // early — at a shadow boundary, or at the relatedTarget — doesn't end on
     // the document and so doesn't reach it.
-    const root_is_document = switch (path_buffer[path_len - 1]._type) {
-        .node => |n| n._type == .document,
-        else => false,
+    const root_is_document = blk: {
+        const root = path_buffer[path_len - 1].is(Node) orelse break :blk false;
+        break :blk root._type == .document;
     };
     if (root_is_document and path_len < path_buffer.len) {
         if (frame_) |frame| {
@@ -356,10 +353,7 @@ pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // it is inside that root and hidden from a currentTarget outside it.
     var closed_host_index: ?usize = null;
     for (path_buffer[0..path_len], 0..) |entry, i| {
-        const node = switch (entry._type) {
-            .node => |n| n,
-            else => continue,
-        };
+        const node = entry.is(Node) orelse continue;
         const shadow = node.is(Node.ShadowRoot) orelse continue;
         if (shadow._mode == .closed) {
             closed_host_index = i + 1;

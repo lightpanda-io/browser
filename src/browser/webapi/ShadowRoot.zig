@@ -19,10 +19,12 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
+
 const Node = @import("Node.zig");
-const DocumentFragment = @import("DocumentFragment.zig");
 const Element = @import("Element.zig");
+const DocumentFragment = @import("DocumentFragment.zig");
 
 const ShadowRoot = @This();
 
@@ -110,6 +112,10 @@ pub fn getSerializable(self: *const ShadowRoot) bool {
 
 pub fn setHTMLUnsafe(self: *ShadowRoot, html: []const u8, frame: *Frame) !void {
     return self.asDocumentFragment().setHTMLUnsafe(html, frame);
+}
+
+pub fn getHTML(self: *ShadowRoot, opts: dump.Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
+    return dump.getHTML(self.asNode(), opts, writer, frame);
 }
 
 pub fn getOnSlotChange(self: *ShadowRoot, frame: *Frame) ?js.Function.Global {
@@ -214,6 +220,20 @@ pub const JsApi = struct {
     }
     pub const adoptedStyleSheets = bridge.accessor(ShadowRoot.getAdoptedStyleSheets, ShadowRoot.setAdoptedStyleSheets, .{});
     pub const setHTMLUnsafe = bridge.function(ShadowRoot.setHTMLUnsafe, .{ .ce_reactions = true });
+    pub const getHTML = bridge.function(_getHTML, .{});
+    const GetHTMLOpts = struct {
+        serializableShadowRoots: bool = false,
+        shadowRoots: []const *ShadowRoot = &.{},
+    };
+    fn _getHTML(self: *ShadowRoot, opts_: ?GetHTMLOpts, frame: *Frame) ![]const u8 {
+        const opts = opts_ orelse GetHTMLOpts{};
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        try self.getHTML(.{
+            .shadow_roots = opts.shadowRoots,
+            .serializable_shadow_roots = opts.serializableShadowRoots,
+        }, &buf.writer, frame);
+        return buf.written();
+    }
     pub const onslotchange = bridge.accessor(ShadowRoot.getOnSlotChange, ShadowRoot.setOnSlotChange, .{});
 };
 

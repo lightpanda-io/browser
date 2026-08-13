@@ -36,7 +36,7 @@ pub const Opts = struct {
         invisible: bool = false,
     };
 
-    pub const Shadow = enum {
+    pub const Shadow = union(enum) {
         // Skip shadow DOM entirely (innerHTML/outerHTML)
         skip,
 
@@ -45,6 +45,16 @@ pub const Opts = struct {
 
         // Resolve slot elements (like what actually gets rendered)
         rendered,
+
+        // Element/ShadowRoot.getHTML can control how it handles shadow elements
+        declarative: Declarative,
+
+        pub const Declarative = struct {
+            // Serialize shadow roots whose `serializable` flag is set
+            serializable_shadow_roots: bool = false,
+            // Serialize these roots regardless of their flags or mode
+            shadow_roots: []const *Node.ShadowRoot = &.{},
+        };
     };
 };
 
@@ -125,20 +135,30 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                     return writer.writeAll("</slot>");
                 }
             }
-            if (opts.shadow != .skip) {
-                if (frame._element_shadow_roots.get(el)) |shadow| {
-                    try children(shadow.asNode(), opts, writer, frame);
-                    // In rendered mode, light DOM is only shown through slots, not directly
-                    if (opts.shadow == .rendered) {
-                        // Skip rendering light DOM children
-                        if (!isVoidElement(el)) {
-                            try writer.writeAll("</");
-                            try writer.writeAll(el.getTagNameDump());
-                            try writer.writeByte('>');
+            switch (opts.shadow) {
+                .skip => {},
+                .complete, .rendered => {
+                    if (frame._element_shadow_roots.get(el)) |shadow| {
+                        try children(shadow.asNode(), opts, writer, frame);
+                        // In rendered mode, light DOM is only shown through slots, not directly
+                        if (opts.shadow == .rendered) {
+                            // Skip rendering light DOM children
+                            if (!isVoidElement(el)) {
+                                try writer.writeAll("</");
+                                try writer.writeAll(el.getTagNameDump());
+                                try writer.writeByte('>');
+                            }
+                            return;
                         }
-                        return;
                     }
-                }
+                },
+                .declarative => |declarative| {
+                    if (frame._element_shadow_roots.get(el)) |shadow| {
+                        if (shouldSerializeShadow(shadow, declarative)) {
+                            try writeDeclarativeShadow(shadow, opts, writer, frame);
+                        }
+                    }
+                },
             }
 
             if (opts.with_frames and el.is(IFrame) != null) {
@@ -199,6 +219,22 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
     }
 }
 
+// Element.getHTML / ShadowRoot.getHTML
+pub fn getHTML(node: *Node, declarative: Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
+    const opts = Opts{ .shadow = .{ .declarative = declarative } };
+    if (node.is(Node.Element)) |el| {
+        if (frame._element_shadow_roots.get(el)) |shadow| {
+            if (shouldSerializeShadow(shadow, declarative)) {
+                // if the element's shadowroot tree is rendered before its
+                // children (assume the opts say that it should serialize the
+                // shadowroot at all (i.e. shouldSerializeShadow).
+                try writeDeclarativeShadow(shadow, opts, writer, frame);
+            }
+        }
+    }
+    return children(node, opts, writer, frame);
+}
+
 pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     var it = parent.childrenIterator();
     while (it.next()) |child| {
@@ -245,6 +281,39 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
     }
     try writer.endArray();
     try writer.endObject();
+}
+
+fn shouldSerializeShadow(shadow: *const Node.ShadowRoot, declarative: Opts.Shadow.Declarative) bool {
+    if (declarative.serializable_shadow_roots and shadow._serializable) {
+        return true;
+    }
+    for (declarative.shadow_roots) |sr| {
+        if (sr == shadow) {
+            // if it's explictly requested, it's serialized even if _serialized == false
+            return true;
+        }
+    }
+    return false;
+}
+
+// The spec's "attach a declarative shadow root" serialization: attribute order
+// is fixed, and boolean attributes serialize with an explicit ="".
+fn writeDeclarativeShadow(shadow: *Node.ShadowRoot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    try writer.writeAll("<template shadowrootmode=\"");
+    try writer.writeAll(@tagName(shadow._mode));
+    try writer.writeByte('"');
+    if (shadow._delegates_focus) {
+        try writer.writeAll(" shadowrootdelegatesfocus=\"\"");
+    }
+    if (shadow._serializable) {
+        try writer.writeAll(" shadowrootserializable=\"\"");
+    }
+    if (shadow._clonable) {
+        try writer.writeAll(" shadowrootclonable=\"\"");
+    }
+    try writer.writeByte('>');
+    try children(shadow.asNode(), opts, writer, frame);
+    try writer.writeAll("</template>");
 }
 
 fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
