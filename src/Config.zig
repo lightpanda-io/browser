@@ -663,10 +663,39 @@ pub fn port(self: *const Config) u16 {
 
 pub fn advertiseHost(self: *const Config) []const u8 {
     return switch (self.mode) {
-        .serve => |opts| opts.advertise_host orelse opts.host,
+        .serve => |opts| opts.advertise_host orelse advertiseHostFallback(opts.host),
         .mcp => "127.0.0.1",
         else => unreachable,
     };
+}
+
+// Wildcard bind addresses (0.0.0.0, ::) are not routable for clients
+// resolving /json/version. Fall back to a loopback address so the
+// advertised webSocketDebuggerUrl is at least connectable from the same
+// host (covers the official Docker image, which exposes 9222 via the
+// container's published port, and the WSL localhost bridge).
+// For remote hosts, users can still pin the URL with --advertise-host.
+// See issue #1922.
+fn advertiseHostFallback(host: []const u8) []const u8 {
+    if (isHostWildcard(host)) {
+        return "127.0.0.1";
+    }
+    return host;
+}
+
+// True when serve is binding a wildcard address (e.g. Docker --host
+// 0.0.0.0) without an explicit --advertise-host. /json/version replaces
+// the wildcard with 127.0.0.1 in advertiseHostFallback so the URL stays
+// resolvable, but the caller still benefits from emitting a guidance log.
+pub fn bindIsWildcard(self: *const Config) bool {
+    return switch (self.mode) {
+        .serve => |opts| opts.advertise_host == null and isHostWildcard(opts.host),
+        else => false,
+    };
+}
+
+fn isHostWildcard(host: []const u8) bool {
+    return std.mem.eql(u8, host, "0.0.0.0") or std.mem.eql(u8, host, "::");
 }
 
 pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
@@ -978,6 +1007,48 @@ test "Config: blockedUrlPatterns splits comma-separated patterns" {
     try std.testing.expectEqualStrings("*doubleclick*", patterns.next().?);
     try std.testing.expectEqualStrings("*://*/*.png", patterns.next().?);
     try std.testing.expectEqual(null, patterns.next());
+}
+
+// /json/version must never advertise a wildcard bind address because
+// clients (Chromedp, Playwright MCP, etc.) cannot dial 0.0.0.0/::. See
+// issue #1922.
+test "Config: advertiseHost falls back to loopback for wildcard binds" {
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .host = "0.0.0.0",
+        } });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expect(config.bindIsWildcard());
+        try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
+    }
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .host = "::",
+        } });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expect(config.bindIsWildcard());
+        try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
+    }
+}
+
+test "Config: advertiseHost honors explicit --advertise-host override" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .host = "0.0.0.0",
+        .advertise_host = "192.168.0.5",
+    } });
+    defer config.deinit(std.testing.allocator);
+    // The explicit --advertise-host silences the wildcard guidance log.
+    try std.testing.expect(!config.bindIsWildcard());
+    try std.testing.expectEqualStrings("192.168.0.5", config.advertiseHost());
+}
+
+test "Config: advertiseHost preserves concrete host when not a wildcard" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .host = "127.0.0.1",
+    } });
+    defer config.deinit(std.testing.allocator);
+    try std.testing.expect(!config.bindIsWildcard());
+    try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {
