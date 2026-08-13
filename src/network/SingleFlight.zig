@@ -120,7 +120,7 @@ test "SingleFlight: enter returns initial for the first waiter" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -128,9 +128,9 @@ test "SingleFlight: enter returns initial for the first waiter" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const t2 = try makeTestTransfer(arena, &client, 2);
-    const t3 = try makeTestTransfer(arena, &client, 3);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const t2 = try makeTestTransfer(arena, client, 2);
+    const t3 = try makeTestTransfer(arena, client, 3);
 
     try testing.expectEqual(.initial, try sf.enter("key", t1, .robots));
     try testing.expectEqual(.queued, try sf.enter("key", t2, .robots));
@@ -146,7 +146,7 @@ test "SingleFlight: different keys get independent entries" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -154,8 +154,8 @@ test "SingleFlight: different keys get independent entries" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const t2 = try makeTestTransfer(arena, &client, 2);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const t2 = try makeTestTransfer(arena, client, 2);
 
     try testing.expectEqual(.initial, try sf.enter("key-a", t1, .robots));
     try testing.expectEqual(.initial, try sf.enter("key-b", t2, .robots));
@@ -167,7 +167,7 @@ test "SingleFlight: take removes and returns the waiter list" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -175,8 +175,8 @@ test "SingleFlight: take removes and returns the waiter list" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const t2 = try makeTestTransfer(arena, &client, 2);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const t2 = try makeTestTransfer(arena, client, 2);
 
     _ = try sf.enter("key", t1, .robots);
     _ = try sf.enter("key", t2, .robots);
@@ -204,7 +204,7 @@ test "SingleFlight: discard for the shutdown path" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -212,8 +212,8 @@ test "SingleFlight: discard for the shutdown path" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const t2 = try makeTestTransfer(arena, &client, 2);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const t2 = try makeTestTransfer(arena, client, 2);
     _ = try sf.enter("key", t1, .robots);
     _ = try sf.enter("key", t2, .robots);
 
@@ -229,7 +229,7 @@ test "SingleFlight: remove unlinks a single waiter from its key's list" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -237,9 +237,9 @@ test "SingleFlight: remove unlinks a single waiter from its key's list" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const t2 = try makeTestTransfer(arena, &client, 2);
-    const t3 = try makeTestTransfer(arena, &client, 3);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const t2 = try makeTestTransfer(arena, client, 2);
+    const t3 = try makeTestTransfer(arena, client, 3);
 
     _ = try sf.enter("key", t1, .robots);
     _ = try sf.enter("key", t2, .robots);
@@ -259,7 +259,7 @@ test "SingleFlight: remove on a transfer not in any list is a no-op" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -267,8 +267,8 @@ test "SingleFlight: remove on a transfer not in any list is a no-op" {
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
-    const stray = try makeTestTransfer(arena, &client, 2);
+    const t1 = try makeTestTransfer(arena, client, 1);
+    const stray = try makeTestTransfer(arena, client, 2);
 
     _ = try sf.enter("key", t1, .robots);
 
@@ -290,7 +290,7 @@ test "SingleFlight: removing every waiter for a key leaves an empty (but present
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client = testing.test_browser.http_client;
+    const client = &testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -298,7 +298,7 @@ test "SingleFlight: removing every waiter for a key leaves an empty (but present
     const arena = try pool.acquire(.small, "test");
     defer pool.release(arena);
 
-    const t1 = try makeTestTransfer(arena, &client, 1);
+    const t1 = try makeTestTransfer(arena, client, 1);
     _ = try sf.enter("key", t1, .robots);
 
     sf.remove(t1);
