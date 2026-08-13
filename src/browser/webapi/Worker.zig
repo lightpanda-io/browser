@@ -274,10 +274,17 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // error.Abort is not a load failure: terminate() (or worker teardown)
+    // cancelled a still-inflight script fetch. Per spec a terminated worker
+    // fires no further events, so no error event either — Chrome is silent
+    // here, and challenge scripts do probe this exact sequence.
+    const is_abort = err == error.Abort;
+    if (!is_abort) {
+        log.err(.browser, "worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onmessage will never be registered.
     // Drain any buffered messages so they get dispatched (and silently
@@ -286,7 +293,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    if (!is_abort) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {

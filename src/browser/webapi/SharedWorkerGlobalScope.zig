@@ -252,10 +252,14 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "shared worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // error.Abort means teardown (deinit) cancelled a still-inflight script
+    // fetch — a cancellation, not a load failure.
+    if (err != error.Abort) {
+        log.err(.browser, "shared worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onconnect will never be registered.
     // Drain the buffered connects so they get dispatched (and dropped at the
