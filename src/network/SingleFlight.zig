@@ -32,6 +32,7 @@ pub fn init(allocator: Allocator) SingleFlight {
 pub fn deinit(self: *SingleFlight) void {
     var it = self.pending.iterator();
     while (it.next()) |entry| {
+        self.allocator.free(entry.key_ptr.*);
         entry.value_ptr.deinit(self.allocator);
     }
     self.pending.deinit(self.allocator);
@@ -40,25 +41,27 @@ pub fn deinit(self: *SingleFlight) void {
 pub const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
-    const gop = try self.pending.getOrPut(self.allocator, key);
-    var waiting = gop.value_ptr;
-
-    if (gop.found_existing) {
+    if (self.pending.getPtr(key)) |waiting| {
         try waiting.append(self.allocator, transfer);
         transfer.park(reason);
         return .queued;
     }
 
-    waiting.* = .empty;
-    try waiting.append(self.allocator, transfer);
-    errdefer waiting.deinit(self.allocator);
-    transfer.park(reason);
+    const owned_key = try self.allocator.dupe(u8, key);
+    errdefer self.allocator.free(owned_key);
 
+    var waiting: std.ArrayList(*Transfer) = .empty;
+    errdefer waiting.deinit(self.allocator);
+    try waiting.append(self.allocator, transfer);
+
+    try self.pending.put(self.allocator, owned_key, waiting);
+    transfer.park(reason);
     return .initial;
 }
 
 pub fn abort(self: *SingleFlight, key: []const u8) void {
     var entry = self.pending.fetchRemove(key) orelse return;
+    self.allocator.free(entry.key);
     entry.value.deinit(self.allocator);
 }
 
@@ -76,11 +79,13 @@ pub fn remove(self: *SingleFlight, transfer: *Transfer) void {
 
 pub fn take(self: *SingleFlight, key: []const u8) ?std.ArrayList(*Transfer) {
     const entry = self.pending.fetchRemove(key) orelse return null;
+    self.allocator.free(entry.key);
     return entry.value;
 }
 
 pub fn discard(self: *SingleFlight, key: []const u8) void {
     var entry = self.pending.fetchRemove(key) orelse return;
+    self.allocator.free(entry.key);
     entry.value.deinit(self.allocator);
 }
 

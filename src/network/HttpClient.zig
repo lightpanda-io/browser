@@ -3602,7 +3602,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
 
     const robots_url = "http://example.com/robots.txt";
 
-    var waiting: std.ArrayList(*Transfer) = .empty;
+    var transfers: [2]*Transfer = undefined;
     for (0..2) |i| {
         const arena = try pool.acquire(.small, "test");
         const transfer = try arena.create(Transfer);
@@ -3625,14 +3625,14 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .start_time = 0,
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
-        try waiting.append(testing.allocator, transfer);
-        transfer.park(.robots);
+        transfers[i] = transfer;
     }
 
-    try client.robots.single_flight.pending.putNoClobber(testing.allocator, robots_url, waiting);
+    _ = try client.robots.single_flight.enter(robots_url, transfers[0], .robots);
+    _ = try client.robots.single_flight.enter(robots_url, transfers[1], .robots);
 
-    const t1 = client.robots.single_flight.pending.get(robots_url).?.items[0];
-    const t2 = client.robots.single_flight.pending.get(robots_url).?.items[1];
+    const t1 = transfers[0];
+    const t2 = transfers[1];
 
     t1.abort(error.Abort);
     try testing.expectEqual(1, client.robots.single_flight.pending.get(robots_url).?.items.len);
