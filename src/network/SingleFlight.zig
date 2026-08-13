@@ -120,13 +120,7 @@ test "SingleFlight: enter returns initial for the first waiter" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    // Only transfers.remove/pending_queue.remove/etc. touched by deinit
-    // matter here; a minimal zeroed client is enough since these tests
-    // never call transfer.deinit(), only single_flight directly.
-    client = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -152,9 +146,7 @@ test "SingleFlight: different keys get independent entries" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -175,9 +167,7 @@ test "SingleFlight: take removes and returns the waiter list" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -214,9 +204,7 @@ test "SingleFlight: discard for the shutdown path" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -241,9 +229,7 @@ test "SingleFlight: remove unlinks a single waiter from its key's list" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -273,9 +259,7 @@ test "SingleFlight: remove on a transfer not in any list is a no-op" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
@@ -306,9 +290,7 @@ test "SingleFlight: removing every waiter for a key leaves an empty (but present
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
-    var client: HttpClient = undefined;
-    client.transfers = .empty;
-    client.intercepted = 0;
+    var client = testing.test_browser.http_client;
 
     var sf = SingleFlight{ .allocator = testing.allocator };
     defer sf.deinit();
