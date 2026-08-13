@@ -41,7 +41,9 @@ pub fn deinit(self: *SingleFlight) void {
 pub const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
-    if (self.pending.getPtr(key)) |waiting| {
+    const gop = try self.pending.getOrPut(self.allocator, key);
+    if (gop.found_existing) {
+        const waiting = gop.value_ptr;
         try waiting.append(self.allocator, transfer);
         transfer.park(reason);
         return .queued;
@@ -49,12 +51,13 @@ pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: 
 
     const owned_key = try self.allocator.dupe(u8, key);
     errdefer self.allocator.free(owned_key);
+    gop.key_ptr.* = owned_key;
 
     var waiting: std.ArrayList(*Transfer) = .empty;
     errdefer waiting.deinit(self.allocator);
     try waiting.append(self.allocator, transfer);
+    gop.value_ptr.* = waiting;
 
-    try self.pending.put(self.allocator, owned_key, waiting);
     transfer.park(reason);
     return .initial;
 }
