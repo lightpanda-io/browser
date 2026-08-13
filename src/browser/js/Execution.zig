@@ -36,6 +36,7 @@ const Factory = @import("../Factory.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
+const Console = @import("../webapi/Console.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -162,6 +163,13 @@ pub fn hasDirectListeners(self: *const Execution, target: *EventTarget, typ: []c
 pub fn performance(self: *const Execution) *Performance {
     return switch (self.js.global) {
         inline else => |g| g.performance(),
+    };
+}
+
+pub fn console(self: *const Execution) *Console {
+    return switch (self.js.global) {
+        .frame => |frame| frame.window.getConsole(),
+        .worker => |worker| worker.getConsole(),
     };
 }
 
