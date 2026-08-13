@@ -247,6 +247,48 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         pages.appendAssumeCapacity(page);
     }
 
+    // // Both profilers are debug-only (`@compileError` in the start functions)
+    // // and cover pages.items[0], so pass a single url.
+
+    // // Uncomment to get a profile of the JS code. You can open this in
+    // // Chrome's profiler. I've seen it generate invalid JSON, but I'm not
+    // // sure why. It happens rarely, and I manually fix the file.
+    // pages.items[0].frame().?.js.startCpuProfiler();
+    // defer {
+    //     if (pages.items[0].frame().?.js.stopCpuProfiler()) |profile| {
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/cpu_profile.json",
+    //             .data = profile,
+    //         }) catch |err| {
+    //             log.err(.app, "profile write error", .{ .err = err });
+    //         };
+    //     } else |err| {
+    //         log.err(.app, "profile error", .{ .err = err });
+    //     }
+    // }
+
+    // // Uncomment to get a V8 heap profile. The snapshot opens in Chrome's
+    // // Memory tab, which is where the retainer breakdown lives.
+    // pages.items[0].frame().?.js.startHeapProfiler();
+    // defer {
+    //     if (pages.items[0].frame().?.js.stopHeapProfiler()) |profile| {
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/allocating.heapprofile",
+    //             .data = profile.@"0",
+    //         }) catch |err| {
+    //             log.err(.app, "allocating write error", .{ .err = err });
+    //         };
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
+    //             .data = profile.@"1",
+    //         }) catch |err| {
+    //             log.err(.app, "heapsnapshot write error", .{ .err = err });
+    //         };
+    //     } else |err| {
+    //         log.err(.app, "profile error", .{ .err = err });
+    //     }
+    // }
+
     var runner = session.runner(.{});
 
     var timer: std.Io.Timestamp = .now(io, .boot);
