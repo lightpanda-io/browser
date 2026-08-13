@@ -24,10 +24,10 @@ pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const Network = @import("network/Network.zig");
-pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const String = @import("string.zig").String;
 pub const Notification = @import("Notification.zig");
+pub const Server = @import("server/Server.zig");
 
 pub const URL = @import("browser/URL.zig");
 pub const Page = @import("browser/Page.zig");
@@ -45,7 +45,7 @@ pub const Base64Writer = @import("Base64Writer.zig");
 const Selector = @import("browser/webapi/selector/Selector.zig");
 const Node = @import("browser/webapi/Node.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
-pub const CDPNode = @import("cdp/Node.zig");
+pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const links = @import("browser/links.zig");
 pub const forms = @import("browser/forms.zig");
@@ -490,7 +490,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             try pdf.print(arena.allocator(), root, .{}, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
-            var registry = CDPNode.Registry.init(app.allocator);
+            var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
             const st: SemanticTree = .{

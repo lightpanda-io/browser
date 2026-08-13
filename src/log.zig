@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 pub const Scope = enum {
     app,
+    bidi,
     browser,
     bug,
     cache,

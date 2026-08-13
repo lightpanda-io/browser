@@ -21,18 +21,18 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
-const Node = @import("../Node.zig");
+const NodeRegistry = @import("../../../NodeRegistry.zig");
 
-const dump = @import("../../browser/dump.zig");
-const js = @import("../../browser/js/js.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
-const Selector = @import("../../browser/webapi/selector/Selector.zig");
-const xpath = @import("../../browser/xpath/Evaluator.zig");
-const Input = @import("../../browser/webapi/element/html/Input.zig");
-const File = @import("../../browser/webapi/File.zig");
-const Blob = @import("../../browser/webapi/Blob.zig");
-const Factory = @import("../../browser/Factory.zig");
-const Page = @import("../../browser/Page.zig");
+const dump = @import("../../../browser/dump.zig");
+const js = @import("../../../browser/js/js.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Selector = @import("../../../browser/webapi/selector/Selector.zig");
+const xpath = @import("../../../browser/xpath/Evaluator.zig");
+const Input = @import("../../../browser/webapi/element/html/Input.zig");
+const File = @import("../../../browser/webapi/File.zig");
+const Blob = @import("../../../browser/webapi/Blob.zig");
+const Factory = @import("../../../browser/Factory.zig");
+const Page = @import("../../../browser/Page.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -190,14 +190,14 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
 
-    var parents: std.ArrayList(*Node) = .empty;
+    var parents: std.ArrayList(*NodeRegistry.Node) = .empty;
     for (dom_nodes) |dom_node| {
         var current = dom_node;
         while (true) {
             const parent_node = current._parent orelse break;
 
             const node = try bc.node_registry.register(parent_node);
-            if (node.set_child_nodes_event) {
+            if (bc.set_child_nodes_sent.contains(node.id)) {
                 break;
             }
             try parents.append(arena, node);
@@ -219,9 +219,8 @@ fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
         // Although our above loop won't add an already-sent node to `parents`
         // this can still be true because two nodes can share the same parent node
         // so we might have just sent the node a previous iteration of this loop
-        if (node.set_child_nodes_event) continue;
-
-        node.set_child_nodes_event = true;
+        const gop = try bc.set_child_nodes_sent.getOrPut(bc.cdp.allocator, node.id);
+        if (gop.found_existing) continue;
 
         // If the node has no parent, it's the root node.
         // We don't dispatch event for it because we assume the root node is
@@ -280,7 +279,7 @@ fn getSearchResults(cmd: *CDP.Command) !void {
 
 fn querySelector(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: Node.Id,
+        nodeId: NodeRegistry.Id,
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
@@ -306,7 +305,7 @@ fn querySelector(cmd: *CDP.Command) !void {
 
 fn querySelectorAll(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: Node.Id,
+        nodeId: NodeRegistry.Id,
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
@@ -322,7 +321,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
 
     const nodes = selected_nodes._nodes;
 
-    const node_ids = try cmd.arena.alloc(Node.Id, nodes.len);
+    const node_ids = try cmd.arena.alloc(NodeRegistry.Id, nodes.len);
     for (nodes, node_ids) |selected_node, *node_id| {
         node_id.* = (try bc.node_registry.register(selected_node)).id;
     }
@@ -337,7 +336,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
 
 fn resolveNode(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
         backendNodeId: ?u32 = null,
         objectGroup: ?[]const u8 = null,
         executionContextId: ?u32 = null,
@@ -399,8 +398,8 @@ fn resolveNode(cmd: *CDP.Command) !void {
 
 fn describeNode(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         objectId: ?[]const u8 = null,
         depth: i32 = 1,
         pierce: bool = false,
@@ -446,7 +445,7 @@ fn rectToQuad(rect: DOMNode.Element.DOMRect.Data) Quad {
 
 fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
         rect: ?DOMNode.Element.DOMRect.Data = null,
@@ -467,7 +466,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
         return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
@@ -489,8 +488,8 @@ pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?Node.Id, bac
 // Related to: https://drafts.csswg.org/cssom-view/#the-geometryutils-interface
 fn getContentQuads(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
@@ -515,7 +514,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
 
 fn getBoxModel(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
         backendNodeId: ?u32 = null,
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
@@ -545,7 +544,7 @@ fn getBoxModel(cmd: *CDP.Command) !void {
 
 fn requestChildNodes(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: Node.Id,
+        nodeId: NodeRegistry.Id,
         depth: i32 = 1,
         pierce: bool = false,
     })) orelse return error.InvalidParams;
@@ -585,8 +584,8 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
 
 fn getOuterHTML(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         objectId: ?[]const u8 = null,
         includeShadowDOM: bool = false,
     })) orelse return error.InvalidParams;
@@ -624,8 +623,8 @@ const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
 fn setFileInputFiles(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         files: []const []const u8,
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 

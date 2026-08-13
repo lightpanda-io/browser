@@ -21,9 +21,9 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 
-const Node = @import("../Node.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
-const Robots = @import("../../network/Robots.zig");
+const Robots = @import("../../../network/Robots.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const NodeRegistry = @import("../../../NodeRegistry.zig");
 
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
@@ -118,7 +118,7 @@ fn getSemanticTree(cmd: anytype) !void {
         format: ?enum { text } = null,
         prune: ?bool = null,
         interactiveOnly: ?bool = null,
-        backendNodeId: ?Node.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         maxDepth: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -160,7 +160,7 @@ fn getSemanticTree(cmd: anytype) !void {
 
 fn getMarkdown(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -183,7 +183,7 @@ fn getMarkdown(cmd: anytype) !void {
 
 fn getInteractiveElements(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -205,7 +205,7 @@ fn getInteractiveElements(cmd: anytype) !void {
 
 fn getNodeDetails(cmd: anytype) !void {
     const Params = struct {
-        backendNodeId: Node.Id,
+        backendNodeId: NodeRegistry.Id,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
@@ -276,8 +276,8 @@ fn detectForms(cmd: anytype) !void {
 
 fn clickNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
@@ -297,8 +297,8 @@ fn clickNode(cmd: anytype) !void {
 
 fn fillNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         text: []const u8,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
@@ -319,8 +319,8 @@ fn fillNode(cmd: anytype) !void {
 
 fn scrollNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         x: ?i32 = null,
         y: ?i32 = null,
     };

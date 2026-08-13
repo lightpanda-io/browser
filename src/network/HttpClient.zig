@@ -20,11 +20,11 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Inbox = @import("../Inbox.zig");
+const Watchdog = @import("../Watchdog.zig");
 const ArenaPool = @import("../ArenaPool.zig");
 const Notification = @import("../Notification.zig");
+const Driver = @import("../server/Driver.zig");
 
-const CDP = @import("../cdp/CDP.zig");
-const Watchdog = @import("../Watchdog.zig");
 const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
@@ -150,27 +150,28 @@ test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null els
 // Allocated from self.allocator when set, null otherwise.
 user_agent_override: ?[:0]const u8 = null,
 
-// The CDP layer we dispatch inbox messages to. Set in CDP.init for
-// `serve` mode; null in all other modes. Since this is set early, BEFORE the
-// CDP socket is registered with the network thread, we also have the
-// `cdp_link_active` boolean.
-cdp: ?*CDP = null,
+// The protocol layer we dispatch inbox messages to. Set in CDP.init /
+// BiDi.init for `serve` mode; null in all other modes. Since this is set
+// early, BEFORE the socket is registered with the network thread, we also
+// have the `driver_link_active` boolean.
+driver: ?Driver = null,
 
 // True iff a producer (Server.handleConnection, after the worker
-// handshake completes) has registered the CDP socket with the Network
+// handshake completes) has registered the client socket with the Network
 // thread and Network will fire curl_multi_wakeup on our multi handle
-// when it pushes to the inbox. perform uses this — NOT `cdp != null`
+// when it pushes to the inbox. perform uses this — NOT `driver != null`
 // — to decide whether to block in poll without any in-flight curl
-// work. cdp is set in CDP.init, well before the link is wired; tests
-// and the pre-handshake window have a cdp but no producer, so polling
+// work. driver is set in the driver's init, well before the link is
+// wired; tests and the pre-handshake window have a driver but no
+// producer, so polling
 // there would just eat the timeout waiting for a wakeup that's never
 // coming.
-cdp_link_active: bool = false,
+driver_link_active: bool = false,
 
-// CDP messages parsed off the WS socket by the Network thread land
+// Client messages read off the WS socket by the Network thread land
 // here. perform drains the inbox at each safe point and dispatches
-// via cdp.onMessage / onPing / onClose / onDisconnect. Always present
-// even in non-CDP mode — the empty-queue drain is one mutex lock plus
+// via driver.onMessage / onPing / onClose / onDisconnect. Always present
+// even in non-serve mode — the empty-queue drain is one mutex lock plus
 // a linked-list head check, cheaper than nullability everywhere.
 inbox: Inbox,
 
@@ -199,7 +200,7 @@ http_version: lp.Config.HttpVersion,
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
 
-pub fn init(self: *Client, app: *lp.App, cdp: ?*CDP) !void {
+pub fn init(self: *Client, app: *lp.App, driver: ?Driver) !void {
     const config = app.config;
     const allocator = app.allocator;
 
@@ -229,7 +230,7 @@ pub fn init(self: *Client, app: *lp.App, cdp: ?*CDP) !void {
         .handles = handles,
         .network = network,
         .allocator = app.allocator,
-        .cdp = cdp,
+        .driver = driver,
         .inbox = .{},
         .cache = &network.cache,
 
@@ -557,7 +558,7 @@ pub fn activity(self: *const Client) Activity {
     };
 }
 
-// What CDP messages drainInbox is allowed to dispatch this tick.
+// What client messages drainInbox is allowed to dispatch this tick.
 //   .all       — outer event loop (Runner.tick). Safe to dispatch
 //                everything; the JS stack is empty.
 //   .sync_wait — reachable from inside a JS callback (syncRequest,
@@ -682,7 +683,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (dispatched == false and processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
         // Nothing was dispatched, no messages were processed and nothing is
         // waiting for dispatch. We need to wait for I/O.
-        if (running > 0 or self.cdp_link_active or self.delayed_queue.first != null) {
+        if (running > 0 or self.driver_link_active or self.delayed_queue.first != null) {
             {
                 self.heartbeat.enterWait();
                 defer self.heartbeat.exitWait();
@@ -1309,14 +1310,14 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     _ = try self.handles.perform();
 }
 
-// Drain any CDP messages the Network thread pushed into our inbox
-// and dispatch them via the cdp_client callbacks. Returns
+// Drain any client messages the Network thread pushed into our inbox
+// and dispatch them via the driver callbacks. Returns
 // error.ClientDisconnected if the inbox surfaced a disconnect message,
 // so the worker loop can tear down the connection. Called from tick
 // only — NOT from perform, because perform recurses through
 // processOneMessage's redirect path.
 fn drainInbox(self: *Client, mode: DrainMode) !void {
-    const cdp = self.cdp orelse return;
+    const driver = &(self.driver orelse return);
     while (true) {
         const msg = switch (mode) {
             .all => self.inbox.pop(),
@@ -1326,20 +1327,19 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
         defer msg.deinit();
 
         switch (msg.payload) {
-            .cdp => |*c| cdp.onMessage(c) catch |err| {
+            .cdp, .bidi => driver.onMessage(msg) catch |err| {
                 // A single malformed/failed dispatch shouldn't poison
                 // the rest of the batch — log and continue.
-                log.err(.cdp, "CDP dispatch", .{ .err = err });
+                log.err(.app, "client dispatch", .{ .err = err });
             },
-            .ping => |body| cdp.onPing(body),
+            .ping => |body| driver.onPing(body),
             .close => {
-                cdp.onClose();
-                cdp.onDisconnect(null);
+                driver.onClose();
                 self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
             .disconnect => |err| {
-                cdp.onDisconnect(err);
+                driver.onDisconnect(err);
                 self.inbox.terminated = true;
                 return error.ClientDisconnected;
             },
@@ -1363,6 +1363,9 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .ping, .close, .disconnect => true,
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
+        // BiDi has no request interception yet, so nothing it can send is
+        // safe to dispatch from inside a JS callback.
+        .bidi => false,
     };
 }
 
@@ -1382,6 +1385,9 @@ fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
         .close, .disconnect => true,
         .ping => false,
         .cdp => |c| isTeardownMethod(c.input.method),
+        // Frames aren't parsed on the Network thread for BiDi, so we
+        // can't spot a teardown command without re-parsing here.
+        .bidi => false,
     };
 }
 

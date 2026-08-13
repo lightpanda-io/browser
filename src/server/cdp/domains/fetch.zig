@@ -19,8 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const http = @import("../../network/http.zig");
-const Notification = @import("../../Notification.zig");
+const http = @import("../../../network/http.zig");
+const Notification = @import("../../../Notification.zig");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
