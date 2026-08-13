@@ -64,7 +64,11 @@ pub fn build(b: *Build) !void {
         }
     }
 
-    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+    // dev_fast links V8 shared, so it defaults to the libc_v8.so that
+    // `make download-v8-shared` caches (when present) rather than a
+    // multi-minute from-source build.
+    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to a prebuilt libc_v8.a or libc_v8.so") orelse
+        if (dev_fast) findSharedV8Cache(b) else null;
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
     const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse dev_fast;
@@ -245,6 +249,44 @@ pub fn build(b: *Build) !void {
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
+}
+
+/// Looks for the shared V8 that `make download-v8-shared` caches. The cache
+/// path is keyed on the zig-v8 release tag, read from the install action so
+/// it cannot drift from CI (the Makefile reads the same source of truth).
+fn findSharedV8Cache(b: *Build) ?[]const u8 {
+    const io = b.graph.io;
+    const action = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        b.pathFromRoot(".github/actions/install/action.yml"),
+        b.allocator,
+        .limited(64 * 1024),
+    ) catch return null;
+
+    const tag = blk: {
+        var in_zig_v8 = false;
+        var lines = std.mem.splitScalar(u8, action, '\n');
+        while (lines.next()) |line| {
+            if (std.mem.startsWith(u8, line, "  ") and !std.mem.startsWith(u8, line, "   ")) {
+                in_zig_v8 = std.mem.eql(u8, std.mem.trimEnd(u8, line, " \r"), "  zig-v8:");
+                continue;
+            }
+            if (!in_zig_v8) continue;
+            const trimmed = std.mem.trim(u8, line, " \r");
+            if (std.mem.startsWith(u8, trimmed, "default:")) {
+                var it = std.mem.splitScalar(u8, trimmed, '\'');
+                _ = it.next();
+                break :blk it.next() orelse return null;
+            }
+        }
+        return null;
+    };
+    if (tag.len == 0) return null;
+
+    const path = b.fmt("{s}/prebuilt-v8/{s}/libc_v8.so", .{ b.pathFromRoot(".lp-cache"), tag });
+    std.Io.Dir.cwd().access(io, path, .{}) catch return null;
+    std.debug.print("Using prebuilt shared V8: {s}\n", .{path});
+    return path;
 }
 
 fn linkV8(
