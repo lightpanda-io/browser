@@ -638,15 +638,7 @@ pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) 
 
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
-
-    // fastpath
-    if (!std.mem.startsWith(u8, url, current_origin)) {
-        return false;
-    }
-
-    // Starting here, at least protocols are equals.
-    // Compare hosts (domain:port) strictly
-    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
+    return URL.isSameOrigin(url, current_origin);
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -3666,8 +3658,8 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo#hash"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1#hash"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
 
     try testing.expectEqual(false, frame.isSameOrigin("http://origin.com/")); // another proto
     try testing.expectEqual(false, frame.isSameOrigin("https://origin.com:123/")); // another port

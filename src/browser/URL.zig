@@ -215,7 +215,7 @@ pub fn getPathname(raw: [:0]const u8) []const u8 {
     return raw[path_start..query_or_hash_start];
 }
 
-pub fn getProtocol(raw: [:0]const u8) []const u8 {
+pub fn getProtocol(raw: []const u8) []const u8 {
     const pos = std.mem.indexOfScalarPos(u8, raw, 0, ':') orelse return "";
     return raw[0 .. pos + 1];
 }
@@ -224,7 +224,7 @@ pub fn isSecure(raw: [:0]const u8) bool {
     return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
-pub fn getHostname(raw: [:0]const u8) []const u8 {
+pub fn getHostname(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return host;
     return host[0..port_sep];
@@ -241,7 +241,7 @@ pub fn getOriginHostname(origin: []const u8) []const u8 {
     return host[0..port_sep];
 }
 
-pub fn getPort(raw: [:0]const u8) []const u8 {
+pub fn getPort(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return "";
     return host[port_sep + 1 ..];
@@ -339,6 +339,21 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
 
     // Common case: no user info, no default port - return slice (zero allocation!)
     return raw[0..authority_end];
+}
+
+pub fn isSameOrigin(url: []const u8, origin: []const u8) bool {
+    const url_proto = getProtocol(url);
+    const origin_proto = getProtocol(origin);
+    if (!std.mem.eql(u8, url_proto, origin_proto)) return false;
+    if (!std.mem.eql(u8, getHostname(url), getHostname(origin))) return false;
+    return std.mem.eql(u8, effectivePort(url_proto, getPort(url)), effectivePort(origin_proto, getPort(origin)));
+}
+
+fn effectivePort(protocol: []const u8, port: []const u8) []const u8 {
+    if (port.len > 0) return port;
+    if (std.mem.eql(u8, protocol, "https:")) return "443";
+    if (std.mem.eql(u8, protocol, "http:")) return "80";
+    return "";
 }
 
 fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
@@ -1482,6 +1497,56 @@ test "URL: getOrigin" {
         } else {
             try testing.expectEqual(null, result);
         }
+    }
+}
+
+test "URL: isSameOrigin" {
+    const Case = struct {
+        url: [:0]const u8,
+        origin: [:0]const u8,
+        expected: bool,
+    };
+
+    const cases = [_]Case{
+        // Identical origins
+        .{ .url = "https://example.com/path", .origin = "https://example.com", .expected = true },
+        .{ .url = "https://example.com", .origin = "https://example.com", .expected = true },
+
+        // Different scheme
+        .{ .url = "http://example.com/path", .origin = "https://example.com", .expected = false },
+
+        // Different host
+        .{ .url = "https://example.org/path", .origin = "https://example.com", .expected = false },
+
+        // Subdomain is a different origin
+        .{ .url = "https://sub.example.com/path", .origin = "https://example.com", .expected = false },
+
+        // Fastpath false-positive guard: url's host is NOT origin's host,
+        // even though origin is a literal string prefix of url.
+        .{ .url = "https://example.com.evil.com/path", .origin = "https://example.com", .expected = false },
+
+        // Same host, different port
+        .{ .url = "https://example.com:8080/path", .origin = "https://example.com", .expected = false },
+        .{ .url = "https://example.com:8080/path", .origin = "https://example.com:8080", .expected = true },
+        .{ .url = "https://example.com:8080/path", .origin = "https://example.com:9090", .expected = false },
+
+        // origin as a full URL (not just an origin serialization) still works
+        .{ .url = "https://example.com/a", .origin = "https://example.com/b?x=1", .expected = true },
+
+        // userinfo on url must not affect the comparison
+        .{ .url = "https://user:pass@example.com/path", .origin = "https://example.com", .expected = true },
+
+        // path/query/fragment differences are irrelevant to origin
+        .{ .url = "https://example.com/a/b?x=1#f", .origin = "https://example.com/", .expected = true },
+
+        // IPv6 hosts
+        .{ .url = "https://[::1]:8080/path", .origin = "https://[::1]:8080", .expected = true },
+        .{ .url = "https://[::1]:8080/path", .origin = "https://[::1]:9090", .expected = false },
+        .{ .url = "https://[::1]/path", .origin = "https://[2001:db8::1]/", .expected = false },
+    };
+
+    for (cases) |case| {
+        try testing.expectEqual(case.expected, isSameOrigin(case.url, case.origin));
     }
 }
 
