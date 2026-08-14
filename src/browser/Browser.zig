@@ -154,6 +154,9 @@ pub fn deinit(self: *Browser) void {
     // fire — only now is it safe to free the pool backing their parameters.
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
+    if (self.http_client.cache) |cache| {
+        cache.maintenance(lp.datetime.timestamp(.real));
+    }
     self.http_client.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);
