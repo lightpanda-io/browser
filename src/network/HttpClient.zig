@@ -24,7 +24,6 @@ const ArenaPool = @import("../ArenaPool.zig");
 const Notification = @import("../Notification.zig");
 
 const CDP = @import("../cdp/CDP.zig");
-const Config = @import("../Config.zig");
 const Watchdog = @import("../Watchdog.zig");
 const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
@@ -384,10 +383,10 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
 }
 
 // Headers _all_ requests include.
-pub fn baselineHeaders(self: *const Client) [3]http.Header {
+pub fn baselineHeaders(self: *const Client) [3]Transfer.RequestHeader {
     return .{
         .{ .name = "User-Agent", .value = self.getUserAgent() },
-        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua },
+        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
         .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
@@ -2731,7 +2730,8 @@ pub const Transfer = struct {
 
     // Who put the header on the request. CORS cares: only non-safelisted
     // author (i.e. script-set) headers trigger a preflight.
-    pub const HeaderSource = enum { user_agent, author };
+    // fixed is hardcoded and can't be changed.
+    pub const HeaderSource = enum { user_agent, author, fixed };
 
     pub const HeaderOpts = struct {
         source: HeaderSource = .user_agent,
@@ -2776,6 +2776,13 @@ pub const Transfer = struct {
                 i += 1;
                 continue;
             }
+
+            // Don't override any fixed header.
+            if (hdr.source == .fixed) {
+                log.info(.http, "ignore overriding fixed header", .{ .header = hdr.name });
+                return;
+            }
+
             if (found) {
                 _ = self.req_headers.orderedRemove(i);
                 continue;
@@ -2793,7 +2800,7 @@ pub const Transfer = struct {
     // The client's baseline headers, added to every request at creation.
     fn seedHeaders(self: *Transfer) !void {
         for (self.client.baselineHeaders()) |hdr| {
-            try self.addHeader(hdr.name, hdr.value, .{});
+            try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
     }
 
@@ -2806,7 +2813,7 @@ pub const Transfer = struct {
         try self.seedHeaders();
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "user-agent")) {
-                Config.validateUserAgent(hdr.value) catch |err| {
+                lp.Config.validateUserAgent(hdr.value) catch |err| {
                     log.info(.http, "ignored request header", .{ .intercepted = self.client.intercepted, .name = hdr.name, .err = err });
                     continue;
                 };
