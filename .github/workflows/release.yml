@@ -35,7 +35,9 @@ jobs:
             runner: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64
           - arch: aarch64
-            runner: ubuntu-22.04-arm
+            # apt.llvm.org no longer publishes an LLVM 23 repo for 22.04
+            # see https://github.com/lightpanda-io/zig-v8-fork/pull/199
+            runner: ubuntu-24.04-arm
             cpu_flag: -Dcpu=generic
 
     env:
