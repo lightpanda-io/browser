@@ -51,6 +51,12 @@
   }
 </script>
 
+<script id=navigator_plugins_iterable>
+  // WebIDL: indexed getter => @@iterator (Chrome: [...navigator.plugins] works)
+  testing.expectEqual('function', typeof navigator.plugins[Symbol.iterator]);
+  testing.expectEqual(0, [...navigator.plugins].length);
+</script>
+
 <script id=navigator_native_descriptor_walk>
   // Mirror the bot-detection fingerprint: read every navigator property's
   // descriptor and call toString() on its value/getter. This must not throw.

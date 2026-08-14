@@ -2,8 +2,13 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const CSSStyleSheet = @import("CSSStyleSheet.zig");
+const GenericIterator = @import("../collections/iterator.zig").Entry;
 
 const StyleSheetList = @This();
+
+pub fn registerTypes() []const type {
+    return &.{ StyleSheetList, ValueIterator };
+}
 
 _sheets: std.ArrayList(*CSSStyleSheet) = .empty,
 
@@ -33,6 +38,23 @@ pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {
     }
 }
 
+fn values(self: *StyleSheetList, frame: *Frame) !*ValueIterator {
+    return .init(.{ .list = self }, frame);
+}
+
+const ValueIterator = GenericIterator(Iterator, null);
+
+const Iterator = struct {
+    index: u32 = 0,
+    list: *StyleSheetList,
+
+    pub fn next(self: *Iterator, _: *Frame) ?*CSSStyleSheet {
+        const sheet = self.list.item(self.index) orelse return null;
+        self.index += 1;
+        return sheet;
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(StyleSheetList);
 
@@ -44,4 +66,5 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(StyleSheetList.length, null, .{});
     pub const @"[]" = bridge.indexed(StyleSheetList.item, null, .{ .null_as_undefined = true });
+    pub const symbol_iterator = bridge.iterator(StyleSheetList.values, .{});
 };
