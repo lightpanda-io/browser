@@ -269,5 +269,6 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Console" {
+    testing.expectLog(&.{ .js, .js, .js });
     try testing.htmlRunner("console", .{});
 }
