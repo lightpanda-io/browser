@@ -2,8 +2,13 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const CSSRule = @import("CSSRule.zig");
+const GenericIterator = @import("../collections/iterator.zig").Entry;
 
 const CSSRuleList = @This();
+
+pub fn registerTypes() []const type {
+    return &.{ CSSRuleList, ValueIterator };
+}
 
 _rules: std.ArrayList(*CSSRule) = .empty,
 
@@ -40,6 +45,23 @@ pub fn clear(self: *CSSRuleList) void {
     self._rules.clearRetainingCapacity();
 }
 
+fn values(self: *CSSRuleList, frame: *Frame) !*ValueIterator {
+    return .init(.{ .list = self }, frame);
+}
+
+const ValueIterator = GenericIterator(Iterator, null);
+
+const Iterator = struct {
+    index: u32 = 0,
+    list: *CSSRuleList,
+
+    pub fn next(self: *Iterator, _: *Frame) ?*CSSRule {
+        const rule = self.list.item(self.index) orelse return null;
+        self.index += 1;
+        return rule;
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSRuleList);
 
@@ -51,4 +73,5 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(CSSRuleList.length, null, .{});
     pub const @"[]" = bridge.indexed(CSSRuleList.item, null, .{ .null_as_undefined = true });
+    pub const symbol_iterator = bridge.iterator(CSSRuleList.values, .{});
 };

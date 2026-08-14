@@ -24,6 +24,42 @@
 }
 </script>
 
+<script id="StyleSheetList_iterable">
+{
+    // WebIDL: indexed getter => @@iterator, but no iterable<> declaration,
+    // so no keys/values/entries. Stitches does [...document.styleSheets].
+    const sheets = document.styleSheets;
+    testing.expectEqual('function', typeof sheets[Symbol.iterator]);
+    testing.expectEqual(undefined, sheets.values);
+    testing.expectEqual(0, [...sheets].length);
+
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    style.sheet.insertRule('.it-a { color: green; }', 0);
+    style.sheet.insertRule('.it-b { color: blue; }', 1);
+
+    const collected = [...document.styleSheets];
+    testing.expectEqual(1, collected.length);
+    testing.expectTrue(collected[0] === sheets[0]);
+
+    const rules = style.sheet.cssRules;
+    testing.expectEqual('function', typeof rules[Symbol.iterator]);
+    testing.expectEqual(undefined, rules.values);
+    const selectors = [...rules].map(r => r.selectorText);
+    testing.expectEqual('.it-a,.it-b', selectors.join(','));
+
+    // The iterator is live: rules removed mid-iteration are not visited
+    const seen = [];
+    for (const rule of rules) {
+        seen.push(rule.selectorText);
+        style.sheet.deleteRule(1);
+    }
+    testing.expectEqual('.it-a', seen.join(','));
+
+    document.head.removeChild(style);
+}
+</script>
+
 <script id="CSSStyleDeclaration_setCssText_basic">
 {
     const div = document.createElement('div');
