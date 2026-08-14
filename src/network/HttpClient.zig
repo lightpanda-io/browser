@@ -24,6 +24,7 @@ const ArenaPool = @import("../ArenaPool.zig");
 const Notification = @import("../Notification.zig");
 
 const CDP = @import("../cdp/CDP.zig");
+const Config = @import("../Config.zig");
 const Watchdog = @import("../Watchdog.zig");
 const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
@@ -2804,6 +2805,12 @@ pub const Transfer = struct {
         self.req_headers.clearRetainingCapacity();
         try self.seedHeaders();
         for (headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "user-agent")) {
+                Config.validateUserAgent(hdr.value) catch |err| {
+                    log.info(.http, "ignored request header", .{ .intercepted = self.client.intercepted, .name = hdr.name, .err = err });
+                    continue;
+                };
+            }
             try self.setHeader(hdr.name, hdr.value, .{});
         }
     }
