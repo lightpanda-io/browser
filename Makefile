@@ -6,9 +6,8 @@ BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 # option test filter make test F="server"
 F=
 
-# Extra flags forwarded to every `$(ZIG) build` invocation. Most commonly used
-# to point at a prebuilt V8 archive and skip the multi-minute source rebuild:
-#   ZIGFLAGS=-Dprebuilt_v8_path=/path/to/libc_v8.a make test
+# Extra flags forwarded to every `$(ZIG) build` invocation, e.g.:
+#   ZIGFLAGS=-Ddev_fast=false make test
 ZIGFLAGS ?=
 
 # OS and ARCH
@@ -36,7 +35,8 @@ endif
 # Prebuilt V8
 # -----------
 # Building V8 from source takes 10+ minutes. `make download-v8` fetches the
-# matching prebuilt archive from the zig-v8-fork releases instead. The versions
+# matching prebuilt archive from the zig-v8-fork releases instead; build.zig
+# discovers the cached files itself, so the target only fetches. The versions
 # are read from the install action so they can't drift from CI.
 #
 # The cache path is keyed on ZIG_V8_TAG as well as the archive name: a
@@ -56,14 +56,6 @@ V8_CACHE   := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/$(V8_ARCHIVE)
 # already keys freshness.
 V8_SO_ASSET := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).so
 V8_SO_CACHE := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/libc_v8.so
-
-# If the prebuilt archive is in place and the caller hasn't set ZIGFLAGS, point
-# the build at it rather than building V8 from source.
-ifeq ($(strip $(ZIGFLAGS)),)
-  ifneq ($(wildcard $(V8_CACHE)),)
-    ZIGFLAGS := -Dprebuilt_v8_path=$(V8_CACHE)
-  endif
-endif
 
 
 # Infos
@@ -85,9 +77,9 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 download-v8-shared run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
 
-## Download the prebuilt V8 archive (skips the 10+ min source build)
+## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
 	@mkdir -p $(dir $(V8_CACHE))
 	@test -f $(V8_CACHE) || ( \
@@ -96,16 +88,14 @@ download-v8:
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_ARCHIVE) \
 		|| (rm -f $(V8_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
 	@printf "\033[33mV8 ready: %s\033[0m\n" "$(V8_CACHE)"
-
-## Download the prebuilt shared V8 used by -Ddev_fast builds (Linux x86_64)
-download-v8-shared:
-	@mkdir -p $(dir $(V8_SO_CACHE))
+ifeq ($(OS)_$(ARCH),linux_x86_64)
 	@test -f $(V8_SO_CACHE) || ( \
 		printf "\033[36mDownloading prebuilt shared V8 $(V8_VERSION) ($(ZIG_V8_TAG))...\033[0m\n"; \
 		curl -fL --progress-bar -o $(V8_SO_CACHE) \
 			https://github.com/lightpanda-io/zig-v8-fork/releases/download/$(ZIG_V8_TAG)/$(V8_SO_ASSET) \
 		|| (rm -f $(V8_SO_CACHE); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
 	@printf "\033[33mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
+endif
 
 ## Build v8 snapshot
 build-v8-snapshot:

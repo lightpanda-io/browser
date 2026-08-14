@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -37,21 +37,19 @@ const Build = blk: {
 
 pub fn build(b: *Build) !void {
     const optimize = b.standardOptimizeOption(.{});
+    const requested_target = b.standardTargetOptions(.{});
 
-    // The three settings below only work as a set, so they get one knob rather
-    // than three defaults: the self-hosted backend needs the shared V8 (it
-    // cannot apply the CREL relocations in the archive) and needs zig's own CRT
-    // (a system crt1.o with SFrame unwind data has relocations its linker does
-    // not handle). Debug-only, opt-in, and a good deal faster to rebuild.
-    const dev_fast = b.option(bool, "dev_fast", "Linux debug builds: shared V8 + self-hosted backend. Implies -Dshared_v8, -Duse_llvm=false and a bundled-CRT target") orelse false;
+    const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
+    const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;
+    const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
 
-    const target = if (dev_fast) b.resolveTargetQuery(.{
-        .cpu_arch = .x86_64,
-        .os_tag = .linux,
-        .abi = .gnu,
-        // https://codeberg.org/ziglang/zig/issues/31272
-        .glibc_version = .{ .major = 2, .minor = 43, .patch = 0 },
-    }) else b.standardTargetOptions(.{});
+    const prebuilt_v8_path_option = b.option([]const u8, "prebuilt_v8_path", "Path to a prebuilt libc_v8.a or libc_v8.so");
+
+    const dev_fast = b.option(bool, "dev_fast", "Linux debug builds: shared V8 + self-hosted backend. Implies -Dshared_v8, -Duse_llvm=false and a bundled-CRT target") orelse
+        (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and
+            optimize == .Debug and requested_target.query.isNative() and
+            !enable_tsan and !enable_asan and
+            (prebuilt_v8_path_option == null or std.mem.endsWith(u8, prebuilt_v8_path_option.?, ".so")));
 
     if (dev_fast) {
         if (builtin.os.tag != .linux) {
@@ -62,16 +60,27 @@ pub fn build(b: *Build) !void {
             std.debug.print("-Ddev_fast is Debug-only (optimize is {s})\n", .{@tagName(optimize)});
             return error.DevFastRequiresDebug;
         }
+        if (!requested_target.query.isNative()) {
+            std.debug.print("-Ddev_fast builds for the host; drop -Dtarget/-Dcpu\n", .{});
+            return error.DevFastRequiresNativeTarget;
+        }
     }
 
-    // dev_fast links V8 shared, so it defaults to the libc_v8.so that
-    // `make download-v8-shared` caches (when present) rather than a
-    // multi-minute from-source build.
-    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to a prebuilt libc_v8.a or libc_v8.so") orelse
-        if (dev_fast) findSharedV8Cache(b) else null;
+    const target = if (dev_fast) b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .linux,
+        .abi = .gnu,
+        // https://codeberg.org/ziglang/zig/issues/31272
+        .glibc_version = .{ .major = 2, .minor = 43, .patch = 0 },
+    }) else requested_target;
+
+    // Without an explicit -Dprebuilt_v8_path, pick up whatever `make
+    // download-v8` cached rather than building V8 from source.
+    const prebuilt_v8_path = prebuilt_v8_path_option orelse if (enable_tsan or enable_asan) null else findPrebuiltV8(b, target, dev_fast);
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
-    const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse dev_fast;
+    const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse
+        (dev_fast or (prebuilt_v8_path != null and std.mem.endsWith(u8, prebuilt_v8_path.?, ".so")));
     const use_llvm = b.option(bool, "use_llvm", "Use the LLVM backend") orelse !dev_fast;
 
     const version = resolveVersion(b);
@@ -85,10 +94,6 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
     opts.addOption(bool, "wpt_extensions", wpt_extensions);
-
-    const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
-    const enable_asan = b.option(bool, "asan", "Enable Address Sanitizer") orelse false;
-    const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
 
     const lightpanda_module = blk: {
         const mod = b.addModule("lightpanda", .{
@@ -251,10 +256,10 @@ pub fn build(b: *Build) !void {
     }
 }
 
-/// Looks for the shared V8 that `make download-v8-shared` caches. The cache
+/// Looks for the prebuilt V8 that `make download-v8` caches. The cache
 /// path is keyed on the zig-v8 release tag, read from the install action so
 /// it cannot drift from CI (the Makefile reads the same source of truth).
-fn findSharedV8Cache(b: *Build) ?[]const u8 {
+fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]const u8 {
     const io = b.graph.io;
     const action = std.Io.Dir.cwd().readFileAlloc(
         io,
@@ -263,30 +268,54 @@ fn findSharedV8Cache(b: *Build) ?[]const u8 {
         .limited(64 * 1024),
     ) catch return null;
 
-    const tag = blk: {
-        var in_zig_v8 = false;
-        var lines = std.mem.splitScalar(u8, action, '\n');
-        while (lines.next()) |line| {
-            if (std.mem.startsWith(u8, line, "  ") and !std.mem.startsWith(u8, line, "   ")) {
-                in_zig_v8 = std.mem.eql(u8, std.mem.trimEnd(u8, line, " \r"), "  zig-v8:");
-                continue;
-            }
-            if (!in_zig_v8) continue;
-            const trimmed = std.mem.trim(u8, line, " \r");
-            if (std.mem.startsWith(u8, trimmed, "default:")) {
-                var it = std.mem.splitScalar(u8, trimmed, '\'');
-                _ = it.next();
-                break :blk it.next() orelse return null;
-            }
+    const tag = actionDefault(action, "zig-v8:") orelse return null;
+    if (tag.len == 0) {
+        return null;
+    }
+
+    // The .so must keep the name the exe's DT_NEEDED records; the archive
+    // name encodes V8 version, os and arch.
+    const path = if (dev_fast)
+        b.fmt("{s}/prebuilt-v8/{s}/libc_v8.so", .{ b.pathFromRoot(".lp-cache"), tag })
+    else blk: {
+        const version = actionDefault(action, "v8:") orelse return null;
+        break :blk b.fmt("{s}/prebuilt-v8/{s}/libc_v8_{s}_{s}_{s}.a", .{
+            b.pathFromRoot(".lp-cache"),
+            tag,
+            version,
+            @tagName(target.result.os.tag),
+            @tagName(target.result.cpu.arch),
+        });
+    };
+    std.Io.Dir.cwd().access(io, path, .{}) catch {
+        if (dev_fast) {
+            std.debug.print("No cached libc_v8.so; building V8 from source. `make download-v8` skips this.\n", .{});
         }
         return null;
     };
-    if (tag.len == 0) return null;
-
-    const path = b.fmt("{s}/prebuilt-v8/{s}/libc_v8.so", .{ b.pathFromRoot(".lp-cache"), tag });
-    std.Io.Dir.cwd().access(io, path, .{}) catch return null;
-    std.debug.print("Using prebuilt shared V8: {s}\n", .{path});
+    std.debug.print("Using prebuilt V8: {s}\n", .{path});
     return path;
+}
+
+// Returns the quoted `default:` value of a top-level `key` in the install
+// action's yaml.
+fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
+    var in_key = false;
+    var lines = std.mem.splitScalar(u8, action, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "  ") and !std.mem.startsWith(u8, line, "   ")) {
+            in_key = std.mem.eql(u8, std.mem.trimEnd(u8, line[2..], " \r"), key);
+            continue;
+        }
+        if (!in_key) continue;
+        const trimmed = std.mem.trim(u8, line, " \r");
+        if (std.mem.startsWith(u8, trimmed, "default:")) {
+            var it = std.mem.splitScalar(u8, trimmed, '\'');
+            _ = it.next();
+            return it.next();
+        }
+    }
+    return null;
 }
 
 fn linkV8(
