@@ -224,7 +224,7 @@ pub fn isSecure(raw: [:0]const u8) bool {
     return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
-pub fn getHostname(raw: [:0]const u8) []const u8 {
+pub fn getHostname(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return host;
     return host[0..port_sep];
@@ -241,7 +241,7 @@ pub fn getOriginHostname(origin: []const u8) []const u8 {
     return host[0..port_sep];
 }
 
-pub fn getPort(raw: [:0]const u8) []const u8 {
+pub fn getPort(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return "";
     return host[port_sep + 1 ..];
@@ -342,8 +342,18 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
 }
 
 pub fn isSameOrigin(url: []const u8, origin: []const u8) bool {
-    return std.mem.eql(u8, getProtocol(url), getProtocol(origin)) and
-        std.mem.eql(u8, getHost(url), getHost(origin));
+    const url_proto = getProtocol(url);
+    const origin_proto = getProtocol(origin);
+    if (!std.mem.eql(u8, url_proto, origin_proto)) return false;
+    if (!std.mem.eql(u8, getHostname(url), getHostname(origin))) return false;
+    return std.mem.eql(u8, effectivePort(url_proto, getPort(url)), effectivePort(origin_proto, getPort(origin)));
+}
+
+fn effectivePort(protocol: []const u8, port: []const u8) []const u8 {
+    if (port.len > 0) return port;
+    if (std.mem.eql(u8, protocol, "https:")) return "443";
+    if (std.mem.eql(u8, protocol, "http:")) return "80";
+    return "";
 }
 
 fn getUserInfo(raw: [:0]const u8) ?[]const u8 {
