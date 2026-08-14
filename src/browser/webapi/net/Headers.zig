@@ -101,7 +101,7 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
 const HttpClient = @import("../../../network/HttpClient.zig");
 pub fn populateRequestHeaders(self: *Headers, transfer: *HttpClient.Transfer) !void {
     for (self._list._entries.items) |entry| {
-        try transfer.addHeader(entry.name.str(), entry.value.str(), .{ .source = .author });
+        try transfer.appendHeader(entry.name.str(), entry.value.str(), .{ .source = .author });
     }
 }
 
