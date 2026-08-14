@@ -25,6 +25,7 @@ const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 const Document = @import("../../Document.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
@@ -142,16 +143,40 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
 
 // Enqueues an atomic-move reaction (moveBefore). Unlike connect/disconnect there
 // is no dedup state to flip: a move always fires, and the element's connected
-// state is unchanged by the move.
+// state is unchanged by the move. The element's shadow tree (if any) always
+// moves with it.
 pub fn enqueueMoveCallbackOnElement(element: *Element, frame: *Frame) void {
-    if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
-    } else {
-        if (frame.getCustomizedBuiltInDefinition(element) == null) return;
+    const eligible = if (element.is(Custom)) |custom|
+        custom._definition != null
+    else
+        frame.getCustomizedBuiltInDefinition(element) != null;
+
+    if (eligible) {
+        frame._ce_reactions.enqueueMove(frame, element) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
     }
-    frame._ce_reactions.enqueueMove(frame, element) catch |err| {
-        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
-    };
+
+    const shadow_root = element.hostedShadowRoot(frame) orelse return;
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_root.asNode(), .{});
+    while (tw.next()) |el| {
+        enqueueMoveCallbackOnElement(el, frame);
+    }
+}
+
+// Reactions descend through the shadodom, so when an element is connected or
+// disconnected, we need to enqueue the connect/disconnect callback for any
+// nested element including those nested in a shadow root.
+pub fn enqueueShadowTreeCallbacks(host: *Element, comptime reaction: enum { connected, disconnected }, frame: *Frame) error{OutOfMemory}!void {
+    const shadow_root = host.hostedShadowRoot(frame) orelse return;
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_root.asNode(), .{});
+    while (tw.next()) |el| {
+        switch (comptime reaction) {
+            .connected => try enqueueConnectedCallbackOnElement(false, el, frame),
+            .disconnected => enqueueDisconnectedCallbackOnElement(el, frame),
+        }
+        try enqueueShadowTreeCallbacks(el, reaction, frame);
+    }
 }
 
 pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {

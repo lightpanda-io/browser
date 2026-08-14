@@ -41,7 +41,7 @@ pub fn isSlottable(node: *Node) bool {
 pub fn findSlot(slottable: *Node, comptime open_only: bool, frame: *Frame) ?*Slot {
     const parent = slottable.parentElement() orelse return null;
 
-    const shadow_root = frame._element_shadow_roots.get(parent) orelse return null;
+    const shadow_root = parent.hostedShadowRoot(frame) orelse return null;
 
     if (open_only and shadow_root._mode != .open) {
         return null;
@@ -172,7 +172,7 @@ fn subtreeHasSlot(node: *Node) bool {
 pub fn insertionSteps(parent: *Node, child: *Node, in_fragment_parse: bool, frame: *Frame) void {
     // The new child may be a slottable to assign in the parent's shadow tree.
     if (parent.is(Element)) |parent_el| {
-        if (frame._element_shadow_roots.get(parent_el) != null and isSlottable(child)) {
+        if (parent_el.hostedShadowRoot(frame) != null and isSlottable(child)) {
             assignASlot(child, frame);
         }
     }

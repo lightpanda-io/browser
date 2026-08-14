@@ -439,7 +439,7 @@ const Context = struct {
         // path (cf. dump.zig's default .rendered mode), so we always pierce; the
         // early-return tags above can never be valid shadow hosts, so only this
         // generic path needs the check.
-        if (self.frame._element_shadow_roots.get(el)) |shadow| {
+        if (el.hostedShadowRoot(self.frame)) |shadow| {
             try self.renderChildren(shadow.asNode());
         } else {
             try self.renderChildren(el.asNode());

@@ -132,8 +132,19 @@ pub const Namespace = enum(u8) {
     }
 };
 
+pub const Flags = packed struct(u8) {
+    shadow_host: bool = false,
+    customized_builtin: bool = false,
+    _unused: u6 = 0,
+};
+
 _type: Type,
 _namespace: Namespace = .html,
+// Presence hints for the frame's element-keyed side tables: a set bit means
+// "maybe in the map" (the map stays the authority), a clear bit skips the
+// lookup. Turns the per-element map probe in tree walks into a bit test on
+// memory the walk already touches. Fits in existing struct padding.
+_flags: Flags = .{},
 _attributes: Attribute.List = .{},
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
@@ -624,31 +635,6 @@ pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-// ARIAMixin - ARIA attribute reflection
-pub fn getAriaAtomic(self: *const Element) ?[]const u8 {
-    return self.getAttributeSafe(comptime .wrap("aria-atomic"));
-}
-
-pub fn setAriaAtomic(self: *Element, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-atomic"), .wrap(v), frame);
-    } else {
-        try self.removeAttribute(comptime .wrap("aria-atomic"), frame);
-    }
-}
-
-pub fn getAriaLive(self: *const Element) ?[]const u8 {
-    return self.getAttributeSafe(comptime .wrap("aria-live"));
-}
-
-pub fn setAriaLive(self: *Element, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-live"), .wrap(v), frame);
-    } else {
-        try self.removeAttribute(comptime .wrap("aria-live"), frame);
-    }
-}
-
 pub fn getClassName(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("class")) orelse "";
 }
@@ -815,7 +801,7 @@ pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Fra
 }
 
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
-    const shadow_root = frame._element_shadow_roots.get(self) orelse return null;
+    const shadow_root = self.hostedShadowRoot(frame) orelse return null;
     if (shadow_root._mode == .closed) return null;
     return shadow_root;
 }
@@ -852,7 +838,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
         }
     }
 
-    if (frame._element_shadow_roots.get(self)) |existing| {
+    if (self.hostedShadowRoot(frame)) |existing| {
         // Imperative attachShadow over a declarative shadow root with a matching
         // mode empties it and returns the same root. The parser
         // (opts.declarative) never replaces an existing root.
@@ -866,7 +852,18 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
     try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
+    self._flags.shadow_host = true;
     return shadow_root;
+}
+
+// The shadow root this element hosts, closed ones included (the JS-facing
+// getShadowRoot filters those). The flag check skips the map probe for the
+// overwhelming majority of elements, which host nothing.
+pub fn hostedShadowRoot(self: *Element, frame: *const Frame) ?*ShadowRoot {
+    if (!self._flags.shadow_host) {
+        return null;
+    }
+    return frame._element_shadow_roots.get(self);
 }
 
 pub fn insertAdjacentElement(
@@ -1789,7 +1786,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
 
     // Per spec, a clonable shadow root is cloned along with its host — its
     // children always deep-cloned, even when the host clone is shallow.
-    if (frame._element_shadow_roots.get(self)) |shadow| {
+    if (self.hostedShadowRoot(frame)) |shadow| {
         if (shadow._clonable) {
             const cloned_shadow = node.as(Element).attachShadow(.{
                 .mode = shadow._mode,
@@ -2362,8 +2359,50 @@ pub const JsApi = struct {
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{ .ce_reactions = true });
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{ .ce_reactions = true });
-    pub const ariaAtomic = bridge.accessor(Element.getAriaAtomic, Element.setAriaAtomic, .{ .ce_reactions = true });
-    pub const ariaLive = bridge.accessor(Element.getAriaLive, Element.setAriaLive, .{ .ce_reactions = true });
+    pub const role = ariaAccessor("role");
+    pub const ariaAtomic = ariaAccessor("aria-atomic");
+    pub const ariaAutoComplete = ariaAccessor("aria-autocomplete");
+    pub const ariaBrailleLabel = ariaAccessor("aria-braillelabel");
+    pub const ariaBrailleRoleDescription = ariaAccessor("aria-brailleroledescription");
+    pub const ariaBusy = ariaAccessor("aria-busy");
+    pub const ariaChecked = ariaAccessor("aria-checked");
+    pub const ariaColCount = ariaAccessor("aria-colcount");
+    pub const ariaColIndex = ariaAccessor("aria-colindex");
+    pub const ariaColIndexText = ariaAccessor("aria-colindextext");
+    pub const ariaColSpan = ariaAccessor("aria-colspan");
+    pub const ariaCurrent = ariaAccessor("aria-current");
+    pub const ariaDescription = ariaAccessor("aria-description");
+    pub const ariaDisabled = ariaAccessor("aria-disabled");
+    pub const ariaExpanded = ariaAccessor("aria-expanded");
+    pub const ariaHasPopup = ariaAccessor("aria-haspopup");
+    pub const ariaHidden = ariaAccessor("aria-hidden");
+    pub const ariaInvalid = ariaAccessor("aria-invalid");
+    pub const ariaKeyShortcuts = ariaAccessor("aria-keyshortcuts");
+    pub const ariaLabel = ariaAccessor("aria-label");
+    pub const ariaLevel = ariaAccessor("aria-level");
+    pub const ariaLive = ariaAccessor("aria-live");
+    pub const ariaModal = ariaAccessor("aria-modal");
+    pub const ariaMultiLine = ariaAccessor("aria-multiline");
+    pub const ariaMultiSelectable = ariaAccessor("aria-multiselectable");
+    pub const ariaOrientation = ariaAccessor("aria-orientation");
+    pub const ariaPlaceholder = ariaAccessor("aria-placeholder");
+    pub const ariaPosInSet = ariaAccessor("aria-posinset");
+    pub const ariaPressed = ariaAccessor("aria-pressed");
+    pub const ariaReadOnly = ariaAccessor("aria-readonly");
+    pub const ariaRelevant = ariaAccessor("aria-relevant");
+    pub const ariaRequired = ariaAccessor("aria-required");
+    pub const ariaRoleDescription = ariaAccessor("aria-roledescription");
+    pub const ariaRowCount = ariaAccessor("aria-rowcount");
+    pub const ariaRowIndex = ariaAccessor("aria-rowindex");
+    pub const ariaRowIndexText = ariaAccessor("aria-rowindextext");
+    pub const ariaRowSpan = ariaAccessor("aria-rowspan");
+    pub const ariaSelected = ariaAccessor("aria-selected");
+    pub const ariaSetSize = ariaAccessor("aria-setsize");
+    pub const ariaSort = ariaAccessor("aria-sort");
+    pub const ariaValueMax = ariaAccessor("aria-valuemax");
+    pub const ariaValueMin = ariaAccessor("aria-valuemin");
+    pub const ariaValueNow = ariaAccessor("aria-valuenow");
+    pub const ariaValueText = ariaAccessor("aria-valuetext");
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
@@ -2463,6 +2502,23 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Element.scrollTo, .{});
     pub const scrollTo = bridge.function(Element.scrollTo, .{});
     pub const scrollBy = bridge.function(Element.scrollBy, .{});
+
+    fn ariaAccessor(comptime attr: []const u8) js.bridge.Accessor {
+        const R = struct {
+            pub fn get(self: *const Element) ?[]const u8 {
+                return self.getAttributeSafe(.wrap(attr));
+            }
+
+            pub fn set(self: *Element, value: ?[]const u8, frame: *Frame) !void {
+                if (value) |v| {
+                    try self.setAttributeSafe(.wrap(attr), .wrap(v), frame);
+                } else {
+                    try self.removeAttribute(.wrap(attr), frame);
+                }
+            }
+        };
+        return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
+    }
 };
 
 pub const Build = struct {
@@ -2501,4 +2557,12 @@ pub const Build = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
+}
+
+test "Element: div chain slot size" {
+    // Guard against accidental growth: new Element fields (e.g. _flags) must
+    // fit in existing padding. Debug is larger from the _proto_canary fields.
+    const Div = @import("element/html/Div.zig");
+    const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 120 else 74, slot);
 }

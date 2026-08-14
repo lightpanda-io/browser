@@ -59,7 +59,7 @@ fn htmlAsChildrenInner(frame: *Frame, node: *Node, html: []const u8, opts: Fragm
             slotting.assignSlottablesForTree(root, frame);
         }
         if (node.is(Element)) |el| {
-            if (frame._element_shadow_roots.get(el)) |shadow_root| {
+            if (el.hostedShadowRoot(frame)) |shadow_root| {
                 slotting.assignSlottablesForTree(shadow_root.asNode(), frame);
             }
         }
