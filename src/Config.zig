@@ -195,7 +195,7 @@ const CommonOptions = .{
     .{ .name = "web_bot_auth_key_file", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
-    .{ .name = "user_agent", .type = ?[]const u8 },
+    .{ .name = "user_agent", .type = ?[]const u8, .validator = userAgentValidator },
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8 },
     .{ .name = "block_urls", .type = ?[]const u8 },
@@ -1049,6 +1049,30 @@ test "Config: advertiseHost preserves concrete host when not a wildcard" {
     defer config.deinit(std.testing.allocator);
     try std.testing.expect(!config.bindIsWildcard());
     try std.testing.expectEqualStrings("127.0.0.1", config.advertiseHost());
+}
+
+test "Config: parseArgs refuses a mozilla user-agent" {
+    log.expectLog(&.{.app});
+    const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--user-agent", "mozilla/1.0" };
+    const proc_args: std.process.Args = .{ .vector = &argv };
+    try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+}
+
+test "Config: validateUserAgent" {
+    try validateUserAgent("Lightpanda/1.0");
+    try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
+    try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
+    try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
+}
+
+fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    validateUserAgent(str) catch {
+        log.fatal(.app, "invalid user-agent", .{ .hint = "User agent can't contain Mozilla" });
+        return error.InvalidArgument;
+    };
+
+    ua.* = try allocator.dupe(u8, str);
 }
 
 pub fn validateUserAgent(ua: []const u8) !void {

@@ -101,7 +101,16 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
 const HttpClient = @import("../../../network/HttpClient.zig");
 pub fn populateRequestHeaders(self: *Headers, transfer: *HttpClient.Transfer) !void {
     for (self._list._entries.items) |entry| {
-        try transfer.addHeader(entry.name.str(), entry.value.str(), .{ .source = .author });
+        if (std.ascii.eqlIgnoreCase(entry.name.str(), "user-agent")) {
+            lp.Config.validateUserAgent(entry.value.str()) catch |err| {
+                log.info(.js, "populateRequestHeaders", .{ .info = "user-agent override", .err = err });
+                continue;
+            };
+            try transfer.setHeader(entry.name.str(), entry.value.str(), .{ .source = .author });
+            continue;
+        }
+
+        try transfer.appendHeader(entry.name.str(), entry.value.str(), .{ .source = .author });
     }
 }
 

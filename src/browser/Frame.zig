@@ -623,7 +623,7 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
     const arena = transfer.arena.allocator();
     if (try referrer.compute(arena, self.referrer_policy, self.referrerSource(), transfer.req.url)) |ref| {
-        try transfer.addHeader("Referer", ref, .{});
+        try transfer.setHeader("Referer", ref, .{});
         transfer.req.referrer_policy = self.referrer_policy;
     }
 }
@@ -843,15 +843,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
         if (opts.header) |hdr| {
             // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
             if (HttpClient.Header.parse(hdr)) |parsed| {
-                try transfer.addHeader(parsed.name, parsed.value, .{});
+                try transfer.setHeader(parsed.name, parsed.value, .{});
             }
         }
         if (opts.referer) |ref| {
-            try transfer.addHeader("Referer", ref, .{});
+            try transfer.setHeader("Referer", ref, .{});
             self._referrer = try self.arena.dupe(u8, ref);
             transfer.req.referrer_policy = opts.referrer_policy;
         }
@@ -2307,7 +2307,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
     {
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", "text/css,*/*;q=0.1", .{});
+        try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
         try self.headersForRequest(transfer);
     }
 

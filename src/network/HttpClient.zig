@@ -383,10 +383,10 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
 }
 
 // Headers _all_ requests include.
-pub fn baselineHeaders(self: *const Client) [3]http.Header {
+pub fn baselineHeaders(self: *const Client) [3]Transfer.RequestHeader {
     return .{
         .{ .name = "User-Agent", .value = self.getUserAgent() },
-        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua },
+        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
         .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
@@ -931,10 +931,10 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
                 .last_modified = cached.last_modified,
             });
             if (cached.etag) |etag| {
-                try transfer.addHeader("If-None-Match", etag, .{});
+                try transfer.setHeader("If-None-Match", etag, .{});
             }
             if (cached.last_modified) |lm| {
-                try transfer.addHeader("If-Modified-Since", lm, .{});
+                try transfer.setHeader("If-Modified-Since", lm, .{});
             }
             transfer._cache_intent = .{ .revalidate = cached };
             return false;
@@ -2730,13 +2730,14 @@ pub const Transfer = struct {
 
     // Who put the header on the request. CORS cares: only non-safelisted
     // author (i.e. script-set) headers trigger a preflight.
-    pub const HeaderSource = enum { user_agent, author };
+    // fixed is hardcoded and can't be changed.
+    pub const HeaderSource = enum { user_agent, author, fixed };
 
     pub const HeaderOpts = struct {
         source: HeaderSource = .user_agent,
     };
 
-    pub fn addHeader(self: *Transfer, name: []const u8, value: []const u8, opts: HeaderOpts) !void {
+    fn addHeader(self: *Transfer, name: []const u8, value: []const u8, opts: HeaderOpts) !void {
         const arena = self.arena.allocator();
         try self.req_headers.append(arena, .{
             .name = try arena.dupe(u8, name),
@@ -2775,6 +2776,13 @@ pub const Transfer = struct {
                 i += 1;
                 continue;
             }
+
+            // Don't override any fixed header.
+            if (hdr.source == .fixed) {
+                log.info(.http, "ignore overriding fixed header", .{ .header = hdr.name });
+                return;
+            }
+
             if (found) {
                 _ = self.req_headers.orderedRemove(i);
                 continue;
@@ -2789,10 +2797,34 @@ pub const Transfer = struct {
         }
     }
 
+    // Adds, appending every existing header with the first same case-insensitive name.
+    // appendHeader doesn't deduplicate any existing headers.
+    pub fn appendHeader(self: *Transfer, name: []const u8, value: []const u8, opts: HeaderOpts) !void {
+        var i: usize = 0;
+        while (i < self.req_headers.items.len) {
+            const hdr = &self.req_headers.items[i];
+            if (std.ascii.eqlIgnoreCase(hdr.name, name) == false) {
+                i += 1;
+                continue;
+            }
+
+            // Don't override any fixed header.
+            if (hdr.source == .fixed) {
+                log.info(.http, "ignore overriding fixed header", .{ .header = hdr.name });
+                return;
+            }
+
+            hdr.value = try std.fmt.allocPrint(self.arena.allocator(), "{s}, {s}", .{ hdr.value, value });
+            hdr.source = opts.source;
+            return;
+        }
+        try self.addHeader(name, value, opts);
+    }
+
     // The client's baseline headers, added to every request at creation.
     fn seedHeaders(self: *Transfer) !void {
         for (self.client.baselineHeaders()) |hdr| {
-            try self.addHeader(hdr.name, hdr.value, .{});
+            try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
     }
 
@@ -2804,6 +2836,12 @@ pub const Transfer = struct {
         self.req_headers.clearRetainingCapacity();
         try self.seedHeaders();
         for (headers) |hdr| {
+            if (std.ascii.eqlIgnoreCase(hdr.name, "user-agent")) {
+                lp.Config.validateUserAgent(hdr.value) catch |err| {
+                    log.info(.http, "ignored request header", .{ .intercepted = self.client.intercepted, .name = hdr.name, .err = err });
+                    continue;
+                };
+            }
             try self.setHeader(hdr.name, hdr.value, .{});
         }
     }
@@ -3456,9 +3494,15 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
         .start_time = 0,
     };
 
-    try transfer.addHeader("User-Agent", "Lightpanda/1.0", .{});
-    try transfer.addHeader("X-Twice", "a", .{});
-    try transfer.addHeader("x-twice", "b", .{});
+    try transfer.setHeader("User-Agent", "Lightpanda/1.0", .{});
+    try transfer.setHeader("X-Twice", "a", .{});
+
+    // force a duplicated value manually
+    try transfer.req_headers.append(transfer.arena.allocator(), .{
+        .name = "x-twice",
+        .value = "b",
+        .source = .user_agent,
+    });
 
     // replaces in place, collapsing duplicates
     try transfer.setHeader("user-agent", "Custom/1.0", .{});
@@ -3475,6 +3519,46 @@ test "HttpClient: Transfer.setHeader replaces by case-insensitive name" {
     try testing.expectEqual(.author, headers[1].source);
     try testing.expectEqual("X-New", headers[2].name);
     try testing.expectEqual("yes", headers[2].value);
+}
+
+test "HttpClient: Transfer.appendHeader joins values by case-insensitive name" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    const arena = try pool.acquire(.small, "test");
+    defer arena.release();
+
+    var transfer = Transfer{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .document,
+            .notification = undefined,
+            .shutdown_callback = noopShutdown,
+        },
+        .client = undefined,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    // no match: appends a new header
+    try transfer.appendHeader("Cookie", "a=1", .{});
+    // match by case-insensitive name: joins onto the existing value
+    try transfer.appendHeader("COOKIE", "b=2", .{ .source = .author });
+
+    {
+        const headers = transfer.req_headers.items;
+        try testing.expectEqual(1, headers.len);
+        try testing.expectEqual("Cookie", headers[0].name);
+        try testing.expectEqual("a=1, b=2", headers[0].value);
+        try testing.expectEqual(.author, headers[0].source);
+    }
 }
 
 test "HttpClient: Fetch header overrides restore after one hop" {

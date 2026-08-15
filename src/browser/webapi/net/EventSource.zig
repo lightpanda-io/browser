@@ -196,15 +196,15 @@ fn connect(self: *EventSource) !void {
 
     {
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", "text/event-stream", .{});
-        try transfer.addHeader("Cache-Control", "no-cache", .{});
+        try transfer.setHeader("Accept", "text/event-stream", .{});
+        try transfer.setHeader("Cache-Control", "no-cache", .{});
         if (self._last_event_id.items.len > 0) {
-            try transfer.addHeader("Last-Event-ID", self._last_event_id.items, .{});
+            try transfer.setHeader("Last-Event-ID", self._last_event_id.items, .{});
         }
         if (!same_origin) {
             // EventSource is a CORS request: cross-origin fetches carry the
             // document's origin ("null" for opaque origins, like Chrome).
-            try transfer.addHeader("Origin", exec.origin() orelse "null", .{});
+            try transfer.setHeader("Origin", exec.origin() orelse "null", .{});
         }
         try exec.headersForRequest(transfer);
     }
