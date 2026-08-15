@@ -38,6 +38,10 @@ pub const Context = struct {
     // ones the page itself initiates.
     navigation_id: [36]u8,
 
+    // The window realm's id, reported by the script module. A navigation
+    // means a new document and so a new realm.
+    realm_id: [36]u8,
+
     // A navigate command whose `wait` hasn't been satisfied yet.
     pending_navigate: ?PendingNavigate = null,
 };
@@ -89,10 +93,12 @@ fn create(cmd: *const BiDi.Command) !void {
 
     var ctx = Context{
         .id = undefined,
+        .realm_id = undefined,
         .frame_id = page.frame_id,
         .navigation_id = undefined,
     };
     uuidv4(&ctx.id);
+    uuidv4(&ctx.realm_id);
     uuidv4(&ctx.navigation_id);
     bidi.context = ctx;
 
@@ -178,9 +184,8 @@ fn close(cmd: *const BiDi.Command) !void {
     const ctx_id = ctx.id;
 
     // the frame's url doesn't survive closePage
-    const arena = bidi.message_arena.allocator();
     const url: []const u8 = if (bidi.session.currentFrame()) |frame|
-        try arena.dupe(u8, frame.url)
+        try cmd.arena.dupe(u8, frame.url)
     else
         "about:blank";
 
@@ -198,7 +203,7 @@ fn close(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(struct {}{});
 }
 
-fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context {
+pub fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context {
     if (cmd.bidi.context) |*ctx| {
         if (std.mem.eql(u8, &ctx.id, context)) {
             return ctx;
@@ -230,14 +235,28 @@ fn rejectPending(bidi: *BiDi, ctx: *Context, message: []const u8) !void {
 pub fn registerNotifications(bidi: *BiDi) !void {
     const notification = bidi.notification;
     try notification.register(.frame_loaded, bidi, onFrameLoaded);
+    try notification.register(.frame_remove, bidi, onFrameRemove);
     try notification.register(.frame_navigate, bidi, onFrameNavigate);
     try notification.register(.frame_navigate_failed, bidi, onFrameNavigateFailed);
     try notification.register(.frame_dom_content_loaded, bidi, onFrameDOMContentLoaded);
 }
 
+// The page whose nodes and persisted values these belong to is going away.
+fn onFrameRemove(ptr: *anyopaque, _: Notification.FrameRemove) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    bidi.resetRealm();
+}
+
 fn onFrameNavigate(ptr: *anyopaque, msg: *const Notification.FrameNavigate) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     const ctx = rootContext(bidi, msg.frame_id) orelse return;
+
+    if (msg.is_pending_root == false) {
+        bidi.resetRealm();
+    } else {
+        // pending root keeps its old page and thus its sharedIds and handles
+        // reachable until frameRemove commits the replacement.
+    }
 
     uuidv4(&ctx.navigation_id);
     try bidi.sendEvent("browsingContext.navigationStarted", .{
