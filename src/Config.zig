@@ -1067,8 +1067,8 @@ test "Config: validateUserAgent" {
 
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
     const str = args.next() orelse return error.MissingArgument;
-    validateUserAgent(str) catch {
-        log.fatal(.app, "invalid user-agent", .{ .hint = "User agent can't contain Mozilla" });
+    validateUserAgent(str) catch |err| {
+        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII and can't contain Mozilla" });
         return error.InvalidArgument;
     };
 

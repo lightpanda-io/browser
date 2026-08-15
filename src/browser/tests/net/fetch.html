@@ -452,9 +452,38 @@
   }
 </script>
 
-<!-- Referer across redirects: a same-origin hop keeps the full referrer; a
-     cross-origin hop (localhost alias) recomputes it at the redirect, which
-     the default policy (strict-origin-when-cross-origin) strips to origin. -->
+<script id=fetch_header_layers type=module>
+  {
+    const state = await testing.async();
+    const headers = new Headers();
+    headers.set('Accept-Language', 'fr');
+    headers.append('X-Multi', 'a');
+    headers.append('X-Multi', 'b');
+    headers.append('Cookie', 'a=1');
+    headers.append('Cookie', 'b=2');
+    headers.set('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)');
+    headers.set('Sec-Ch-Ua', '"Chromium";v="140"');
+    const response = await fetch('http://127.0.0.1:9582/echo_headers', { headers });
+    const text = await response.text();
+    state.resolve();
+
+    await state.done(() => {
+      const got = {};
+      for (const line of text.trim().split('\n')) {
+        const sep = line.indexOf(': ');
+        got[line.slice(0, sep).toLowerCase()] = line.slice(sep + 2);
+      }
+      testing.expectEqual('fr', got['accept-language']);
+      testing.expectEqual('a, b', got['x-multi']);
+      testing.expectEqual('a=1; b=2', got['cookie']);
+      testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
+      testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
+      testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
+      testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+    });
+  }
+</script>
+
 <script id=fetch_redirect_referer type=module>
   {
     const state = await testing.async();
