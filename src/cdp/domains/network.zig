@@ -369,11 +369,11 @@ pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const N
     const frame_id = req.document_frame_id orelse req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
-    // Modify request with extra CDP headers. Use setHeader (replace by name)
-    // so a caller-supplied header overrides a built-in default of the same
-    // name (e.g. User-Agent) instead of producing a duplicate.
+    // Modify request with extra CDP headers: the .cdp layer overrides both
+    // built-in defaults and script-set headers of the same name (Chrome
+    // behavior), but never a .fixed header.
     for (bc.extra_headers.items) |extra| {
-        try transfer.setHeader(extra.name, extra.value, .{});
+        try transfer.setHeader(extra.name, extra.value, .{ .source = .cdp });
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
