@@ -334,7 +334,11 @@ const JavascriptUrlTask = struct {
     }
 };
 
-pub fn handleClick(frame: *Frame, target: *Node) !void {
+// event_target is the element that was actually clicked
+// target is the element that's being activated. Imagine a span inside an anchor
+// the span is clicked (event_target), but it's the anchor that we're activating
+// (target).
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
 
@@ -377,6 +381,12 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             // behavior is to run the synthetic click activation steps on the
             // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
             const control = label.getControl(frame) orelse return;
+            if (control.asNode().contains(event_target)) {
+                // label is the only control that synthesizes another click, so
+                // we need to guard against that activation re-triggering the
+                // label (into an infinite loop)
+                return;
+            }
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(frame);
         },
