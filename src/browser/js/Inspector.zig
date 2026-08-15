@@ -367,13 +367,7 @@ pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
     }
-    const internal_field_count = v8.v8__Object__InternalFieldCount(value);
-    if (internal_field_count == 0) {
-        return null;
-    }
-
-    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(value, 0).?;
-    return @ptrCast(@alignCast(tao_ptr));
+    return TaggedOpaque.fromObject(@ptrCast(value));
 }
 
 fn cZigStringToString(s: v8.CZigString) ?[]const u8 {

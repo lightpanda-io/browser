@@ -88,6 +88,14 @@ pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
     return .{ .local = self, .handle = handle };
 }
 
+// StringToBigInt semantics: arbitrary precision, sign-aware, and it never
+// consults the page's globals. Fails on non-numeric digits.
+pub fn newBigInt(self: *const Local, digits: []const u8) !js.Value {
+    const str: *const v8.Value = @ptrCast(self.isolate.initStringHandle(digits));
+    const handle = v8.v8__Value__ToBigInt(str, self.handle) orelse return error.JsException;
+    return .{ .local = self, .handle = @ptrCast(handle) };
+}
+
 pub fn newNumber(self: *const Local, f: f64) !js.Value {
     return .{
         .local = self,

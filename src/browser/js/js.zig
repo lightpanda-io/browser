@@ -36,6 +36,7 @@ pub const Identity = @import("Identity.zig");
 pub const Context = @import("Context.zig");
 pub const Execution = @import("Execution.zig");
 pub const Local = @import("Local.zig");
+pub const TaggedOpaque = @import("TaggedOpaque.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
@@ -477,7 +478,7 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(24, @sizeOf(@import("TaggedOpaque.zig")));
+    try std.testing.expectEqual(24, @sizeOf(TaggedOpaque));
 }
 
 // Every finalizable instance of Zig gets 1 FinalizerCallback registered in the

@@ -22,12 +22,22 @@ const BiDi = @import("BiDi.zig");
 
 pub fn processMessage(cmd: *const BiDi.Command) !void {
     const command = std.meta.stringToEnum(enum {
+        close,
         getUserContexts,
     }, cmd.action) orelse return error.UnknownCommand;
 
     switch (command) {
+        .close => return close(cmd),
         .getUserContexts => return getUserContexts(cmd),
     }
+}
+
+fn close(cmd: *const BiDi.Command) !void {
+    try cmd.sendResult(struct {}{});
+
+    const browser = &cmd.bidi.browser;
+    const arena = try browser.arena_pool.acquire(.tiny, "bidi browser close");
+    browser.http_client.inbox.push(arena, .close);
 }
 
 fn getUserContexts(cmd: *const BiDi.Command) !void {

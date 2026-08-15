@@ -19,17 +19,22 @@
 const std = @import("std");
 
 const App = @import("../../App.zig");
+const uuidv4 = @import("../../id.zig").uuidv4;
 const Server = @import("../Server.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
 
+const NodeRegistry = @import("../../NodeRegistry.zig");
+
 const Driver = @import("../Driver.zig");
 const Connection = @import("../Connection.zig");
 
+const remote_value = @import("remote_value.zig");
 const browsing_context = @import("browsing_context.zig");
 
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 const BiDi = @This();
 
@@ -55,6 +60,12 @@ session: *Session,
 notification: *Notification,
 context: ?browsing_context.Context = null,
 
+// Issues the script module's sharedIds
+node_registry: NodeRegistry,
+
+// Values the client owns via `resultOwnership: "root"`
+handles: remote_value.Handles,
+
 subscriptions: std.ArrayList(Subscription) = .empty,
 
 const Subscription = struct {
@@ -76,6 +87,8 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
         .browser = undefined,
         .session = undefined,
         .notification = undefined,
+        .node_registry = .init(allocator),
+        .handles = .{ .allocator = allocator },
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .session_arena = std.heap.ArenaAllocator.init(allocator),
     };
@@ -104,12 +117,24 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
 
 pub fn deinit(self: *BiDi) void {
     self.notification.unregisterAll(self);
+
+    self.handles.deinit();
     self.browser.closeSession();
+
+    self.node_registry.deinit();
     self.notification.deinit();
     self.browser.deinit();
     self.conn.deinit();
     self.message_arena.deinit();
     self.session_arena.deinit();
+}
+
+pub fn resetRealm(self: *BiDi) void {
+    self.handles.releaseAll();
+    self.node_registry.reset();
+    if (self.context) |*ctx| {
+        uuidv4(&ctx.realm_id);
+    }
 }
 
 // Dispatch a single BiDi frame from the inbox. Unlike CDP, frames aren't
@@ -135,7 +160,7 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         return self.sendError(id, "invalid argument", "missing command method");
     };
 
-    self.dispatch(id, method, data) catch |err| switch (err) {
+    self.dispatch(arena, id, method, data) catch |err| switch (err) {
         error.UnknownCommand => try self.sendError(id, "unknown command", method),
         // Command.params already answered the client.
         error.InvalidParams => {},
@@ -144,12 +169,13 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
 }
 
 // A BiDi method is always "<module>.<command>".
-fn dispatch(self: *BiDi, id: u64, method: []const u8, data: []const u8) !void {
+fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []const u8) !void {
     const i = std.mem.indexOfScalar(u8, method, '.') orelse {
         return error.UnknownCommand;
     };
     const module = std.meta.stringToEnum(enum {
         session,
+        script,
         browser,
         browsingContext,
     }, method[0..i]) orelse return error.UnknownCommand;
@@ -164,11 +190,13 @@ fn dispatch(self: *BiDi, id: u64, method: []const u8, data: []const u8) !void {
         .id = id,
         .bidi = self,
         .json = data,
+        .arena = arena,
         .action = method[i + 1 ..],
     };
 
     switch (module) {
         .session => return @import("session.zig").processMessage(&cmd),
+        .script => return @import("script.zig").processMessage(&cmd),
         .browser => return @import("browser.zig").processMessage(&cmd),
         .browsingContext => return browsing_context.processMessage(&cmd),
     }
@@ -178,6 +206,9 @@ fn dispatch(self: *BiDi, id: u64, method: []const u8, data: []const u8) !void {
 // have to thread the id (and the raw message) around.
 pub const Command = struct {
     bidi: *BiDi,
+
+    // The message_arena; valid for the lifetime of the command.
+    arena: Allocator,
 
     // Echoed back in the response.
     id: u64,
@@ -192,8 +223,7 @@ pub const Command = struct {
     // error.InvalidParams when the message has no params or they don't
     // match T, so callers can just `try`. onMessage swallows that error.
     pub fn params(self: *const Command, comptime T: type) !T {
-        const arena = self.bidi.message_arena.allocator();
-        const wrapper = std.json.parseFromSliceLeaky(struct { params: T }, arena, self.json, .{
+        const wrapper = std.json.parseFromSliceLeaky(struct { params: T }, self.arena, self.json, .{
             .ignore_unknown_fields = true,
         }) catch {
             try self.sendError("invalid argument", "invalid params");
