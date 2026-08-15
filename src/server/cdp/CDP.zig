@@ -206,7 +206,7 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
 fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
-    lp.metrics.cdp_commands.incr();
+    lp.metrics.serve_commands.incr(.cdp);
 
     var command = Command{
         .input = .{
@@ -240,7 +240,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         dispatchCommand(&command, input.method) catch |err| {
             switch (err) {
                 error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
-                    lp.metrics.cdp_unknown_commands.incr();
+                    lp.metrics.serve_unknown_commands.incr(.cdp);
                     // Chrome's code and wording; drivers feature-detect on it.
                     const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
                     command.sendError(-32601, message, .{}) catch return err;
