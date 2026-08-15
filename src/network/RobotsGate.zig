@@ -222,8 +222,16 @@ const RobotsContext = struct {
                     try network.robot_store.putAllowed(robots_url);
                 }
             },
+            // Unauthorized/Forbidden: treat as fully disallowed since we can't verify permissions.
+            401, 403 => {
+                log.debug(.http, "robots.txt access denied", .{
+                    .url = robots_url,
+                    .status = self.status,
+                });
+                try network.robot_store.putDisallowed(robots_url);
+            },
             // RFC9309: Unavailable (400-499) means that we may access any resources on the server.
-            400...499 => {
+            400, 402, 404...499 => {
                 log.debug(.http, "robots.txt unavailable", .{ .url = robots_url });
                 try network.robot_store.putAllowed(robots_url);
             },
