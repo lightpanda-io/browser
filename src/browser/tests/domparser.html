@@ -419,3 +419,26 @@
   testing.expectEqual(2, allElements.length);
 }
 </script>
+
+<script id=xml-namespaces>
+{
+  const doc = new DOMParser().parseFromString(
+    '<r xmlns:a="urn:a" a:b="1" xml:lang="en" c="2"><a:k/><k/></r>', 'text/xml');
+  const r = doc.documentElement;
+
+  // Elements outside any xmlns declaration are in no namespace
+  testing.expectEqual(null, r.namespaceURI);
+  testing.expectEqual(1, doc.getElementsByTagNameNS('', 'r').length);
+  testing.expectEqual(1, doc.getElementsByTagNameNS(null, 'k').length);
+
+  // Prefixed attributes keep their qualified name. (Not asserted: browsers
+  // also list xmlns:a as an attribute; xml5ever consumes the declaration.)
+  testing.expectEqual(true, Array.from(r.attributes).some(a => a.name === 'a:b'));
+  testing.expectEqual(false, Array.from(r.attributes).some(a => a.name === 'b'));
+  testing.expectEqual('1', r.getAttribute('a:b'));
+  testing.expectEqual('en', r.getAttribute('xml:lang'));
+  testing.expectEqual(null, r.getAttribute('lang'));
+  testing.expectEqual('en', r.getAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang'));
+  testing.expectEqual(true, r.hasAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang'));
+}
+</script>

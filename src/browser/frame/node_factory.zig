@@ -1087,8 +1087,23 @@ fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !v
     var attributes = &element._attributes;
     try attributes.ensureTotalCapacity(count, frame);
     while (list.next()) |attr| {
-        try attributes.putNew(attr.name.local.slice(), attr.value.slice(), frame);
+        const name = try parserAttributeName(frame, attr.name);
+        try attributes.putNew(name, attr.value.slice(), frame);
     }
+}
+
+// Attributes are keyed by qualified name (no namespace model), so a prefixed
+// attribute (`xlink:href` in foreign content, `xml:id` in XML) must keep its
+// prefix — that is what `getAttribute("xlink:href")` and `Attr.name` see in
+// browsers. The joined name only has to outlive putNew, which canonicalizes
+// it into the frame arena. (Not frame.buf: name normalization writes there.)
+fn parserAttributeName(frame: *Frame, qname: Parser.QualName) ![]const u8 {
+    const local = qname.local.slice();
+    const prefix = (qname.prefix.unwrap() orelse return local).slice();
+    if (prefix.len == 0) {
+        return local;
+    }
+    return std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local });
 }
 
 // Called when `new MyElement()` is invoked directly in JS (not via the

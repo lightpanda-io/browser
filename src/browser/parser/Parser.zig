@@ -25,6 +25,7 @@ const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
 const CData = @import("../webapi/CData.zig");
 
+pub const QualName = h5e.QualName;
 pub const AttributeIterator = h5e.AttributeIterator;
 
 const Allocator = std.mem.Allocator;
@@ -453,7 +454,8 @@ fn createElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName,
 }
 
 fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
-    return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .xml);
+    // An XML element outside any xmlns declaration is in no namespace (null namespace)
+    return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .null);
 }
 
 // html5ever_parse_fragment materializes the fragment's context element through

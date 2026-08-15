@@ -674,7 +674,7 @@ pub fn evaluate(
     self: *Document,
     expression: []const u8,
     context_node: ?*Node,
-    resolver: ?js.Function,
+    resolver: ?js.Value,
     result_type: ?u16,
     result: ?*XPathResult,
     frame: *Frame,
@@ -697,7 +697,7 @@ pub fn evaluate(
 pub fn createExpression(
     _: *const Document,
     expression: []const u8,
-    resolver: ?js.Function,
+    resolver: ?js.Value,
     frame: *Frame,
 ) !*XPathExpression {
     _ = resolver;
