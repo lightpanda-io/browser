@@ -31,4 +31,12 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(TableCol);
+    pub const span = reflect.unsignedLong("span", .{ .default = 1, .clamp = .{ .min = 1, .max = 1000 } });
+    pub const width = reflect.string("width");
+    pub const vAlign = reflect.string("valign");
+    pub const chOff = reflect.string("charoff");
+    pub const ch = reflect.string("char");
+    pub const @"align" = reflect.string("align");
 };

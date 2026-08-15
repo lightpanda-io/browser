@@ -43,73 +43,6 @@ pub fn asNode(self: *Area) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getAlt(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
-}
-
-pub fn setAlt(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), frame);
-}
-
-pub fn getCoords(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("coords")) orelse "";
-}
-
-pub fn setCoords(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("coords"), .wrap(value), frame);
-}
-
-pub fn getShape(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("shape")) orelse "";
-}
-
-pub fn setShape(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("shape"), .wrap(value), frame);
-}
-
-pub fn getTarget(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("target")) orelse "";
-}
-
-pub fn setTarget(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
-}
-
-pub fn getDownload(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("download")) orelse "";
-}
-
-pub fn setDownload(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("download"), .wrap(value), frame);
-}
-
-pub fn getRel(self: *const Area) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("rel")) orelse "";
-}
-
-pub fn setRel(self: *Area, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
-}
-
-pub fn getReferrerPolicy(self: *const Area) []const u8 {
-    const valid_referrer_policy = [_][]const u8{
-        "",
-        "no-referrer",
-        "no-referrer-when-downgrade",
-        "same-origin",
-        "origin",
-        "strict-origin",
-        "origin-when-cross-origin",
-        "strict-origin-when-cross-origin",
-        "unsafe-url",
-    };
-    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(.wrap("referrerpolicy")), &valid_referrer_policy, "", "").?;
-}
-
-pub fn setReferrerPolicy(self: *Area, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(.wrap("referrerpolicy"), .wrap(value), frame);
-}
-
 pub fn getHref(self: *Area, frame: *Frame) ![]const u8 {
     const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
@@ -286,6 +219,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Area);
+    pub const noHref = reflect.boolean("nohref");
+    pub const @"type" = reflect.string("type");
+    pub const ping = reflect.string("ping");
+    pub const hreflang = reflect.string("hreflang");
+
     pub const href = bridge.accessor(Area.getHref, Area.setHref, .{ .ce_reactions = true });
     pub const origin = bridge.accessor(Area.getOrigin, null, .{});
     pub const protocol = bridge.accessor(Area.getProtocol, Area.setProtocol, .{ .ce_reactions = true });
@@ -297,13 +236,13 @@ pub const JsApi = struct {
     pub const pathname = bridge.accessor(Area.getPathname, Area.setPathname, .{ .ce_reactions = true });
     pub const search = bridge.accessor(Area.getSearch, Area.setSearch, .{ .ce_reactions = true });
     pub const hash = bridge.accessor(Area.getHash, Area.setHash, .{ .ce_reactions = true });
-    pub const alt = bridge.accessor(Area.getAlt, Area.setAlt, .{ .ce_reactions = true });
-    pub const coords = bridge.accessor(Area.getCoords, Area.setCoords, .{ .ce_reactions = true });
-    pub const shape = bridge.accessor(Area.getShape, Area.setShape, .{ .ce_reactions = true });
-    pub const target = bridge.accessor(Area.getTarget, Area.setTarget, .{ .ce_reactions = true });
-    pub const download = bridge.accessor(Area.getDownload, Area.setDownload, .{ .ce_reactions = true });
-    pub const rel = bridge.accessor(Area.getRel, Area.setRel, .{ .ce_reactions = true });
-    pub const referrerPolicy = bridge.accessor(Area.getReferrerPolicy, Area.setReferrerPolicy, .{ .ce_reactions = true });
+    pub const alt = reflect.string("alt");
+    pub const coords = reflect.string("coords");
+    pub const shape = reflect.string("shape");
+    pub const target = reflect.string("target");
+    pub const download = reflect.string("download");
+    pub const rel = reflect.string("rel");
+    pub const referrerPolicy = reflect.referrerPolicy();
     pub const toString = bridge.function(Area.getHref, .{});
     pub const relList = bridge.accessor(Area.getRelList, null, .{ .null_as_undefined = true });
 };

@@ -20,10 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const reflect = @import("../../reflect.zig");
 const Factory = @import("../../Factory.zig");
 
 const Frame = @import("../../Frame.zig");
+const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const global_event_handlers = @import("../global_event_handlers.zig");
@@ -521,11 +521,7 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    return reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
-}
-
-pub fn setDir(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
+    return reflection.enumeratedValue(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn getAccessKey(self: *HtmlElement) []const u8 {
@@ -1445,55 +1441,14 @@ pub fn getOnWheel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.onwheel, frame);
 }
 
-// HTML integer parsing is lax
+// HTML "rules for parsing integers", for callers that want an i32 (tabindex);
+// out-of-range values parse as failure.
 pub fn parseInteger(input: []const u8) ?i32 {
-    var normalized = std.mem.trimStart(u8, input, "\t\n\r\x0c ");
-    if (normalized.len == 0) {
-        return null;
-    }
-
-    var negative = false;
-    if (normalized[0] == '-') {
-        negative = true;
-        normalized = normalized[1..];
-    } else if (normalized[0] == '+') {
-        normalized = normalized[1..];
-    }
-
-    if (normalized.len == 0 or std.ascii.isDigit(normalized[0]) == false) {
-        return null;
-    }
-
-    var i: usize = 0;
-    var value: i64 = 0;
-    while (i < normalized.len and std.ascii.isDigit(normalized[i])) : (i += 1) {
-        value = value * 10 + (normalized[i] - '0');
-        if (value > 2147483648) {
-            return null;
-        }
-    }
-
-    if (negative) {
-        value = -value;
-    }
-
-    if (value < -2147483648 or value > 2147483647) {
+    const value = reflection.parseInteger(input) orelse return null;
+    if (value < std.math.minInt(i32) or value > std.math.maxInt(i32)) {
         return null;
     }
     return @intCast(value);
-}
-
-pub fn reflectEnumerated(
-    value: ?[]const u8,
-    keywords: []const []const u8,
-    missing: ?[]const u8,
-    invalid: ?[]const u8,
-) ?[]const u8 {
-    const v = value orelse return missing;
-    for (keywords) |keyword| {
-        if (std.ascii.eqlIgnoreCase(v, keyword)) return keyword;
-    }
-    return invalid;
 }
 
 const InnerTextState = struct {
@@ -1819,6 +1774,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(HtmlElement);
+    pub const inputMode = reflect.enumerated("inputmode", &.{ "none", "text", "tel", "url", "email", "numeric", "decimal", "search" }, .{});
+    pub const enterKeyHint = reflect.enumerated("enterkeyhint", &.{ "enter", "done", "go", "next", "previous", "search", "send" }, .{});
+
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
     pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
@@ -1841,7 +1800,7 @@ pub const JsApi = struct {
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
-    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
+    pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});

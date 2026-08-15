@@ -44,4 +44,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(HR);
+    pub const noShade = reflect.boolean("noshade");
+    pub const width = reflect.string("width");
+    pub const size = reflect.string("size");
+    pub const color = reflect.string("color");
+    pub const @"align" = reflect.string("align");
 };

@@ -54,45 +54,6 @@ pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
     return self.imageAddedCallback(frame);
 }
 
-pub fn getAlt(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
-}
-
-pub fn setAlt(self: *Image, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), frame);
-}
-
-pub fn getWidth(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse return 0;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
-}
-
-pub fn setWidth(self: *Image, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
-}
-
-pub fn getHeight(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 0;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
-}
-
-pub fn setHeight(self: *Image, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
-}
-
-pub fn getCrossOrigin(self: *const Image) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
-}
-
-pub fn setCrossOrigin(self: *Image, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), frame);
-    }
-    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), frame);
-}
-
 pub fn getLoading(self: *const Image) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("loading")) orelse "eager";
 }
@@ -149,11 +110,26 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Image.constructor, .{});
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Image.getSrc, null, .{});
-    pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{ .ce_reactions = true });
-    pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{ .ce_reactions = true });
-    pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{ .ce_reactions = true });
-    pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{ .ce_reactions = true });
+    pub const alt = reflect.string("alt");
+    pub const width = reflect.unsignedLong("width", .{});
+    pub const height = reflect.unsignedLong("height", .{});
+    pub const crossOrigin = reflect.enumerated("crossorigin", &.{ "anonymous", "use-credentials" }, .{ .missing = null, .nullable = true, .invalid = "anonymous" });
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Image);
+    pub const srcset = reflect.string("srcset");
+    pub const useMap = reflect.string("usemap");
+    pub const isMap = reflect.boolean("ismap");
+    pub const referrerPolicy = reflect.referrerPolicy();
+    pub const decoding = reflect.enumerated("decoding", &.{ "async", "sync", "auto" }, .{ .missing = "auto" });
+    // Obsolete
+    pub const name = reflect.string("name");
+    pub const lowsrc = reflect.url("lowsrc");
+    pub const @"align" = reflect.string("align");
+    pub const hspace = reflect.unsignedLong("hspace", .{});
+    pub const vspace = reflect.unsignedLong("vspace", .{});
+    pub const longDesc = reflect.url("longdesc");
+    pub const border = reflect.stringNullToEmpty("border");
+
     pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
     pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
     pub const complete = bridge.accessor(Image.getComplete, null, .{});

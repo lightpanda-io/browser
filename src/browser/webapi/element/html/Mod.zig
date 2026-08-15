@@ -31,4 +31,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(Mod);
+    pub const cite = reflect.url("cite");
+    pub const dateTime = reflect.string("datetime");
 };

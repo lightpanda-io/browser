@@ -93,14 +93,6 @@ pub fn setSrcdoc(self: *IFrame, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("srcdoc"), .wrap(value), frame);
 }
 
-pub fn getName(self: *IFrame) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *IFrame, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
-}
-
 pub fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
@@ -118,9 +110,21 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(IFrame);
+    pub const referrerPolicy = reflect.referrerPolicy();
+    pub const longDesc = reflect.url("longdesc");
+    pub const allowFullscreen = reflect.boolean("allowfullscreen");
+    pub const width = reflect.string("width");
+    pub const scrolling = reflect.string("scrolling");
+    pub const marginWidth = reflect.stringNullToEmpty("marginwidth");
+    pub const marginHeight = reflect.stringNullToEmpty("marginheight");
+    pub const height = reflect.string("height");
+    pub const frameBorder = reflect.string("frameborder");
+    pub const @"align" = reflect.string("align");
+
     pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{ .ce_reactions = true });
     pub const srcdoc = bridge.accessor(IFrame.getSrcdoc, IFrame.setSrcdoc, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
+    pub const name = reflect.string("name");
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
     pub const sandbox = bridge.accessor(IFrame.getSandbox, null, .{ .null_as_undefined = true });

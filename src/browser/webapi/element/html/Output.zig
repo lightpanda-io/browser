@@ -62,6 +62,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Output);
+    pub const name = reflect.string("name");
+
     pub const labels = bridge.accessor(Output.getLabels, null, .{});
     pub const htmlFor = bridge.accessor(Output.getHtmlFor, null, .{ .null_as_undefined = true });
 };
