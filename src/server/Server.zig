@@ -601,7 +601,7 @@ fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
     while (current < self.max_connections) {
         current = self.active_conns.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
     } else {
-        lp.metrics.cdp_connection_limit.incr();
+        lp.metrics.serve_connection_limit.incr();
         return error.MaxConnectionsReached;
     }
     errdefer _ = self.active_conns.fetchSub(1, .monotonic);
@@ -650,11 +650,9 @@ fn serveCDP(self: *Server, socket: posix.socket_t, active_conns_early_release: *
     };
     defer cdp.deinit();
 
-    // Only CDP connections are counted: the metric names are part of the
-    // scrape contract, and there are no bidi_* equivalents yet.
-    lp.metrics.cdp_connections.incr();
-    lp.metrics.cdp_active_connections.incr();
-    defer lp.metrics.cdp_active_connections.decr();
+    lp.metrics.serve_connections.incr(.cdp);
+    lp.metrics.serve_active_connections.incr(.cdp);
+    defer lp.metrics.serve_active_connections.decr(.cdp);
 
     self.serve(.init(.{ .cdp = cdp }), active_conns_early_release);
 }
@@ -672,6 +670,10 @@ fn serveBiDi(self: *Server, socket: posix.socket_t, active_conns_early_release: 
         return;
     };
     defer bidi.deinit();
+
+    lp.metrics.serve_connections.incr(.bidi);
+    lp.metrics.serve_active_connections.incr(.bidi);
+    defer lp.metrics.serve_active_connections.decr(.bidi);
 
     self.serve(.init(.{ .bidi = bidi }), active_conns_early_release);
 }
@@ -1374,7 +1376,7 @@ test "server: get /metrics" {
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
     try testing.expect(std.mem.indexOf(u8, res, "build_info{version=") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "# TYPE cdp_connections_total counter") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "# TYPE serve_connections_total counter") != null);
 }
 
 fn assertHTTPError(

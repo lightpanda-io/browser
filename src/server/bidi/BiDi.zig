@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const App = @import("../../App.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
@@ -160,8 +161,12 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
         return self.sendError(id, "invalid argument", "missing command method");
     };
 
+    lp.metrics.serve_commands.incr(.bidi);
     self.dispatch(arena, id, method, data) catch |err| switch (err) {
-        error.UnknownCommand => try self.sendError(id, "unknown command", method),
+        error.UnknownCommand => {
+            lp.metrics.serve_unknown_commands.incr(.bidi);
+            try self.sendError(id, "unknown command", method);
+        },
         // Command.params already answered the client.
         error.InvalidParams => {},
         else => return err,
