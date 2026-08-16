@@ -24,15 +24,13 @@ const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minim
 
 const Build = blk: {
     if (builtin.zig_version.order(min_zig_version) == .lt) {
-        const message = std.fmt.comptimePrint(
+        @compileError(std.fmt.comptimePrint(
             \\Zig version is too old:
             \\  current Zig version: {f}
             \\  minimum Zig version: {f}
-        , .{ builtin.zig_version, min_zig_version });
-        @compileError(message);
-    } else {
-        break :blk std.Build;
+        , .{ builtin.zig_version, min_zig_version }));
     }
+    break :blk std.Build;
 };
 
 pub fn build(b: *Build) !void {
@@ -95,39 +93,31 @@ pub fn build(b: *Build) !void {
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
     opts.addOption(bool, "wpt_extensions", wpt_extensions);
 
-    const lightpanda_module = blk: {
-        const mod = b.addModule("lightpanda", .{
-            .root_source_file = b.path("src/lightpanda.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .link_libcpp = true,
-            .sanitize_c = enable_csan,
-            .sanitize_thread = enable_tsan,
-        });
-        mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
-        mod.addImport("build_config", opts.createModule());
+    const lightpanda_module = b.addModule("lightpanda", .{
+        .root_source_file = b.path("src/lightpanda.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+        .sanitize_c = enable_csan,
+        .sanitize_thread = enable_tsan,
+    });
+    lightpanda_module.addImport("lightpanda", lightpanda_module); // allow circular "lightpanda" import
+    lightpanda_module.addImport("build_config", opts.createModule());
 
-        // Format check
-        const fmt_step = b.step("fmt", "Check code formatting");
-        const fmt = b.addFmt(.{
-            .paths = &.{ "src", "build.zig", "build.zig.zon" },
-            .check = true,
-        });
-        fmt_step.dependOn(&fmt.step);
+    const fmt_step = b.step("fmt", "Check code formatting");
+    const fmt = b.addFmt(.{
+        .paths = &.{ "src", "build.zig", "build.zig.zon" },
+        .check = true,
+    });
+    fmt_step.dependOn(&fmt.step);
+    b.default_step.dependOn(fmt_step);
 
-        // Set default behavior
-        b.default_step.dependOn(fmt_step);
-
-        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
-        try linkCurl(b, mod, enable_tsan);
-        try linkHtml5Ever(b, mod);
-        linkZenai(b, mod);
-        linkIsocline(b, mod);
-
-        break :blk mod;
-    };
-
+    linkV8(b, lightpanda_module, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
+    linkCurl(b, lightpanda_module, enable_tsan);
+    linkHtml5Ever(b, lightpanda_module);
+    linkZenai(b, lightpanda_module);
+    linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, enable_csan, enable_tsan);
 
     // Check compilation
@@ -144,29 +134,20 @@ pub fn build(b: *Build) !void {
     // with `zig build extras`.
     const extras_step = b.step("extras", "Build snapshot_creator");
 
+    const exe_config: ExeConfig = .{
+        .check = check,
+        .lightpanda_module = lightpanda_module,
+        .target = target,
+        .optimize = optimize,
+        .use_llvm = use_llvm,
+        .sanitize_c = enable_csan,
+        .sanitize_thread = enable_tsan,
+    };
+
     {
         // browser
-        const exe = b.addExecutable(.{
-            .name = "lightpanda",
-            .use_llvm = use_llvm,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .sanitize_c = enable_csan,
-                .sanitize_thread = enable_tsan,
-                .imports = &.{
-                    .{ .name = "lightpanda", .module = lightpanda_module },
-                },
-            }),
-        });
+        const exe = addExe(b, exe_config, "lightpanda", "lightpanda_exe_check", "src/main.zig");
         b.installArtifact(exe);
-
-        const exe_check = b.addLibrary(.{
-            .name = "lightpanda_exe_check",
-            .root_module = exe.root_module,
-        });
-        check.dependOn(&exe_check.step);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -183,25 +164,8 @@ pub fn build(b: *Build) !void {
 
     {
         // snapshot creator
-        const exe = b.addExecutable(.{
-            .name = "lightpanda-snapshot-creator",
-            .use_llvm = use_llvm,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main_snapshot_creator.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "lightpanda", .module = lightpanda_module },
-                },
-            }),
-        });
+        const exe = addExe(b, exe_config, "lightpanda-snapshot-creator", "snapshot_creator_check", "src/main_snapshot_creator.zig");
         extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
-
-        const exe_check = b.addLibrary(.{
-            .name = "snapshot_creator_check",
-            .root_module = exe.root_module,
-        });
-        check.dependOn(&exe_check.step);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -213,24 +177,7 @@ pub fn build(b: *Build) !void {
 
     {
         // skills generator
-        const exe = b.addExecutable(.{
-            .name = "lightpanda-skills",
-            .use_llvm = use_llvm,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main_skills.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "lightpanda", .module = lightpanda_module },
-                },
-            }),
-        });
-
-        const exe_check = b.addLibrary(.{
-            .name = "skills_check",
-            .root_module = exe.root_module,
-        });
-        check.dependOn(&exe_check.step);
+        const exe = addExe(b, exe_config, "lightpanda-skills", "skills_check", "src/main_skills.zig");
 
         const run_cmd = b.addRunArtifact(exe);
         const out_dir = run_cmd.addOutputDirectoryArg("skills");
@@ -256,6 +203,41 @@ pub fn build(b: *Build) !void {
     }
 }
 
+const ExeConfig = struct {
+    check: *Build.Step,
+    lightpanda_module: *Build.Module,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
+    sanitize_c: ?std.zig.SanitizeC,
+    sanitize_thread: bool,
+};
+
+fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8, root_source_file: []const u8) *Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = name,
+        .use_llvm = config.use_llvm,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(root_source_file),
+            .target = config.target,
+            .optimize = config.optimize,
+            .sanitize_c = config.sanitize_c,
+            .sanitize_thread = config.sanitize_thread,
+            .imports = &.{
+                .{ .name = "lightpanda", .module = config.lightpanda_module },
+            },
+        }),
+    });
+
+    const exe_check = b.addLibrary(.{
+        .name = check_name,
+        .root_module = exe.root_module,
+    });
+    config.check.dependOn(&exe_check.step);
+
+    return exe;
+}
+
 /// Looks for the prebuilt V8 that `make download-v8` caches. The cache
 /// path is keyed on the zig-v8 release tag, read from the install action so
 /// it cannot drift from CI (the Makefile reads the same source of truth).
@@ -273,32 +255,29 @@ fn findPrebuiltV8(b: *Build, target: Build.ResolvedTarget, dev_fast: bool) ?[]co
         return null;
     }
 
+    const cache_dir = b.pathFromRoot(".lp-cache");
     // The .so must keep the name the exe's DT_NEEDED records; the archive
     // name encodes V8 version, os and arch.
     const path = if (dev_fast)
-        b.fmt("{s}/prebuilt-v8/{s}/libc_v8.so", .{ b.pathFromRoot(".lp-cache"), tag })
+        b.pathJoin(&.{ cache_dir, "prebuilt-v8", tag, "libc_v8.so" })
     else blk: {
         const version = actionDefault(action, "v8:") orelse return null;
-        break :blk b.fmt("{s}/prebuilt-v8/{s}/libc_v8_{s}_{s}_{s}.a", .{
-            b.pathFromRoot(".lp-cache"),
-            tag,
+        break :blk b.pathJoin(&.{ cache_dir, "prebuilt-v8", tag, b.fmt("libc_v8_{s}_{s}_{s}.a", .{
             version,
             @tagName(target.result.os.tag),
             @tagName(target.result.cpu.arch),
-        });
+        }) });
     };
     std.Io.Dir.cwd().access(io, path, .{}) catch {
-        if (dev_fast) {
-            std.debug.print("No cached libc_v8.so; building V8 from source. `make download-v8` skips this.\n", .{});
-        }
+        std.debug.print("No prebuilt V8 at {s}; using the V8 source-build path. `make download-v8` fetches the prebuilt.\n", .{path});
         return null;
     };
     std.debug.print("Using prebuilt V8: {s}\n", .{path});
     return path;
 }
 
-// Returns the quoted `default:` value of a top-level `key` in the install
-// action's yaml.
+/// Returns the quoted `default:` value of a top-level `key` in the install
+/// action's yaml.
 fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
     var in_key = false;
     var lines = std.mem.splitScalar(u8, action, '\n');
@@ -312,9 +291,11 @@ fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
         if (std.mem.startsWith(u8, trimmed, "default:")) {
             var it = std.mem.splitScalar(u8, trimmed, '\'');
             _ = it.next();
-            return it.next();
+            if (it.next()) |value| return value;
+            break;
         }
     }
+    std.debug.print("Can't parse the `{s} default:` value from .github/actions/install/action.yml; prebuilt V8 discovery skipped.\n", .{key});
     return null;
 }
 
@@ -325,7 +306,7 @@ fn linkV8(
     is_tsan: bool,
     prebuilt_v8_path: ?[]const u8,
     shared_v8: bool,
-) !void {
+) void {
     const target = mod.resolved_target.?;
 
     const dep = b.dependency("v8", .{
@@ -342,8 +323,8 @@ fn linkV8(
     mod.addImport("v8", dep.module("v8"));
 }
 
-fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
-    const is_debug = if (mod.optimize.? == .Debug) true else false;
+fn linkHtml5Ever(b: *Build, mod: *Build.Module) void {
+    const is_debug = mod.optimize.? == .Debug;
 
     const exec_cargo = b.addSystemCommand(&.{
         "cargo",           "build",
@@ -434,7 +415,7 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     mod.addImport("sqlite3", translate_c.createModule());
 }
 
-fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
+fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) void {
     const target = mod.resolved_target.?;
 
     const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
@@ -461,27 +442,27 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
     const boringssl = buildBoringSsl(b, target, mod.optimize.?);
     for (boringssl) |lib| curl.root_module.linkLibrary(lib);
 
-    switch (target.result.os.tag) {
-        .macos => {
-            // needed for proxying on mac
-            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-            mod.linkFramework("CoreFoundation", .{});
-            mod.linkFramework("SystemConfiguration", .{});
-        },
-        else => {},
+    if (target.result.os.tag == .macos) {
+        // needed for proxying on mac
+        mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+        mod.linkFramework("CoreFoundation", .{});
+        mod.linkFramework("SystemConfiguration", .{});
     }
 }
 
-fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
-    const dep = b.dependency("zlib", .{});
-
-    const mod = b.createModule(.{
+fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Module {
+    return b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .sanitize_thread = is_tsan,
     });
+}
 
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
+    const dep = b.dependency("zlib", .{});
+
+    const mod = cLibModule(b, target, optimize, is_tsan);
     const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
     lib.installHeadersDirectory(dep.path(""), "", .{});
     mod.addCSourceFiles(.{
@@ -507,12 +488,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
 fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) [3]*Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
-    const mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .sanitize_thread = is_tsan,
-    });
+    const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("c/include"));
 
     const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = mod });
@@ -570,12 +546,7 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
 fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
 
-    const mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .sanitize_thread = is_tsan,
-    });
+    const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("lib/includes"));
 
     const config = b.addConfigHeader(.{
@@ -623,12 +594,7 @@ fn buildCurl(
 ) *Build.Step.Compile {
     const dep = b.dependency("curl", .{});
 
-    const mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .sanitize_thread = is_tsan,
-    });
+    const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("lib"));
     mod.addIncludePath(dep.path("include"));
 
@@ -647,8 +613,7 @@ fn buildCurl(
 
     const byte_size = struct {
         fn it(b2: *std.Build, target2: Build.ResolvedTarget, name: []const u8, comptime ctype: std.Target.CType) []const u8 {
-            const size = target2.result.cTypeByteSize(ctype);
-            return std.fmt.allocPrint(b2.allocator, "#define SIZEOF_{s} {d}", .{ name, size }) catch @panic("OOM");
+            return b2.fmt("#define SIZEOF_{s} {d}", .{ name, target2.result.cTypeByteSize(ctype) });
         }
     }.it;
 
@@ -699,10 +664,9 @@ fn buildCurl(
         .HAVE_IDN2_H = false,
         .CURL_OS = switch (os) {
             .linux => if (is_android) "\"android\"" else "\"linux\"",
-            else => std.fmt.allocPrint(b.allocator, "\"{s}\"", .{@tagName(os)}) catch @panic("OOM"),
+            else => b.fmt("\"{s}\"", .{@tagName(os)}),
         },
 
-        // Adjusts the sizes of variables
         .SIZEOF_INT_CODE = byte_size(b, target, "INT", .int),
         .SIZEOF_LONG_CODE = byte_size(b, target, "LONG", .long),
         .SIZEOF_LONG_LONG_CODE = byte_size(b, target, "LONG_LONG", .longlong),
@@ -982,10 +946,8 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
     else
         lightpanda_version;
 
-    // Only enrich versions that have a pre-release field and no explicit build metadata.
     if (version.pre == null or version.build != null) return version;
 
-    // For dev/nightly versions, calculate the commit count and hash
     const git_hash_raw = runGit(b, &.{ "rev-parse", "--short", "HEAD" }) catch return version;
     const commit_hash = std.mem.trim(u8, git_hash_raw, " \n\r");
 
@@ -1001,13 +963,11 @@ fn resolveVersion(b: *std.Build) std.SemanticVersion {
     };
 }
 
-/// Helper function to run git commands and return stdout
 fn runGit(b: *std.Build, args: []const []const u8) ![]const u8 {
     var code: u8 = undefined;
-    const dir = b.pathFromRoot(".");
-    var command: std.ArrayList([]const u8) = .empty;
-    defer command.deinit(b.allocator);
-    try command.appendSlice(b.allocator, &.{ "git", "-C", dir });
-    try command.appendSlice(b.allocator, args);
-    return b.runAllowFail(command.items, &code, .ignore);
+    const command = try std.mem.concat(b.allocator, []const u8, &.{
+        &.{ "git", "-C", b.pathFromRoot(".") },
+        args,
+    });
+    return b.runAllowFail(command, &code, .ignore);
 }
