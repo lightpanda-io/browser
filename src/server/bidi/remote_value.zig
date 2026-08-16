@@ -329,6 +329,7 @@ pub const Serializer = struct {
         JsException,
         ExecutionTerminated,
         MethodNotFound,
+        DeadFunctionHandle,
     };
 
     fn remote(self: *Serializer, value: js.Value, depth: u32, own: bool) Error!Remote {

@@ -53,6 +53,10 @@ pub const Context = struct {
 
     // A navigate command whose `wait` hasn't been satisfied yet.
     pending_navigate: ?PendingNavigate = null,
+
+    // Whether script.realmCreated was sent or not. If sent, we'll send
+    // script.realmDestroyed on teardown.
+    realm_announced: bool = false,
 };
 
 const PendingNavigate = struct {
@@ -146,9 +150,26 @@ fn create(cmd: *const BiDi.Command) !void {
         }) catch |err| {
             log.warn(.bidi, "blank navigate", .{ .err = err });
         };
+        try announceRealm(bidi, frame);
     }
 
     return cmd.sendResult(.{ .context = &ctx.id });
+}
+
+fn announceRealm(bidi: *BiDi, frame: *const Frame) !void {
+    const ctx = &(bidi.browsing_context orelse return);
+    if (ctx.realm_announced) {
+        return;
+    }
+    ctx.realm_announced = true;
+
+    const origin = (URL.getOrigin(bidi.message_arena.allocator(), frame.url) catch null) orelse "null";
+    return bidi.sendEvent("script.realmCreated", .{
+        .realm = &ctx.realm_id,
+        .origin = origin,
+        .type = "window",
+        .context = &ctx.id,
+    });
 }
 
 fn navigate(cmd: *const BiDi.Command) !void {
@@ -217,6 +238,9 @@ pub fn destroy(cmd: *const BiDi.Command, ctx: *Context) !void {
 
     // ctx points into bidi.browsing_context, which is about to be cleared
     const gone = ctx.*;
+
+    // the input state map is keyed by top-level browsing context
+    bidi.input_state.reset(bidi.app.allocator);
 
     // the frame's url doesn't survive closePage
     const url: []const u8 = if (bidi.user_context.session.currentFrame()) |frame|
@@ -390,6 +414,7 @@ pub fn registerNotifications(bidi: *BiDi) !void {
     const notification = bidi.notification;
     try notification.register(.frame_loaded, bidi, onFrameLoaded);
     try notification.register(.frame_remove, bidi, onFrameRemove);
+    try notification.register(.frame_created, bidi, onFrameCreated);
     try notification.register(.frame_destroyed, bidi, onFrameDestroyed);
     try notification.register(.frame_navigate, bidi, onFrameNavigate);
     try notification.register(.frame_navigate_failed, bidi, onFrameNavigateFailed);
@@ -400,6 +425,15 @@ pub fn registerNotifications(bidi: *BiDi) !void {
 fn onFrameRemove(ptr: *anyopaque, _: Notification.FrameRemove) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     bidi.resetRealm();
+}
+
+// A new root document, so a new window realm.
+fn onFrameCreated(ptr: *anyopaque, frame: *Frame) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    if (frame.parent != null or rootContext(bidi, frame._frame_id) == null) {
+        return;
+    }
+    return announceRealm(bidi, frame);
 }
 
 fn onFrameDestroyed(ptr: *anyopaque, frame: *const Frame) !void {
@@ -660,4 +694,31 @@ test "bidi.browsing_context: locateNodes" {
         .params = .{ .context = "nope", .locator = .{ .type = "css", .value = ".item" } },
     });
     try ctx.expectSentError("no such frame", null, .{ .id = 12 });
+}
+
+test "bidi.browsing_context: window realm lifecycle" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.startSession();
+    try ctx.processMessage(.{ .id = 1, .method = "session.subscribe", .params = .{ .events = .{"script"} } });
+    try ctx.processMessage(.{ .id = 2, .method = "browsingContext.create", .params = .{ .type = "tab" } });
+
+    const bc = &(ctx.bidi().browsing_context orelse return error.NoBrowsingContext);
+    const context_id = try testing.arena.dupe(u8, &bc.id);
+    const realm1 = try testing.arena.dupe(u8, &bc.realm_id);
+    try ctx.expectSentEvent("script.realmCreated", .{ .realm = realm1, .type = "window", .context = context_id, .origin = "null" });
+
+    // a navigation is a new document and so a new realm
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.navigate",
+        .params = .{ .context = context_id, .url = testing.test_server ++ "bidi/values.html", .wait = "complete" },
+    });
+    try ctx.wait();
+    const realm2 = try testing.arena.dupe(u8, &bc.realm_id);
+    try testing.expect(std.mem.eql(u8, realm1, realm2) == false);
+    try ctx.expectSentEvent("script.realmDestroyed", .{ .realm = realm1 });
+    try ctx.expectSentEvent("script.realmCreated", .{ .realm = realm2, .type = "window", .context = context_id, .origin = "http://127.0.0.1:9582" });
+    try ctx.expectSentResult(.{ .navigation = &bc.navigation_id }, .{ .id = 3 });
 }
