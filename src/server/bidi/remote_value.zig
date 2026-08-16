@@ -288,13 +288,13 @@ pub const Serializer = struct {
     // Locals, not globals: everything happens inside the caller's scope.
     seen: std.ArrayList(js.Object) = .empty,
 
-    pub fn init(cmd: *const BiDi.Command, frame: *Frame, local: *const js.Local, opts: Options) Serializer {
+    pub fn init(bidi: *BiDi, arena: Allocator, frame: *Frame, local: *const js.Local, opts: Options) Serializer {
         return .{
             .frame = frame,
             .local = local,
-            .arena = cmd.arena,
-            .handles = &cmd.bidi.handles,
-            .registry = &cmd.bidi.node_registry,
+            .arena = arena,
+            .handles = &bidi.handles,
+            .registry = &bidi.node_registry,
             .opts = opts,
         };
     }

@@ -184,8 +184,8 @@ fn pageWait(self: *const Driver) ?PageWait {
             return .{ .session = bc.session, .frame_id = page.frame_id };
         },
         .bidi => |bidi| {
-            const context = bidi.context orelse return null;
-            return .{ .session = bidi.session, .frame_id = context.frame_id };
+            const context = bidi.browsing_context orelse return null;
+            return .{ .session = bidi.user_context.session, .frame_id = context.frame_id };
         },
     }
 }

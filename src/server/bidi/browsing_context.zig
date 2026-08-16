@@ -19,12 +19,15 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const URL = @import("../../browser/URL.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
+
+const URL = @import("../../browser/URL.zig");
+const Frame = @import("../../browser/Frame.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
 
 const BiDi = @import("BiDi.zig");
+const script = @import("script.zig");
 
 const log = lp.log;
 
@@ -69,24 +72,40 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
 
 fn getTree(cmd: *const BiDi.Command) !void {
     const bidi = cmd.bidi;
-    const ctx = &(bidi.context orelse {
+    const ctx = &(bidi.browsing_context orelse {
         return cmd.sendResult(.{ .contexts = &[_]Info{} });
     });
 
-    const url: []const u8 = if (bidi.session.currentFrame()) |frame| frame.url else "about:blank";
+    const url: []const u8 = if (bidi.user_context.session.currentFrame()) |frame| frame.url else "about:blank";
     return cmd.sendResult(.{
-        .contexts = &[_]Info{.{ .context = &ctx.id, .url = url }},
+        .contexts = &[_]Info{.{
+            .url = url,
+            .context = &ctx.id,
+            .userContext = bidi.user_context.id(),
+        }},
     });
 }
 
-// {type: "tab" | "window"}  ignored
 fn create(cmd: *const BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        type: enum { tab, window },
+        userContext: ?[]const u8 = null,
+        referenceContext: ?[]const u8 = null,
+        background: bool = false,
+    });
+
     const bidi = cmd.bidi;
-    if (bidi.context != null) {
+    if (bidi.browsing_context != null) {
+        log.warn(.not_implemented, "bidi.BrowingContext", .{ .feature = "multiple user contexts" });
         return cmd.sendError("unsupported operation", "only a single browsing context is supported");
     }
 
-    const page = bidi.session.createPage() catch |err| {
+    const requested = p.userContext orelse "default";
+    if (std.mem.eql(u8, requested, bidi.user_context.id()) == false) {
+        return cmd.sendError("no such user context", "unknown user context");
+    }
+
+    const page = bidi.user_context.session.createPage() catch |err| {
         log.err(.bidi, "create page", .{ .err = err });
         return cmd.sendError("unknown error", "failed to create page");
     };
@@ -100,12 +119,12 @@ fn create(cmd: *const BiDi.Command) !void {
     uuidv4(&ctx.id);
     uuidv4(&ctx.realm_id);
     uuidv4(&ctx.navigation_id);
-    bidi.context = ctx;
+    bidi.browsing_context = ctx;
 
     try cmd.sendEvent("browsingContext.contextCreated", .{
         .context = &ctx.id,
         .url = "about:blank",
-        .userContext = "default",
+        .userContext = bidi.user_context.id(),
         .originalOpener = null,
         .children = null,
     });
@@ -134,7 +153,7 @@ fn navigate(cmd: *const BiDi.Command) !void {
     const bidi = cmd.bidi;
     const ctx = (try requireContext(cmd, p.context)) orelse return;
 
-    const frame = bidi.session.currentFrame() orelse {
+    const frame = bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("unknown error", "no frame");
     };
     const encoded_url = URL.resolveNavigation(frame.call_arena, p.url, .{}) catch {
@@ -160,7 +179,7 @@ fn navigate(cmd: *const BiDi.Command) !void {
     const nav_result = if (frame._load_state == .waiting)
         frame.navigate(encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } })
     else
-        bidi.session.initiateRootNavigation(frame._frame_id, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+        bidi.user_context.session.initiateRootNavigation(frame._frame_id, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } });
 
     nav_result catch |err| {
         log.warn(.bidi, "navigate", .{ .err = err });
@@ -178,33 +197,39 @@ fn close(cmd: *const BiDi.Command) !void {
         context: []const u8,
     });
 
-    const bidi = cmd.bidi;
     const ctx = (try requireContext(cmd, p.context)) orelse return;
+    try destroy(cmd, ctx);
+    return cmd.sendResult(struct {}{});
+}
+
+// Closes the page behind `ctx` and reports it gone.
+pub fn destroy(cmd: *const BiDi.Command, ctx: *Context) !void {
+    const bidi = cmd.bidi;
     try rejectPending(bidi, ctx, "browsing context closed");
-    const ctx_id = ctx.id;
+
+    // ctx points into bidi.browsing_context, which is about to be cleared
+    const gone = ctx.*;
 
     // the frame's url doesn't survive closePage
-    const url: []const u8 = if (bidi.session.currentFrame()) |frame|
+    const url: []const u8 = if (bidi.user_context.session.currentFrame()) |frame|
         try cmd.arena.dupe(u8, frame.url)
     else
         "about:blank";
 
-    bidi.session.closePage(ctx.frame_id);
-    bidi.context = null;
+    bidi.user_context.session.closePage(gone.frame_id);
+    bidi.browsing_context = null;
 
     try cmd.sendEvent("browsingContext.contextDestroyed", .{
-        .context = &ctx_id,
+        .context = &gone.id,
         .url = url,
-        .userContext = "default",
+        .userContext = bidi.user_context.id(),
         .originalOpener = null,
         .children = null,
     });
-
-    return cmd.sendResult(struct {}{});
 }
 
 pub fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context {
-    if (cmd.bidi.context) |*ctx| {
+    if (cmd.bidi.browsing_context) |*ctx| {
         if (std.mem.eql(u8, &ctx.id, context)) {
             return ctx;
         }
@@ -236,6 +261,7 @@ pub fn registerNotifications(bidi: *BiDi) !void {
     const notification = bidi.notification;
     try notification.register(.frame_loaded, bidi, onFrameLoaded);
     try notification.register(.frame_remove, bidi, onFrameRemove);
+    try notification.register(.frame_destroyed, bidi, onFrameDestroyed);
     try notification.register(.frame_navigate, bidi, onFrameNavigate);
     try notification.register(.frame_navigate_failed, bidi, onFrameNavigateFailed);
     try notification.register(.frame_dom_content_loaded, bidi, onFrameDOMContentLoaded);
@@ -245,6 +271,11 @@ pub fn registerNotifications(bidi: *BiDi) !void {
 fn onFrameRemove(ptr: *anyopaque, _: Notification.FrameRemove) !void {
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     bidi.resetRealm();
+}
+
+fn onFrameDestroyed(ptr: *anyopaque, frame: *const Frame) !void {
+    const bidi: *BiDi = @ptrCast(@alignCast(ptr));
+    script.Pending.contextDestroyed(bidi, frame.js.id);
 }
 
 fn onFrameNavigate(ptr: *anyopaque, msg: *const Notification.FrameNavigate) !void {
@@ -299,7 +330,7 @@ fn frameLifecycleEvent(
     const bidi: *BiDi = @ptrCast(@alignCast(ptr));
     const ctx = rootContext(bidi, frame_id) orelse return;
 
-    const url: []const u8 = if (bidi.session.currentFrame()) |frame| frame.url else "";
+    const url: []const u8 = if (bidi.user_context.session.currentFrame()) |frame| frame.url else "";
     try bidi.sendEvent(method, .{
         .context = &ctx.id,
         .navigation = &ctx.navigation_id,
@@ -320,7 +351,7 @@ fn frameLifecycleEvent(
 // Only the root frame maps to the BiDi context; child-frame events are
 // dropped until child navigables are supported.
 fn rootContext(bidi: *BiDi, frame_id: u32) ?*Context {
-    if (bidi.context) |*ctx| {
+    if (bidi.browsing_context) |*ctx| {
         if (ctx.frame_id == frame_id) {
             return ctx;
         }
@@ -333,7 +364,7 @@ fn rootContext(bidi: *BiDi, frame_id: u32) ?*Context {
 const Info = struct {
     context: []const u8,
     url: []const u8,
-    userContext: []const u8 = "default",
+    userContext: []const u8,
     originalOpener: ?[]const u8 = null,
     children: []const Info = &.{},
 };
