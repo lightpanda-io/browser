@@ -31,8 +31,8 @@ const NodeRegistry = @import("../../NodeRegistry.zig");
 const Driver = @import("../Driver.zig");
 const Connection = @import("../Connection.zig");
 
+const script = @import("script.zig");
 const remote_value = @import("remote_value.zig");
-const browsing_context = @import("browsing_context.zig");
 
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
@@ -57,15 +57,23 @@ session_arena: std.heap.ArenaAllocator,
 session_id: ?[36]u8 = null,
 
 browser: Browser,
-session: *Session,
 notification: *Notification,
-context: ?browsing_context.Context = null,
+
+// browsing context is the page
+browsing_context: ?@import("browsing_context.zig").Context = null,
+
+// A user context is a Session. There's a "default" and we allow 1 more to
+// be created (limited because a Browser can only have 1 Session).
+user_context: UserContext,
 
 // Issues the script module's sharedIds
 node_registry: NodeRegistry,
 
 // Values the client owns via `resultOwnership: "root"`
 handles: remote_value.Handles,
+
+// Commands awaiting promise resolution
+pending: std.ArrayList(*script.Pending) = .empty,
 
 subscriptions: std.ArrayList(Subscription) = .empty,
 
@@ -86,7 +94,7 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
         .link = undefined,
         .conn = undefined,
         .browser = undefined,
-        .session = undefined,
+        .user_context = undefined,
         .notification = undefined,
         .node_registry = .init(allocator),
         .handles = .{ .allocator = allocator },
@@ -109,18 +117,25 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
         .socket = socket,
         .handles = http_client.handles,
     };
-
-    // the remaining failures are OOM-class; no point cleaning up
     self.notification = try Notification.init(allocator);
-    self.session = try self.browser.newSession(self.notification);
-    try browsing_context.registerNotifications(self);
+    errdefer self.notification.deinit();
+
+    try self.newUserContext("default");
+    try @import("browsing_context.zig").registerNotifications(self);
 }
 
 pub fn deinit(self: *BiDi) void {
+    const allocator = self.app.allocator;
+
     self.notification.unregisterAll(self);
 
+    // Cancel first, so that any completions during session teardown are still valid
+    script.Pending.cancelAll(self);
     self.handles.deinit();
     self.browser.closeSession();
+    // Now we can destroy
+    script.Pending.destroyAll(self);
+    self.pending.deinit(allocator);
 
     self.node_registry.deinit();
     self.notification.deinit();
@@ -130,10 +145,36 @@ pub fn deinit(self: *BiDi) void {
     self.session_arena.deinit();
 }
 
+pub fn replaceSession(self: *BiDi, id: []const u8) !void {
+    self.resetRealm();
+    try self.newUserContext(id);
+}
+
+fn newUserContext(self: *BiDi, id: []const u8) !void {
+    const session = try self.browser.newSession(self.notification);
+    self.user_context = .{ .session = session, .id_len = @intCast(id.len), .id_buf = undefined };
+    @memcpy(self.user_context.id_buf[0..id.len], id);
+}
+
+pub const UserContext = struct {
+    id_len: u8,
+    id_buf: [36]u8, // "default" or uuid
+    session: *Session,
+
+    pub fn id(self: *const UserContext) []const u8 {
+        return self.id_buf[0..self.id_len];
+    }
+
+    pub fn isDefault(self: *const UserContext) bool {
+        return std.mem.eql(u8, self.id(), "default");
+    }
+};
+
 pub fn resetRealm(self: *BiDi) void {
+    script.Pending.realmReset(self);
     self.handles.releaseAll();
     self.node_registry.reset();
-    if (self.context) |*ctx| {
+    if (self.browsing_context) |*ctx| {
         uuidv4(&ctx.realm_id);
     }
 }
@@ -203,7 +244,7 @@ fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []
         .session => return @import("session.zig").processMessage(&cmd),
         .script => return @import("script.zig").processMessage(&cmd),
         .browser => return @import("browser.zig").processMessage(&cmd),
-        .browsingContext => return browsing_context.processMessage(&cmd),
+        .browsingContext => return @import("browsing_context.zig").processMessage(&cmd),
     }
 }
 

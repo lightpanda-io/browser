@@ -27,6 +27,7 @@ const remote_value = @import("remote_value.zig");
 const browsing_context = @import("browsing_context.zig");
 
 const log = lp.log;
+const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *const BiDi.Command) !void {
     const command = std.meta.stringToEnum(enum {
@@ -69,7 +70,7 @@ fn evaluate(cmd: *const BiDi.Command) !void {
     });
 
     const ctx = (try resolveTarget(cmd, p.target)) orelse return;
-    const frame = cmd.bidi.session.currentFrame() orelse {
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("no such frame", "no frame");
     };
 
@@ -81,11 +82,12 @@ fn evaluate(cmd: *const BiDi.Command) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    const reply: Reply = .init(cmd, ctx);
     const value = ls.local.exec(p.expression, "bidi.evaluate") catch |err| {
-        return sendException(cmd, ctx, frame, &ls.local, &try_catch, err);
+        return sendException(&reply, frame, &ls.local, &try_catch, err);
     };
 
-    return settle(cmd, ctx, frame, &ls.local, value, p.awaitPromise, .{
+    return settle(&reply, frame, &ls.local, value, p.awaitPromise, .{
         .own_root = p.resultOwnership == .root,
         .max_dom_depth = p.serializationOptions.maxDomDepth,
         .max_object_depth = p.serializationOptions.maxObjectDepth,
@@ -106,7 +108,7 @@ fn callFunction(cmd: *const BiDi.Command) !void {
 
     const bidi = cmd.bidi;
     const ctx = (try resolveTarget(cmd, p.target)) orelse return;
-    const frame = bidi.session.currentFrame() orelse {
+    const frame = bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("no such frame", "no frame");
     };
 
@@ -123,8 +125,9 @@ fn callFunction(cmd: *const BiDi.Command) !void {
     // the functionDeclaration has a trailing comment.
     const arena = cmd.arena;
     const source = try std.fmt.allocPrint(arena, "({s}\n)", .{p.functionDeclaration});
+    const reply: Reply = .init(cmd, ctx);
     const declaration = ls.local.exec(source, "bidi.callFunction") catch |err| {
-        return sendException(cmd, ctx, frame, &ls.local, &try_catch, err);
+        return sendException(&reply, frame, &ls.local, &try_catch, err);
     };
     if (declaration.isFunction() == false) {
         return cmd.sendError("invalid argument", "functionDeclaration is not a function");
@@ -140,10 +143,10 @@ fn callFunction(cmd: *const BiDi.Command) !void {
     const this = if (p.this) |t| ((try toJs(cmd, &ls.local, t)) orelse return) else try ls.local.zigValueToJs({}, .{});
 
     const value = function.callWithThisRethrow(js.Value, this, arguments) catch |err| {
-        return sendException(cmd, ctx, frame, &ls.local, &try_catch, err);
+        return sendException(&reply, frame, &ls.local, &try_catch, err);
     };
 
-    return settle(cmd, ctx, frame, &ls.local, value, p.awaitPromise, .{
+    return settle(&reply, frame, &ls.local, value, p.awaitPromise, .{
         .own_root = p.resultOwnership == .root,
         .max_dom_depth = p.serializationOptions.maxDomDepth,
         .max_object_depth = p.serializationOptions.maxObjectDepth,
@@ -169,11 +172,37 @@ fn disown(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(struct {}{});
 }
 
-// Answers `cmd` with an EvaluateResultSuccess, resolving the promise first if
-// the client asked for it.
+// What answering a command takes, so the same code serves both an immediate
+// reply and one sent from a promise callback after the Command (and its
+// message_arena) is gone.
+const Reply = struct {
+    id: u64,
+    bidi: *BiDi,
+    arena: Allocator,
+    realm_id: [36]u8,
+
+    fn init(cmd: *const BiDi.Command, ctx: *const browsing_context.Context) Reply {
+        return .{
+            .id = cmd.id,
+            .bidi = cmd.bidi,
+            .arena = cmd.arena,
+            .realm_id = ctx.realm_id,
+        };
+    }
+
+    fn sendResult(self: *const Reply, result: anytype) !void {
+        return self.bidi.sendResult(self.id, result);
+    }
+
+    fn sendError(self: *const Reply, code: []const u8, message: []const u8) !void {
+        return self.bidi.sendError(self.id, code, message);
+    }
+};
+
+// Answers with an EvaluateResultSuccess, resolving the promise first if the
+// client asked for it.
 fn settle(
-    cmd: *const BiDi.Command,
-    ctx: *const browsing_context.Context,
+    reply: *const Reply,
     frame: *Frame,
     local: *const js.Local,
     value: js.Value,
@@ -186,33 +215,153 @@ fn settle(
         const promise = value.toPromise();
         promise.markAsHandled();
 
-        // A promise that only needs the microtask queue — an async function
-        // with no real await — settles right here. One waiting on I/O won't:
-        // answering that means holding the command open across event-loop
-        // ticks, which is machinery we don't have yet.
+        // some promises can be settled immediately.
         local.runMicrotasks();
 
         switch (promise.state()) {
-            .pending => return cmd.sendError("unsupported operation", "awaitPromise on a pending promise"),
             .fulfilled => result = promise.result(),
-            .rejected => return sendRejection(cmd, ctx, frame, local, promise.result()),
+            .pending => return Pending.await(reply, promise, opts),
+            .rejected => return sendRejection(reply, frame, local, promise.result()),
         }
     }
 
-    const remote = (try serialize(cmd, frame, local, result, opts)) orelse return;
-    return cmd.sendResult(.{
+    const remote = (try serialize(reply, frame, local, result, opts)) orelse return;
+    return reply.sendResult(.{
         .type = "success",
         .result = remote,
-        .realm = &ctx.realm_id,
+        .realm = &reply.realm_id,
     });
 }
+
+// A script command waiting a promise resolution.
+pub const Pending = struct {
+    reply: Reply,
+    arena: *lp.Arena,
+    js_context_id: usize,
+    cancelled: bool = false,
+    opts: remote_value.Options,
+
+    fn await(reply: *const Reply, promise: js.Promise, opts: remote_value.Options) !void {
+        const bidi = reply.bidi;
+        const arena = try bidi.app.arena_pool.acquire(.small, "bidi Pending");
+        errdefer arena.release();
+
+        const pending = try arena.allocator().create(Pending);
+        pending.* = .{
+            .opts = opts,
+            .arena = arena,
+            .js_context_id = promise.local.ctx.id,
+            .reply = .{ // clone reply, injecting our Pending's arena
+                .id = reply.id,
+                .bidi = reply.bidi,
+                .arena = arena.allocator(),
+                .realm_id = reply.realm_id,
+            },
+        };
+        try bidi.pending.append(bidi.app.allocator, pending);
+        errdefer _ = bidi.pending.pop();
+
+        const local = promise.local;
+        _ = try promise.thenAndCatch(
+            local.newCallback(onFulfilled, pending),
+            local.newCallback(onRejected, pending),
+        );
+    }
+
+    fn deinit(self: *Pending) void {
+        self.arena.release();
+    }
+
+    fn onFulfilled(self: *Pending, value: js.Value, exec: *const js.Execution) void {
+        self.finish(value, .fulfilled, exec);
+    }
+
+    fn onRejected(self: *Pending, reason: js.Value, exec: *const js.Execution) void {
+        self.finish(reason, .rejected, exec);
+    }
+
+    fn finish(
+        self: *Pending,
+        value: js.Value,
+        state: enum { fulfilled, rejected },
+        exec: *const js.Execution,
+    ) void {
+        defer self.destroy();
+        if (self.cancelled) {
+            return;
+        }
+
+        const reply = &self.reply;
+        const local = exec.js.local.?;
+        const frame = reply.bidi.user_context.session.currentFrame() orelse {
+            reply.sendError("no such frame", "no frame") catch {};
+            return;
+        };
+
+        const result = switch (state) {
+            .fulfilled => settle(reply, frame, local, value, false, self.opts),
+            .rejected => sendRejection(reply, frame, local, value),
+        };
+
+        result catch |err| {
+            log.err(.bidi, "await promise", .{ .err = err, .id = reply.id });
+        };
+    }
+
+    fn destroy(self: *Pending) void {
+        const bidi = self.reply.bidi;
+        for (bidi.pending.items, 0..) |pending, i| {
+            if (pending == self) {
+                _ = bidi.pending.swapRemove(i);
+                break;
+            }
+        }
+        self.deinit();
+    }
+
+    // The realm is being replaced: answer the client now. The Pending remains
+    // alive until it fires or Frame.deinit -> ... -> contextDestroyed is called
+    pub fn realmReset(bidi: *BiDi) void {
+        for (bidi.pending.items) |pending| {
+            if (pending.cancelled) {
+                continue;
+            }
+            pending.cancelled = true;
+            pending.reply.sendError("no such realm", "realm destroyed while awaiting a promise") catch {};
+        }
+    }
+
+    // A frame (and it's JS context) is being destroyed.
+    pub fn contextDestroyed(bidi: *BiDi, js_context_id: usize) void {
+        var i = bidi.pending.items.len;
+        while (i > 0) {
+            i -= 1;
+            const pending = bidi.pending.items[i];
+            if (pending.js_context_id == js_context_id) {
+                _ = bidi.pending.swapRemove(i);
+                pending.deinit();
+            }
+        }
+    }
+
+    pub fn cancelAll(bidi: *BiDi) void {
+        for (bidi.pending.items) |pending| {
+            pending.cancelled = true;
+        }
+    }
+
+    pub fn destroyAll(bidi: *BiDi) void {
+        while (bidi.pending.pop()) |pending| {
+            pending.deinit();
+        }
+    }
+};
 
 // A JS throw isn't a command failure: the command succeeds and reports the
 // exception in its result. The thrown value is always serialized with the
 // default options rather than the command's
 fn sendException(
-    cmd: *const BiDi.Command,
-    ctx: *const browsing_context.Context,
+    reply: *const Reply,
     frame: *Frame,
     local: *const js.Local,
     try_catch: *js.TryCatch,
@@ -222,13 +371,13 @@ fn sendException(
         return err;
     }
 
-    const arena = cmd.arena;
+    const arena = reply.arena;
     const caught = try_catch.caughtOrError(arena, err);
 
     const thrown = try_catch.exceptionValue();
     const exception: remote_value.Remote = blk: {
         const value = thrown orelse break :blk .{ .body = .undefined };
-        break :blk (try serialize(cmd, frame, local, value, .{})) orelse return;
+        break :blk (try serialize(reply, frame, local, value, .{})) orelse return;
     };
 
     // `text` is the exception stringified ("Error: nope"), not just its message
@@ -238,30 +387,27 @@ fn sendException(
         break :blk value.toStringSliceWithAlloc(arena) catch fallback;
     };
 
-    return sendExceptionDetails(cmd, ctx, exception, text, caught.line);
+    return sendExceptionDetails(reply, exception, text, caught.line);
 }
 
 fn sendRejection(
-    cmd: *const BiDi.Command,
-    ctx: *const browsing_context.Context,
+    reply: *const Reply,
     frame: *Frame,
     local: *const js.Local,
     reason: js.Value,
 ) !void {
-    const arena = cmd.arena;
-    const text = reason.toStringSliceWithAlloc(arena) catch "promise rejected";
-    const exception = (try serialize(cmd, frame, local, reason, .{})) orelse return;
-    return sendExceptionDetails(cmd, ctx, exception, text, null);
+    const text = reason.toStringSliceWithAlloc(reply.arena) catch "promise rejected";
+    const exception = (try serialize(reply, frame, local, reason, .{})) orelse return;
+    return sendExceptionDetails(reply, exception, text, null);
 }
 
 fn sendExceptionDetails(
-    cmd: *const BiDi.Command,
-    ctx: *const browsing_context.Context,
+    reply: *const Reply,
     exception: remote_value.Remote,
     text: []const u8,
     line: ?u32,
 ) !void {
-    return cmd.sendResult(.{
+    return reply.sendResult(.{
         .type = "exception",
         .exceptionDetails = .{
             .text = text,
@@ -270,25 +416,25 @@ fn sendExceptionDetails(
             .columnNumber = 0, // required by the spec, even if we don't know it
             .stackTrace = .{ .callFrames = &[_]struct {}{} },
         },
-        .realm = &ctx.realm_id,
+        .realm = &reply.realm_id,
     });
 }
 
 fn serialize(
-    cmd: *const BiDi.Command,
+    reply: *const Reply,
     frame: *Frame,
     local: *const js.Local,
     value: js.Value,
     opts: remote_value.Options,
 ) !?remote_value.Remote {
-    var serializer = remote_value.Serializer.init(cmd, frame, local, opts);
+    var serializer = remote_value.Serializer.init(reply.bidi, reply.arena, frame, local, opts);
 
     return serializer.run(value) catch |err| {
         if (err == error.OutOfMemory) {
             return err;
         }
         log.warn(.bidi, "serialize", .{ .err = err });
-        try cmd.sendError("unknown error", "cannot serialize result");
+        try reply.sendError("unknown error", "cannot serialize result");
         return null;
     };
 }
@@ -327,7 +473,7 @@ fn resolveTarget(cmd: *const BiDi.Command, target: Target) !?*browsing_context.C
     }
 
     if (target.realm) |realm| {
-        if (bidi.context) |*ctx| {
+        if (bidi.browsing_context) |*ctx| {
             if (std.mem.eql(u8, &ctx.realm_id, realm)) {
                 return ctx;
             }
@@ -846,18 +992,98 @@ test "bidi.script: evaluate awaitPromise" {
         .result = .{ .type = "promise" },
     }, .{ .id = 3 });
 
-    // A promise waiting on a timer can't settle without running the event
-    // loop, which means holding the command open across ticks.
+    // A promise waiting on a timer needs the event loop: the command stays
+    // open and is answered from the callback.
     try ctx.processMessage(.{
         .id = 4,
         .method = "script.evaluate",
         .params = .{
-            .expression = "new Promise(r => setTimeout(r, 0))",
+            .expression = "new Promise(r => setTimeout(() => r({n: 42}), 5))",
             .target = .{ .context = context_id },
             .awaitPromise = true,
         },
     });
-    try ctx.expectSentError("unsupported operation", "awaitPromise on a pending promise", .{ .id = 4 });
+    try ctx.expectNotAnswered(4);
+    try ctx.wait();
+    try ctx.expectSentResult(.{
+        .type = "success",
+        .result = .{ .type = "object", .value = .{.{ "n", .{ .type = "number", .value = 42 } }} },
+    }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "script.callFunction",
+        .params = .{
+            .functionDeclaration = "() => new Promise((_, reject) => setTimeout(() => reject(new Error('late')), 5))",
+            .target = .{ .context = context_id },
+            .awaitPromise = true,
+        },
+    });
+    try ctx.wait();
+    try ctx.expectSentResult(.{
+        .type = "exception",
+        .exceptionDetails = .{ .text = "Error: late", .exception = .{ .type = "error" } },
+    }, .{ .id = 5 });
+
+    // resultOwnership applies to the settled value, not the promise.
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "new Promise(r => setTimeout(() => r({}), 5))",
+            .target = .{ .context = context_id },
+            .awaitPromise = true,
+            .resultOwnership = "root",
+        },
+    });
+    try ctx.wait();
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "object", .handle = "1" } }, .{ .id = 6 });
+}
+
+test "bidi.script: awaitPromise across a navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{ .url = "bidi/values.html" });
+
+    // A promise that never settles: the navigation is what answers it, with
+    // an error, so the client isn't left hanging on a realm that's gone.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "new Promise(() => {})",
+            .target = .{ .context = context_id },
+            .awaitPromise = true,
+        },
+    });
+    try ctx.expectNotAnswered(1);
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "browsingContext.navigate",
+        .params = .{
+            .context = context_id,
+            .url = testing.test_server ++ "bidi/values.html",
+            .wait = "complete",
+        },
+    });
+    try ctx.wait();
+    try ctx.expectSentError("no such realm", null, .{ .id = 1 });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    // The new realm works as usual, timers included.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "new Promise(r => setTimeout(() => r('after'), 5))",
+            .target = .{ .context = context_id },
+            .awaitPromise = true,
+        },
+    });
+    try ctx.wait();
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "after" } }, .{ .id = 3 });
 }
 
 test "bidi.script: callFunction arguments" {
@@ -1070,7 +1296,7 @@ test "bidi.script: target validation" {
     try ctx.expectSentError("unsupported operation", "sandboxes are not supported", .{ .id = 3 });
 
     // The realm reported alongside a result is also accepted as a target.
-    const realm = try testing.arena.dupe(u8, &ctx.bidi().context.?.realm_id);
+    const realm = try testing.arena.dupe(u8, &ctx.bidi().browsing_context.?.realm_id);
     try ctx.processMessage(.{
         .id = 4,
         .method = "script.evaluate",

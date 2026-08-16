@@ -500,7 +500,9 @@ pub fn deinit(self: *Frame) void {
     // Unregister CookieStore from session notifications before the JS
     // context (and thus the scheduler) is destroyed, otherwise a late
     // mutation could schedule a callback that never runs.
-    if (self.window._cookie_store) |cs| cs.detach();
+    if (self.window._cookie_store) |cs| {
+        cs.detach();
+    }
 
     const page = self._page;
 
@@ -553,6 +555,8 @@ pub fn deinit(self: *Frame) void {
         browser.reportJsHeap();
     }
 
+    // fired the last moment the js context is still alive
+    page.session.notification.dispatch(.frame_destroyed, self);
     browser.env.destroyContext(self.js);
 
     // Must be after context is destroyed. A finalizer can reach into the *Worker

@@ -95,7 +95,7 @@ const TestContext = struct {
         try self.startSession();
         try self.processMessage(.{ .id = command_id_create, .method = "browsingContext.create", .params = .{ .type = "tab" } });
 
-        const ctx = &(self.bidi().context orelse return error.NoBrowsingContext);
+        const ctx = &(self.bidi().browsing_context orelse return error.NoBrowsingContext);
         const context_id = try base.arena_allocator.dupe(u8, &ctx.id);
 
         if (opts.url) |url| {
@@ -117,13 +117,13 @@ const TestContext = struct {
     // when the command already answered.
     pub fn wait(self: *TestContext) !void {
         const b = self.bidi();
-        const ctx = b.context orelse return error.NoBrowsingContext;
-        var runner = b.session.runner(.{});
+        const ctx = b.browsing_context orelse return error.NoBrowsingContext;
+        var runner = b.user_context.session.runner(.{});
         try runner.waitForFrame(ctx.frame_id, 2000, .{ .until = .done });
     }
 
     pub fn frame(self: *TestContext) !*Frame {
-        return self.bidi().session.currentFrame() orelse error.NoFrame;
+        return self.bidi().user_context.session.currentFrame() orelse error.NoFrame;
     }
 
     const SentOpts = struct {
@@ -188,6 +188,18 @@ const TestContext = struct {
             return error.MessageNotFound;
         }
         return self.received.items[index];
+    }
+
+    // No reply for `id` yet: the command is being held open.
+    pub fn expectNotAnswered(self: *TestContext, id: usize) !void {
+        try self.read();
+        for (self.received.items) |received| {
+            const got = received.object.get("id") orelse continue;
+            if (got == .integer and got.integer == id) {
+                self.dumpReceived();
+                return error.UnexpectedAnswer;
+            }
+        }
     }
 
     pub fn expectSentCount(self: *TestContext, expected: usize) !void {
