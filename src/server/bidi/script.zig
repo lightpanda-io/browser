@@ -51,12 +51,6 @@ const Target = struct {
     sandbox: ?[]const u8 = null,
 };
 
-const SerializationOptions = struct {
-    maxDomDepth: ?u32 = 0,
-    maxObjectDepth: ?u32 = null,
-    includeShadowTree: enum { none, open, all } = .none,
-};
-
 const ResultOwnership = enum { root, none };
 
 fn evaluate(cmd: *const BiDi.Command) !void {
@@ -65,7 +59,7 @@ fn evaluate(cmd: *const BiDi.Command) !void {
         target: Target,
         awaitPromise: bool = false,
         resultOwnership: ResultOwnership = .none,
-        serializationOptions: SerializationOptions = .{},
+        serializationOptions: remote_value.SerializationOptions = .{},
         userActivation: bool = false,
     });
 
@@ -87,11 +81,7 @@ fn evaluate(cmd: *const BiDi.Command) !void {
         return sendException(&reply, frame, &ls.local, &try_catch, err);
     };
 
-    return settle(&reply, frame, &ls.local, value, p.awaitPromise, .{
-        .own_root = p.resultOwnership == .root,
-        .max_dom_depth = p.serializationOptions.maxDomDepth,
-        .max_object_depth = p.serializationOptions.maxObjectDepth,
-    });
+    return settle(&reply, frame, &ls.local, value, p.awaitPromise, p.serializationOptions.options(p.resultOwnership == .root));
 }
 
 fn callFunction(cmd: *const BiDi.Command) !void {
@@ -102,7 +92,7 @@ fn callFunction(cmd: *const BiDi.Command) !void {
         arguments: []const std.json.Value = &.{},
         this: ?std.json.Value = null,
         resultOwnership: ResultOwnership = .none,
-        serializationOptions: SerializationOptions = .{},
+        serializationOptions: remote_value.SerializationOptions = .{},
         userActivation: bool = false,
     });
 
@@ -146,11 +136,7 @@ fn callFunction(cmd: *const BiDi.Command) !void {
         return sendException(&reply, frame, &ls.local, &try_catch, err);
     };
 
-    return settle(&reply, frame, &ls.local, value, p.awaitPromise, .{
-        .own_root = p.resultOwnership == .root,
-        .max_dom_depth = p.serializationOptions.maxDomDepth,
-        .max_object_depth = p.serializationOptions.maxObjectDepth,
-    });
+    return settle(&reply, frame, &ls.local, value, p.awaitPromise, p.serializationOptions.options(p.resultOwnership == .root));
 }
 
 fn disown(cmd: *const BiDi.Command) !void {
@@ -207,7 +193,7 @@ fn settle(
     local: *const js.Local,
     value: js.Value,
     await_promise: bool,
-    opts: remote_value.Options,
+    opts: remote_value.Serializer.Options,
 ) !void {
     var result = value;
 
@@ -239,9 +225,9 @@ pub const Pending = struct {
     arena: *lp.Arena,
     js_context_id: usize,
     cancelled: bool = false,
-    opts: remote_value.Options,
+    opts: remote_value.Serializer.Options,
 
-    fn await(reply: *const Reply, promise: js.Promise, opts: remote_value.Options) !void {
+    fn await(reply: *const Reply, promise: js.Promise, opts: remote_value.Serializer.Options) !void {
         const bidi = reply.bidi;
         const arena = try bidi.app.arena_pool.acquire(.small, "bidi Pending");
         errdefer arena.release();
@@ -425,7 +411,7 @@ fn serialize(
     frame: *Frame,
     local: *const js.Local,
     value: js.Value,
-    opts: remote_value.Options,
+    opts: remote_value.Serializer.Options,
 ) !?remote_value.Remote {
     var serializer = remote_value.Serializer.init(reply.bidi, reply.arena, frame, local, opts);
 

@@ -21,13 +21,19 @@ const lp = @import("lightpanda");
 
 const uuidv4 = @import("../../id.zig").uuidv4;
 
+const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
+const Node = @import("../../browser/webapi/Node.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Session = @import("../../browser/Session.zig");
+const Selector = @import("../../browser/webapi/selector/Selector.zig");
+const xpath = @import("../../browser/xpath/Evaluator.zig");
+const XPathParser = @import("../../browser/xpath/Parser.zig");
 const Notification = @import("../../Notification.zig");
 
 const BiDi = @import("BiDi.zig");
 const script = @import("script.zig");
+const remote_value = @import("remote_value.zig");
 
 const log = lp.log;
 
@@ -60,6 +66,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
         create,
         navigate,
         close,
+        locateNodes,
     }, cmd.action) orelse return error.UnknownCommand;
 
     switch (command) {
@@ -67,6 +74,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
         .create => return create(cmd),
         .navigate => return navigate(cmd),
         .close => return close(cmd),
+        .locateNodes => return locateNodes(cmd),
     }
 }
 
@@ -228,6 +236,127 @@ pub fn destroy(cmd: *const BiDi.Command, ctx: *Context) !void {
     });
 }
 
+fn locateNodes(cmd: *const BiDi.Command) !void {
+    const p = try cmd.params(struct {
+        context: []const u8,
+        locator: struct {
+            type: enum { css, xpath, innerText, accessibility, context },
+            value: std.json.Value,
+        },
+        maxNodeCount: ?u32 = null,
+        serializationOptions: remote_value.SerializationOptions = .{},
+        startNodes: []const std.json.Value = &.{},
+    });
+
+    if ((try requireContext(cmd, p.context)) == null) {
+        return;
+    }
+
+    if (p.maxNodeCount == 0) {
+        return cmd.sendError("invalid argument", "maxNodeCount must be at least 1");
+    }
+
+    const selector = switch (p.locator.type) {
+        .css, .xpath => switch (p.locator.value) {
+            .string => |str| str,
+            else => return cmd.sendError("invalid argument", "locator value must be a string"),
+        },
+        .innerText, .accessibility, .context => {
+            log.warn(.not_implemented, "bidi.locateNodes", .{ .locator = @tagName(p.locator.type) });
+            return cmd.sendError("unsupported operation", "locator type is not supported");
+        },
+    };
+
+    const bidi = cmd.bidi;
+    const frame = bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendError("no such frame", "no frame");
+    };
+    const arena = cmd.arena;
+
+    // The document is the default root
+    var roots: []const *Node = &.{frame.window._document.asNode()};
+    if (p.startNodes.len > 0) {
+        const start_nodes = try arena.alloc(*Node, p.startNodes.len);
+        for (p.startNodes, start_nodes) |ref, *node| {
+            const shared_id = switch (ref) {
+                .object => |o| o.get("sharedId") orelse .null,
+                else => .null,
+            };
+            node.* = remote_value.nodeFromSharedId(&bidi.node_registry, shared_id) catch {
+                return cmd.sendError("no such node", "unknown start node");
+            };
+            if (node.*.is(Node.Element) == null and node.*.is(Node.Document) == null and node.*.is(Node.DocumentFragment) == null) {
+                return cmd.sendError("invalid argument", "start nodes must be elements, documents or document fragments");
+            }
+        }
+        roots = start_nodes;
+    }
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var serializer = remote_value.Serializer.init(bidi, arena, frame, &ls.local, p.serializationOptions.options(false));
+
+    const xpath_expr = if (p.locator.type == .xpath) XPathParser.parse(arena, selector) catch |err| {
+        return invalidSelector(cmd, "xpath", selector, err);
+    } else undefined;
+
+    // Serialized straight from each root's result, stopping at maxNodeCount.
+    const max = p.maxNodeCount orelse std.math.maxInt(u32);
+    var remotes: std.ArrayList(remote_value.Remote) = .empty;
+    for (roots) |root| {
+        switch (p.locator.type) {
+            .css => {
+                if (max == 1) {
+                    const element = Selector.querySelector(root, selector, frame) catch |err| {
+                        return invalidSelector(cmd, "css", selector, err);
+                    };
+                    if (element) |el| {
+                        try remotes.append(arena, try serializer.domNode(el.asNode()));
+                    }
+                } else {
+                    const list = Selector.querySelectorAll(root, selector, frame) catch |err| {
+                        return invalidSelector(cmd, "css", selector, err);
+                    };
+                    defer list.deinit(frame._page);
+                    try appendNodes(&remotes, arena, &serializer, list._nodes, max);
+                }
+            },
+            .xpath => {
+                // TODO: maxNodeCount == 1 could stop at the first match like css
+                const result = xpath.evaluate(arena, xpath_expr, root, frame) catch |err| {
+                    return invalidSelector(cmd, "xpath", selector, err);
+                };
+                switch (result) {
+                    .node_set => |nodes| try appendNodes(&remotes, arena, &serializer, nodes, max),
+                    else => return cmd.sendError("invalid selector", "xpath expression must select nodes"),
+                }
+            },
+            else => unreachable, // other types aren't currently supported (TODO) and were already rejected
+        }
+
+        if (remotes.items.len >= max) {
+            break;
+        }
+    }
+
+    return cmd.sendResult(.{ .nodes = remotes.items });
+}
+
+fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allocator, serializer: *remote_value.Serializer, nodes: []const *Node, max: u32) !void {
+    // Try to optimize this a little for the inherit inefficiency of ArrayList with Arena.
+    const take = @min(nodes.len, max - remotes.items.len);
+    try remotes.ensureTotalCapacityPrecise(arena, remotes.items.len + take);
+    for (nodes[0..take]) |node| {
+        remotes.appendAssumeCapacity(try serializer.domNode(node));
+    }
+}
+
+fn invalidSelector(cmd: *const BiDi.Command, kind: []const u8, selector: []const u8, err: anyerror) !void {
+    log.debug(.bidi, "locateNodes", .{ .kind = kind, .selector = selector, .err = err });
+    return cmd.sendError("invalid selector", "invalid selector");
+}
+
 pub fn requireContext(cmd: *const BiDi.Command, context: []const u8) !?*Context {
     if (cmd.bidi.browsing_context) |*ctx| {
         if (std.mem.eql(u8, &ctx.id, context)) {
@@ -368,3 +497,167 @@ const Info = struct {
     originalOpener: ?[]const u8 = null,
     children: []const Info = &.{},
 };
+
+const testing = @import("testing.zig");
+test "bidi.browsing_context: locateNodes" {
+    testing.silenceLog(&.{.not_implemented});
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const context_id = try ctx.createContext(.{ .url = "bidi/locate.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item" } },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "1", .value = .{ .nodeType = 1, .localName = "li", .attributes = .{ .class = "item" } } },
+        .{ .type = "node", .sharedId = "2", .value = .{ .localName = "li" } },
+        .{ .type = "node", .sharedId = "3", .value = .{ .localName = "li" } },
+        .{ .type = "node", .sharedId = "4", .value = .{ .localName = "span" } },
+    } }, .{ .id = 1 });
+
+    // maxNodeCount truncates in document order
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item" }, .maxNodeCount = 2 },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "1" },
+        .{ .type = "node", .sharedId = "2" },
+    } }, .{ .id = 2 });
+
+    // xpath, with serializationOptions
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "browsingContext.locateNodes",
+        .params = .{
+            .context = context_id,
+            .locator = .{ .type = "xpath", .value = "//div[@id='other']" },
+            .serializationOptions = .{ .maxDomDepth = 1 },
+        },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .value = .{
+            .localName = "div",
+            .children = .{.{ .type = "node", .sharedId = "4", .value = .{ .localName = "span" } }},
+        } },
+    } }, .{ .id = 3 });
+
+    // startNodes scope the search
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "browsingContext.locateNodes",
+        .params = .{
+            .context = context_id,
+            .locator = .{ .type = "css", .value = ".item" },
+            .startNodes = .{.{ .sharedId = "5" }},
+        },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "4" },
+    } }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "browsingContext.locateNodes",
+        .params = .{
+            .context = context_id,
+            .locator = .{ .type = "xpath", .value = ".//*[@class='item']" },
+            .startNodes = .{ .{ .sharedId = "5" }, .{ .sharedId = "1" } },
+        },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "4" },
+    } }, .{ .id = 5 });
+
+    // maxNodeCount 1 takes the querySelector path; the first root has no match
+    try ctx.processMessage(.{
+        .id = 14,
+        .method = "browsingContext.locateNodes",
+        .params = .{
+            .context = context_id,
+            .locator = .{ .type = "css", .value = ".item" },
+            .startNodes = .{ .{ .sharedId = "1" }, .{ .sharedId = "5" } },
+            .maxNodeCount = 1,
+        },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "4" },
+    } }, .{ .id = 14 });
+
+    try ctx.processMessage(.{
+        .id = 15,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item[" }, .maxNodeCount = 1 },
+    });
+    try ctx.expectSentError("invalid selector", null, .{ .id = 15 });
+
+    // An absolute xpath ignores the start node, as in any browser.
+    try ctx.processMessage(.{
+        .id = 13,
+        .method = "browsingContext.locateNodes",
+        .params = .{
+            .context = context_id,
+            .locator = .{ .type = "xpath", .value = "//li" },
+            .startNodes = .{.{ .sharedId = "5" }},
+        },
+    });
+    try ctx.expectSentResult(.{ .nodes = .{
+        .{ .type = "node", .sharedId = "1" },
+        .{ .type = "node", .sharedId = "2" },
+        .{ .type = "node", .sharedId = "3" },
+    } }, .{ .id = 13 });
+
+    // errors
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item[" } },
+    });
+    try ctx.expectSentError("invalid selector", null, .{ .id = 6 });
+
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "xpath", .value = "count(//li)" } },
+    });
+    try ctx.expectSentError("invalid selector", null, .{ .id = 7 });
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "xpath", .value = "//li[" } },
+    });
+    try ctx.expectSentError("invalid selector", null, .{ .id = 8 });
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item" }, .startNodes = .{.{ .sharedId = "999" }} },
+    });
+    try ctx.expectSentError("no such node", null, .{ .id = 9 });
+
+    try ctx.processMessage(.{
+        .id = 10,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "css", .value = ".item" }, .maxNodeCount = 0 },
+    });
+    try ctx.expectSentError("invalid argument", null, .{ .id = 10 });
+
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = context_id, .locator = .{ .type = "innerText", .value = "a" } },
+    });
+    try ctx.expectSentError("unsupported operation", null, .{ .id = 11 });
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "browsingContext.locateNodes",
+        .params = .{ .context = "nope", .locator = .{ .type = "css", .value = ".item" } },
+    });
+    try ctx.expectSentError("no such frame", null, .{ .id = 12 });
+}

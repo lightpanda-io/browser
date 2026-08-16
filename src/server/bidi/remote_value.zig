@@ -263,16 +263,19 @@ pub const Handles = struct {
     }
 };
 
-pub const Options = struct {
-    // by default, a node serializs without its children
-    max_dom_depth: ?u32 = 0,
+// input parameter that we JSON parse
+pub const SerializationOptions = struct {
+    maxDomDepth: ?u32 = 0,
+    maxObjectDepth: ?u32 = null,
+    includeShadowTree: enum { none, open, all } = .none,
 
-    // but an object serializes without limit (all the way down)
-    max_object_depth: ?u32 = null,
-
-    // when resultOwnership == "root", we'll persist the value in our handles
-    // lookup
-    own_root: bool = false,
+    pub fn options(self: *const SerializationOptions, own_root: bool) Serializer.Options {
+        return .{
+            .own_root = own_root,
+            .max_dom_depth = self.maxDomDepth,
+            .max_object_depth = self.maxObjectDepth,
+        };
+    }
 };
 
 pub const Serializer = struct {
@@ -288,6 +291,17 @@ pub const Serializer = struct {
     // Locals, not globals: everything happens inside the caller's scope.
     seen: std.ArrayList(js.Object) = .empty,
 
+    pub const Options = struct {
+        // by default, a node serializes without its children
+        max_dom_depth: ?u32 = 0,
+
+        // but an object serializes without limit (all the way down)
+        max_object_depth: ?u32 = null,
+
+        // when resultOwnership == "root", we'll persist the value in our handles lookup
+        own_root: bool = false,
+    };
+
     pub fn init(bidi: *BiDi, arena: Allocator, frame: *Frame, local: *const js.Local, opts: Options) Serializer {
         return .{
             .frame = frame,
@@ -301,6 +315,11 @@ pub const Serializer = struct {
 
     pub fn run(self: *Serializer, value: js.Value) !Remote {
         return self.remote(value, 0, self.opts.own_root);
+    }
+
+    // A node reached without going through JS (browsingContext.locateNodes).
+    pub fn domNode(self: *Serializer, dom_node: *Node) !Remote {
+        return .{ .body = .{ .node = try self.node(dom_node, 0) } };
     }
 
     const Error = error{
@@ -571,9 +590,9 @@ fn bareType(value: js.Value) ?[]const u8 {
 }
 
 pub const LocalError = error{
-    UnsupportedLocalValue,
-    NoSuchHandle,
     NoSuchNode,
+    NoSuchHandle,
+    UnsupportedLocalValue,
 };
 
 // script.LocalValue -> JS, for callFunction's `arguments` and `this`.
@@ -588,17 +607,15 @@ pub fn toJs(
         else => return error.UnsupportedLocalValue,
     };
 
-    // A remote reference carries no `type`, which is how it's told apart from
-    // a value.
     if (fields.get("handle")) |handle| {
         const id = parseId(u32, handle) orelse return error.NoSuchHandle;
         const global = handles.get(id) orelse return error.NoSuchHandle;
         return global.local(local);
     }
+
     if (fields.get("sharedId")) |shared_id| {
-        const id = parseId(NodeRegistry.Id, shared_id) orelse return error.NoSuchNode;
-        const node = registry.lookup_by_id.get(id) orelse return error.NoSuchNode;
-        return local.zigValueToJs(node.dom, .{});
+        const node = try nodeFromSharedId(registry, shared_id);
+        return local.zigValueToJs(node, .{});
     }
 
     const name = switch (fields.get("type") orelse return error.UnsupportedLocalValue) {
@@ -631,7 +648,6 @@ pub fn toJs(
         .number => return local.newNumber(switch (payload) {
             .integer => |i| @floatFromInt(i),
             .float => |f| f,
-            // NaN / Infinity / -0 arrive as strings.
             .string => |s| specialNumber(s) orelse return error.UnsupportedLocalValue,
             else => return error.UnsupportedLocalValue,
         }),
@@ -704,6 +720,12 @@ fn objectKey(value: std.json.Value) ?[]const u8 {
     }
 }
 
+pub fn nodeFromSharedId(registry: *const NodeRegistry, shared_id: std.json.Value) error{NoSuchNode}!*Node {
+    const id = parseId(NodeRegistry.Id, shared_id) orelse return error.NoSuchNode;
+    const node = registry.lookup_by_id.get(id) orelse return error.NoSuchNode;
+    return node.dom;
+}
+
 fn parseId(comptime T: type, value: std.json.Value) ?T {
     const str = switch (value) {
         .string => |s| s,
@@ -713,9 +735,21 @@ fn parseId(comptime T: type, value: std.json.Value) ?T {
 }
 
 fn specialNumber(name: []const u8) ?f64 {
-    if (std.mem.eql(u8, name, "NaN")) return std.math.nan(f64);
-    if (std.mem.eql(u8, name, "Infinity")) return std.math.inf(f64);
-    if (std.mem.eql(u8, name, "-Infinity")) return -std.math.inf(f64);
-    if (std.mem.eql(u8, name, "-0")) return -0.0;
+    if (std.mem.eql(u8, name, "NaN")) {
+        return std.math.nan(f64);
+    }
+
+    if (std.mem.eql(u8, name, "Infinity")) {
+        return std.math.inf(f64);
+    }
+
+    if (std.mem.eql(u8, name, "-Infinity")) {
+        return -std.math.inf(f64);
+    }
+
+    if (std.mem.eql(u8, name, "-0")) {
+        return -0.0;
+    }
+
     return null;
 }
