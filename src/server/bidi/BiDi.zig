@@ -75,6 +75,8 @@ handles: remote_value.Handles,
 // Commands awaiting promise resolution
 pending: std.ArrayList(*script.Pending) = .empty,
 
+input_state: @import("input.zig").State = .{},
+
 subscriptions: std.ArrayList(Subscription) = .empty,
 
 const Subscription = struct {
@@ -136,6 +138,7 @@ pub fn deinit(self: *BiDi) void {
     // Now we can destroy
     script.Pending.destroyAll(self);
     self.pending.deinit(allocator);
+    self.input_state.deinit(allocator);
 
     self.node_registry.deinit();
     self.notification.deinit();
@@ -175,6 +178,10 @@ pub fn resetRealm(self: *BiDi) void {
     self.handles.releaseAll();
     self.node_registry.reset();
     if (self.browsing_context) |*ctx| {
+        if (ctx.realm_announced) {
+            ctx.realm_announced = false;
+            self.sendEvent("script.realmDestroyed", .{ .realm = &ctx.realm_id }) catch {};
+        }
         uuidv4(&ctx.realm_id);
     }
 }
@@ -224,6 +231,7 @@ fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []
         script,
         browser,
         browsingContext,
+        input,
     }, method[0..i]) orelse return error.UnknownCommand;
 
     // Only the session module is reachable without a session (it's what
@@ -245,6 +253,7 @@ fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []
         .script => return @import("script.zig").processMessage(&cmd),
         .browser => return @import("browser.zig").processMessage(&cmd),
         .browsingContext => return @import("browsing_context.zig").processMessage(&cmd),
+        .input => return @import("input.zig").processMessage(&cmd),
     }
 }
 

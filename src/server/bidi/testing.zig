@@ -39,7 +39,7 @@ pub const silenceLog = base.silenceLog;
 // Where the test http server serves src/browser/tests from.
 pub const test_server = "http://127.0.0.1:9582/src/browser/tests/";
 
-const TestContext = struct {
+pub const TestContext = struct {
     read_at: usize = 0,
     read_buf: [1024 * 32]u8 = undefined,
     bidi_: BiDi = undefined,
