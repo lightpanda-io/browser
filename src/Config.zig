@@ -214,6 +214,7 @@ fn caPathValidator(
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
+    .{ .name = "obey_cors", .type = bool },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -489,6 +490,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
+        else => unreachable,
+    };
+}
+
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_cors,
         else => unreachable,
     };
 }

@@ -184,6 +184,7 @@ cache: ?*Cache,
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
 obey_robots: bool,
+obey_cors: bool,
 
 robots: RobotsGate,
 cors: CorsGate,
@@ -225,6 +226,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
+        .obey_cors = network.config.obeyCors(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
@@ -885,7 +887,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             if (try self.cacheLookup(transfer)) {
                 return;
             }
-            if (!transfer.req.internal) {
+            if (self.obey_cors and !transfer.req.internal) {
                 switch (try self.cors.check(transfer)) {
                     .allowed => {},
                     .blocked => return transfer.failAsync(error.CorsBlocked),
