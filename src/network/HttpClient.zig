@@ -1085,7 +1085,7 @@ pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
     return self.pipeline(transfer, .after_cors);
 }
 
-fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
+pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
     for (headers) |hdr| {
         if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
             return hdr.value;
@@ -1689,6 +1689,16 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
+
+    // Validate the headers for the response with CORS.
+    if (transfer._cors_cross_origin) {
+        CorsGate.validateResponse(transfer) catch |err| {
+            self.removeConn(msg.conn);
+            transfer._conn = null;
+            transfer.failAsync(err);
+            return true;
+        };
+    }
 
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
