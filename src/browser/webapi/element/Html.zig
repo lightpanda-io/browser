@@ -402,6 +402,13 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
         else => {},
     }
 
+    const flags = &self.asElement()._flags;
+    if (flags.click_in_progress) {
+        return;
+    }
+    flags.click_in_progress = true;
+    defer flags.click_in_progress = false;
+
     const event = (try @import("../event/MouseEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
