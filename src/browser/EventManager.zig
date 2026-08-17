@@ -222,7 +222,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             // activation behavior (ancestors only for bubbling events).
             if (event.is(@import("webapi/event/MouseEvent.zig")) != null) {
                 if (Frame.user_input.findClickActivationTarget(target, event._bubbles)) |activation_target| {
-                    Frame.user_input.handleClick(frame, activation_target) catch |err| {
+                    Frame.user_input.handleClick(frame, activation_target, target) catch |err| {
                         log.warn(.event, "frame.click", .{ .err = err });
                     };
                 }
