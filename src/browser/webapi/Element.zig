@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
-const reflect = @import("../reflect.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
 
@@ -31,17 +30,19 @@ const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
-pub const DOMRect = @import("DOMRect.zig");
 
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 
+const slotting = @import("element/slotting.zig");
+const DOMStringMap = @import("element/DOMStringMap.zig");
+
+pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
-const slotting = @import("element/slotting.zig");
 pub const Attribute = @import("element/Attribute.zig");
-const DOMStringMap = @import("element/DOMStringMap.zig");
+pub const Reflect = @import("element/reflection.zig").Reflect;
 
 const log = lp.log;
 const String = lp.String;

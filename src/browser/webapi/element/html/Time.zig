@@ -20,14 +20,6 @@ pub fn asNode(self: *Time) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getDateTime(self: *Time) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("datetime")) orelse "";
-}
-
-pub fn setDateTime(self: *Time, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("datetime"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Time);
 
@@ -37,7 +29,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const dateTime = bridge.accessor(Time.getDateTime, Time.setDateTime, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Time);
+
+    pub const dateTime = reflect.string("datetime");
 };
 
 const testing = @import("../../../../testing.zig");

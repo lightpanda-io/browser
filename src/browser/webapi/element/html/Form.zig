@@ -58,14 +58,6 @@ pub fn asNode(self: *Form) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getName(self: *const Form) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Form, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
 /// Canonicalize the `method` content attribute (or its `formmethod` submitter
 /// override) per WHATWG HTML "limited to only known values":
 ///   - missing → returns `missing_default`
@@ -132,32 +124,12 @@ pub fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), frame);
 }
 
-pub fn getTarget(self: *Form) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
-}
-
-pub fn setTarget(self: *Form, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
-}
-
 pub fn getAcceptCharset(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(.wrap("accept-charset")) orelse "";
 }
 
 pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
-}
-
-pub fn getNoValidate(self: *const Form) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
-}
-
-pub fn setNoValidate(self: *Form, value: bool, frame: *Frame) !void {
-    if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("novalidate"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("novalidate"), frame);
-    }
 }
 
 pub fn getEnctype(self: *const Form) []const u8 {
@@ -245,6 +217,10 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
     return true;
 }
 
+pub fn getNoValidate(self: *const Form) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Form);
     pub const Meta = struct {
@@ -253,13 +229,17 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(Form.getName, Form.setName, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Form);
+    pub const encoding = reflect.enumerated("enctype", &.{ "application/x-www-form-urlencoded", "multipart/form-data", "text/plain" }, .{ .missing = "application/x-www-form-urlencoded" });
+    pub const autocomplete = reflect.enumerated("autocomplete", &.{ "on", "off" }, .{ .missing = "on" });
+
+    pub const name = reflect.string("name");
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{ .ce_reactions = true });
     pub const action = bridge.accessor(Form.getAction, Form.setAction, .{ .ce_reactions = true });
-    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{ .ce_reactions = true });
+    pub const target = reflect.string("target");
     pub const acceptCharset = bridge.accessor(Form.getAcceptCharset, Form.setAcceptCharset, .{ .ce_reactions = true });
     pub const enctype = bridge.accessor(Form.getEnctype, Form.setEnctype, .{ .ce_reactions = true });
-    pub const noValidate = bridge.accessor(Form.getNoValidate, Form.setNoValidate, .{ .ce_reactions = true });
+    pub const noValidate = reflect.boolean("novalidate");
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});

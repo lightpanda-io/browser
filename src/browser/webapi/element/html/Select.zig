@@ -171,78 +171,11 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
     }
 }
 
-pub fn getMultiple(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
-}
-
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type
 // The `type` IDL attribute reflects the element's mode: "select-multiple" when
 // the `multiple` attribute is present, "select-one" otherwise.
 pub fn getType(self: *const Select) []const u8 {
     return if (self.getMultiple()) "select-multiple" else "select-one";
-}
-
-pub fn setMultiple(self: *Select, multiple: bool, frame: *Frame) !void {
-    if (multiple) {
-        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("multiple"), frame);
-    }
-}
-
-pub fn getDisabled(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *Select, disabled: bool, frame: *Frame) !void {
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
-pub fn getName(self: *const Select) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Select, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
-pub fn getSize(self: *const Select) u32 {
-    const s = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 0;
-
-    const trimmed = std.mem.trimStart(u8, s, &std.ascii.whitespace);
-
-    var end: usize = 0;
-    for (trimmed) |b| {
-        if (!std.ascii.isDigit(b)) {
-            break;
-        }
-        end += 1;
-    }
-    if (end == 0) {
-        return 0;
-    }
-    return std.fmt.parseInt(u32, trimmed[0..end], 10) catch 0;
-}
-
-pub fn setSize(self: *Select, size: u32, frame: *Frame) !void {
-    const size_string = try std.fmt.allocPrint(frame.call_arena, "{d}", .{size});
-    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(size_string), frame);
-}
-
-pub fn getRequired(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
-}
-
-pub fn setRequired(self: *Select, required: bool, frame: *Frame) !void {
-    if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
-    }
 }
 
 pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollection {
@@ -393,6 +326,18 @@ pub fn suffersValueMissing(self: *const Select) bool {
     return false;
 }
 
+pub fn getDisabled(self: *const Select) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+}
+
+pub fn getMultiple(self: *const Select) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
+}
+
+pub fn getRequired(self: *const Select) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Select);
 
@@ -402,17 +347,19 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Select);
+
     pub const value = bridge.accessor(Select.getValue, Select.setValue, .{});
     pub const @"type" = bridge.accessor(Select.getType, null, .{});
     pub const selectedIndex = bridge.accessor(Select.getSelectedIndex, Select.setSelectedIndex, .{});
-    pub const multiple = bridge.accessor(Select.getMultiple, Select.setMultiple, .{ .ce_reactions = true });
-    pub const disabled = bridge.accessor(Select.getDisabled, Select.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(Select.getName, Select.setName, .{ .ce_reactions = true });
-    pub const required = bridge.accessor(Select.getRequired, Select.setRequired, .{ .ce_reactions = true });
+    pub const multiple = reflect.boolean("multiple");
+    pub const disabled = reflect.boolean("disabled");
+    pub const name = reflect.string("name");
+    pub const required = reflect.boolean("required");
     pub const options = bridge.accessor(Select.getOptions, null, .{});
     pub const selectedOptions = bridge.accessor(Select.getSelectedOptions, null, .{});
     pub const form = bridge.accessor(Select.getForm, null, .{});
-    pub const size = bridge.accessor(Select.getSize, Select.setSize, .{ .ce_reactions = true });
+    pub const size = reflect.unsignedLong("size", .{});
     pub const length = bridge.accessor(Select.getLength, null, .{});
     pub const labels = bridge.accessor(Select.getLabels, null, .{});
     pub const willValidate = bridge.accessor(Select.getWillValidate, null, .{});

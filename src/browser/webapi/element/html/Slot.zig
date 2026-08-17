@@ -32,14 +32,6 @@ pub fn asNode(self: *Slot) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getName(self: *const Slot) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Slot, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
 const AssignedNodesOptions = struct {
     flatten: bool = false,
 };
@@ -157,6 +149,10 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
     }
 }
 
+pub fn getName(self: *const Slot) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Slot);
 
@@ -166,7 +162,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(Slot.getName, Slot.setName, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Slot);
+
+    pub const name = reflect.string("name");
     pub const assignedNodes = bridge.function(Slot.assignedNodes, .{});
     pub const assignedElements = bridge.function(Slot.assignedElements, .{});
     pub const assign = bridge.function(Slot.assign, .{});

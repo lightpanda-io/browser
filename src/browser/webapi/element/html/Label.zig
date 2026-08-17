@@ -22,14 +22,6 @@ pub fn asNode(self: *Label) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getHtmlFor(self: *Label) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("for")) orelse "";
-}
-
-pub fn setHtmlFor(self: *Label, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("for"), .wrap(value), frame);
-}
-
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
     if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
         const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
@@ -143,7 +135,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const htmlFor = bridge.accessor(Label.getHtmlFor, Label.setHtmlFor, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Label);
+
+    pub const htmlFor = reflect.string("for");
     pub const control = bridge.accessor(Label.getControl, null, .{});
 };
 

@@ -77,22 +77,6 @@ pub fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Fram
     self.reflectedWindow(frame)._on_scroll = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getCols(self: *FrameSet) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("cols")) orelse "";
-}
-
-pub fn setCols(self: *FrameSet, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("cols"), .wrap(value), frame);
-}
-
-pub fn getRows(self: *FrameSet) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("rows")) orelse "";
-}
-
-pub fn setRows(self: *FrameSet, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("rows"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FrameSet);
 
@@ -102,8 +86,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const cols = bridge.accessor(FrameSet.getCols, FrameSet.setCols, .{ .ce_reactions = true });
-    pub const rows = bridge.accessor(FrameSet.getRows, FrameSet.setRows, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(FrameSet);
+
+    pub const cols = reflect.string("cols");
+    pub const rows = reflect.string("rows");
 
     pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
     pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });

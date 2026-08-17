@@ -52,19 +52,9 @@ pub fn getWidth(self: *const Canvas) u32 {
     return std.fmt.parseUnsigned(u32, attr, 10) catch 300;
 }
 
-pub fn setWidth(self: *Canvas, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
-}
-
 pub fn getHeight(self: *const Canvas) u32 {
     const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 150;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 150;
-}
-
-pub fn setHeight(self: *Canvas, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.local_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
 }
 
 /// Since there's no base class rendering contexts inherit from,
@@ -124,8 +114,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(Canvas.getWidth, Canvas.setWidth, .{ .ce_reactions = true });
-    pub const height = bridge.accessor(Canvas.getHeight, Canvas.setHeight, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Canvas);
+
+    pub const width = reflect.unsignedLong("width", .{ .default = 300 });
+    pub const height = reflect.unsignedLong("height", .{ .default = 150 });
     pub const getContext = bridge.function(Canvas.getContext, .{});
     pub const transferControlToOffscreen = bridge.function(Canvas.transferControlToOffscreen, .{});
 };

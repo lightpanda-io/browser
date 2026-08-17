@@ -34,5 +34,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(TableRow);
+    pub const vAlign = reflect.string("valign");
+    pub const chOff = reflect.string("charoff");
+    pub const ch = reflect.string("char");
+    pub const bgColor = reflect.stringNullToEmpty("bgcolor");
+    pub const @"align" = reflect.string("align");
+
     pub const cells = bridge.accessor(TableRow.getCells, null, .{});
 };

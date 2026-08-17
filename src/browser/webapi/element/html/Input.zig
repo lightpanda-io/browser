@@ -34,6 +34,7 @@ const ValidityState = @import("ValidityState.zig");
 const popover = @import("../popover.zig");
 const File = @import("../../File.zig");
 const FileList = @import("../../FileList.zig");
+const reflection = @import("../reflection.zig");
 
 const String = lp.String;
 
@@ -137,9 +138,8 @@ pub fn getType(self: *const Input) []const u8 {
 }
 
 pub fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
-    // Setting the type property should update the attribute, which will trigger attributeChange
-    const type_enum = Type.fromString(typ);
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(type_enum.toString()), frame);
+    // Reflected verbatim; attributeChange derives the state from it
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), frame);
 }
 
 pub fn getValue(self: *const Input) []const u8 {
@@ -589,75 +589,12 @@ pub fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
     }
 }
 
-pub fn getName(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Input, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
-pub fn getAccept(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("accept")) orelse "";
-}
-
-pub fn setAccept(self: *Input, accept: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("accept"), .wrap(accept), frame);
-}
-
-pub fn getAlt(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
-}
-
-pub fn setAlt(self: *Input, alt: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(alt), frame);
-}
-
 pub fn getMaxLength(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return -1;
-    return std.fmt.parseInt(i32, attr, 10) catch -1;
-}
-
-pub fn setMaxLength(self: *Input, max_length: i32, frame: *Frame) !void {
-    if (max_length < 0) {
-        return error.IndexSizeError;
-    }
-    var buf: [32]u8 = undefined;
-    const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
+    return reflection.getLimitedLong(self.asConstElement(), comptime .wrap("maxlength"));
 }
 
 pub fn getMinLength(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return -1;
-    return std.fmt.parseInt(i32, attr, 10) catch -1;
-}
-
-pub fn setMinLength(self: *Input, min_length: i32, frame: *Frame) !void {
-    if (min_length < 0) {
-        return error.IndexSizeError;
-    }
-    var buf: [32]u8 = undefined;
-    const value = std.fmt.bufPrint(&buf, "{d}", .{min_length}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("minlength"), .wrap(value), frame);
-}
-
-pub fn getSize(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 20;
-    const parsed = std.fmt.parseInt(i32, attr, 10) catch return 20;
-    return if (parsed == 0) 20 else parsed;
-}
-
-pub fn setSize(self: *Input, size: i32, frame: *Frame) !void {
-    if (size == 0) {
-        return error.ZeroNotAllowed;
-    }
-    if (size < 0) {
-        return self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap("20"), frame);
-    }
-
-    var buf: [32]u8 = undefined;
-    const value = std.fmt.bufPrint(&buf, "{d}", .{size}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(value), frame);
+    return reflection.getLimitedLong(self.asConstElement(), comptime .wrap("minlength"));
 }
 
 pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
@@ -668,90 +605,6 @@ pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
 pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
     const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), frame);
-}
-
-pub fn getReadonly(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("readonly")) != null;
-}
-
-pub fn setReadonly(self: *Input, readonly: bool, frame: *Frame) !void {
-    if (readonly) {
-        try self.asElement().setAttributeSafe(comptime .wrap("readonly"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("readonly"), frame);
-    }
-}
-
-pub fn getRequired(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
-}
-
-pub fn setRequired(self: *Input, required: bool, frame: *Frame) !void {
-    if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
-    }
-}
-
-pub fn getPlaceholder(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("placeholder")) orelse "";
-}
-
-pub fn setPlaceholder(self: *Input, placeholder: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("placeholder"), .wrap(placeholder), frame);
-}
-
-pub fn getPattern(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse "";
-}
-
-pub fn setPattern(self: *Input, pattern: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("pattern"), .wrap(pattern), frame);
-}
-
-pub fn getMin(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
-}
-
-pub fn setMin(self: *Input, min: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("min"), .wrap(min), frame);
-}
-
-pub fn getMax(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
-}
-
-pub fn setMax(self: *Input, max: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("max"), .wrap(max), frame);
-}
-
-pub fn getStep(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
-}
-
-pub fn setStep(self: *Input, step: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("step"), .wrap(step), frame);
-}
-
-pub fn getMultiple(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
-}
-
-pub fn setMultiple(self: *Input, multiple: bool, frame: *Frame) !void {
-    if (multiple) {
-        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("multiple"), frame);
-    }
-}
-
-pub fn getAutocomplete(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("autocomplete")) orelse "";
-}
-
-pub fn setAutocomplete(self: *Input, autocomplete: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("autocomplete"), .wrap(autocomplete), frame);
 }
 
 pub fn select(self: *Input, frame: *Frame) !void {
@@ -966,14 +819,6 @@ pub fn getFormMethod(self: *const Input) []const u8 {
 
 pub fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
-}
-
-pub fn getFormTarget(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("formtarget")) orelse "";
-}
-
-pub fn setFormTarget(self: *Input, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("formtarget"), .wrap(value), frame);
 }
 
 pub fn getFormNoValidate(self: *const Input) bool {
@@ -1406,6 +1251,22 @@ pub fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !v
     try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
 }
 
+pub fn getMax(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
+}
+
+pub fn getMin(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
+}
+
+pub fn getRequired(self: *const Input) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+}
+
+pub fn getStep(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Input);
 
@@ -1414,6 +1275,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(Input);
+    pub const useMap = reflect.string("usemap");
+    pub const dirName = reflect.string("dirname");
+    pub const @"align" = reflect.string("align");
 
     /// Handles [LegacyNullToEmptyString]: null → "" per HTML spec.
     fn setValueFromJS(self: *Input, js_value: js.Value, frame: *Frame) !void {
@@ -1431,14 +1297,14 @@ pub const JsApi = struct {
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{ .ce_reactions = true });
     pub const disabled = bridge.accessor(Input.getDisabled, Input.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(Input.getName, Input.setName, .{ .ce_reactions = true });
-    pub const required = bridge.accessor(Input.getRequired, Input.setRequired, .{ .ce_reactions = true });
-    pub const accept = bridge.accessor(Input.getAccept, Input.setAccept, .{ .ce_reactions = true });
-    pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{ .ce_reactions = true });
-    pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{ .ce_reactions = true });
-    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .ce_reactions = true });
-    pub const minLength = bridge.accessor(Input.getMinLength, Input.setMinLength, .{ .ce_reactions = true });
-    pub const size = bridge.accessor(Input.getSize, Input.setSize, .{ .ce_reactions = true });
+    pub const name = reflect.string("name");
+    pub const required = reflect.boolean("required");
+    pub const accept = reflect.string("accept");
+    pub const readOnly = reflect.boolean("readonly");
+    pub const alt = reflect.string("alt");
+    pub const maxLength = reflect.limitedLong("maxlength");
+    pub const minLength = reflect.limitedLong("minlength");
+    pub const size = reflect.unsignedLong("size", .{ .default = 20, .positive = true });
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{ .ce_reactions = true });
     pub const form = bridge.accessor(Input.getForm, null, .{});
     pub const list = bridge.accessor(Input.getList, null, .{});
@@ -1446,18 +1312,18 @@ pub const JsApi = struct {
     pub const formEnctype = bridge.accessor(Input.getFormEnctype, Input.setFormEnctype, .{});
     pub const formMethod = bridge.accessor(Input.getFormMethod, Input.setFormMethod, .{});
     pub const formNoValidate = bridge.accessor(Input.getFormNoValidate, Input.setFormNoValidate, .{});
-    pub const formTarget = bridge.accessor(Input.getFormTarget, Input.setFormTarget, .{});
+    pub const formTarget = reflect.string("formtarget");
     pub const labels = bridge.accessor(Input.getLabels, null, .{});
     pub const popoverTargetElement = bridge.accessor(Input.getPopoverTargetElement, Input.setPopoverTargetElement, .{ .ce_reactions = true });
     pub const popoverTargetAction = bridge.accessor(Input.getPopoverTargetAction, Input.setPopoverTargetAction, .{ .ce_reactions = true });
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
-    pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{ .ce_reactions = true });
-    pub const pattern = bridge.accessor(Input.getPattern, Input.setPattern, .{ .ce_reactions = true });
-    pub const min = bridge.accessor(Input.getMin, Input.setMin, .{ .ce_reactions = true });
-    pub const max = bridge.accessor(Input.getMax, Input.setMax, .{ .ce_reactions = true });
-    pub const step = bridge.accessor(Input.getStep, Input.setStep, .{ .ce_reactions = true });
-    pub const multiple = bridge.accessor(Input.getMultiple, Input.setMultiple, .{ .ce_reactions = true });
-    pub const autocomplete = bridge.accessor(Input.getAutocomplete, Input.setAutocomplete, .{ .ce_reactions = true });
+    pub const placeholder = reflect.string("placeholder");
+    pub const pattern = reflect.string("pattern");
+    pub const min = reflect.string("min");
+    pub const max = reflect.string("max");
+    pub const step = reflect.string("step");
+    pub const multiple = reflect.boolean("multiple");
+    pub const autocomplete = reflect.string("autocomplete");
     pub const willValidate = bridge.accessor(Input.getWillValidate, null, .{});
     pub const validity = bridge.accessor(Input.getValidity, null, .{});
     pub const validationMessage = bridge.accessor(Input.getValidationMessage, null, .{});

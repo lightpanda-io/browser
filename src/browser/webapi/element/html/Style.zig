@@ -44,42 +44,6 @@ pub fn asNode(self: *Style) *Node {
 
 // Attribute-backed properties
 
-pub fn getBlocking(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("blocking")) orelse "";
-}
-
-pub fn setBlocking(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("blocking"), .wrap(value), frame);
-}
-
-pub fn getMedia(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("media")) orelse "";
-}
-
-pub fn setMedia(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
-}
-
-pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
-}
-
-pub fn setType(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
-}
-
-pub fn getDisabled(self: *const Style) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *Style, disabled: bool, frame: *Frame) !void {
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
 pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
@@ -121,6 +85,10 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
     try frame.queueLoad(Factory.protoOf(self));
 }
 
+pub fn getType(self: *const Style) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Style);
 
@@ -130,10 +98,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{ .ce_reactions = true });
-    pub const media = bridge.accessor(Style.getMedia, Style.setMedia, .{ .ce_reactions = true });
-    pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{ .ce_reactions = true });
-    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Style);
+    pub const nonce = reflect.string("nonce");
+
+    pub const blocking = reflect.string("blocking");
+    pub const media = reflect.string("media");
+    pub const @"type" = reflect.string("type");
+    pub const disabled = reflect.boolean("disabled");
     pub const sheet = bridge.accessor(Style.getSheet, null, .{});
 };
 

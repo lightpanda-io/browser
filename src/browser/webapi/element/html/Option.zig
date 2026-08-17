@@ -37,7 +37,6 @@ _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _value: ?[]const u8 = null,
 _selected: bool = false,
 _default_selected: bool = false,
-_disabled: bool = false,
 
 pub fn asElement(self: *Option) *Element {
     return Factory.protoOf(self).asElement();
@@ -87,28 +86,16 @@ pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {
-    return self._default_selected;
+    return self.asConstElement().hasAttributeSafe(comptime .wrap("selected"));
 }
 
-pub fn getDisabled(self: *const Option) bool {
-    return self._disabled;
-}
-
-pub fn setDisabled(self: *Option, disabled: bool, frame: *Frame) !void {
-    self._disabled = disabled;
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
+pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
+    self._default_selected = value;
+    if (value) {
+        try self.asElement().setAttributeSafe(comptime .wrap("selected"), .wrap(""), frame);
     } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
+        try self.asElement().removeAttribute(comptime .wrap("selected"), frame);
     }
-}
-
-pub fn getName(self: *const Option) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Option, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
@@ -135,13 +122,15 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Option);
+
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{ .ce_reactions = true });
     pub const text = bridge.accessor(Option.getText, Option.setText, .{ .ce_reactions = true });
     pub const label = bridge.accessor(Option.getLabel, Option.setLabel, .{ .ce_reactions = true });
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
-    pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, null, .{});
-    pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(Option.getName, Option.setName, .{ .ce_reactions = true });
+    pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, Option.setDefaultSelected, .{ .ce_reactions = true });
+    pub const disabled = reflect.boolean("disabled");
+    pub const name = reflect.string("name");
 };
 
 pub const Build = struct {
@@ -155,9 +144,6 @@ pub const Build = struct {
         // Check for selected attribute
         self._default_selected = element.getAttributeSafe(comptime .wrap("selected")) != null;
         self._selected = self._default_selected;
-
-        // Check for disabled attribute
-        self._disabled = element.getAttributeSafe(comptime .wrap("disabled")) != null;
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, _: *Frame) !void {

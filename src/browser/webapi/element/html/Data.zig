@@ -40,14 +40,6 @@ pub fn asNode(self: *Data) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getValue(self: *Data) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("value")) orelse "";
-}
-
-pub fn setValue(self: *Data, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Data);
 
@@ -57,5 +49,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(Data.getValue, Data.setValue, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Data);
+
+    pub const value = reflect.string("value");
 };

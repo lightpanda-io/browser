@@ -51,52 +51,8 @@ pub fn asNode(self: *Button) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getDisabled(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *Button, disabled: bool, frame: *Frame) !void {
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
-pub fn getName(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Button, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
 pub fn getType(self: *const Button) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "submit";
-}
-
-pub fn setType(self: *Button, typ: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), frame);
-}
-
-pub fn getValue(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
-}
-
-pub fn setValue(self: *Button, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
-}
-
-pub fn getRequired(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
-}
-
-pub fn setRequired(self: *Button, required: bool, frame: *Frame) !void {
-    if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
-    }
 }
 
 pub fn getForm(self: *Button, frame: *Frame) ?*Form {
@@ -167,14 +123,6 @@ pub fn getFormMethod(self: *const Button) []const u8 {
 
 pub fn setFormMethod(self: *Button, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
-}
-
-pub fn getFormTarget(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("formtarget")) orelse "";
-}
-
-pub fn setFormTarget(self: *Button, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("formtarget"), .wrap(value), frame);
 }
 
 pub fn getFormNoValidate(self: *const Button) bool {
@@ -259,6 +207,14 @@ pub fn setPopoverTargetAction(self: *Button, value: []const u8, frame: *Frame) !
     try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
 }
 
+pub fn getDisabled(self: *const Button) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+}
+
+pub fn getValue(self: *const Button) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Button);
 
@@ -268,17 +224,19 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(Button.getDisabled, Button.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(Button.getName, Button.setName, .{ .ce_reactions = true });
-    pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Button);
+
+    pub const disabled = reflect.boolean("disabled");
+    pub const name = reflect.string("name");
+    pub const required = reflect.boolean("required");
     pub const form = bridge.accessor(Button.getForm, null, .{});
     pub const formAction = bridge.accessor(Button.getFormAction, Button.setFormAction, .{ .ce_reactions = true });
     pub const formEnctype = bridge.accessor(Button.getFormEnctype, Button.setFormEnctype, .{ .ce_reactions = true });
     pub const formMethod = bridge.accessor(Button.getFormMethod, Button.setFormMethod, .{ .ce_reactions = true });
     pub const formNoValidate = bridge.accessor(Button.getFormNoValidate, Button.setFormNoValidate, .{ .ce_reactions = true });
-    pub const formTarget = bridge.accessor(Button.getFormTarget, Button.setFormTarget, .{ .ce_reactions = true });
-    pub const value = bridge.accessor(Button.getValue, Button.setValue, .{ .ce_reactions = true });
-    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{ .ce_reactions = true });
+    pub const formTarget = reflect.string("formtarget");
+    pub const value = reflect.string("value");
+    pub const @"type" = reflect.enumerated("type", &.{ "submit", "reset", "button" }, .{ .missing = "submit" });
     pub const labels = bridge.accessor(Button.getLabels, null, .{});
     pub const popoverTargetElement = bridge.accessor(Button.getPopoverTargetElement, Button.setPopoverTargetElement, .{ .ce_reactions = true });
     pub const popoverTargetAction = bridge.accessor(Button.getPopoverTargetAction, Button.setPopoverTargetAction, .{ .ce_reactions = true });
