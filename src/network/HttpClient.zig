@@ -578,6 +578,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // cheap and can solve some nasty UAF.
         owned.url = try arena.dupeZ(u8, req.url);
         owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
+        owned.origin = if (req.origin) |o| try arena.dupe(u8, o) else null;
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
         }
@@ -1705,6 +1706,7 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     cookie_origin: [:0]const u8,
+    origin: ?[]const u8,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
@@ -3561,6 +3563,7 @@ fn testTransfer(arena: *lp.Arena) Transfer {
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -3739,6 +3742,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -3806,6 +3810,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3874,6 +3879,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .body = "payload",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3918,6 +3924,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .body = "payload",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3986,6 +3993,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4054,6 +4062,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4132,6 +4141,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4169,6 +4179,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,

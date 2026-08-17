@@ -138,6 +138,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .loader_id = frame._loader_id,
         .cookie_jar = &frame._session.cookie_jar,
         .cookie_origin = frame.url,
+        .origin = frame.origin,
         .resource_type = .script,
         .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -354,6 +355,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .loader_id = frame._loader_id,
                     .cookie_jar = &frame._session.cookie_jar,
                     .cookie_origin = frame.url,
+                    .origin = frame.origin,
                     .resource_type = .script,
                     .notification = frame._session.notification,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
@@ -401,6 +403,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .loader_id = frame._loader_id,
         .cookie_jar = &frame._session.cookie_jar,
         .cookie_origin = frame.url,
+        .origin = frame.origin,
         .resource_type = .script,
         .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
