@@ -38,6 +38,7 @@ pub const Scope = enum {
     cache,
     websocket,
     storage,
+    cors,
 };
 
 pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
