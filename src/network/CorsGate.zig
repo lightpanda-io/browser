@@ -114,11 +114,13 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     }
 
     transfer._cors_cross_origin = true;
+    const origin = req.origin orelse "null";
+    try transfer.setHeader("Origin", origin, .{});
 
     if (!requiresPreflight(transfer)) {
         log.debug(.cors, "cross origin", .{
             .url = req.url,
-            .origin = req.origin orelse "null",
+            .origin = origin,
             .preflight = false,
         });
         return .allowed;
