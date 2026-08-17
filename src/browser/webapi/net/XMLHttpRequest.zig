@@ -316,6 +316,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .method = self._method,
         .body = self._request_body,
         .cookies = cookie_support,
+        .origin = exec.origin(),
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
         .header_callback = httpHeaderDoneCallback,

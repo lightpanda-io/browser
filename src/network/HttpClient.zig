@@ -626,9 +626,13 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             .url => |url| .{ .url = try arena.dupeZ(u8, url) },
         };
         owned.cookie_origin = null;
+
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
         }
+
+        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.origin.* else null;
+        owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
 
         // The body can be larger, so callers can signal, via the
         // `body_outlives_request` flag that they guarantee that the body
@@ -1807,6 +1811,9 @@ pub const Request = struct {
     // Frame.navigate is the one caller with a reason to override it: the
     // initiator of a top-level navigation isn't the frame being navigated.
     cookie_origin: ?Cookie.SiteForCookies = null,
+
+    // The Origin of the Request.
+    origin: ?[]const u8,
 
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
@@ -4143,6 +4150,7 @@ fn testTransfer(arena: *lp.Arena) Transfer {
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = "",
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
         },
@@ -4371,6 +4379,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = "",
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4588,6 +4597,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = "",
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
             },
@@ -4651,6 +4661,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .method = .POST,
                 .url = "http://example.com/start",
                 .body = "payload",
+                .origin = "",
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
@@ -4690,6 +4701,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .method = .POST,
                 .url = "http://example.com/start",
                 .body = "payload",
+                .origin = "",
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
@@ -4753,6 +4765,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = "",
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4816,6 +4829,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = "",
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4889,6 +4903,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = "",
                 .resource_type = .xhr,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,
@@ -4921,6 +4936,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = "",
                 .resource_type = .xhr,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,

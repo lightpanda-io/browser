@@ -857,7 +857,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // do, they probably don't want the cached version.
         .skip_cache = self.parent == null,
         .throttle = self.parent == null,
-        .cookie_origin = opts.initiator_url,
+        .origin = self.origin,
         .resource_type = .document,
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
@@ -2382,6 +2382,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const transfer = http_client.newRequest(.{
         .url = resolved,
         .method = .GET,
+        .origin = self.origin,
         .resource_type = .stylesheet,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {

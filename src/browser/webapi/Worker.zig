@@ -106,6 +106,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .resource_type = if (self._type == .module) .script else .worker,
+        .origin = frame.origin,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,

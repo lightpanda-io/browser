@@ -134,6 +134,7 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .ctx = script,
         .url = owned_url,
         .method = .GET,
+        .origin = frame.origin,
         .resource_type = .script,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -345,6 +346,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
+                    .origin = frame.origin,
                     .resource_type = .script,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 }, &frame._http_owner);
@@ -389,6 +391,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .ctx = script,
             .url = remote_url,
             .method = .GET,
+            .origin = frame.origin,
             .resource_type = .script,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
             .header_callback = Script.headerCallback,

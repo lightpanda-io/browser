@@ -179,6 +179,7 @@ fn connect(self: *EventSource) !void {
         .url = self._url,
         .method = .GET,
         .cookies = cookie_support,
+        .origin = exec.origin(),
         .resource_type = .eventsource,
         .streaming = true,
         .header_callback = httpHeaderDoneCallback,
