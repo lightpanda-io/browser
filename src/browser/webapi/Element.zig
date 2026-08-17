@@ -139,7 +139,14 @@ pub const Namespace = enum(u8) {
 pub const Flags = packed struct(u8) {
     shadow_host: bool = false,
     customized_builtin: bool = false,
-    _unused: u6 = 0,
+
+    // Prevents nested clicks (which have a specific spec-compliant behavior
+    // compared to other events). If this bit can be more useful for something
+    // else, a stack in EventManager (for click-specifically) is an alterantive
+    // approach
+    click_in_progress: bool = false,
+
+    _unused: u5 = 0,
 };
 
 _type: Type,
