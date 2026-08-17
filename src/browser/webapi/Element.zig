@@ -115,6 +115,9 @@ pub const Namespace = enum(u8) {
 
     pub fn parse(namespace_: ?[]const u8) Namespace {
         const namespace = namespace_ orelse return .null;
+        if (namespace.len == 0) {
+            return .null;
+        }
         if (namespace.len == "http://www.w3.org/1999/xhtml".len) {
             // Common case, avoid the string comparison. Recklessly
             @branchHint(.likely);
@@ -653,20 +656,38 @@ pub fn getAttribute(self: *const Element, name: String, frame: *Frame) !?String 
     return self._attributes.get(name, frame);
 }
 
-/// For simplicity, the namespace is currently ignored and only the local name is used.
 pub fn getAttributeNS(
     self: *const Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     local_name: String,
     frame: *Frame,
 ) !?String {
-    if (maybe_namespace) |namespace| {
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.getAttributeNS", .{ .namespace = namespace });
+    if (namespace_) |namespace| {
+        // we don't really support namespaces, but if the namespace has a fixed
+        // prefix, we can try to fetch the attribute with it
+        if (try prefixedAttributeName(namespace, local_name.str(), frame)) |prefixed| {
+            if (try self.getAttribute(.wrap(prefixed), frame)) |value| {
+                return value;
+            }
         }
     }
-
     return self.getAttribute(local_name, frame);
+}
+
+fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *Frame) !?[]const u8 {
+    const prefix = blk: {
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xlink")) {
+            break :blk "xlink";
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/XML/1998/namespace")) {
+            break :blk "xml";
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/xmlns/")) {
+            break :blk "xmlns";
+        }
+        return null;
+    };
+    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -678,20 +699,13 @@ pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
     return value != null;
 }
 
-/// Like getAttributeNS, the namespace is currently ignored.
 pub fn hasAttributeNS(
     self: *const Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     local_name: String,
     frame: *Frame,
 ) !bool {
-    if (maybe_namespace) |namespace| {
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.hasAttributeNS", .{ .namespace = namespace });
-        }
-    }
-
-    return self.hasAttribute(local_name, frame);
+    return try self.getAttributeNS(namespace_, local_name, frame) != null;
 }
 
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
@@ -770,30 +784,24 @@ pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) 
 
 pub fn setAttributeNS(
     self: *Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     qualified_name: []const u8,
     value: String,
     frame: *Frame,
 ) !void {
-    const attr_name = if (maybe_namespace) |namespace| blk: {
-        // For xmlns namespace, store the full qualified name (e.g. "xmlns:bar")
-        // so lookupNamespaceURI can find namespace declarations.
-        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/xmlns/")) {
-            break :blk qualified_name;
+    const local_start = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
+        if (idx == 0 or idx == qualified_name.len - 1) {
+            // cannot be at the start or end of the qname
+            return error.InvalidCharacterError;
         }
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.setAttributeNS", .{ .namespace = namespace });
+        if (std.mem.indexOfScalarPos(u8, qualified_name, idx + 1, ':') != null) {
+            // and can only have one
+            return error.InvalidCharacterError;
         }
-        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
-            qualified_name[idx + 1 ..]
-        else
-            qualified_name;
-    } else blk: {
-        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
-            qualified_name[idx + 1 ..]
-        else
-            qualified_name;
-    };
+        break :blk idx + 1;
+    } else 0;
+
+    const attr_name = if (namespace_ != null) qualified_name else qualified_name[local_start..];
     return self.setAttribute(.wrap(attr_name), value, frame);
 }
 
