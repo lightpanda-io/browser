@@ -227,8 +227,8 @@ fn getStructuredData(cmd: anytype) !void {
 
 // Advisory `Content-Signal` robots.txt preferences for the current document's
 // host (https://contentsignals.org). `available` is false when no robots.txt
-// has been fetched for the host — note this is the case unless `obey_robots`
-// is enabled, since the robots layer is what populates the store.
+// has been fetched for the host — note this is the case when the robots layer
+// is disabled with `--no-obey-robots`, since that's what populates the store.
 fn getContentSignal(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
