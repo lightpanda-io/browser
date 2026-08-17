@@ -634,7 +634,7 @@ fn eventPathParent(node: *Node, event: *Event, target_root: *Node, frame: ?*Fram
     }
 
     if (frame) |f| {
-        if (f._assigned_slots.get(node)) |slot| {
+        if (node.assignedSlot(f)) |slot| {
             return slot.asNode();
         }
     }
