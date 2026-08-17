@@ -247,6 +247,7 @@ pub const LoadResources = packed struct(u4) {
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
+    .{ .name = "obey_cors", .type = bool },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
@@ -551,6 +552,13 @@ pub fn obeyRobots(self: *const Config) bool {
 pub fn httpVersion(self: *const Config) HttpVersion {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_version,
+        else => unreachable,
+    };
+}
+
+pub fn obeyCors(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_cors,
         else => unreachable,
     };
 }

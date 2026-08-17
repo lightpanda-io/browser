@@ -453,6 +453,9 @@
     \\  --obey-robots
     \\          Fetches and obeys robots.txt of the target page.
     \\          Defaults to false.
+    \\  --obey-cors
+    \\          Obeys CORS rules, executing preflights as needed.
+    \\          Defaults to false.
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:
     \\          Proxy-Authorization: Bearer <token>.
