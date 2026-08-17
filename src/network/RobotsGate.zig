@@ -53,7 +53,11 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
 
     if (self.network.robot_store.get(robots_url)) |robot_entry| {
         switch (robot_entry) {
-            .absent => return .allowed,
+            .allowed => return .allowed,
+            .disallowed => {
+                log.warn(.http, "blocked by robots", .{ .url = url });
+                return .blocked;
+            },
             .present => |robots| {
                 if (robots.isAllowed(URL.getPathname(url))) {
                     return .allowed;
@@ -142,7 +146,8 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
         transfer.unpark();
 
         const allowed = if (robot_entry) |entry| switch (entry) {
-            .absent => true,
+            .allowed => true,
+            .disallowed => false,
             .present => |robots| robots.isAllowed(URL.getPathname(transfer.req.url)),
         } else true;
 
@@ -201,26 +206,49 @@ const RobotsContext = struct {
                     const robots: ?Robots = network.robot_store.robotsFromBytes(
                         network.config.http_headers.user_agent,
                         self.buffer.items,
-                    ) catch blk: {
-                        log.warn(.browser, "failed to parse robots", .{ .robots_url = robots_url });
-                        try network.robot_store.putAbsent(robots_url);
+                    ) catch |err| blk: {
+                        // We only return an error if an allocation or something fails.
+                        // Our parser does already leniently handle malformed input and takes whichever rules it can parse.
+                        // On this case of an allocation failure, it is our fault so we put it as disallowed.
+                        log.warn(.browser, "error while parsing robots.txt", .{ .robots_url = robots_url, .err = err });
+                        try network.robot_store.putDisallowed(robots_url);
                         break :blk null;
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
                     }
+                } else {
+                    // Empty robots.txt means we can short-circuit the allowed path.
+                    try network.robot_store.putAllowed(robots_url);
                 }
             },
-            404 => {
-                log.debug(.http, "robots not found", .{ .url = robots_url });
-                try network.robot_store.putAbsent(robots_url);
+            // Unauthorized/Forbidden: treat as fully disallowed since we can't verify permissions.
+            401, 403 => {
+                log.debug(.http, "robots.txt access denied", .{
+                    .url = robots_url,
+                    .status = self.status,
+                });
+                try network.robot_store.putDisallowed(robots_url);
+            },
+            // RFC9309: Unavailable (400-499) means that we may access any resources on the server.
+            400, 402, 404...499 => {
+                log.debug(.http, "robots.txt unavailable", .{ .url = robots_url });
+                try network.robot_store.putAllowed(robots_url);
+            },
+            // RFC9309: Unreachable (500-599) means that we are completely disallowed.
+            500...599 => {
+                log.warn(.http, "robots.txt unreachable", .{
+                    .url = robots_url,
+                    .status = self.status,
+                });
+                try network.robot_store.putDisallowed(robots_url);
             },
             else => {
                 log.debug(.http, "unexpected status on robots", .{
                     .url = robots_url,
                     .status = self.status,
                 });
-                try network.robot_store.putAbsent(robots_url);
+                try network.robot_store.putDisallowed(robots_url);
             },
         }
 

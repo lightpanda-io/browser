@@ -92,7 +92,8 @@ pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
-        absent,
+        allowed,
+        disallowed,
     };
 
     pub const RobotsMap = std.HashMapUnmanaged([]const u8, RobotsEntry, struct {
@@ -141,7 +142,7 @@ pub const RobotStore = struct {
 
             switch (entry.value_ptr.*) {
                 .present => |*robots| robots.deinit(self.allocator),
-                .absent => {},
+                .allowed, .disallowed => {},
             }
         }
 
@@ -175,16 +176,26 @@ pub const RobotStore = struct {
         const entry = self.map.get(url) orelse return null;
         return switch (entry) {
             .present => |robots| robots.content_signals,
-            .absent => null,
+            .allowed, .disallowed => null,
         };
     }
 
-    pub fn putAbsent(self: *RobotStore, url: []const u8) !void {
+    /// This URL has no restrictions on crawling.
+    pub fn putAllowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
         const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .absent);
+        try self.map.put(self.allocator, duped, .allowed);
+    }
+
+    /// This URL is fully restricted from crawling.
+    pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+
+        const duped = try self.allocator.dupe(u8, url);
+        try self.map.put(self.allocator, duped, .disallowed);
     }
 };
 
