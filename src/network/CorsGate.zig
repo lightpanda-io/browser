@@ -26,6 +26,7 @@ const http = @import("http.zig");
 const Network = @import("Network.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
+const HttpClient = @import("HttpClient.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -103,7 +104,6 @@ fn requiresPreflight(transfer: *const Transfer) bool {
 const Result = enum { allowed, blocked, pending };
 
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
-    _ = self;
     const req = &transfer.req;
 
     if (req.origin) |origin| {
@@ -113,8 +113,60 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         }
     }
 
-    log.debug(.cors, "cross origin", .{ .url = req.url, .origin = req.origin orelse "null" });
     transfer._cors_cross_origin = true;
 
+    if (!requiresPreflight(transfer)) {
+        log.debug(.cors, "cross origin", .{
+            .url = req.url,
+            .origin = req.origin orelse "null",
+            .preflight = false,
+        });
+        return .allowed;
+    }
+
+    log.debug(.cors, "cross origin", .{
+        .url = req.url,
+        .origin = req.origin orelse "null",
+        .preflight = true,
+    });
+
+    _ = self;
     return .blocked;
+
+    // try self.fetchThenResumse(transfer);
+    // return .pendind;
+}
+
+pub fn validateResponse(transfer: *Transfer) !void {
+    const req = &transfer.req;
+    const allow_origin = HttpClient.findHeader(transfer.res.headers, "access-control-allow-origin");
+
+    if (allow_origin == null) {
+        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
+        return error.CorsBlocked;
+    }
+
+    const wants_credentials = req.credentials != null or transfer.findRequestHeader("Cookie") != null;
+
+    if (!std.mem.eql(u8, allow_origin.?, "*")) {
+        const origin = req.origin orelse {
+            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "opaque origin" });
+            return error.CorsBlocked;
+        };
+        if (!std.mem.eql(u8, allow_origin.?, origin)) {
+            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "origin mismatch", .allow_origin = allow_origin.?, .origin = origin });
+            return error.CorsBlocked;
+        }
+    } else if (wants_credentials) {
+        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "wildcard with credentials" });
+        return error.CorsBlocked;
+    }
+
+    if (wants_credentials) {
+        const allow_creds = HttpClient.findHeader(transfer.res.headers, "access-control-allow-credentials");
+        if (allow_creds == null or !std.mem.eql(u8, allow_creds.?, "true")) {
+            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed" });
+            return error.CorsBlocked;
+        }
+    }
 }
