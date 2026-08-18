@@ -116,7 +116,8 @@
   testing.expectEqual(true, validUAPlatforms.includes(navigator.userAgentData.platform));
 
   testing.expectEqual(1, navigator.userAgentData.brands.length);
-  testing.expectEqual({brand: 'Lightpanda', version: "1"}, navigator.userAgentData.brands[0]);
+  testing.expectEqual('Lightpanda', navigator.userAgentData.brands[0].brand);
+  testing.expectEqual("1.0.0-", navigator.userAgentData.brands[0].version.substring(0,6));
 
   // Same instance returned on repeated access
   testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);
@@ -142,7 +143,7 @@
       testing.expectEqual(true, Array.isArray(v.brands));
       testing.expectEqual(true, Array.isArray(v.fullVersionList));
       testing.expectEqual('Lightpanda', v.fullVersionList[0].brand);
-      testing.expectEqual('1.0.0.0', v.uaFullVersion);
+      testing.expectEqual('1.0.0-', v.uaFullVersion.substring(0,6));
       testing.expectEqual(false, v.wow64);
       testing.expectEqual(true, Array.isArray(v.formFactor));
       testing.expectEqual('Desktop', v.formFactor[0]);

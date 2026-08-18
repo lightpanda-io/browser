@@ -868,13 +868,14 @@ pub const HttpHeaders = struct {
     const Brand = struct {
         brand: [:0]const u8,
         version: [:0]const u8,
+        full_version: []const u8,
     };
 
     /// Source of truth for client-hints brand data. Both the Sec-Ch-Ua
     /// HTTP header and navigator.userAgentData.brands derive from this
     /// list, so the two sides cannot drift.
     pub const brands = [_]Brand{
-        .{ .brand = "Lightpanda", .version = "1" },
+        .{ .brand = "Lightpanda", .version = "1", .full_version = lp.build_config.version },
     };
 
     pub const sec_ch_ua: [:0]const u8 = blk: {
@@ -882,6 +883,15 @@ pub const HttpHeaders = struct {
         for (brands, 0..) |b, i| {
             const sep = if (i == 0) "" else ", ";
             out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.version ++ "\"";
+        }
+        break :blk out;
+    };
+
+    pub const sec_ch_ua_full_version_list: [:0]const u8 = blk: {
+        var out: [:0]const u8 = "";
+        for (brands, 0..) |b, i| {
+            const sep = if (i == 0) "" else ", ";
+            out = out ++ sep ++ "\"" ++ b.brand ++ "\";v=\"" ++ b.full_version ++ "\"";
         }
         break :blk out;
     };
