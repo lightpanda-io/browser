@@ -1608,16 +1608,18 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     switch (self._parse_state) {
         .html => |*html| try html.buffer.appendSlice(html.arena.allocator(), data),
         .text => |*buf| {
-            // we have to escape the data...
+            // The payload is text, not markup: `&` has to be escaped too, or
+            // the parser turns a literal "&#9733;" in the body into a star.
             var v = data;
             while (v.len > 0) {
-                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>' }) orelse {
+                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.arena, v);
                 };
                 try buf.appendSlice(self.arena, v[0..index]);
                 switch (v[index]) {
                     '<' => try buf.appendSlice(self.arena, "&lt;"),
                     '>' => try buf.appendSlice(self.arena, "&gt;"),
+                    '&' => try buf.appendSlice(self.arena, "&amp;"),
                     else => unreachable,
                 }
                 v = v[index + 1 ..];
@@ -3400,9 +3402,11 @@ pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
 fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
     for (frame.child_frames.items) |f| {
         if (f.iframe) |iframe| {
-            const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-            if (std.mem.eql(u8, frame_name, name)) {
-                return f;
+            if (iframe.asNode().isConnected()) {
+                const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+                if (std.mem.eql(u8, frame_name, name)) {
+                    return f;
+                }
             }
         }
         // Recursively search child frames
@@ -3515,7 +3519,20 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
-    const form_data = try FormData.init(form, submitter_, &self.js.execution);
+    // Resolved before the entry list is built: a hidden `_charset_` field
+    // takes the submission encoding's name as its value.
+    const charset: []const u8 = blk: {
+        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
+            // Normalize to canonical encoding name
+            const info = h5e.encoding_for_label(ac.ptr, ac.len);
+            if (info.isValid()) {
+                break :blk info.name();
+            }
+        }
+        break :blk self.charset;
+    };
+
+    const form_data = try FormData.initWithCharset(form, submitter_, charset, &self.js.execution);
     form_data.acquireRef();
     defer form_data.releaseRef(self._page);
 
@@ -3567,18 +3584,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer arena.release();
 
-    // Get charset from accept-charset attribute or fall back to document charset
-    const charset: []const u8 = blk: {
-        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
-            // Normalize to canonical encoding name
-            const info = h5e.encoding_for_label(ac.ptr, ac.len);
-            if (info.isValid()) {
-                break :blk info.name();
-            }
-        }
-        break :blk self.charset;
-    };
-
     var boundary_buf: [36]u8 = undefined;
     // GET ignores enctype per HTML spec; only resolve the union for POST.
     const encoding: FormData.EncType = blk: {
@@ -3595,7 +3600,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     var buf = std.Io.Writer.Allocating.init(arena.allocator());
-    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena.allocator() }, &buf.writer);
+    try form_data.write(arena.allocator(), .{ .encoding = encoding, .charset = charset }, &buf.writer);
 
     var action = blk: {
         if (submit_button) |s| {
