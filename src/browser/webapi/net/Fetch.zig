@@ -98,6 +98,11 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             .include => true,
             .@"same-origin" => exec.isSameOrigin(request._url),
         },
+        .credentials_mode = switch (request._credentials) {
+            .omit => .omit,
+            .@"same-origin" => .same_origin,
+            .include => .include,
+        },
         .origin = exec.origin(),
         .redirect = switch (request._redirect) {
             .follow => .follow,
