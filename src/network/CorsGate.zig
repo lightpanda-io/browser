@@ -248,7 +248,7 @@ const CorsPreflightContext = struct {
             switch (status) {
                 200...299 => {},
                 else => |s| {
-                    log.debug(.cors, "failed preflight", .{ .url = self.url, .status = s });
+                    log.debug(.cors, "preflight blocked", .{ .url = self.url, .status = s });
                     self.allowed = false;
                     return .proceed;
                 },
@@ -271,7 +271,6 @@ const CorsPreflightContext = struct {
         }
 
         self.allowed = self.validateHeaders(acao, acam, acah);
-
         return .proceed;
     }
 
@@ -306,6 +305,15 @@ const CorsPreflightContext = struct {
 };
 
 fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
+    const url = transfer.req.url;
+
+    const result = try self.single_flight.enter(url, transfer, .cors);
+    if (result == .queued) return;
+    errdefer {
+        self.single_flight.discard(url);
+        transfer.unpark();
+    }
+
     const client = transfer.client;
     const arena_pool = client.arena_pool;
 
@@ -393,7 +401,12 @@ pub fn validateResponse(transfer: *Transfer) !void {
         };
 
         if (!std.mem.eql(u8, allow_origin, origin)) {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "origin mismatch", .allow_origin = allow_origin.?, .origin = origin });
+            log.warn(.cors, "blocked", .{
+                .url = req.url,
+                .reason = "origin mismatch",
+                .allow_origin = allow_origin,
+                .origin = origin,
+            });
             return error.CorsBlocked;
         }
     }
