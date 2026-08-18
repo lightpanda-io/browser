@@ -807,7 +807,121 @@ pub extern "C" fn xml5ever_parse_document(
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(xml, len) };
-    xml5ever::driver::parse_document(sink, xml5ever::driver::XmlParseOpts::default())
-        .from_utf8()
-        .one(bytes);
+    let bytes = strip_doctype_internal_subset(bytes);
+    let tb = xml5ever::tree_builder::XmlTreeBuilder::new(sink, Default::default());
+    let tokenizer = xml5ever::tokenizer::XmlTokenizer::new(
+        UnclosedTagSink { tb, depth: Cell::new(0) },
+        Default::default(),
+    );
+    html5ever::tendril::stream::Utf8LossyDecoder::new(XmlDocumentParser {
+        tokenizer,
+        input_buffer: Default::default(),
+    })
+    .one(&*bytes);
+}
+
+// xml5ever's tokenizer has no notion of a DOCTYPE internal subset
+// (`<!DOCTYPE svg [ <!ENTITY ns_svg "..."> ]>`, as old Illustrator exports
+// emit): the `[` ends the doctype as bogus and the declarations tokenize as
+// junk before the root, each step a parse error. Nothing in the subset is used
+// anyway (no DTD support), so cut it out before tokenizing. Quotes are
+// respected; nested `[`/`]` are not (they don't occur in the subset syntax).
+fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let Some(doctype) = bytes.windows(9).position(|w| w == b"<!DOCTYPE") else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    let mut i = doctype + 9;
+    let mut quote: Option<u8> = None;
+    let mut open = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None
+                }
+            },
+            None => match c {
+                b'"' | b'\'' => quote = Some(c),
+                b'>' if open.is_none() => return std::borrow::Cow::Borrowed(bytes),
+                b'[' if open.is_none() => open = Some(i),
+                b']' if open.is_some() => {
+                    let mut out = Vec::with_capacity(bytes.len());
+                    out.extend_from_slice(&bytes[..open.unwrap()]);
+                    out.extend_from_slice(&bytes[i + 1..]);
+                    return std::borrow::Cow::Owned(out);
+                },
+                _ => {},
+            },
+        }
+        i += 1;
+    }
+    std::borrow::Cow::Borrowed(bytes)
+}
+
+// xml5ever's tree builder silently closes elements still open at EOF, and
+// its tokenizer reports nothing either, so a truncated document
+// (`<root><a>text`) parses "cleanly". Browsers reject it. This sits between
+// the tokenizer and the tree builder, tracks tag nesting from the raw token
+// stream, and reports an error when EOF arrives with tags still open.
+struct UnclosedTagSink<'arena> {
+    tb: xml5ever::tree_builder::XmlTreeBuilder<Ref, sink::Sink<'arena>>,
+    depth: Cell<u32>,
+}
+
+impl<'arena> xml5ever::tokenizer::TokenSink for UnclosedTagSink<'arena> {
+    type Handle = Ref;
+
+    fn process_token(
+        &self,
+        token: xml5ever::tokenizer::Token,
+    ) -> xml5ever::tokenizer::ProcessResult<Ref> {
+        use xml5ever::tokenizer::{TagKind, Token};
+        match &token {
+            Token::Tag(tag) => match tag.kind {
+                TagKind::StartTag => self.depth.set(self.depth.get() + 1),
+                TagKind::EndTag | TagKind::ShortTag => {
+                    self.depth.set(self.depth.get().saturating_sub(1))
+                },
+                TagKind::EmptyTag => {},
+            },
+            Token::EndOfFile => {
+                if self.depth.get() > 0 {
+                    use xml5ever::tree_builder::TreeSink;
+                    self.tb.sink.parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
+                }
+            },
+            _ => {},
+        }
+        self.tb.process_token(token)
+    }
+
+    fn end(&self) {
+        self.tb.end()
+    }
+}
+
+// xml5ever::driver::XmlParser, minus the tree-builder-typed tokenizer so the
+// UnclosedTagSink can sit in between.
+struct XmlDocumentParser<'arena> {
+    tokenizer: xml5ever::tokenizer::XmlTokenizer<UnclosedTagSink<'arena>>,
+    input_buffer: xml5ever::buffer_queue::BufferQueue,
+}
+
+impl<'arena> TendrilSink<html5ever::tendril::fmt::UTF8> for XmlDocumentParser<'arena> {
+    type Output = ();
+
+    fn process(&mut self, t: StrTendril) {
+        self.input_buffer.push_back(t);
+        while let xml5ever::TokenizerResult::Script(_) = self.tokenizer.feed(&self.input_buffer) {}
+    }
+
+    fn error(&mut self, desc: std::borrow::Cow<'static, str>) {
+        use xml5ever::tree_builder::TreeSink;
+        self.tokenizer.sink.tb.sink.parse_error(desc)
+    }
+
+    fn finish(self) -> () {
+        self.tokenizer.end();
+    }
 }

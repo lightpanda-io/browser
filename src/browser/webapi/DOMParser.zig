@@ -23,6 +23,7 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
+const Node = @import("Node.zig");
 const HTMLDocument = @import("HTMLDocument.zig");
 const Document = @import("Document.zig");
 
@@ -41,15 +42,9 @@ pub fn parseFromString(
     mime_type: []const u8,
     frame: *Frame,
 ) !*Document {
-    const target_mime = std.meta.stringToEnum(enum {
-        @"text/html",
-        @"text/xml",
-        @"application/xml",
-        @"application/xhtml+xml",
-        @"image/svg+xml",
-    }, mime_type) orelse return error.NotSupported;
+    const target_mime = std.meta.stringToEnum(SupportedType, mime_type) orelse return error.NotSupported;
 
-    return switch (target_mime) {
+    switch (target_mime) {
         .@"text/html" => {
             const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
             defer arena.release();
@@ -89,13 +84,34 @@ pub fn parseFromString(
             return doc.asDocument();
         },
         else => {
-            const doc = (try Frame.parse.xmlDocument(frame, html)) orelse blk: {
-                // Return a document with a <parsererror> element per spec.
-                break :blk (try Frame.parse.xmlDocument(frame, "<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>")).?;
-            };
-            return doc.asDocument();
+            const xml_doc = (try Frame.parse.xmlDocument(frame, html)) orelse try parserErrorDocument(frame);
+            const doc = xml_doc.asDocument();
+            doc._content_type = @tagName(target_mime);
+            return doc;
         },
-    };
+    }
+}
+
+const SupportedType = enum {
+    @"text/html",
+    @"text/xml",
+    @"application/xml",
+    @"application/xhtml+xml",
+    @"image/svg+xml",
+};
+
+const parsererror_ns = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
+
+// Per spec, a well-formedness error yields a document whose only child is
+// <parsererror> in the Mozilla error namespace.
+fn parserErrorDocument(frame: *Frame) !*Document.XMLDocument {
+    const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
+    const root = try Frame.node_factory.createElementNS(frame, .unknown, "parsererror", null);
+    try frame._element_namespace_uris.put(frame.arena, root.as(Node.Element), parsererror_ns);
+    const text = try Frame.node_factory.createTextNode(frame, "error");
+    _ = try root.appendChild(text, frame);
+    _ = try doc.asNode().appendChild(root, frame);
+    return doc;
 }
 
 pub const JsApi = struct {

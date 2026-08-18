@@ -117,7 +117,7 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
         return error.ExecutionTerminated;
     }
 
-    if (parser.err != null or doc_node.firstChild() == null) {
+    if (parser.err != null or parser.xml_error or doc_node.firstChild() == null) {
         return null;
     }
 
