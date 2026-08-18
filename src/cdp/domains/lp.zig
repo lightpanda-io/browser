@@ -77,11 +77,16 @@ fn version(cmd: *CDP.Command) !void {
 fn configureCDP(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         disableSetCacheDisabled: ?bool = null,
+        obeyRobots: ?bool = null,
     })) orelse return error.InvalidParams;
 
     if (params.disableSetCacheDisabled) |value| {
         cmd.cdp.disable_set_cache_disabled = value;
     }
+    if (params.obeyRobots) |value| {
+        try cmd.cdp.browser.http_client.obeyRobots(value);
+    }
+
     return cmd.sendResult(null, .{});
 }
 

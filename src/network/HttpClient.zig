@@ -305,6 +305,12 @@ pub fn setTlsVerify(self: *Client, verify: bool) !void {
     self.tls_verify = verify;
 }
 
+pub fn obeyRobots(self: *Client, enable: bool) !void {
+    if (self.obey_robots == enable) return;
+    try self.ensureNoActiveConnection();
+    self.obey_robots = enable;
+}
+
 pub fn disableCache(self: *Client, disable: bool) void {
     if (disable) {
         self.cache = null;
