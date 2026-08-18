@@ -82,10 +82,11 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     // tree builders (Playwright ariaSnapshot) consult on every element.
     if (self._is_computed) {
         if (self._element) |element| {
+            const style_manager = &element.ownerFrame(frame)._style_manager;
             if (wrapped.eql(comptime .wrap("display"))) {
-                if (frame._style_manager.hasDisplayNone(element)) return "none";
+                if (style_manager.hasDisplayNone(element)) return "none";
             } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                if (frame._style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+                if (style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
             }
         }
     }
@@ -96,7 +97,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
             if (self._element) |element| {
                 // Resolve inline `style=` declarations through the element's
                 // parsed inline style, so computed values match `el.style`.
-                if (frame._style_manager.inlineStyleValue(element, wrapped)) |value| {
+                if (element.ownerFrame(frame)._style_manager.inlineStyleValue(element, wrapped)) |value| {
                     return value;
                 }
 

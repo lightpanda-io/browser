@@ -88,7 +88,8 @@ fn text(self: *TextContent, frame: *Frame) []const u8 {
 }
 
 fn fontSize(self: *TextContent, frame: *Frame) f64 {
-    return frame._style_manager.computedFontSize(self.asElement());
+    const element = self.asElement();
+    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
 }
 
 fn getTextLength(self: *TextContent, frame: *Frame) !*AnimatedLength {
