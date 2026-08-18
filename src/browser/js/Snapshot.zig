@@ -796,8 +796,9 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
                     continue;
                 }
 
-                // For non-static functions, use the signature to validate the receiver
-                const func_signature = if (value.static) null else signature;
+                // For non-static functions, use the signature to validate the
+                // receiver, unless the operation has to reject rather than throw.
+                const func_signature = if (value.static or value.rejects_bad_receiver) null else signature;
                 const function_template = v8.v8__FunctionTemplate__New__Config(isolate, &.{
                     .callback = value.func,
                     .length = value.arity,
