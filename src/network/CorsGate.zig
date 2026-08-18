@@ -36,6 +36,17 @@ const CorsGate = @This();
 network: *Network,
 single_flight: SingleFlight,
 
+// CORS Request Headers
+const ORIGIN = "origin";
+const ACCESS_CONTROL_REQUEST_METHOD = "access-control-request-method";
+const ACCESS_CONTROL_REQUEST_HEADERS = "access-control-request-headers";
+
+// CORS Response Headers
+const ACCESS_CONTROL_ALLOW_ORIGIN = "access-control-allow-origin";
+const ACCESS_CONTROL_ALLOW_METHODS = "access-control-allow-methods";
+const ACCESS_CONTROL_ALLOW_HEADERS = "access-control-allow-headers";
+const ACCESS_CONTROL_MAX_AGE = "access-control-max-age";
+
 pub fn deinit(self: *CorsGate) void {
     self.single_flight.deinit();
 }
@@ -115,7 +126,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     transfer._cors_cross_origin = true;
     const origin = req.origin orelse "null";
-    try transfer.setHeader("Origin", origin, .{});
+    try transfer.setHeader(ORIGIN, origin, .{});
 
     if (!requiresPreflight(transfer)) {
         log.debug(.cors, "cross origin", .{
@@ -128,46 +139,261 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     log.debug(.cors, "cross origin", .{
         .url = req.url,
-        .origin = req.origin orelse "null",
+        .origin = origin,
         .preflight = true,
     });
 
-    _ = self;
-    return .blocked;
+    try self.fetchThenResume(transfer);
+    return .pending;
+}
 
-    // try self.fetchThenResumse(transfer);
-    // return .pendind;
+const CorsPreflightContext = struct {
+    gate: *CorsGate,
+    arena: *lp.Arena,
+
+    url: [:0]const u8,
+    origin: []const u8,
+    method: http.Method,
+    request_headers: []const []const u8,
+
+    allowed: bool = false,
+
+    fn validateHeaders(
+        self: *CorsPreflightContext,
+        acao: ?[]const u8,
+        acam: ?[]const u8,
+        acah: ?[]const u8,
+    ) bool {
+        // Access-Control-Allow-Origin
+        const allow_origin = acao orelse {
+            log.debug(.cors, "preflight blocked", .{ .url = self.url, .reason = "missing acao" });
+            return false;
+        };
+
+        if (!std.mem.eql(u8, allow_origin, "*") and !std.mem.eql(u8, allow_origin, self.origin)) {
+            log.debug(.cors, "preflight blocked", .{
+                .url = self.url,
+                .reason = "origin mismatch",
+                .allow_origin = allow_origin,
+                .origin = self.origin,
+            });
+            return false;
+        }
+
+        // Access-Control-Allow-Methods
+        const allow_methods = acam orelse {
+            log.debug(.cors, "preflight blocked", .{ .url = self.url, .reason = "missing acam" });
+            return false;
+        };
+
+        if (!std.mem.eql(u8, allow_methods, "*") and !methodAllowed(allow_methods, self.method)) {
+            log.debug(.cors, "preflight blocked", .{
+                .url = self.url,
+                .reason = "method not allowed",
+                .allow_methods = allow_methods,
+                .method = @tagName(self.method),
+            });
+            return false;
+        }
+
+        // Access-Control-Allow-Headers
+        if (self.request_headers.len > 0) {
+            const allow_headers = acah orelse {
+                log.debug(.cors, "preflight blocked", .{ .url = self.url, .reason = "missing acah" });
+                return false;
+            };
+
+            if (!std.mem.eql(u8, allow_headers, "*")) {
+                for (self.request_headers) |name| {
+                    if (!headerAllowed(allow_headers, name)) {
+                        log.debug(.cors, "preflight blocked", .{
+                            .url = self.url,
+                            .reason = "header not allowed",
+                            .allow_headers = allow_headers,
+                            .header = name,
+                        });
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    fn methodAllowed(list: []const u8, method: http.Method) bool {
+        const method_name = @tagName(method);
+        var it = std.mem.splitScalar(u8, list, ',');
+        while (it.next()) |raw| {
+            const token = std.mem.trim(u8, raw, &std.ascii.whitespace);
+            if (std.mem.eql(u8, token, method_name)) return true;
+        }
+        return false;
+    }
+
+    fn headerAllowed(list: []const u8, name: []const u8) bool {
+        var it = std.mem.splitScalar(u8, list, ',');
+        while (it.next()) |raw| {
+            const tok = std.mem.trim(u8, raw, &std.ascii.whitespace);
+            if (std.ascii.eqlIgnoreCase(tok, name)) return true;
+        }
+        return false;
+    }
+
+    fn headerCallback(transfer: *Transfer) anyerror!Transfer.HeaderResult {
+        const self: *CorsPreflightContext = @ptrCast(@alignCast(transfer.req.ctx));
+
+        // Must be 2xx
+        if (transfer.responseStatus()) |status| {
+            switch (status) {
+                200...299 => {},
+                else => |s| {
+                    log.debug(.cors, "failed preflight", .{ .url = self.url, .status = s });
+                    self.allowed = false;
+                    return .proceed;
+                },
+            }
+        }
+
+        var acao: ?[]const u8 = null;
+        var acam: ?[]const u8 = null;
+        var acah: ?[]const u8 = null;
+
+        var iter = transfer.responseHeaderIterator();
+        while (iter.next()) |hdr| {
+            if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_ORIGIN, hdr.name)) {
+                acao = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_METHODS, hdr.name)) {
+                acam = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_HEADERS, hdr.name)) {
+                acah = hdr.value;
+            }
+        }
+
+        self.allowed = self.validateHeaders(acao, acam, acah);
+
+        return .proceed;
+    }
+
+    fn doneCallback(ctx_ptr: *anyopaque) anyerror!void {
+        const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
+        self.resolve(self.allowed);
+    }
+
+    fn errorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
+        const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
+        log.warn(.cors, "preflight error", .{ .url = self.url, .err = err });
+
+        self.resolve(false);
+    }
+
+    fn shutdownCallback(ctx_ptr: *anyopaque) void {
+        const self: *CorsPreflightContext = @ptrCast(@alignCast(ctx_ptr));
+        log.debug(.cors, "preflight shutdown", .{ .url = self.url });
+
+        const gate = self.gate;
+        const arena = self.arena;
+        gate.single_flight.discard(self.url);
+        arena.release();
+    }
+
+    fn resolve(self: *CorsPreflightContext, allowed: bool) void {
+        const gate = self.gate;
+        const arena = self.arena;
+        gate.flushPending(self.url, allowed);
+        arena.release();
+    }
+};
+
+fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
+    const client = transfer.client;
+    const arena_pool = client.arena_pool;
+
+    const arena = try arena_pool.acquire(.tiny, "CorsGate.CorsPreflightContext");
+    errdefer arena_pool.release(arena);
+
+    const owned_url = try arena.dupeZ(u8, transfer.req.url);
+
+    var header_names: std.ArrayList([]const u8) = .empty;
+    for (transfer.req_headers.items) |hdr| {
+        if (hdr.source != .author) continue;
+        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
+        try header_names.append(arena.allocator(), try arena.dupe(u8, hdr.name));
+    }
+
+    const ctx = try arena.create(CorsPreflightContext);
+    ctx.* = .{
+        .gate = self,
+        .arena = arena,
+        .url = owned_url,
+
+        .origin = try arena.dupe(u8, transfer.req.origin orelse "null"),
+        .method = transfer.req.method,
+        .request_headers = header_names.items,
+    };
+
+    const fetch_transfer = try client.newRequest(.{
+        .url = owned_url,
+        .method = .OPTIONS,
+        .internal = true,
+        .resource_type = .fetch,
+        .frame_id = transfer.req.frame_id,
+        .document_frame_id = transfer.req.document_frame_id,
+        .loader_id = transfer.req.loader_id,
+        .notification = transfer.req.notification,
+        .cookie_jar = null,
+        .cookie_origin = transfer.req.cookie_origin,
+        .origin = transfer.req.origin,
+        .ctx = ctx,
+        .header_callback = CorsPreflightContext.headerCallback,
+        .done_callback = CorsPreflightContext.doneCallback,
+        .error_callback = CorsPreflightContext.errorCallback,
+        .shutdown_callback = CorsPreflightContext.shutdownCallback,
+    }, null);
+    errdefer fetch_transfer.deinit();
+
+    // Origin
+    try fetch_transfer.setHeader(
+        ORIGIN,
+        transfer.req.origin orelse "null",
+        .{},
+    );
+
+    // Access-Control-Allow-Methods
+    try fetch_transfer.setHeader(
+        ACCESS_CONTROL_REQUEST_METHOD,
+        @tagName(transfer.req.method),
+        .{},
+    );
+
+    // Access-Control-Allow-Headers
+    if (header_names.items.len > 0) {
+        const request_headers_value = try std.mem.join(arena.allocator(), ",", header_names.items);
+        try fetch_transfer.setHeader(
+            ACCESS_CONTROL_REQUEST_HEADERS,
+            request_headers_value,
+            .{},
+        );
+    }
+
+    fetch_transfer.submit() catch {};
 }
 
 pub fn validateResponse(transfer: *Transfer) !void {
     const req = &transfer.req;
-    const allow_origin = HttpClient.findHeader(transfer.res.headers, "access-control-allow-origin");
-
-    if (allow_origin == null) {
+    const allow_origin = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_ORIGIN) orelse {
         log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
         return error.CorsBlocked;
-    }
+    };
 
-    const wants_credentials = req.credentials != null or transfer.findRequestHeader("Cookie") != null;
-
-    if (!std.mem.eql(u8, allow_origin.?, "*")) {
+    if (!std.mem.eql(u8, allow_origin, "*")) {
         const origin = req.origin orelse {
             log.warn(.cors, "blocked", .{ .url = req.url, .reason = "opaque origin" });
             return error.CorsBlocked;
         };
-        if (!std.mem.eql(u8, allow_origin.?, origin)) {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "origin mismatch", .allow_origin = allow_origin.?, .origin = origin });
-            return error.CorsBlocked;
-        }
-    } else if (wants_credentials) {
-        log.warn(.cors, "blocked", .{ .url = req.url, .reason = "wildcard with credentials" });
-        return error.CorsBlocked;
-    }
 
-    if (wants_credentials) {
-        const allow_creds = HttpClient.findHeader(transfer.res.headers, "access-control-allow-credentials");
-        if (allow_creds == null or !std.mem.eql(u8, allow_creds.?, "true")) {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "credentials not allowed" });
+        if (!std.mem.eql(u8, allow_origin, origin)) {
+            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "origin mismatch", .allow_origin = allow_origin.?, .origin = origin });
             return error.CorsBlocked;
         }
     }
