@@ -1687,6 +1687,80 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     }
 }
 
+test "cdp.frame: anchor click runs the default navigation unless preventDefault (#3179)" {
+    // Regression test for #3179. Clicking an <a href> must run the default
+    // action (navigation) even when the anchor has a click handler that does
+    // NOT call preventDefault. A handler that calls preventDefault() must
+    // suppress the navigation. The two behaviors are driven by element.click(),
+    // the same path a CDP Input.dispatchMouseEvent release uses.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-ACT";
+    bc.session_id = "SID-ACT";
+    bc.target_id = "TID-ACT-000000".*;
+
+    // Initial navigation to the page hosting the two anchors.
+    {
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/activation.html", .{});
+        try testing.waitForPage(bc);
+    }
+
+    // Click the non-preventing anchor. The handler runs, then the default
+    // action navigates to /echo_method.
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("document.getElementById('link').click()", null);
+        try testing.waitForPage(bc);
+    }
+
+    // The navigation committed and the handler actually ran.
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        try testing.expect(std.mem.endsWith(u8, f.url, "/echo_method"));
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        // /echo_method echoes "method=GET" in its body.
+        const v = try ls.local.exec("document.body.innerText.includes('method=GET')", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Reload the fixture so we can test the preventDefault anchor.
+    try ctx.processMessage(.{ .id = 30, .method = "Page.reload" });
+    try testing.waitForPage(bc);
+
+    // The handler flag must be reachable before clicking.
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("typeof window.handlerRan === 'number'", null);
+        try testing.expect(v.toBool());
+    }
+
+    // Click the preventDefault anchor: the handler runs but the navigation is
+    // suppressed, so the frame stays on activation.html.
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("document.getElementById('prevented').click()", null);
+        // Give any (incorrect) navigation a chance to start before asserting.
+        try testing.waitForPage(bc);
+        try testing.expect(std.mem.endsWith(u8, f.url, "/activation.html"));
+    }
+}
+
 test "cdp.frame: address-bar Page.navigate sends no Referer" {
     // Regression guard: navigations initiated by the user agent itself (CDP
     // Page.navigate, address-bar typed URLs, Page.reload) must not leak the

@@ -1000,6 +1000,21 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         );
     }
 
+    if (std.mem.eql(u8, path, "/activation.html")) {
+        // Page with anchors used by the click-activation regression test
+        // (#3179). `link` runs a click handler that does NOT preventDefault, so
+        // its default action (navigate to /echo_method) must still run.
+        // `prevented` runs a handler that calls preventDefault(), suppressing it.
+        return req.respond(
+            "<html><body><a id=\"link\" href=\"/echo_method\">go</a><a id=\"prevented\" href=\"/echo_method\">blocked</a><script>window.handlerRan=0;document.getElementById('link').addEventListener('click',function(){window.handlerRan++;});document.getElementById('prevented').addEventListener('click',function(e){e.preventDefault();});</script></body></html>",
+            .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        );
+    }
+
     if (std.mem.eql(u8, path, "/echo_method")) {
         // Echo the request method back as HTML so tests can assert on what
         // method the navigation used. Used by the Page.reload-replays-POST test.
