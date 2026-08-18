@@ -900,6 +900,50 @@ test "isBadPort" {
     }
 }
 
+test "Header.parse" {
+    {
+        const h = Header.parse("Content-Type: text/html; charset=utf-8").?;
+        try testing.expectEqualSlices(u8, "Content-Type", h.name);
+        try testing.expectEqualSlices(u8, "text/html; charset=utf-8", h.value);
+    }
+    {
+        // no space after the colon
+        const h = Header.parse("X-Custom:value").?;
+        try testing.expectEqualSlices(u8, "X-Custom", h.name);
+        try testing.expectEqualSlices(u8, "value", h.value);
+    }
+    {
+        // name and value are trimmed of spaces and tabs
+        const h = Header.parse(" \tAccept \t: \tapplication/json \t").?;
+        try testing.expectEqualSlices(u8, "Accept", h.name);
+        try testing.expectEqualSlices(u8, "application/json", h.value);
+    }
+    {
+        // only the first colon splits; later colons stay in the value
+        const h = Header.parse("Referer: http://example.com:8080/").?;
+        try testing.expectEqualSlices(u8, "Referer", h.name);
+        try testing.expectEqualSlices(u8, "http://example.com:8080/", h.value);
+    }
+    {
+        // empty value
+        const h = Header.parse("X-Empty:").?;
+        try testing.expectEqualSlices(u8, "X-Empty", h.name);
+        try testing.expectEqualSlices(u8, "", h.value);
+    }
+
+    {
+        // Splitting is all `parse` does; a name that isn't an HTTP token still
+        // parses. Callers validate what comes back.
+        const h = Header.parse("Foo Bar: value").?;
+        try testing.expectEqualSlices(u8, "Foo Bar", h.name);
+        try testing.expectEqualSlices(u8, "value", h.value);
+    }
+
+    // no colon, no header
+    try testing.expect(Header.parse("not-a-header") == null);
+    try testing.expect(Header.parse("") == null);
+}
+
 test "Header.firstValue" {
     try testing.expectEqualSlices(u8, "attachment", (Header{ .name = "Content-Disposition", .value = "attachment" }).firstValue());
     // firstValue trims but preserves case (callers compare case-insensitively).

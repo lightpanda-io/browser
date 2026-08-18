@@ -132,16 +132,13 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         const key = header.key_ptr.*;
         const value = header.value_ptr.*;
 
-        if (std.mem.indexOfAny(u8, key, "\r\n") != null or std.mem.indexOfAny(u8, value, "\r\n") != null) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
+        if (Mime.isHttpToken(key) == false) {
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must be a non-empty HTTP token" });
             continue;
         }
 
-        // A colon in the name would smuggle a different header name onto the
-        // wire once the pair is joined ("User-Agent:Mozilla/5.0 (X" + "Y)"),
-        // bypassing the User-Agent validation below.
-        if (std.mem.indexOfScalar(u8, key, ':') != null) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must not contain a colon" });
+        if (Mime.isHttpHeaderValue(value) == false) {
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header value must be Latin-1 text without CR, LF or NUL" });
             continue;
         }
 
@@ -795,6 +792,30 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
         .method = "Network.setExtraHTTPHeaders",
         .params = .{ .headers = .{
             .@"x-custom" = "bar\r\nUser-Agent: Mozilla/5.0",
+            .@"x-keep" = "ok",
+        } },
+    });
+
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", bc.extra_headers.items[0].name);
+    try testing.expectEqual("ok", bc.extra_headers.items[0].value);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
+    testing.silenceLog(&.{.cdp});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA6", .session_id = "NESI-UA6" });
+
+    // A space — or any other non-token byte — in the name would land
+    // malformed on the wire.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"X Custom" = "bar",
             .@"x-keep" = "ok",
         } },
     });

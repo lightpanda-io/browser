@@ -358,6 +358,14 @@
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 0.
+    \\  --http-header <HEADER>
+    \\          Extra custom header added to every outgoing HTTP request, including redirections,
+    \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
+    \\          Note that if you add a custom header that has the same name as one of the
+    \\          internal ones Lightpanda would use, your set header is always used instead of the
+    \\          internal one. You should not replace internally set headers without knowing
+    \\          perfectly well what you are doing.
+    \\          Script set headers via CDP or JS can't override a CLI set header.
     \\  --http-max-concurrent <INT>
     \\          Maximum number of concurrent HTTP requests.
     \\          Defaults to 40.
