@@ -300,19 +300,13 @@ fn navigate(cmd: *CDP.Command) !void {
 
     const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
-    // Fast path: a freshly-created target whose root frame hasn't navigated
-    // yet has nothing to preserve across the HTTP round-trip. Skip the
-    // pending-Page allocation (which would create a V8 context just to
-    // throw the OLD blank one away at commit) and navigate the active
-    // frame in place.
-    if (frame._load_state == .waiting) {
-        return frame.navigate(encoded_url, .{
-            .reason = .address_bar,
-            .cdp_id = cmd.input.id,
-            .kind = .{ .push = null },
-        });
-    }
-
+    // A cross-document navigation replaces the JS global object. Even a
+    // freshly-created about:blank target must not reuse its bootstrap
+    // context in place: a client can run JS on the blank page (Runtime.evaluate)
+    // before the first Page.navigate, and those globals would leak into the
+    // navigated document (issue #3215). Route every root navigation through
+    // initiateRootNavigation so a fresh page/window/global is committed and
+    // the blank one is discarded.
     try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
@@ -1635,6 +1629,56 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     defer ls.deinit();
     const v = try ls.local.exec("window.location.href === 'about:blank'", null);
     try testing.expect(v.toBool());
+}
+
+test "cdp.frame: first navigation replaces the bootstrap about:blank global (#3215)" {
+    // Regression test for #3215. A JS global set on a freshly-created target's
+    // initial about:blank page must not survive the first Page.navigate: a
+    // cross-document navigation replaces the JS global object. The second
+    // navigation already reset globals correctly; the leak was scoped to the
+    // bootstrap about:blank context being reused as the first navigated page.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-GLB", .target_id = "TID-GLB-000000".* });
+    bc.session_id = "SID-GLB";
+
+    // Create a fresh target whose root frame is the bootstrap about:blank
+    // document (this is what Target.createTarget {url: "about:blank"} does).
+    _ = try bc.session.createPage();
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "about:blank", frame.url);
+    }
+
+    // Simulate a client running JS on the blank page before navigating
+    // (Runtime.evaluate "window.leak = 'set-on-about-blank'").
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("window.leak = 'set-on-about-blank'; window.leak", null);
+        try testing.expect(v.toBool());
+    }
+
+    // First real navigation. It must NOT inherit the about:blank global.
+    try ctx.processMessage(.{
+        .id = 71,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" },
+    });
+    try testing.waitForPage(bc);
+
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/cdp/dom1.html"));
+
+    // The leaked global must be gone: the navigation created a fresh global.
+    var ls2: js.Local.Scope = undefined;
+    frame.js.localScope(&ls2);
+    defer ls2.deinit();
+    const v2 = try ls2.local.exec("window.leak === undefined", null);
+    try testing.expect(v2.toBool());
 }
 
 test "cdp.frame: anchor click sends Referer matching the originating page" {
