@@ -1031,7 +1031,6 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             if (self.obey_cors and !transfer.req.internal) {
                 switch (try self.cors.check(transfer)) {
                     .allowed => {},
-                    .blocked => return transfer.failAsync(error.CorsBlocked),
                     .pending => return,
                 }
             }

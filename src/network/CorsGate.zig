@@ -112,7 +112,7 @@ fn requiresPreflight(transfer: *const Transfer) bool {
     return false;
 }
 
-const Result = enum { allowed, blocked, pending };
+const Result = enum { allowed, pending };
 
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     const req = &transfer.req;
