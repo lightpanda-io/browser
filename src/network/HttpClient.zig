@@ -231,10 +231,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
             .network = network,
             .single_flight = .init(allocator),
         },
-        .cors = .{
-            .network = network,
-            .single_flight = .init(allocator),
-        },
+        .cors = .{ .single_flight = .init(allocator) },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
