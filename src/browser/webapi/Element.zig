@@ -970,16 +970,20 @@ pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.Named
     return gop.value_ptr.*;
 }
 
+// The materialized style lives in the map of the element's own frame, not
+// the caller's: attributeChange (which resyncs it) is dispatched on the owner
+// frame, and a same-origin script can reach an element in another frame.
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
-    const gop = try frame._element_styles.getOrPut(frame.arena, self);
+    const owner = self.ownerFrame(frame);
+    const gop = try owner._element_styles.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, false, frame);
+        gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
     return gop.value_ptr.*;
 }
 
 fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
-    return frame._element_styles.get(self);
+    return self.ownerFrame(frame)._element_styles.get(self);
 }
 
 pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -1299,12 +1303,15 @@ pub const VisibilityCache = StyleManager.VisibilityCache;
 /// Cache for pointer-events checks - re-exported from StyleManager for convenience.
 pub const PointerEventsCache = StyleManager.PointerEventsCache;
 
+// Style checks go through the StyleManager of the element's own frame, not
+// the caller's: its stylesheets and materialized inline styles are per-frame,
+// and a same-origin script can reach an element in another frame.
 pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame) bool {
-    return frame._style_manager.hasPointerEventsNone(self, cache);
+    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache);
 }
 
 pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame) bool {
-    return !frame._style_manager.isHidden(self, cache, .{});
+    return !self.ownerFrame(frame)._style_manager.isHidden(self, cache, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1315,7 +1322,7 @@ const CheckVisibilityOpts = struct {
 };
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
-    return !frame._style_manager.isHidden(self, null, .{
+    return !self.ownerFrame(frame)._style_manager.isHidden(self, null, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
     });

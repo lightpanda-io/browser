@@ -290,15 +290,16 @@ fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
 fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, frame: *Frame, depth: u8) f64 {
     const factor = switch (parsed.unit) {
         .percentage => ancestorViewportDimensionAt(element, direction, frame, depth) / 100.0,
-        .em => frame._style_manager.computedFontSize(element),
-        .ex => frame._style_manager.computedFontSize(element) / 2.0,
+        .em => element.ownerFrame(frame)._style_manager.computedFontSize(element),
+        .ex => element.ownerFrame(frame)._style_manager.computedFontSize(element) / 2.0,
         else => units.absoluteLengthFactor(toShared(parsed.unit)).?,
     };
     return parsed.value * factor;
 }
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
-    return frame._style_manager.computedFontSize(self._element);
+    const element = self._element orelse return frame._style_manager.computedFontSize(null);
+    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
 }
 
 const Parsed = struct {
