@@ -1,0 +1,17 @@
+[package]
+name = "lightpanda-html5ever"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lightpanda_html5ever"
+path = "lib.rs"
+
+[dependencies]
+html5ever = "0.39.0"
+string_cache = "0.9.0"
+typed-arena = "2.0.2"
+xml5ever = "0.39.0"
+encoding_rs = "0.8"
+idna = "1.1.0"
+url = "2.5.8"

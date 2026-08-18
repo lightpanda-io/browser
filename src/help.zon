@@ -68,6 +68,8 @@
     \\          Allowed values:
     \\              html               Serialized HTML of the DOM.
     \\              markdown           Converts content to Markdown.
+    \\              png                Text-only rendering of the page as a
+    \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
     \\  --inject-script <EXPR>

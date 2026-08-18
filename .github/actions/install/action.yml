@@ -49,13 +49,13 @@ runs:
       shell: bash
       run: mkdir -p "${ZIG_GLOBAL_CACHE_DIR:-$HOME/.cache/zig}/tmp"
 
-    # Rust Toolchain for html5ever
+    # Rust Toolchain for src/rust (html5ever bridge, renderer)
     - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
       with:
         toolchain: stable
     - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       with:
-        workspaces: src/html5ever
+        workspaces: src/rust
 
     - name: Cache v8
       id: cache-v8

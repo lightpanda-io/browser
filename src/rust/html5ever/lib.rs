@@ -21,10 +21,6 @@ mod sink;
 mod types;
 mod url;
 
-#[cfg(feature = "memstats")]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 use std::cell::Cell;
 use std::os::raw::{c_uchar, c_void};
 use types::*;
@@ -592,27 +588,6 @@ pub extern "C" fn html5ever_attribute_iterator_next(
 pub extern "C" fn html5ever_attribute_iterator_count(c_iter: *const c_void) -> usize {
     let iter: &mut CAttributeIterator = unsafe { &mut *(c_iter as *mut CAttributeIterator) };
     return iter.vec.len();
-}
-
-#[cfg(feature = "memstats")]
-#[repr(C)]
-pub struct Memory {
-    pub resident: usize,
-    pub allocated: usize,
-}
-
-#[cfg(feature = "memstats")]
-#[no_mangle]
-pub extern "C" fn html5ever_get_memory_usage() -> Memory {
-    use tikv_jemalloc_ctl::{epoch, stats};
-
-    // many statistics are cached and only updated when the epoch is advanced.
-    let _ = epoch::advance();
-
-    Memory {
-        resident: stats::resident::read().unwrap_or(0),
-        allocated: stats::allocated::read().unwrap_or(0),
-    }
 }
 
 // Streaming parser API

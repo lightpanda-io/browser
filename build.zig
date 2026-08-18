@@ -115,7 +115,7 @@ pub fn build(b: *Build) !void {
 
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
     linkCurl(b, lightpanda_module, enable_tsan);
-    linkHtml5Ever(b, lightpanda_module);
+    linkRust(b, lightpanda_module);
     linkZenai(b, lightpanda_module);
     linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, enable_csan, enable_tsan);
@@ -323,37 +323,47 @@ fn linkV8(
     mod.addImport("v8", dep.module("v8"));
 }
 
-fn linkHtml5Ever(b: *Build, mod: *Build.Module) void {
+fn linkRust(b: *Build, mod: *Build.Module) void {
     const is_debug = mod.optimize.? == .Debug;
 
+    // One cargo workspace, one staticlib (src/rust/Cargo.toml explains why).
     const exec_cargo = b.addSystemCommand(&.{
         "cargo",           "build",
         "--profile",       if (is_debug) "dev" else "release",
         "--features",      if (is_debug) "memstats" else "",
-        "--manifest-path", "src/html5ever/Cargo.toml",
+        "--manifest-path", "src/rust/ffi/Cargo.toml",
     });
 
     // Track Rust sources so edits invalidate the cargo step's cache.
     // Without this, Zig keys the step on argv only and won't re-run cargo
-    // when lib.rs/Cargo.toml change.
+    // when the sources change.
     for ([_][]const u8{
-        "src/html5ever/Cargo.toml",
-        "src/html5ever/Cargo.lock",
-        "src/html5ever/lib.rs",
-        "src/html5ever/sink.rs",
-        "src/html5ever/types.rs",
-        "src/html5ever/url.rs",
+        "src/rust/Cargo.toml",
+        "src/rust/Cargo.lock",
+        "src/rust/ffi/Cargo.toml",
+        "src/rust/ffi/lib.rs",
+        "src/rust/html5ever/Cargo.toml",
+        "src/rust/html5ever/lib.rs",
+        "src/rust/html5ever/prescan.rs",
+        "src/rust/html5ever/sink.rs",
+        "src/rust/html5ever/types.rs",
+        "src/rust/html5ever/url.rs",
+        "src/rust/render/Cargo.toml",
+        "src/rust/render/lib.rs",
+        "src/rust/render/fonts/DejaVuSans.ttf",
+        "src/rust/render/fonts/DejaVuSans-Bold.ttf",
+        "src/rust/render/fonts/DejaVuSansMono.ttf",
     }) |path| {
         exec_cargo.addFileInput(b.path(path));
     }
 
     // TODO: We can prefer `--artifact-dir` once it become stable.
-    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
+    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "rust");
 
-    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
-    html5ever_step.dependOn(&exec_cargo.step);
+    const rust_step = b.step("rust", "Build the Rust staticlib (requires cargo)");
+    rust_step.dependOn(&exec_cargo.step);
 
-    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
+    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblightpanda_ffi.a");
     mod.addObjectFile(obj);
 }
 

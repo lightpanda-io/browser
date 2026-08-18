@@ -847,6 +847,7 @@ pub fn customCertStore(self: *const Config) ?*crypto.X509_STORE {
 pub const DumpFormat = enum {
     html,
     markdown,
+    png,
     wpt,
     semantic_tree,
     semantic_tree_text,

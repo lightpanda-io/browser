@@ -114,7 +114,7 @@ fn isLayoutBlock(tag: Element.Tag) bool {
     };
 }
 
-fn isStandaloneAnchor(el: *Element) bool {
+pub fn isStandaloneAnchor(el: *Element) bool {
     const node = el.asNode();
     const parent = node.parentNode() orelse return false;
     const parent_el = parent.is(Element) orelse return false;
@@ -154,12 +154,12 @@ fn getAnchorLabel(el: *Element) ?[]const u8 {
     return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
 }
 
-const ContentInfo = struct {
+pub const ContentInfo = struct {
     has_visible: bool,
     has_block: bool,
 };
 
-fn analyzeContent(root: *Node) ContentInfo {
+pub fn analyzeContent(root: *Node) ContentInfo {
     var result: ContentInfo = .{ .has_visible = false, .has_block = false };
     var tw = TreeWalker.FullExcludeSelf.init(root, .{});
     while (tw.next()) |node| {

@@ -36,8 +36,9 @@ pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const expectLog = base.expectLog;
 pub const silenceLog = base.silenceLog;
+pub const arena_allocator = base.arena_allocator;
 
-const TestContext = struct {
+pub const TestContext = struct {
     read_at: usize = 0,
     read_buf: [1024 * 32]u8 = undefined,
     cdp_: CDP = undefined,
