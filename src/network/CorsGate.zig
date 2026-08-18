@@ -33,7 +33,6 @@ const Allocator = std.mem.Allocator;
 
 const CorsGate = @This();
 
-network: *Network,
 single_flight: SingleFlight,
 
 // CORS Request Headers
