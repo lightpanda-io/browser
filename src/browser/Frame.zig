@@ -2964,6 +2964,8 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     } else if (name.eql(comptime .wrap("popover"))) {
         const old = if (old_value) |o| o.str() else null;
         popover.attributeChanged(element, old, value.str(), self);
+    } else if (name.eql(comptime .wrap("style"))) {
+        self.styleAttributeChanged(element, value.str());
     }
 }
 
@@ -2985,7 +2987,16 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         }
     } else if (name.eql(comptime .wrap("popover"))) {
         popover.attributeChanged(element, old_value.str(), null, self);
+    } else if (name.eql(comptime .wrap("style"))) {
+        self.styleAttributeChanged(element, null);
     }
+}
+
+fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
+    const style = self._element_styles.get(element) orelse return;
+    style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
+        log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
+    };
 }
 
 pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {

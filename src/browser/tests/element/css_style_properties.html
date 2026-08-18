@@ -191,3 +191,32 @@
   testing.expectEqual('0.5em 0.25em', div.style.margin);
 }
 </script>
+
+<script id="styleAttributeResync">
+{
+  const div = document.createElement('div');
+  div.setAttribute('style', 'color: red');
+  testing.expectEqual('color: red;', div.style.cssText);
+
+  // attribute writes after .style is materialized must be reflected
+  div.setAttribute('style', 'color: green');
+  testing.expectEqual('color: green;', div.style.cssText);
+  testing.expectEqual('green', div.style.color);
+
+  div.style.backgroundColor = 'blue';
+  testing.expectEqual('color: green; background-color: blue;', div.style.cssText);
+  testing.expectEqual('color: green; background-color: blue;', div.getAttribute('style'));
+
+  div.setAttribute('style', 'margin: 1px');
+  div.removeAttribute('style');
+  testing.expectEqual('', div.style.cssText);
+  testing.expectEqual(0, div.style.length);
+
+  // connected element, same rules
+  const c = $('#test-div');
+  c.setAttribute('style', 'color: red');
+  testing.expectEqual('red', c.style.color);
+  c.setAttribute('style', 'color: teal');
+  testing.expectEqual('teal', c.style.color);
+}
+</script>
