@@ -2,7 +2,9 @@
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to open a pull request (CLA, dev setup, pre-PR checks).
 
-## Tests
+## Build and tests
+
+Run `make download-v8` once first: it fetches the prebuilt V8 archive into `.lp-cache/`, which `build.zig` picks up automatically. Without it every build compiles V8 from source (10+ minutes).
 
 ```bash
 make test                                       # Run all tests
