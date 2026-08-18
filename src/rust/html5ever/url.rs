@@ -34,6 +34,51 @@ fn str_from(ptr: *const c_uchar, len: usize) -> Option<&'static str> {
     std::str::from_utf8(bytes).ok()
 }
 
+/// Work around servo/rust-url#1130 (fix pending in servo/rust-url#1138): when
+/// a relative reference starts with a ".." path segment against a base whose
+/// last path segment looks like a Windows drive letter ("C:" or "C|") and the
+/// base path ends with a slash, rust-url treats that segment as a drive letter
+/// and refuses to pop it for every scheme. Per the URL Standard this exemption
+/// only applies to "file". Join against the base first, then pop the segment
+/// the spec requires.
+fn fix_drive_letter_join(base: &Url, input: &str, joined: &mut Url) {
+    if base.scheme() == "file" || joined.scheme() == "file" {
+        return;
+    }
+    let input_path = input.split(['?', '#']).next().unwrap_or(input);
+    let first_seg = input_path.split('/').next().unwrap_or("");
+    if first_seg != ".." {
+        return;
+    }
+    // The bug only fires when the base path ends with a slash whose last
+    // segment looks like a Windows drive letter (a bare "C:" pops fine).
+    let base_path = base.path();
+    let Some(trimmed) = base_path.strip_suffix('/') else {
+        return;
+    };
+    let Some(slash) = trimmed.rfind('/') else {
+        return;
+    };
+    if !is_drive_letter_lookalike(&trimmed[slash + 1..]) {
+        return;
+    }
+    // The buggy join kept the lookalike segment; pop it (everything up to and
+    // including the slash before it) from the joined URL.
+    let path = joined.path().to_string();
+    if !path.ends_with('/') {
+        return;
+    }
+    let Some(slash) = path[..path.len() - 1].rfind('/') else {
+        return;
+    };
+    joined.set_path(&path[..slash + 1]);
+}
+
+fn is_drive_letter_lookalike(seg: &str) -> bool {
+    let b = seg.as_bytes();
+    b.len() == 2 && b[0].is_ascii_alphabetic() && (b[1] == b':' || b[1] == b'|')
+}
+
 // Catch any panic from the IDNA code so it never unwinds across the extern "C"
 // boundary and aborts the whole process; a panic becomes error code 1.
 fn ffi_guard<F: FnOnce() -> i32>(f: F) -> i32 {
@@ -129,7 +174,11 @@ pub unsafe extern "C" fn url_parse_with_base(
 
     match Url::parse(base_slice) {
         Ok(base) => match base.join(slice) {
-            Ok(url) => Box::into_raw(Box::new(url)),
+            Ok(url) => {
+                let mut url = url;
+                fix_drive_letter_join(&base, slice, &mut url);
+                Box::into_raw(Box::new(url))
+            }
             Err(e) => {
                 *err = e as i32;
                 std::ptr::null_mut()
@@ -159,7 +208,11 @@ pub unsafe extern "C" fn url_join(
     };
 
     match base.join(slice) {
-        Ok(url) => Box::into_raw(Box::new(url)),
+        Ok(url) => {
+            let mut url = url;
+            fix_drive_letter_join(base, slice, &mut url);
+            Box::into_raw(Box::new(url))
+        }
         Err(e) => {
             *err = e as i32;
             std::ptr::null_mut()
@@ -704,10 +757,19 @@ pub unsafe extern "C" fn url_resolve_with_encoding(
         Some(encoding) => Url::options()
             .base_url(base.as_ref())
             .encoding_override(Some(&move |s| encode_query_ncr(encoding, s)))
-            .parse(slice),
+            .parse(slice)
+            .map(|mut url| {
+                if let Some(base) = &base {
+                    fix_drive_letter_join(base, slice, &mut url);
+                }
+                url
+            }),
         // Fallback to default.
         None => match &base {
-            Some(base) => base.join(slice),
+            Some(base) => base.join(slice).map(|mut url| {
+                fix_drive_letter_join(base, slice, &mut url);
+                url
+            }),
             None => Url::parse(slice),
         },
     };
@@ -765,7 +827,10 @@ pub unsafe extern "C" fn url_resolve_without_encoding(
     };
 
     let result = match &base {
-        Some(base) => base.join(input),
+        Some(base) => base.join(input).map(|mut url| {
+            fix_drive_letter_join(base, input, &mut url);
+            url
+        }),
         None => Url::parse(input),
     };
     match result {
@@ -780,5 +845,67 @@ pub unsafe extern "C" fn url_resolve_without_encoding(
             *err = -1;
             EMPTY_OWNED_STRING
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn join(base: &str, rel: &str) -> String {
+        let base_url = Url::parse(base).unwrap();
+        let mut url = base_url.join(rel).unwrap();
+        fix_drive_letter_join(&base_url, rel, &mut url);
+        url.into()
+    }
+
+    /// https://github.com/servo/rust-url/issues/1130
+    /// A path segment that looks like a Windows drive letter (e.g. "C:" or
+    /// "C|") is only special for file: URLs. For any other scheme it is an
+    /// ordinary segment, so ".." must pop it.
+    #[test]
+    fn test_join_dotdot_pops_drive_letter_lookalike_for_non_file_scheme() {
+        assert_eq!(join("abc://x/y/z/C:/", ".."), "abc://x/y/z/");
+
+        // Special (but non-file) scheme hits the same code path.
+        assert_eq!(join("http://x/y/z/C:/", ".."), "http://x/y/z/");
+
+        // The "C|" (pipe) form is affected too.
+        assert_eq!(join("abc://x/y/z/C|/", ".."), "abc://x/y/z/");
+
+        // Controls that already behave correctly (ordinary segments pop).
+        assert_eq!(join("abc://x/y/z/w/", ".."), "abc://x/y/z/");
+        assert_eq!(join("abc://x/y/z/Ca/", ".."), "abc://x/y/z/");
+
+        // A drive-letter segment WITHOUT a trailing slash pops fine already.
+        assert_eq!(join("abc://x/y/z/C:", ".."), "abc://x/y/");
+    }
+
+    /// file: URLs must keep the drive-letter guard.
+    #[test]
+    fn test_join_dotdot_keeps_drive_letter_guard_for_file_scheme() {
+        let url = url::Url::parse("file:///c:/foo/").unwrap();
+        let joined = url.join("..").unwrap();
+        assert_eq!(joined.as_str(), "file:///c:/");
+    }
+
+    /// The WPT constructor path (url_parse_with_base) hits the same bug.
+    #[test]
+    fn test_parse_with_base_dotdot_pops_drive_letter_lookalike() {
+        let base = Url::parse("abc://x/y/z/C:/").unwrap();
+        let mut url = base.join("..").unwrap();
+        fix_drive_letter_join(&base, "..", &mut url);
+        assert_eq!(url.as_str(), "abc://x/y/z/");
+    }
+
+    /// is_drive_letter_lookalike only matches single-letter + ':'/'|' segments.
+    #[test]
+    fn test_is_drive_letter_lookalike() {
+        assert!(is_drive_letter_lookalike("C:"));
+        assert!(is_drive_letter_lookalike("c|"));
+        assert!(!is_drive_letter_lookalike("Ca:"));
+        assert!(!is_drive_letter_lookalike("Ca"));
+        assert!(!is_drive_letter_lookalike(":"));
+        assert!(!is_drive_letter_lookalike(""));
     }
 }
