@@ -133,12 +133,14 @@ fn _assignSlottables(slot: *Slot, frame: *Frame) !void {
     for (old) |node| {
         if (frame._assigned_slots.get(node) == slot) {
             _ = frame._assigned_slots.remove(node);
+            node._flags.assigned_slot = false;
         }
     }
     slot._assigned.clearRetainingCapacity();
     try slot._assigned.appendSlice(frame.arena, slottables.items);
     for (slottables.items) |node| {
         try frame._assigned_slots.put(frame.arena, node, slot);
+        node._flags.assigned_slot = true;
     }
 }
 
@@ -205,7 +207,7 @@ pub fn removalSteps(parent: *Node, child: *Node, frame: *Frame) void {
         return;
     }
 
-    if (frame._assigned_slots.get(child)) |slot| {
+    if (child.assignedSlot(frame)) |slot| {
         assignSlottables(slot, frame);
     }
 
@@ -234,7 +236,7 @@ pub fn slotAttributeChanged(slottable: *Node, old_value: []const u8, value: []co
     if (frame._element_shadow_roots.count() == 0) {
         return;
     }
-    if (frame._assigned_slots.get(slottable)) |old_slot| {
+    if (slottable.assignedSlot(frame)) |old_slot| {
         assignSlottables(old_slot, frame);
     }
     assignASlot(slottable, frame);
