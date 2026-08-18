@@ -22,9 +22,12 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const Mime = @import("../Mime.zig");
+const html5ever = @import("../parser/html5ever.zig");
+
+const Blob = @import("Blob.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
-const Blob = @import("Blob.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -40,6 +43,7 @@ _exec: *Execution,
 _proto: *EventTarget,
 _arena: *lp.Arena,
 
+_generation: u32 = 0,
 _ready_state: ReadyState = .empty,
 _result: ?Result = null,
 _error: ?[]const u8 = null,
@@ -50,8 +54,6 @@ _on_load: ?js.Function.Global = null,
 _on_load_end: ?js.Function.Global = null,
 _on_load_start: ?js.Function.Global = null,
 _on_progress: ?js.Function.Global = null,
-
-_aborted: bool = false,
 
 const ReadyState = enum(u8) {
     empty = 0,
@@ -160,20 +162,19 @@ pub fn getError(self: *const FileReader) ?[]const u8 {
 }
 
 pub fn readAsArrayBuffer(self: *FileReader, blob: *Blob) !void {
-    try self.readInternal(blob, .arraybuffer);
+    try self.readInternal(blob, .arraybuffer, null);
 }
 
 pub fn readAsBinaryString(self: *FileReader, blob: *Blob) !void {
-    try self.readInternal(blob, .binary_string);
+    try self.readInternal(blob, .binary_string, null);
 }
 
 pub fn readAsText(self: *FileReader, blob: *Blob, encoding_: ?[]const u8) !void {
-    _ = encoding_; // TODO: Handle encoding properly
-    try self.readInternal(blob, .text);
+    try self.readInternal(blob, .text, encoding_);
 }
 
 pub fn readAsDataURL(self: *FileReader, blob: *Blob) !void {
-    try self.readInternal(blob, .data_url);
+    try self.readInternal(blob, .data_url, null);
 }
 
 const ReadType = enum {
@@ -183,61 +184,198 @@ const ReadType = enum {
     data_url,
 };
 
-fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
+fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType, encoding_: ?[]const u8) !void {
     if (self._ready_state == .loading) {
         return error.InvalidStateError;
     }
 
-    // Reset state
-    self._ready_state = .loading;
-    self._result = null;
     self._error = null;
-    self._aborted = false;
+    self._result = null;
+    self._generation +%= 1;
+    self._ready_state = .loading;
 
     const exec = self._exec;
 
-    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, exec);
-    if (self._aborted) {
-        return;
-    }
+    // The task holds the blob rather than a copy of its bytes: the events are
+    // dispatched from later tasks, by which point JS may have dropped its last
+    // reference. Only `encoding` is copied, because it comes off the call arena.
+    const task = try exec._factory.create(ReadTask{
+        .blob = blob,
+        .reader = self,
+        .step = .load_start,
+        .read_type = read_type,
+        .generation = self._generation,
+        .encoding = if (encoding_) |e| try self._arena.dupe(u8, e) else null,
+    });
+    errdefer exec._factory.destroy(task);
 
-    // Perform the read (synchronous since data is in memory). _result
-    // outlives this call and the blob can be GC'd before JS reads it,
-    // so the result must not borrow the blob's memory.
-    const data = try self._arena.dupe(u8, blob._slice);
-    const size = data.len;
-    try self.dispatch(.progress, .{ .loaded = size, .total = size }, exec);
-    if (self._aborted) {
-        return;
-    }
+    blob.acquireRef();
+    errdefer blob.releaseRef(exec.page);
 
-    // Process the data based on read type
-    self._result = switch (read_type) {
-        .arraybuffer => .{ .arraybuffer = .{ .values = data } },
-        .binary_string => .{ .binary_string = .{ .bytes = data } },
-        .text => .{ .string = data },
+    self.acquireRef();
+    errdefer self.releaseRef(exec.page);
+
+    try exec._scheduler.add(task, ReadTask.run, 0, .{
+        .name = "FileReader.read",
+        .finalizer = ReadTask.cancelled,
+    });
+}
+
+fn complete(self: *FileReader, task: *const ReadTask) !void {
+    const arena = self._arena.allocator();
+    const data = task.blob._slice;
+
+    self._result = switch (task.read_type) {
+        .arraybuffer => .{ .arraybuffer = .{ .values = try arena.dupe(u8, data) } },
+        .binary_string => .{ .binary_string = .{ .bytes = try arena.dupe(u8, data) } },
+        .text => .{ .string = try decodeText(arena, data, task.encoding, task.blob._mime) },
         .data_url => blk: {
-            // Create data URL with base64 encoding
-            const mime = if (blob._mime.len > 0) blob._mime else "application/octet-stream";
-            const data_url = try encodeDataURL(self._arena.allocator(), mime, data);
-            break :blk .{ .string = data_url };
+            const mime = if (task.blob._mime.len > 0) task.blob._mime else "application/octet-stream";
+            break :blk .{ .string = try encodeDataURL(arena, mime, data) };
         },
     };
 
     self._ready_state = .done;
 
+    const exec = self._exec;
+    const size = data.len;
     try self.dispatch(.load, .{ .loaded = size, .total = size }, exec);
     try self.dispatch(.load_end, .{ .loaded = size, .total = size }, exec);
 }
 
+const ReadTask = struct {
+    step: Step,
+    blob: *Blob,
+    generation: u32,
+    reader: *FileReader,
+    read_type: ReadType,
+    encoding: ?[]const u8,
+
+    const Step = enum { load_start, progress, complete };
+
+    fn deinit(self: *ReadTask) void {
+        const reader = self.reader;
+        const exec = reader._exec;
+
+        self.blob.releaseRef(exec.page);
+        reader.releaseRef(exec.page);
+        exec._factory.destroy(self);
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *ReadTask = @ptrCast(@alignCast(ctx));
+        self.deinit();
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *ReadTask = @ptrCast(@alignCast(ctx));
+        const reader = self.reader;
+        const exec = reader._exec;
+
+        if (self.generation != reader._generation) {
+            self.deinit();
+            return null;
+        }
+        errdefer self.deinit();
+
+        const size = self.blob._slice.len;
+        switch (self.step) {
+            .load_start => {
+                self.step = if (size == 0) .complete else .progress;
+                try reader.dispatch(.load_start, .{ .loaded = 0, .total = size }, exec);
+            },
+            .progress => {
+                self.step = .complete;
+                try reader.dispatch(.progress, .{ .loaded = size, .total = size }, exec);
+            },
+            .complete => {
+                try reader.complete(self);
+                self.deinit();
+                return null;
+            },
+        }
+
+        if (self.generation != reader._generation) {
+            // a handler aborted or started another thread
+            self.deinit();
+            return null;
+        }
+
+        // enqueue for the next step
+        try exec._scheduler.add(self, run, 0, .{
+            .name = "FileReader.read",
+            .finalizer = cancelled,
+        });
+        return null;
+    }
+};
+
+fn encodingHandle(label: []const u8) ?*anyopaque {
+    if (label.len == 0) {
+        return null;
+    }
+    const info = html5ever.encoding_for_label(label.ptr, label.len);
+    if (info.isValid() == false or std.mem.eql(u8, info.name(), "replacement")) {
+        return null;
+    }
+    return info.handle;
+}
+
+pub fn decodeText(arena: Allocator, input: []const u8, label_: ?[]const u8, mime_type: []const u8) ![]const u8 {
+    var data = input;
+    var handle: ?*anyopaque = null;
+
+    // BOM wins over an explicit encoding
+    if (std.mem.startsWith(u8, data, "\xEF\xBB\xBF")) {
+        data = data[3..];
+        handle = encodingHandle("utf-8");
+    } else if (std.mem.startsWith(u8, data, "\xFE\xFF")) {
+        data = data[2..];
+        handle = encodingHandle("utf-16be");
+    } else if (std.mem.startsWith(u8, data, "\xFF\xFE")) {
+        data = data[2..];
+        handle = encodingHandle("utf-16le");
+    } else if (label_) |label| {
+        handle = encodingHandle(label);
+    }
+
+    if (handle == null and mime_type.len > 0) {
+        if (Mime.parse(mime_type)) |mime| {
+            if (mime.is_default_charset == false) {
+                handle = encodingHandle(mime.charsetString());
+            }
+        } else |_| {}
+    }
+
+    const encoding = handle orelse encodingHandle("utf-8") orelse return arena.dupe(u8, data);
+
+    const max_out = html5ever.encoding_max_utf8_buffer_length(encoding, if (data.len == 0) 4 else data.len);
+    if (max_out == 0) {
+        return "";
+    }
+
+    const out = try arena.alloc(u8, max_out);
+    const result = html5ever.encoding_decode(
+        encoding,
+        if (data.len == 0) null else data.ptr,
+        data.len,
+        out.ptr,
+        out.len,
+        1, // is_last
+    );
+    return out[0..result.bytes_written];
+}
+
 pub fn abort(self: *FileReader) !void {
     if (self._ready_state != .loading) {
+        self._result = null;
         return;
     }
 
-    self._aborted = true;
     self._ready_state = .done;
     self._result = null;
+    // Retires the queued read chain.
+    self._generation +%= 1;
 
     const exec = self._exec;
     try self.dispatch(.abort, null, exec);
@@ -287,7 +425,7 @@ const Progress = struct {
 
 /// Encodes binary data as a data URL with base64 encoding.
 /// Format: data:[<mediatype>][;base64],<data>
-fn encodeDataURL(arena: Allocator, mime: []const u8, data: []const u8) ![]const u8 {
+pub fn encodeDataURL(arena: Allocator, mime: []const u8, data: []const u8) ![]const u8 {
     const base64 = std.base64.standard.Encoder;
 
     // Calculate size needed for base64 encoding
