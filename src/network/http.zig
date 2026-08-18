@@ -62,24 +62,10 @@ pub const Header = struct {
     };
 
     pub fn parse(header_str: []const u8) ?Header {
-        // ignore headers containing "\r\n".
-        if (std.mem.indexOfAny(u8, header_str, "\r\n") != null) {
-            return null;
-        }
-        // ignore headers w/o colon.
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
         const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
-
-        // no empty name.
-        if (name.len == 0) {
-            return null;
-        }
-        // no name incl. space.
-        if (std.mem.indexOfAny(u8, name, " ") != null) {
-            return null;
-        }
 
         return .{ .name = name, .value = value };
     }
@@ -945,17 +931,17 @@ test "Header.parse" {
         try testing.expectEqualSlices(u8, "", h.value);
     }
 
-    // empty name
-    try testing.expect(Header.parse(": value") == null);
-    // bad name
-    try testing.expect(Header.parse("Foo Bar: value") == null);
-    // no colon
+    {
+        // Splitting is all `parse` does; a name that isn't an HTTP token still
+        // parses. Callers validate what comes back.
+        const h = Header.parse("Foo Bar: value").?;
+        try testing.expectEqualSlices(u8, "Foo Bar", h.name);
+        try testing.expectEqualSlices(u8, "value", h.value);
+    }
+
+    // no colon, no header
     try testing.expect(Header.parse("not-a-header") == null);
     try testing.expect(Header.parse("") == null);
-    // CR or LF anywhere rejects the header (injection guard)
-    try testing.expect(Header.parse("X-A: b\r\nX-B: c") == null);
-    try testing.expect(Header.parse("X-A: b\n") == null);
-    try testing.expect(Header.parse("\rX-A: b") == null);
 }
 
 test "Header.firstValue" {

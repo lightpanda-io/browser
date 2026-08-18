@@ -121,30 +121,12 @@ fn validateAndNormalize(list: *KeyValueList) !void {
         if (Mime.isHttpToken(entry.name.str()) == false) {
             return error.TypeError;
         }
+        // A valid header value is a byte string without NUL, LF or CR.
         const trimmed = entry.value.trim(&Mime.HTTP_WHITESPACE);
-        try validateHeaderValue(trimmed.str());
+        if (Mime.isHttpHeaderValue(trimmed.str()) == false) {
+            return error.TypeError;
+        }
         entry.value = trimmed;
-    }
-}
-
-/// Validate an already-normalized header value. Returns `error.TypeError` —
-/// surfaced to script as a JS TypeError — when it contains a code point above
-/// U+00FF (not a valid byte string) or a 0x00/0x0A/0x0D byte.
-/// https://fetch.spec.whatwg.org/#headers-class
-fn validateHeaderValue(value: []const u8) error{TypeError}!void {
-    var i: usize = 0;
-    while (i < value.len) {
-        const n = std.unicode.utf8ByteSequenceLength(value[i]) catch return error.TypeError;
-        if (i + n > value.len) {
-            return error.TypeError;
-        }
-
-        const cp = std.unicode.utf8Decode(value[i..][0..n]) catch return error.TypeError;
-
-        if (cp > 0xFF or cp == 0x00 or cp == 0x0A or cp == 0x0D) {
-            return error.TypeError;
-        }
-        i += n;
     }
 }
 

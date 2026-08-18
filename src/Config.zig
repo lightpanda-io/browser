@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 
 const cli = @import("cli.zig");
 const dump = @import("browser/dump.zig");
+const Mime = @import("browser/Mime.zig");
 
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 const HttpHeader = @import("network/http.zig").Header;
@@ -93,13 +94,25 @@ fn httpHeaderValidator(allocator: Allocator, args: *std.process.Args.Iterator, l
         return error.InvalidArgument;
     };
 
+    // The same shape script-set headers go through in `Headers`: a name that
+    // is an HTTP token, a value that is a CR/LF-free byte string.
+    if (Mime.isHttpToken(header.name) == false) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "name must be a non-empty HTTP token" });
+        return error.InvalidArgument;
+    }
+
+    if (Mime.isHttpHeaderValue(header.value) == false) {
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "value must be Latin-1 text without CR, LF or NUL" });
+        return error.InvalidArgument;
+    }
+
     if (std.ascii.eqlIgnoreCase(header.name, "User-Agent")) {
         log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Use --user-agent instead" });
         return error.InvalidArgument;
     }
 
     if (std.ascii.eqlIgnoreCase(header.name, "Sec-Ch-Ua")) {
-        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Sec-Ch-Ua is not oevrridable" });
+        log.fatal(.app, "invalid option value", .{ .arg = "--http-header", .value = str, .hint = "Sec-Ch-Ua is not overridable" });
         return error.InvalidArgument;
     }
 
@@ -1095,6 +1108,55 @@ test "Config: validateUserAgent" {
     try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
     try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
+}
+
+test "Config: parseArgs refuses an invalid --http-header" {
+    const invalid = [_][*:0]const u8{
+        // no colon to split on
+        "not-a-header",
+        // empty name
+        ": value",
+        // names that aren't HTTP tokens
+        "Foo Bar: value",
+        "X(Foo)=a: value",
+        // CR/LF in the value would smuggle a second header onto the wire
+        "X-A: b\r\nX-B: c",
+        "X-A: b\n",
+        // reserved names have their own flag, or none at all
+        "User-Agent: Custom/1.0",
+        "Sec-Ch-Ua: \"Chromium\";v=\"140\"",
+    };
+
+    for (invalid) |header| {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-header", header };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs collects --http-header" {
+    // The parsed headers are owned by the allocator for the process lifetime;
+    // an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const argv = [_][*:0]const u8{
+        "lightpanda",         "fetch",
+        "--http-header",      "Accept-Language: fr-FR,fr;q=0.9",
+        "--http-header",      " \tX-Empty \t: \t",
+        "http://example.com",
+    };
+    const proc_args: std.process.Args = .{ .vector = &argv };
+    const config = try parseArgs(arena.allocator(), proc_args);
+
+    const headers = config.httpHeaders();
+    try std.testing.expectEqual(2, headers.len);
+    try std.testing.expectEqualStrings("Accept-Language", headers[0].name);
+    try std.testing.expectEqualStrings("fr-FR,fr;q=0.9", headers[0].value);
+    // Name and value are trimmed; an empty value is legal.
+    try std.testing.expectEqualStrings("X-Empty", headers[1].name);
+    try std.testing.expectEqualStrings("", headers[1].value);
 }
 
 test "Config: httpHeaders accessor" {
