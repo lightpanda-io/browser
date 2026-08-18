@@ -41,10 +41,10 @@ pub const DOM_DELTA_LINE: u32 = 0x01;
 pub const DOM_DELTA_PAGE: u32 = 0x02;
 
 pub const WheelEventOptions = struct {
+    deltaMode: u32 = 0,
     deltaX: f64 = 0.0,
     deltaY: f64 = 0.0,
     deltaZ: f64 = 0.0,
-    deltaMode: u32 = 0,
 };
 
 pub const Options = Event.inheritOptions(

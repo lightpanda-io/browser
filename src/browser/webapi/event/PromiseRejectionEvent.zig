@@ -33,8 +33,8 @@ _reason: ?js.Value.Global = null,
 _promise: ?js.Promise.Global = null,
 
 const PromiseRejectionEventOptions = struct {
-    reason: ?js.Value.Global = null,
     promise: ?js.Promise.Global = null,
+    reason: ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);

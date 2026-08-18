@@ -685,6 +685,49 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     return js_str.format(writer);
 }
 
+// The JS iteration protocol (@@iterator)
+pub fn iterator(self: Value) !?Iterator {
+    if (!self.isObject()) {
+        return null;
+    }
+    const source = self.toObject();
+
+    const method = try source.getSymbol(v8.v8__Symbol__GetIterator(self.local.isolate.handle).?);
+    if (method.isNullOrUndefined()) {
+        return null;
+    }
+    if (!method.isFunction()) {
+        return error.TypeError;
+    }
+    const iterator_fn: js.Function = .{ .local = self.local, .handle = @ptrCast(method.handle) };
+
+    const iterator_value = try iterator_fn.callWithThisRethrow(Value, source, .{});
+    if (!iterator_value.isObject()) {
+        return error.TypeError;
+    }
+    const iterator_object = iterator_value.toObject();
+    const next_fn = (try iterator_object.getFunction("next")) orelse return error.TypeError;
+
+    return .{ .object = iterator_object, .next_fn = next_fn };
+}
+
+pub const Iterator = struct {
+    object: js.Object,
+    next_fn: js.Function,
+    pub fn next(self: *const Iterator) !?Value {
+        const step = try self.next_fn.callWithThisRethrow(Value, self.object, .{});
+        if (!step.isObject()) {
+            return error.TypeError;
+        }
+
+        const step_object = step.toObject();
+        if ((try step_object.get("done")).toBool()) {
+            return null;
+        }
+        return try step_object.get("value");
+    }
+};
+
 // Copyable handle to our v8::Global wrapper so that releasing a copy resets
 // the underlying v8::Global
 pub const Global = struct {

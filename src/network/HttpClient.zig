@@ -3277,11 +3277,17 @@ const Synthetic = struct {
             content_type = parsed.content_type;
             body = parsed.body;
         } else {
+            // Fetch: a blob: request with any other method is a network error.
+            if (transfer.req.method != .GET) {
+                return error.BlobMethodNotAllowed;
+            }
+
             const owner = transfer.owner orelse return error.BlobNotFound;
-            if (!Owner.Blob.urlBelongsToOrigin(url, owner.origin.*)) {
+            const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
+            if (!Owner.Blob.urlBelongsToOrigin(key, owner.origin.*)) {
                 return error.BlobNotFound;
             }
-            const blob = (owner.blob_urls.get(url) orelse return error.BlobNotFound).blob;
+            const blob = (owner.blob_urls.get(key) orelse return error.BlobNotFound).blob;
             // blob can be removed by the time we run, dupe it.
             content_type = try arena.dupe(u8, blob._mime);
             body = try arena.dupe(u8, blob._slice);

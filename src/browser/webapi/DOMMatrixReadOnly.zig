@@ -127,6 +127,7 @@ pub const DOMMatrixInit = struct {
     d: ?f64 = null,
     e: ?f64 = null,
     f: ?f64 = null,
+    is2D: ?bool = null,
     m11: ?f64 = null,
     m12: ?f64 = null,
     m13: ?f64 = null,
@@ -143,7 +144,6 @@ pub const DOMMatrixInit = struct {
     m42: ?f64 = null,
     m43: ?f64 = null,
     m44: ?f64 = null,
-    is2D: ?bool = null,
 };
 
 // Implements "validate and fixup a DOMMatrixInit dictionary".

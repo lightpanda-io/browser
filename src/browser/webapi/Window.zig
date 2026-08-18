@@ -927,9 +927,9 @@ const ScrollToOpts = union(enum) {
     opts: Opts,
 
     const Opts = struct {
-        top: i32,
-        left: i32,
         behavior: []const u8 = "",
+        left: i32,
+        top: i32,
     };
 };
 pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {

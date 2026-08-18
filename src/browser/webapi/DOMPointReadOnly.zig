@@ -59,10 +59,10 @@ pub const Type = union(enum) {
 };
 
 pub const DOMPointInit = struct {
+    w: f64 = 1,
     x: f64 = 0,
     y: f64 = 0,
     z: f64 = 0,
-    w: f64 = 1,
 };
 
 pub fn init(x_: ?f64, y_: ?f64, z_: ?f64, w_: ?f64, exec: *const js.Execution) !*DOMPointReadOnly {

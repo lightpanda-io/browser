@@ -40,11 +40,11 @@ _error: ?js.Value.Global = null,
 _arena: Allocator,
 
 pub const ErrorEventOptions = struct {
-    message: ?[]const u8 = null,
-    filename: ?[]const u8 = null,
-    lineno: u32 = 0,
     colno: u32 = 0,
     @"error": ?js.Value.Global = null,
+    filename: ?[]const u8 = null,
+    lineno: u32 = 0,
+    message: ?[]const u8 = null,
 };
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);

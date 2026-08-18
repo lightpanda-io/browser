@@ -68,18 +68,18 @@ _azimuth_angle: f64,
 _is_primary: bool,
 
 pub const PointerEventOptions = struct {
+    altitudeAngle: f64 = std.math.pi / 2.0,
+    azimuthAngle: f64 = 0.0,
+    height: f64 = 1.0,
+    isPrimary: bool = false,
     pointerId: i32 = 0,
     pointerType: []const u8 = "",
-    width: f64 = 1.0,
-    height: f64 = 1.0,
     pressure: f64 = 0.0,
     tangentialPressure: f64 = 0.0,
     tiltX: i32 = 0,
     tiltY: i32 = 0,
     twist: i32 = 0,
-    altitudeAngle: f64 = std.math.pi / 2.0,
-    azimuthAngle: f64 = 0.0,
-    isPrimary: bool = false,
+    width: f64 = 1.0,
 };
 
 const Options = Event.inheritOptions(

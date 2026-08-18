@@ -66,8 +66,8 @@ const Body = union(enum) {
 };
 
 const InitOpts = struct {
-    status: u16 = 200,
     headers: ?Headers.InitOpts = null,
+    status: u16 = 200,
     statusText: ?[]const u8 = null,
 };
 

@@ -55,14 +55,14 @@ pub const Input = union(enum) {
 };
 
 pub const InitOpts = struct {
-    method: ?[]const u8 = null,
-    headers: ?Headers.InitOpts = null,
     body: ?BodyInit = null,
     cache: Cache = .default,
     credentials: Credentials = .@"same-origin",
+    headers: ?Headers.InitOpts = null,
+    method: ?[]const u8 = null,
+    priority: ?[]const u8 = null,
     redirect: Redirect = .follow,
     signal: ?*AbortSignal = null,
-    priority: ?[]const u8 = null,
 };
 
 const Priority = enum { high, low, auto };
