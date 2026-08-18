@@ -218,13 +218,10 @@ pub fn build(b: *Build) !void {
         });
         check.dependOn(&c_api_check.step);
 
-        const install_header = b.addInstallHeaderFile(b.path("include/lightpanda.h"), "lightpanda.h");
-
-        // The published prebuilt V8 is exe-only (local-exec TLS, malloc
-        // shim); the .so needs a source-built V8. Drop this guard once the
-        // fork releases library-safe archives.
-        const lib_step = b.step("lib", "Build the C shared library (needs a source-built V8)");
-        if (prebuilt_v8_path == null) {
+        // A shared V8 would leave liblightpanda.so with a DT_NEEDED on
+        // libc_v8.so; the artifact must stay self-contained.
+        const lib_step = b.step("lib", "Build the C shared library");
+        if (!shared_v8) {
             const shared_lib = b.addLibrary(.{
                 .name = "lightpanda",
                 .linkage = .dynamic,
@@ -273,11 +270,11 @@ pub fn build(b: *Build) !void {
                 install_so.step.dependOn(&export_check.step);
             }
             lib_step.dependOn(&install_so.step);
-            lib_step.dependOn(&install_header.step);
+            lib_step.dependOn(&b.addInstallHeaderFile(b.path("include/lightpanda.h"), "lightpanda.h").step);
             const shared_pc = pkgConfigFile(b, version_string);
             lib_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
         } else {
-            lib_step.dependOn(&b.addFail("lib needs a source-built V8: drop -Dprebuilt_v8_path").step);
+            lib_step.dependOn(&b.addFail("lib needs V8 linked statically: pass -Ddev_fast=false and a libc_v8.a (or no) -Dprebuilt_v8_path").step);
         }
 
         // Own binary: the two test suites must not share one V8 platform.

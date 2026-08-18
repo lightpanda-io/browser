@@ -274,7 +274,10 @@ pub export fn lp_fetch(
         }
     }
 
-    var writer: std.Io.Writer.Allocating = .init(arena);
+    // Seeded so growth doubling doesn't strand superseded buffers in the
+    // arena (it cannot free them); the seed itself is covered by the
+    // retained chunk.
+    var writer = std.Io.Writer.Allocating.initCapacity(arena, result_retain_limit) catch return .out_of_memory;
     fetch_opts.writer = &writer.writer;
 
     // Sessions park their isolate between calls, so entering this
@@ -287,7 +290,7 @@ pub export fn lp_fetch(
         browser.init(handle.app, .{}, null) catch |err| {
             c_allocator.destroy(browser);
             handle.last_error = @errorName(err);
-            return .internal;
+            return errStatus(err);
         };
         handle.fetch_browser = browser;
     }
@@ -698,7 +701,10 @@ test "c_api: lifecycle" {
     try testing.expectEqual(.ok, lp_session_new(browser, &session));
 
     var result: Result = .empty;
-    try testing.expectEqual(.invalid_params, lp_call(session, "nosuchtool", "nosuchtool".len, null, 0, &result));
+    // Unknown tool names come back in-band (is_error) so an LLM caller can
+    // read them; see tools.call.
+    try testing.expectEqual(.ok, lp_call(session, "nosuchtool", "nosuchtool".len, null, 0, &result));
+    try testing.expect(result.is_error);
     try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, null, 0, &result));
     try testing.expectEqual(.invalid_params, lp_call(session, "goto", "goto".len, "not json", "not json".len, &result));
 

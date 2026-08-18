@@ -556,7 +556,7 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 
 pub fn httpHeaders(self: *const Config) []const HttpHeader {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_header.items,
+        inline .serve, .fetch, .mcp, .agent, .embed => |opts| opts.http_header.items,
         else => &.{},
     };
 }
@@ -688,7 +688,7 @@ pub fn httpCacheDir(self: *const Config) ?[]const u8 {
 
 pub fn httpCacheEntryLimit(self: *const Config) u32 {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_entry_limit.?,
+        inline .serve, .fetch, .mcp, .agent, .embed => |opts| opts.http_cache_entry_limit.?,
         else => 1000,
     };
 }
@@ -787,7 +787,7 @@ pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scala
 
 pub fn adblockLists(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
     const paths = switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.adblock_lists,
+        inline .serve, .fetch, .mcp, .agent, .embed => |opts| opts.adblock_lists,
         else => unreachable,
     } orelse return null;
     return std.mem.splitScalar(u8, paths, ',');

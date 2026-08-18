@@ -121,12 +121,12 @@ build-dev:
 test-lib:
 	@$(ZIG) build $(ZIGFLAGS) test-lib -freference-trace
 
-# No $(ZIGFLAGS): the published prebuilt V8 has an exe-only TLS model, so the
-# shared build compiles V8 from source (one-time, ~40 min).
+# -Ddev_fast=false: dev_fast links V8 shared, but liblightpanda.so must stay
+# self-contained (no DT_NEEDED on libc_v8.so), so lib embeds the static V8.
 ## Build the C shared library (zig-out/lib + zig-out/include)
 lib:
-	@printf "\033[36mBuilding C shared library (first run builds V8 from source)...\033[0m\n"
-	@$(ZIG) build lib || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[36mBuilding C shared library...\033[0m\n"
+	@$(ZIG) build lib -Ddev_fast=false || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK: zig-out/lib/liblightpanda.$(LIB_EXT)\033[0m\n"
 
 ## Link and run the C example against the shared library (needs network)
