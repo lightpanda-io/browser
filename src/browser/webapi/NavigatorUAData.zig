@@ -62,6 +62,8 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 
     _ = hints;
 
+    const brands = brandList();
+
     return exec.js.local.?.resolvePromise(.{
         .brands = brandList(),
         .mobile = false,
@@ -70,8 +72,8 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
         .bitness = uaBitness(),
         .model = "",
         .platformVersion = "",
-        .uaFullVersion = "1.0.0.0",
-        .fullVersionList = brandList(),
+        .uaFullVersion = if (brands.len > 0) brands[0].version else "1.0.0.0",
+        .fullVersionList = brands,
         .wow64 = false,
         .formFactor = [_][]const u8{"Desktop"},
     });
@@ -82,7 +84,7 @@ fn brandList() []const Brand {
         const src = &Config.HttpHeaders.brands;
         var arr: [src.len]Brand = undefined;
         for (src, 0..) |b, i| {
-            arr[i] = .{ .brand = b.brand, .version = b.version };
+            arr[i] = .{ .brand = b.brand, .version = b.full_version };
         }
         const final = arr;
         break :blk final;
