@@ -1028,6 +1028,23 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/echo_headers")) {
+        // Echo every request header back as "name: value" lines, so tests
+        // can assert on the headers a request actually sent.
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        var it = req.iterateHeaders();
+        while (it.next()) |header| {
+            const line = try std.fmt.bufPrint(buf[pos..], "{s}: {s}\n", .{ header.name, header.value });
+            pos += line.len;
+        }
+        return req.respond(buf[0..pos], .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect_same_echo_referer")) {
         // Same-origin 302 to /echo_referer: the full Referer must survive the hop.
         return req.respond("", .{

@@ -104,6 +104,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Body);
+    pub const vLink = reflect.stringNullToEmpty("vlink");
+    pub const text = reflect.stringNullToEmpty("text");
+    pub const link = reflect.stringNullToEmpty("link");
+    pub const bgColor = reflect.stringNullToEmpty("bgcolor");
+    pub const background = reflect.string("background");
+    pub const aLink = reflect.stringNullToEmpty("alink");
+
     pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
     pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });
     pub const onfocus = bridge.accessor(getOnFocus, setOnFocus, .{ .null_as_undefined = false });

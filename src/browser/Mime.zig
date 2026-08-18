@@ -648,6 +648,24 @@ pub fn isHttpToken(s: []const u8) bool {
     return true;
 }
 
+pub fn isHttpHeaderValue(value: []const u8) bool {
+    var i: usize = 0;
+    while (i < value.len) {
+        const n = std.unicode.utf8ByteSequenceLength(value[i]) catch return false;
+        if (i + n > value.len) {
+            return false;
+        }
+
+        const cp = std.unicode.utf8Decode(value[i..][0..n]) catch return false;
+
+        if (cp > 0xFF or cp == 0x00 or cp == 0x0A or cp == 0x0D) {
+            return false;
+        }
+        i += n;
+    }
+    return true;
+}
+
 /// Whether every code point in `value` is an "HTTP quoted-string token code
 /// point" (HT, 0x20-0x7E, or 0x80-0xFF). Decodes UTF-8 so that a code point
 /// above U+00FF (e.g. U+FFFD) is rejected even though its bytes are each >=

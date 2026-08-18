@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="shadow_tree_callbacks">
+{
+    let calls = [];
+
+    class MyElement extends HTMLElement {
+        connectedCallback() { calls.push('connected'); }
+        adoptedCallback(oldDoc, newDoc) {
+            calls.push('adopted');
+            calls.push(oldDoc === document);
+            calls.push(newDoc === otherDoc);
+        }
+        disconnectedCallback() { calls.push('disconnected'); }
+    }
+    customElements.define('my-shadowed-element', MyElement);
+
+    const otherDoc = document.implementation.createHTMLDocument('other');
+
+    function makeHost(mode) {
+        const host = document.createElement('div');
+        const shadow = host.attachShadow({mode: mode});
+        shadow.appendChild(document.createElement('my-shadowed-element'));
+        return host;
+    }
+
+    // Case 1: inserting a host fires connectedCallback inside its shadow tree.
+    {
+        const host = makeHost('open');
+        calls = [];
+        document.body.appendChild(host);
+        testing.expectEqual('connected', calls.join(','));
+
+        // and removing it fires disconnectedCallback.
+        calls = [];
+        host.remove();
+        testing.expectEqual('disconnected', calls.join(','));
+    }
+
+    // Case 2: closed shadow trees get the callbacks too.
+    {
+        const host = makeHost('closed');
+        calls = [];
+        document.body.appendChild(host);
+        host.remove();
+        testing.expectEqual('connected,disconnected', calls.join(','));
+    }
+
+    // Case 3: nested shadow trees (a host inside another host's shadow tree).
+    {
+        const outer = document.createElement('div');
+        outer.attachShadow({mode: 'open'}).appendChild(makeHost('open'));
+        calls = [];
+        document.body.appendChild(outer);
+        outer.remove();
+        testing.expectEqual('connected,disconnected', calls.join(','));
+    }
+
+    // Case 4: adopting a connected host into another document runs the shadow
+    // tree's adopted (and disconnected/connected) reactions, and re-owns it.
+    {
+        const host = makeHost('open');
+        const inner = host.shadowRoot.firstChild;
+        document.body.appendChild(host);
+        calls = [];
+        otherDoc.body.appendChild(host);
+        testing.expectEqual('disconnected,adopted,true,true,connected', calls.join(','));
+        testing.expectEqual(otherDoc, inner.ownerDocument);
+    }
+
+    // Case 5: inserting a shadow root (a DocumentFragment) into another
+    // document moves and adopts its children.
+    {
+        const host = makeHost('open');
+        const shadow = host.shadowRoot;
+        document.body.appendChild(host);
+        calls = [];
+        otherDoc.body.appendChild(shadow);
+        testing.expectEqual('disconnected,adopted,true,true,connected', calls.join(','));
+    }
+}
+</script>
+</body>

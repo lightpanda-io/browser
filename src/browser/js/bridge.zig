@@ -221,6 +221,12 @@ pub const Function = struct {
             if (@typeInfo(PT) == .optional) {
                 break;
             }
+
+            // A slice of js.Value is always bound as variadic (see
+            // Caller.getArgs) and variadics contribute 0 to length.
+            if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice and @typeInfo(PT).pointer.child == js.Value) {
+                break;
+            }
             count += 1;
         }
         return count;
@@ -1179,6 +1185,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/EventCounts.zig"),
@@ -1269,6 +1276,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),

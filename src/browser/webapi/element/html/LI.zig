@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
-const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
@@ -38,16 +37,6 @@ pub fn asNode(self: *LI) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getValue(self: *LI) i32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("value")) orelse return 0;
-    return std.fmt.parseInt(i32, attr, 10) catch 0;
-}
-
-pub fn setValue(self: *LI, value: i32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(str), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(LI);
 
@@ -57,7 +46,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(LI.getValue, LI.setValue, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(LI);
+    pub const @"type" = reflect.string("type");
+
+    pub const value = reflect.long("value", 0);
 };
 
 const testing = @import("../../../../testing.zig");

@@ -87,7 +87,7 @@
     \\          any --dump output.
     \\          Defaults to false.
     \\  --strip-mode <STRIP>
-    \\          Comma-separated list of tag groups to remove from dump.
+    \\          Tag group to remove from dump. Can be passed multiple times.
     \\          Defaults to no-strip.
     \\          Allowed values:
     \\              js        Script and link[as=script, rel=preload].
@@ -299,15 +299,20 @@
     ,
     .common_options =
     \\common options:
-    \\  --block-cidrs <LIST>
-    \\          Additional CIDR ranges to block, comma-separated.
+    \\  --adblock-lists <LIST>
+    \\          EasyList-syntax filter files to load. Can be passed multiple times.
+    \\          Requests to a hostname blocked by any list are failed before they leave.
+    \\          e.g. --adblock-lists easylist.txt --adblock-lists easyprivacy.txt
+    \\  --block-cidrs <CIDR>
+    \\          Additional CIDR ranges to block. Can be passed multiple times.
     \\          Prefix with '-' to allow (exempt from blocking).
-    \\          e.g. --block-cidrs 10.0.0.0/8,-10.0.0.42/32
+    \\          e.g. --block-cidrs 10.0.0.0/8 --block-cidrs -10.0.0.42/32
     \\          Can be combined with --block-private-networks.
-    \\  --block-urls <LIST>
-    \\          URL patterns to block, comma-separated. Patterns are matched
-    \\          case-insensitively against the full URL and '*' is a wildcard.
-    \\          e.g. --block-urls "*doubleclick*,*://*/*.png"
+    \\  --block-urls <PATTERN>
+    \\          URL patterns to block. Can be passed multiple times.
+    \\          Patterns are matched case-insensitively against the full URL and '*'
+    \\          is a wildcard.
+    \\          e.g. --block-urls "*doubleclick*" --block-urls "*://*/*.png"
     \\  --block-private-networks
     \\          Block HTTP requests to private/internal IP addresses after DNS
     \\          resolution.
@@ -346,12 +351,22 @@
     \\          this disables caching.
     \\          Defaults to no caching.
     \\  --http-cache-entry-limit <INT>
-    \\          Maximum number of entries that can be stored in the HTTP cache. 0 means no limit.
+    \\          Maximum number of entries kept in the HTTP cache. The limit is
+    \\          soft: it is enforced at startup and when a browser session ends.
+    \\          The cache can temporarily exceed it. 0 means no limit.
     \\          Defaults to 1000.
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
     \\          Defaults to 0.
+    \\  --http-header <HEADER>
+    \\          Extra custom header added to every outgoing HTTP request, including redirections,
+    \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
+    \\          Note that if you add a custom header that has the same name as one of the
+    \\          internal ones Lightpanda would use, your set header is always used instead of the
+    \\          internal one. You should not replace internally set headers without knowing
+    \\          perfectly well what you are doing.
+    \\          Script set headers via CDP or JS can't override a CLI set header.
     \\  --http-max-concurrent <INT>
     \\          Maximum number of concurrent HTTP requests.
     \\          Defaults to 40.
@@ -372,11 +387,14 @@
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.
-    \\  --log-filter-scopes <SCOPES>
-    \\          Filter logs per scope, comma-separated, applied left-to-right.
+    \\  --log-filter-scopes <SCOPE>
+    \\          Filter logs per scope, applied first-to-last. Can be passed multiple times.
     \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
-    \\          "all" targets every scope. e.g. "http,unknown_prop" hides those
-    \\          two; "-all,+cdp" hides everything except cdp.
+    \\          "all" targets every scope.
+    \\          e.g. --log-filter-scopes http --log-filter-scopes unknown_prop
+    \\          hides those two.
+    \\          --log-filter-scopes -all --log-filter-scopes +cdp
+    \\          hides everything except cdp.
     \\  --log-format <FORMAT>
     \\          The log format.
     \\          Defaults to {2s}.

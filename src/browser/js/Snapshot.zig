@@ -899,8 +899,11 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
 
     if (@hasDecl(JsApi.Meta, "name")) {
         const js_name = v8.v8__Symbol__GetToStringTag(isolate);
-        const js_value = v8.v8__String__NewFromUtf8(isolate, JsApi.Meta.name.ptr, v8.kNormal, @intCast(JsApi.Meta.name.len));
-        v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontDelete);
+        // Namespace objects override the class string (e.g. console's is
+        // "console", not "Console").
+        const tag = if (@hasDecl(JsApi.Meta, "class_string")) JsApi.Meta.class_string else JsApi.Meta.name;
+        const js_value = v8.v8__String__NewFromUtf8(isolate, tag.ptr, v8.kNormal, @intCast(tag.len));
+        v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontEnum);
     }
 
     if (comptime lp.IS_DEBUG) {

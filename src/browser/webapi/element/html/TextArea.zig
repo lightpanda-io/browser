@@ -30,6 +30,7 @@ const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
 const InputEvent = @import("../../event/InputEvent.zig");
 const ValidityState = @import("ValidityState.zig");
+const reflection = @import("../reflection.zig");
 
 const TextArea = @This();
 
@@ -114,64 +115,12 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void 
     _ = try node.appendChild(text_node, frame);
 }
 
-pub fn getDisabled(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *TextArea, disabled: bool, frame: *Frame) !void {
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
-pub fn getName(self: *const TextArea) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *TextArea, name: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), frame);
-}
-
-pub fn getRequired(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
-}
-
-pub fn setRequired(self: *TextArea, required: bool, frame: *Frame) !void {
-    if (required) {
-        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("required"), frame);
-    }
-}
-
 pub fn getMaxLength(self: *const TextArea) i32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return -1;
-    return std.fmt.parseInt(i32, attr, 10) catch -1;
-}
-
-pub fn setMaxLength(self: *TextArea, max_length: i32, frame: *Frame) !void {
-    if (max_length < 0) {
-        return error.IndexSizeError;
-    }
-    var buf: [32]u8 = undefined;
-    const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), frame);
+    return reflection.getLimitedLong(self.asConstElement(), comptime .wrap("maxlength"));
 }
 
 pub fn getMinLength(self: *const TextArea) i32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("minlength")) orelse return -1;
-    return std.fmt.parseInt(i32, attr, 10) catch -1;
-}
-
-pub fn setMinLength(self: *TextArea, min_length: i32, frame: *Frame) !void {
-    if (min_length < 0) {
-        return error.IndexSizeError;
-    }
-    var buf: [32]u8 = undefined;
-    const value = std.fmt.bufPrint(&buf, "{d}", .{min_length}) catch unreachable;
-    try self.asElement().setAttributeSafe(comptime .wrap("minlength"), .wrap(value), frame);
+    return reflection.getLimitedLong(self.asConstElement(), comptime .wrap("minlength"));
 }
 
 pub fn select(self: *TextArea, frame: *Frame) !void {
@@ -391,6 +340,14 @@ pub fn suffersTooShort(self: *const TextArea) bool {
     return count < @as(usize, @intCast(min));
 }
 
+pub fn getDisabled(self: *const TextArea) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+}
+
+pub fn getRequired(self: *const TextArea) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TextArea);
 
@@ -399,6 +356,14 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(TextArea);
+    pub const rows = reflect.unsignedLong("rows", .{ .default = 2, .positive = true, .fallback = true });
+    pub const cols = reflect.unsignedLong("cols", .{ .default = 20, .positive = true, .fallback = true });
+    pub const readOnly = reflect.boolean("readonly");
+    pub const wrap = reflect.string("wrap");
+    pub const placeholder = reflect.string("placeholder");
+    pub const dirName = reflect.string("dirname");
 
     pub const labels = bridge.accessor(TextArea.getLabels, null, .{});
     pub const willValidate = bridge.accessor(TextArea.getWillValidate, null, .{});
@@ -410,11 +375,11 @@ pub const JsApi = struct {
     pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{ .ce_reactions = true });
-    pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{ .ce_reactions = true });
-    pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{ .ce_reactions = true });
-    pub const maxLength = bridge.accessor(TextArea.getMaxLength, TextArea.setMaxLength, .{ .ce_reactions = true });
-    pub const minLength = bridge.accessor(TextArea.getMinLength, TextArea.setMinLength, .{ .ce_reactions = true });
+    pub const disabled = reflect.boolean("disabled");
+    pub const name = reflect.string("name");
+    pub const required = reflect.boolean("required");
+    pub const maxLength = reflect.limitedLong("maxlength");
+    pub const minLength = reflect.limitedLong("minlength");
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
     pub const select = bridge.function(TextArea.select, .{});
 

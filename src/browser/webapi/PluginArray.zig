@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
+const GenericIterator = @import("collections/iterator.zig").Entry;
 
 pub fn registerTypes() []const type {
-    return &.{ PluginArray, Plugin };
+    return &.{ PluginArray, Plugin, ValueIterator };
 }
 
 const PluginArray = @This();
@@ -51,6 +53,18 @@ const Plugin = struct {
     };
 };
 
+fn values(_: *const PluginArray, frame: *Frame) !*ValueIterator {
+    return .init(.{}, frame);
+}
+
+const ValueIterator = GenericIterator(Iterator, null);
+
+const Iterator = struct {
+    pub fn next(_: *Iterator, _: *Frame) ?*Plugin {
+        return null;
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(PluginArray);
 
@@ -73,4 +87,5 @@ pub const JsApi = struct {
         return self.getAtIndex(@intCast(index));
     }
     pub const namedItem = bridge.function(PluginArray.getByName, .{});
+    pub const symbol_iterator = bridge.iterator(PluginArray.values, .{});
 };

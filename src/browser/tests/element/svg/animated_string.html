@@ -34,35 +34,34 @@
 
 <script id=href>
 {
-  // The parser stores xlink:href under its local name, href.
+  // The parser keeps the xlink: prefix; href reflects href, else xlink:href.
   const use1 = $('#use1');
   testing.expectEqual(true, use1.href instanceof SVGAnimatedString);
   testing.expectEqual('#icon', use1.href.baseVal);
   testing.expectEqual('#icon', use1.href.animVal);
   testing.expectEqual(true, use1.href === use1.href);
   testing.expectEqual('#modern', $('#use2').href.baseVal);
+  testing.expectEqual('#icon', use1.getAttribute('xlink:href'));
+  testing.expectEqual(null, use1.getAttribute('href'));
+  testing.expectEqual('#icon', use1.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
 
-  // Writes land in xlink:href in browsers (it's the attribute that's set)
-  // but in href for us since the parser stored it there; assert the common
-  // observable.
+  // Only xlink:href present: the write lands in the xlink attribute, not in
+  // a new href. (Firefox drops the prefix on that write, so only assert the
+  // namespaced lookup.)
   use1.href.baseVal = '#other';
   testing.expectEqual('#other', use1.href.baseVal);
+  testing.expectEqual('#other', use1.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
+  testing.expectEqual(false, use1.hasAttributeNS(null, 'href'));
 
-  // setAttributeNS stores under the local name, so a runtime xlink:href
-  // lands in href and reflects like the parsed variant. (Browsers keep the
-  // xlink:href attribute but reflect it the same way.)
+  // Runtime setAttributeNS keeps the qualified name and reflects the same way.
   const use3 = document.createElementNS('http://www.w3.org/2000/svg', 'use');
   use3.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#runtime');
   testing.expectEqual('#runtime', use3.href.baseVal);
+  testing.expectEqual('#runtime', use3.getAttribute('xlink:href'));
 
-  // A namespace-less setAttribute('xlink:href') is a literal attribute in no
-  // namespace: not reflected, in browsers or here.
-  const use4 = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use4.setAttribute('xlink:href', '#literal');
-  testing.expectEqual('', use4.href.baseVal);
-  use4.href.baseVal = '#written';
-  testing.expectEqual('#written', use4.getAttribute('href'));
-  testing.expectEqual(true, use4.hasAttribute('xlink:href'));
+  // Not asserted: a namespace-less setAttribute('xlink:href') is a literal
+  // attribute browsers don't reflect, but attributes here have no namespace
+  // so it is indistinguishable from the xlink one and does reflect.
 
   // No href attribute at all: set writes to href.
   const link = $('#link1');

@@ -36,6 +36,7 @@ const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
 const SqliteCache = @import("cache/SqliteCache.zig");
+const AdBlocker = @import("adblock/AdBlocker.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -90,6 +91,9 @@ config: *const Config,
 x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
+/// Hostname dictionaries built from `--adblock-lists`. Parsed once here and
+/// never mutated afterwards, so every HttpClient can share this one copy.
+adblocker: ?AdBlocker,
 
 connections: []http.Connection,
 available: DoublyLinkedList = .{},
@@ -229,6 +233,10 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         try WebBotAuth.fromConfig(allocator, &wba_cfg)
     else
         null;
+    errdefer if (web_bot_auth) |wba| wba.deinit(allocator);
+
+    var adblocker = try AdBlocker.fromConfig(allocator, config);
+    errdefer if (adblocker) |*blocker| blocker.deinit();
 
     const cache = if (config.httpCacheDir()) |cache_dir_path|
         Cache{
@@ -268,6 +276,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .cache = cache,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .adblocker = adblocker,
 
         .ws_pool = .empty,
         .ws_max = config.wsMaxConcurrent(),
@@ -300,6 +309,8 @@ pub fn deinit(self: *Network) void {
     if (self.web_bot_auth) |wba| {
         wba.deinit(self.allocator);
     }
+
+    if (self.adblocker) |*blocker| blocker.deinit();
 
     if (self.cache) |*cache| cache.deinit();
 

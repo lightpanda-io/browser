@@ -210,7 +210,7 @@ pub fn getDir(self: *HTMLDocument) []const u8 {
 pub fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     const el = self._proto.getDocumentElement() orelse return;
     const html = el.is(Element.Html) orelse return;
-    try html.setDir(value, frame);
+    try html.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
 pub fn getLang(self: *HTMLDocument) []const u8 {
@@ -268,6 +268,28 @@ pub const JsApi = struct {
     }
 
     pub const dir = bridge.accessor(HTMLDocument.getDir, HTMLDocument.setDir, .{ .ce_reactions = true });
+    pub const fgColor = bodyColor("text");
+    pub const linkColor = bodyColor("link");
+    pub const vlinkColor = bodyColor("vlink");
+    pub const alinkColor = bodyColor("alink");
+    pub const bgColor = bodyColor("bgcolor");
+
+    // Legacy [LegacyNullToEmptyString] attributes that reflect an attribute of
+    // the body element ("" without one).
+    fn bodyColor(comptime attr: []const u8) js.bridge.Accessor {
+        const R = struct {
+            fn get(self: *HTMLDocument) []const u8 {
+                const b = self.getBody() orelse return "";
+                return b.asElement().getAttributeSafe(comptime .wrap(attr)) orelse "";
+            }
+            fn set(self: *HTMLDocument, value: js.Value, frame: *Frame) !void {
+                const b = self.getBody() orelse return;
+                const str = if (value.isNull()) "" else try value.toStringSlice();
+                try b.asElement().setAttributeSafe(comptime .wrap(attr), .wrap(str), frame);
+            }
+        };
+        return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
+    }
     pub const head = bridge.accessor(HTMLDocument.getHead, null, .{});
     pub const body = bridge.accessor(HTMLDocument.getBody, HTMLDocument.setBody, .{ .ce_reactions = true });
     pub const lang = bridge.accessor(HTMLDocument.getLang, HTMLDocument.setLang, .{});

@@ -25,6 +25,43 @@
     }
 </script>
 
+<script id=namespace>
+    // console members are namespace properties: they must ignore their
+    // receiver. pino (seen on cnn.com) calls the captured native method as
+    // `write.apply(proto, args)` where proto is its own object.
+    console.log.apply({}, ["via apply"]);
+    console.error.call(null, "via call");
+    const detached = console.warn;
+    detached("detached");
+
+    // stateful members still reach the global's console state
+    const count = console.count;
+    count("ns");
+    count("ns");
+    console.countReset("ns");
+
+    testing.expectEqual(true, true);
+</script>
+
+<script id=shapes>
+    // Web IDL shapes: variadic/optional params don't count toward length,
+    // and fully-optional members must accept zero arguments.
+    testing.expectEqual(0, console.log.length);
+    testing.expectEqual(0, console.assert.length);
+    testing.expectEqual(0, console.table.length);
+
+    // namespace class string is the identifier, lowercase
+    testing.expectEqual('[object console]', Object.prototype.toString.call(console));
+
+    console.assert();          // asserts false, logs, must not throw
+    console.table();
+    console.dir(document.body);
+    console.dir();
+    console.dirxml(document.body, "extra");
+
+    testing.expectEqual(true, true);
+</script>
+
 <script id="time">
     // should not crash
     console.time();

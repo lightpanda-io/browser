@@ -67,6 +67,12 @@ pub fn clear(self: *Cache) !void {
     };
 }
 
+pub fn maintenance(self: *Cache, now: u64) void {
+    return switch (self.kind) {
+        inline else => |*c| c.maintenance(now),
+    };
+}
+
 /// RFC 9111 delta-seconds values larger than this are capped rather than
 /// rejected (§1.2.2). Capping also keeps the value safely castable to i64
 /// for freshness arithmetic and storage.
@@ -283,6 +289,13 @@ pub fn tryCache(
         return null;
     };
 
+    // get() treats must_revalidate as always-expired, so without validators
+    // the entry could never be served, only purged.
+    if (cc.must_revalidate and etag == null and last_modified == null) {
+        log.debug(.cache, "no store", .{ .url = url, .reason = "must_revalidate without validators" });
+        return null;
+    }
+
     return .{
         .url = try arena.dupeZ(u8, url),
         .content_type = if (content_type) |ct| try arena.dupe(u8, ct) else "application/octet-stream",
@@ -360,6 +373,43 @@ test "Cache: tryCache heuristic when no cache-control" {
         false,
     );
     try testing.expectEqual(null, result);
+}
+
+test "Cache: tryCache must_revalidate without validators" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const no_validators = try tryCache(
+        arena.allocator(),
+        1000,
+        "https://example.com",
+        200,
+        "text/html",
+        "no-cache, max-age=300",
+        null,
+        null,
+        null,
+        null,
+        false,
+        false,
+    );
+    try testing.expectEqual(null, no_validators);
+
+    const with_etag = try tryCache(
+        arena.allocator(),
+        1000,
+        "https://example.com",
+        200,
+        "text/html",
+        "no-cache, max-age=300",
+        null,
+        null,
+        "\"abc\"",
+        null,
+        false,
+        false,
+    );
+    try testing.expectEqual(true, with_etag.?.cache_control.must_revalidate);
 }
 
 test "Cache: tryCache heuristic when no cache-control with last-modified" {

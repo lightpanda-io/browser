@@ -132,16 +132,13 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         const key = header.key_ptr.*;
         const value = header.value_ptr.*;
 
-        if (std.mem.indexOfAny(u8, key, "\r\n") != null or std.mem.indexOfAny(u8, value, "\r\n") != null) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name/value must not contain CR or LF" });
+        if (Mime.isHttpToken(key) == false) {
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must be a non-empty HTTP token" });
             continue;
         }
 
-        // A colon in the name would smuggle a different header name onto the
-        // wire once the pair is joined ("User-Agent:Mozilla/5.0 (X" + "Y)"),
-        // bypassing the User-Agent validation below.
-        if (std.mem.indexOfScalar(u8, key, ':') != null) {
-            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header name must not contain a colon" });
+        if (Mime.isHttpHeaderValue(value) == false) {
+            log.warn(.cdp, "network.setExtraHTTPHeaders", .{ .param = "header", .value = key, .info = "header value must be Latin-1 text without CR, LF or NUL" });
             continue;
         }
 
@@ -369,11 +366,11 @@ pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const N
     const frame_id = req.document_frame_id orelse req.frame_id;
     const frame = bc.session.findFrameByFrameId(frame_id) orelse return;
 
-    // Modify request with extra CDP headers. Use setHeader (replace by name)
-    // so a caller-supplied header overrides a built-in default of the same
-    // name (e.g. User-Agent) instead of producing a duplicate.
+    // Modify request with extra CDP headers: the .cdp layer overrides both
+    // built-in defaults and script-set headers of the same name (Chrome
+    // behavior), but never a .fixed header.
     for (bc.extra_headers.items) |extra| {
-        try transfer.setHeader(extra.name, extra.value, .{});
+        try transfer.setHeader(extra.name, extra.value, .{ .source = .cdp });
     }
 
     // We're missing a bunch of fields, but, for now, this eems like enough
@@ -795,6 +792,30 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
         .method = "Network.setExtraHTTPHeaders",
         .params = .{ .headers = .{
             .@"x-custom" = "bar\r\nUser-Agent: Mozilla/5.0",
+            .@"x-keep" = "ok",
+        } },
+    });
+
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("x-keep", bc.extra_headers.items[0].name);
+    try testing.expectEqual("ok", bc.extra_headers.items[0].value);
+}
+
+test "cdp.network setExtraHTTPHeaders rejects a name that isn't an HTTP token" {
+    testing.silenceLog(&.{.cdp});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA6", .session_id = "NESI-UA6" });
+
+    // A space — or any other non-token byte — in the name would land
+    // malformed on the wire.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"X Custom" = "bar",
             .@"x-keep" = "ok",
         } },
     });

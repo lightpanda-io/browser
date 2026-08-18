@@ -45,6 +45,7 @@ const Node = @This();
 pub const Proto = EventTarget;
 
 _type: Type,
+_flags: Flags = .{}, // Fits in existing struct padding.
 _parent: ?*Node = null,
 // The first child's `_prev` points at the LAST child (keeping lastChild
 // O(1)); the last child's `_next` is null. A detached node has null links.
@@ -66,6 +67,11 @@ pub const Type = enum(u8) {
     document_type,
     attribute,
     document_fragment,
+};
+
+pub const Flags = packed struct(u8) {
+    assigned_slot: bool = false,
+    _unused: u7 = 0,
 };
 
 pub fn Subtype(comptime tag: Type) type {
@@ -1694,6 +1700,14 @@ pub fn unlink(self: *Node, child: *Node) void {
     child._prev = null;
 }
 
+pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
+    // optimized with a flag because this is probed for every hop of every event path
+    if (!self._flags.assigned_slot) {
+        return null;
+    }
+    return frame._assigned_slots.get(self);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Node);
 
@@ -1866,4 +1880,12 @@ pub const NodeOrText = union(enum) {
 const testing = @import("../../testing.zig");
 test "WebApi: Node" {
     try testing.htmlRunner("node", .{});
+}
+
+test "Node: text chain slot size" {
+    // Guard against accidental growth: new Node fields (e.g. _flags) must fit
+    // in existing padding. Debug is larger from the _proto_canary fields.
+    const Text = @import("cdata/Text.zig");
+    const slot = comptime Factory.chainOffsetOf(Text, Text) + @sizeOf(Text);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 104 else 73, slot);
 }

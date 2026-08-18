@@ -33,5 +33,8 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Progress);
+    pub const max = reflect.double("max", 1.0, true);
+
     pub const labels = bridge.accessor(Progress.getLabels, null, .{});
 };

@@ -43,6 +43,7 @@ _event_counts: EventCounts = .{},
 // Frame/WorkerGlobalScope) so that both contexts get observers for free.
 _observers: std.ArrayList(*PerformanceObserver) = .empty,
 _delivery_scheduled: bool = false,
+_delivering: bool = false,
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -292,10 +293,18 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
 }
 
 pub fn registerObserver(self: *Performance, observer: *PerformanceObserver, exec: *const Execution) !void {
+    for (self._observers.items) |o| {
+        if (o == observer) {
+            return;
+        }
+    }
     return self._observers.append(exec.arena, observer);
 }
 
 pub fn unregisterObserver(self: *Performance, observer: *PerformanceObserver) void {
+    if (self._delivering) {
+        return;
+    }
     for (self._observers.items, 0..) |o, i| {
         if (o == observer) {
             _ = self._observers.swapRemove(i);
@@ -331,7 +340,26 @@ pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
             fn run(_self: *anyopaque) anyerror!?u32 {
                 const perf: *Performance = @ptrCast(@alignCast(_self));
                 perf._delivery_scheduled = false;
-                for (perf._observers.items) |observer| {
+                perf._delivering = true;
+
+                defer {
+                    perf._delivering = false;
+                    var observers = &perf._observers;
+                    var i: usize = 0;
+                    while (i < observers.items.len) {
+                        if (observers.items[i]._interests == 0) {
+                            // it was disconencted while we ran, dangerous to
+                            // remove while running, remove it now.
+                            _ = observers.swapRemove(i);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
+
+                var i: usize = 0;
+                while (i < perf._observers.items.len) : (i += 1) {
+                    const observer = perf._observers.items[i];
                     if (observer.hasRecords()) {
                         try observer.dispatch();
                     }

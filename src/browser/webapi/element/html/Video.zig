@@ -78,6 +78,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Video);
+    pub const width = reflect.unsignedLong("width", .{});
+    pub const height = reflect.unsignedLong("height", .{});
+    pub const playsInline = reflect.boolean("playsinline");
+
     pub const poster = bridge.accessor(Video.getPoster, Video.setPoster, .{ .ce_reactions = true });
     pub const videoWidth = bridge.accessor(Video.getVideoWidth, null, .{});
     pub const videoHeight = bridge.accessor(Video.getVideoHeight, null, .{});

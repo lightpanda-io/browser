@@ -67,8 +67,20 @@ pub fn getAnimVal(self: *const AnimatedString) []const u8 {
 
 fn attributeName(self: *const AnimatedString) String {
     return switch (self._kind) {
-        .href => comptime .wrap("href"),
         .class => comptime .wrap("class"),
+        .href => {
+            const href: String = comptime .wrap("href");
+            if (self._element.hasAttributeSafe(href)) {
+                return href;
+            }
+
+            const xlink_href: String = comptime .wrap("xlink:href");
+            if (self._element.hasAttributeSafe(xlink_href)) {
+                // legacy attribute, returned if it exists and href doens't
+                return xlink_href;
+            }
+            return href;
+        },
     };
 }
 

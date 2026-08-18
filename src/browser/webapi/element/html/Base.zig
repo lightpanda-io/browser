@@ -22,14 +22,6 @@ pub fn asNode(self: *Base) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getTarget(self: *Base) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
-}
-
-pub fn setTarget(self: *Base, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
-}
-
 pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
@@ -78,8 +70,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Base);
+
     pub const href = bridge.accessor(Base.getHref, Base.setHref, .{ .ce_reactions = true });
-    pub const target = bridge.accessor(Base.getTarget, Base.setTarget, .{ .ce_reactions = true });
+    pub const target = reflect.string("target");
 };
 
 const testing = @import("../../../../testing.zig");

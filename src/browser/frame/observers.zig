@@ -299,10 +299,13 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
     frame._intersection.delivery_scheduled = false;
 
-    // Iterate backwards to handle observers that disconnect during their callback
+    // Iterate backwards so an observer disconnecting during its callback is safe.
     var i = frame._intersection.observers.items.len;
     while (i > 0) {
         i -= 1;
+        if (i >= frame._intersection.observers.items.len) {
+            continue;
+        }
         const observer = frame._intersection.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
             log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });

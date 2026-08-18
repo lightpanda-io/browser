@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
-const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
@@ -38,28 +37,6 @@ pub fn asNode(self: *OL) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getStart(self: *OL) i32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("start")) orelse return 1;
-    return std.fmt.parseInt(i32, attr, 10) catch 1;
-}
-
-pub fn setStart(self: *OL, value: i32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("start"), .wrap(str), frame);
-}
-
-pub fn getReversed(self: *OL) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("reversed")) != null;
-}
-
-pub fn setReversed(self: *OL, value: bool, frame: *Frame) !void {
-    if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("reversed"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("reversed"), frame);
-    }
-}
-
 pub fn getType(self: *OL) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "1";
 }
@@ -77,8 +54,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const start = bridge.accessor(OL.getStart, OL.setStart, .{ .ce_reactions = true });
-    pub const reversed = bridge.accessor(OL.getReversed, OL.setReversed, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(OL);
+    pub const compact = reflect.boolean("compact");
+
+    pub const start = reflect.long("start", 1);
+    pub const reversed = reflect.boolean("reversed");
     pub const @"type" = bridge.accessor(OL.getType, OL.setType, .{ .ce_reactions = true });
 };
 

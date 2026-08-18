@@ -414,12 +414,86 @@ test "Client: http invalid handshake" {
     );
 }
 
+test "Client: http handshake origin" {
+    testing.silenceLog(&.{.cdp});
+
+    const with_origin =
+        "GET / HTTP/1.1\r\n" ++
+        "Connection: upgrade\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "sec-websocket-version:13\r\n" ++
+        "sec-websocket-key: this is my key\r\n" ++
+        "Origin: {s}\r\n\r\n";
+
+    for ([_][]const u8{
+        "https://evil.com",
+        // Being served from loopback yourself doesn't make you trusted.
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+        // Sandboxed iframes and data: URLs.
+        "null",
+    }) |origin| {
+        var c = try createTestClient();
+        defer c.deinit();
+
+        var buf: [256]u8 = undefined;
+        const res = try c.httpRequest(try std.fmt.bufPrint(&buf, with_origin, .{origin}));
+        try testing.expectEqual("HTTP/1.1 403 \r\n" ++
+            "Connection: Close\r\n" ++
+            "Content-Length: 18\r\n\r\n" ++
+            "Origin not allowed", res);
+    }
+
+    // The first one is enough; we never get far enough to see the second.
+    try assertHTTPError(
+        403,
+        "Origin not allowed",
+        "GET / HTTP/1.1\r\n" ++
+            "Connection: upgrade\r\n" ++
+            "Upgrade: websocket\r\n" ++
+            "sec-websocket-version:13\r\n" ++
+            "sec-websocket-key: this is my key\r\n" ++
+            "Origin: https://evil.com\r\n" ++
+            "Origin: https://evil.com\r\n\r\n",
+    );
+}
+
+test "Client: http handshake host" {
+    testing.silenceLog(&.{.cdp});
+
+    // Any name in Host means something resolved to us that shouldn't
+    // have (rebinding); only an IP literal gets through.
+    const with_host =
+        "GET / HTTP/1.1\r\n" ++
+        "Connection: upgrade\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "sec-websocket-version:13\r\n" ++
+        "sec-websocket-key: this is my key\r\n" ++
+        "Host: {s}\r\n\r\n";
+
+    for ([_][]const u8{
+        "rebind.evil.com:9583",
+        // Not even the name that resolves to loopback on every machine.
+        "localhost:9583",
+    }) |host| {
+        var buf: [256]u8 = undefined;
+        try assertHTTPError(
+            403,
+            "Host not allowed",
+            try std.fmt.bufPrint(&buf, with_host, .{host}),
+        );
+    }
+}
+
 test "Client: http valid handshake" {
     var c = try createTestClient();
     defer c.deinit();
 
+    // No Origin (i.e. not a browser) and a Host we're reachable at: what
+    // every CDP driver sends.
     const request =
         "GET /   HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:9583\r\n" ++
         "Connection: upgrade\r\n" ++
         "Upgrade: websocket\r\n" ++
         "sec-websocket-version:13\r\n" ++

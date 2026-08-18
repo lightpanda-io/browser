@@ -138,7 +138,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             switch (opts.shadow) {
                 .skip => {},
                 .complete, .rendered => {
-                    if (frame._element_shadow_roots.get(el)) |shadow| {
+                    if (el.hostedShadowRoot(frame)) |shadow| {
                         try children(shadow.asNode(), opts, writer, frame);
                         // In rendered mode, light DOM is only shown through slots, not directly
                         if (opts.shadow == .rendered) {
@@ -153,7 +153,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                     }
                 },
                 .declarative => |declarative| {
-                    if (frame._element_shadow_roots.get(el)) |shadow| {
+                    if (el.hostedShadowRoot(frame)) |shadow| {
                         if (shouldSerializeShadow(shadow, declarative)) {
                             try writeDeclarativeShadow(shadow, opts, writer, frame);
                         }
@@ -223,7 +223,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
 pub fn getHTML(node: *Node, declarative: Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
     const opts = Opts{ .shadow = .{ .declarative = declarative } };
     if (node.is(Node.Element)) |el| {
-        if (frame._element_shadow_roots.get(el)) |shadow| {
+        if (el.hostedShadowRoot(frame)) |shadow| {
             if (shouldSerializeShadow(shadow, declarative)) {
                 // if the element's shadowroot tree is rendered before its
                 // children (assume the opts say that it should serialize the

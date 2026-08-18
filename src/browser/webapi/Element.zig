@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
-const reflect = @import("../reflect.zig");
 const Factory = @import("../Factory.zig");
 const StyleManager = @import("../StyleManager.zig");
 
@@ -31,17 +30,19 @@ const Node = @import("Node.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
-pub const DOMRect = @import("DOMRect.zig");
 
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 
+const slotting = @import("element/slotting.zig");
+const DOMStringMap = @import("element/DOMStringMap.zig");
+
+pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
-const slotting = @import("element/slotting.zig");
 pub const Attribute = @import("element/Attribute.zig");
-const DOMStringMap = @import("element/DOMStringMap.zig");
+pub const Reflect = @import("element/reflection.zig").Reflect;
 
 const log = lp.log;
 const String = lp.String;
@@ -114,6 +115,9 @@ pub const Namespace = enum(u8) {
 
     pub fn parse(namespace_: ?[]const u8) Namespace {
         const namespace = namespace_ orelse return .null;
+        if (namespace.len == 0) {
+            return .null;
+        }
         if (namespace.len == "http://www.w3.org/1999/xhtml".len) {
             // Common case, avoid the string comparison. Recklessly
             @branchHint(.likely);
@@ -132,8 +136,26 @@ pub const Namespace = enum(u8) {
     }
 };
 
+pub const Flags = packed struct(u8) {
+    shadow_host: bool = false,
+    customized_builtin: bool = false,
+
+    // Prevents nested clicks (which have a specific spec-compliant behavior
+    // compared to other events). If this bit can be more useful for something
+    // else, a stack in EventManager (for click-specifically) is an alterantive
+    // approach
+    click_in_progress: bool = false,
+
+    _unused: u5 = 0,
+};
+
 _type: Type,
 _namespace: Namespace = .html,
+// Presence hints for the frame's element-keyed side tables: a set bit means
+// "maybe in the map" (the map stays the authority), a clear bit skips the
+// lookup. Turns the per-element map probe in tree walks into a bit test on
+// memory the walk already touches. Fits in existing struct padding.
+_flags: Flags = .{},
 _attributes: Attribute.List = .{},
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
@@ -624,31 +646,6 @@ pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-// ARIAMixin - ARIA attribute reflection
-pub fn getAriaAtomic(self: *const Element) ?[]const u8 {
-    return self.getAttributeSafe(comptime .wrap("aria-atomic"));
-}
-
-pub fn setAriaAtomic(self: *Element, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-atomic"), .wrap(v), frame);
-    } else {
-        try self.removeAttribute(comptime .wrap("aria-atomic"), frame);
-    }
-}
-
-pub fn getAriaLive(self: *const Element) ?[]const u8 {
-    return self.getAttributeSafe(comptime .wrap("aria-live"));
-}
-
-pub fn setAriaLive(self: *Element, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        try self.setAttributeSafe(comptime .wrap("aria-live"), .wrap(v), frame);
-    } else {
-        try self.removeAttribute(comptime .wrap("aria-live"), frame);
-    }
-}
-
 pub fn getClassName(self: *const Element) []const u8 {
     return self.getAttributeSafe(comptime .wrap("class")) orelse "";
 }
@@ -666,20 +663,38 @@ pub fn getAttribute(self: *const Element, name: String, frame: *Frame) !?String 
     return self._attributes.get(name, frame);
 }
 
-/// For simplicity, the namespace is currently ignored and only the local name is used.
 pub fn getAttributeNS(
     self: *const Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     local_name: String,
     frame: *Frame,
 ) !?String {
-    if (maybe_namespace) |namespace| {
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.getAttributeNS", .{ .namespace = namespace });
+    if (namespace_) |namespace| {
+        // we don't really support namespaces, but if the namespace has a fixed
+        // prefix, we can try to fetch the attribute with it
+        if (try prefixedAttributeName(namespace, local_name.str(), frame)) |prefixed| {
+            if (try self.getAttribute(.wrap(prefixed), frame)) |value| {
+                return value;
+            }
         }
     }
-
     return self.getAttribute(local_name, frame);
+}
+
+fn prefixedAttributeName(namespace: []const u8, local_name: []const u8, frame: *Frame) !?[]const u8 {
+    const prefix = blk: {
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xlink")) {
+            break :blk "xlink";
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/XML/1998/namespace")) {
+            break :blk "xml";
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/xmlns/")) {
+            break :blk "xmlns";
+        }
+        return null;
+    };
+    return try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix, local_name });
 }
 
 pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
@@ -691,20 +706,13 @@ pub fn hasAttribute(self: *const Element, name: String, frame: *Frame) !bool {
     return value != null;
 }
 
-/// Like getAttributeNS, the namespace is currently ignored.
 pub fn hasAttributeNS(
     self: *const Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     local_name: String,
     frame: *Frame,
 ) !bool {
-    if (maybe_namespace) |namespace| {
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.hasAttributeNS", .{ .namespace = namespace });
-        }
-    }
-
-    return self.hasAttribute(local_name, frame);
+    return try self.getAttributeNS(namespace_, local_name, frame) != null;
 }
 
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
@@ -783,30 +791,24 @@ pub fn setAttribute(self: *Element, name: String, value: String, frame: *Frame) 
 
 pub fn setAttributeNS(
     self: *Element,
-    maybe_namespace: ?[]const u8,
+    namespace_: ?[]const u8,
     qualified_name: []const u8,
     value: String,
     frame: *Frame,
 ) !void {
-    const attr_name = if (maybe_namespace) |namespace| blk: {
-        // For xmlns namespace, store the full qualified name (e.g. "xmlns:bar")
-        // so lookupNamespaceURI can find namespace declarations.
-        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/xmlns/")) {
-            break :blk qualified_name;
+    const local_start = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx| blk: {
+        if (idx == 0 or idx == qualified_name.len - 1) {
+            // cannot be at the start or end of the qname
+            return error.InvalidCharacterError;
         }
-        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
-            log.warn(.not_implemented, "Element.setAttributeNS", .{ .namespace = namespace });
+        if (std.mem.indexOfScalarPos(u8, qualified_name, idx + 1, ':') != null) {
+            // and can only have one
+            return error.InvalidCharacterError;
         }
-        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
-            qualified_name[idx + 1 ..]
-        else
-            qualified_name;
-    } else blk: {
-        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
-            qualified_name[idx + 1 ..]
-        else
-            qualified_name;
-    };
+        break :blk idx + 1;
+    } else 0;
+
+    const attr_name = if (namespace_ != null) qualified_name else qualified_name[local_start..];
     return self.setAttribute(.wrap(attr_name), value, frame);
 }
 
@@ -815,7 +817,7 @@ pub fn setAttributeSafe(self: *Element, name: String, value: String, frame: *Fra
 }
 
 pub fn getShadowRoot(self: *Element, frame: *Frame) ?*ShadowRoot {
-    const shadow_root = frame._element_shadow_roots.get(self) orelse return null;
+    const shadow_root = self.hostedShadowRoot(frame) orelse return null;
     if (shadow_root._mode == .closed) return null;
     return shadow_root;
 }
@@ -852,7 +854,7 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
         }
     }
 
-    if (frame._element_shadow_roots.get(self)) |existing| {
+    if (self.hostedShadowRoot(frame)) |existing| {
         // Imperative attachShadow over a declarative shadow root with a matching
         // mode empties it and returns the same root. The parser
         // (opts.declarative) never replaces an existing root.
@@ -866,7 +868,18 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
     try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
+    self._flags.shadow_host = true;
     return shadow_root;
+}
+
+// The shadow root this element hosts, closed ones included (the JS-facing
+// getShadowRoot filters those). The flag check skips the map probe for the
+// overwhelming majority of elements, which host nothing.
+pub fn hostedShadowRoot(self: *Element, frame: *const Frame) ?*ShadowRoot {
+    if (!self._flags.shadow_host) {
+        return null;
+    }
+    return frame._element_shadow_roots.get(self);
 }
 
 pub fn insertAdjacentElement(
@@ -1789,7 +1802,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
 
     // Per spec, a clonable shadow root is cloned along with its host — its
     // children always deep-cloned, even when the host clone is shallow.
-    if (frame._element_shadow_roots.get(self)) |shadow| {
+    if (self.hostedShadowRoot(frame)) |shadow| {
         if (shadow._clonable) {
             const cloned_shadow = node.as(Element).attachShadow(.{
                 .mode = shadow._mode,
@@ -2362,8 +2375,50 @@ pub const JsApi = struct {
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{ .ce_reactions = true });
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{ .ce_reactions = true });
-    pub const ariaAtomic = bridge.accessor(Element.getAriaAtomic, Element.setAriaAtomic, .{ .ce_reactions = true });
-    pub const ariaLive = bridge.accessor(Element.getAriaLive, Element.setAriaLive, .{ .ce_reactions = true });
+    pub const role = ariaAccessor("role");
+    pub const ariaAtomic = ariaAccessor("aria-atomic");
+    pub const ariaAutoComplete = ariaAccessor("aria-autocomplete");
+    pub const ariaBrailleLabel = ariaAccessor("aria-braillelabel");
+    pub const ariaBrailleRoleDescription = ariaAccessor("aria-brailleroledescription");
+    pub const ariaBusy = ariaAccessor("aria-busy");
+    pub const ariaChecked = ariaAccessor("aria-checked");
+    pub const ariaColCount = ariaAccessor("aria-colcount");
+    pub const ariaColIndex = ariaAccessor("aria-colindex");
+    pub const ariaColIndexText = ariaAccessor("aria-colindextext");
+    pub const ariaColSpan = ariaAccessor("aria-colspan");
+    pub const ariaCurrent = ariaAccessor("aria-current");
+    pub const ariaDescription = ariaAccessor("aria-description");
+    pub const ariaDisabled = ariaAccessor("aria-disabled");
+    pub const ariaExpanded = ariaAccessor("aria-expanded");
+    pub const ariaHasPopup = ariaAccessor("aria-haspopup");
+    pub const ariaHidden = ariaAccessor("aria-hidden");
+    pub const ariaInvalid = ariaAccessor("aria-invalid");
+    pub const ariaKeyShortcuts = ariaAccessor("aria-keyshortcuts");
+    pub const ariaLabel = ariaAccessor("aria-label");
+    pub const ariaLevel = ariaAccessor("aria-level");
+    pub const ariaLive = ariaAccessor("aria-live");
+    pub const ariaModal = ariaAccessor("aria-modal");
+    pub const ariaMultiLine = ariaAccessor("aria-multiline");
+    pub const ariaMultiSelectable = ariaAccessor("aria-multiselectable");
+    pub const ariaOrientation = ariaAccessor("aria-orientation");
+    pub const ariaPlaceholder = ariaAccessor("aria-placeholder");
+    pub const ariaPosInSet = ariaAccessor("aria-posinset");
+    pub const ariaPressed = ariaAccessor("aria-pressed");
+    pub const ariaReadOnly = ariaAccessor("aria-readonly");
+    pub const ariaRelevant = ariaAccessor("aria-relevant");
+    pub const ariaRequired = ariaAccessor("aria-required");
+    pub const ariaRoleDescription = ariaAccessor("aria-roledescription");
+    pub const ariaRowCount = ariaAccessor("aria-rowcount");
+    pub const ariaRowIndex = ariaAccessor("aria-rowindex");
+    pub const ariaRowIndexText = ariaAccessor("aria-rowindextext");
+    pub const ariaRowSpan = ariaAccessor("aria-rowspan");
+    pub const ariaSelected = ariaAccessor("aria-selected");
+    pub const ariaSetSize = ariaAccessor("aria-setsize");
+    pub const ariaSort = ariaAccessor("aria-sort");
+    pub const ariaValueMax = ariaAccessor("aria-valuemax");
+    pub const ariaValueMin = ariaAccessor("aria-valuemin");
+    pub const ariaValueNow = ariaAccessor("aria-valuenow");
+    pub const ariaValueText = ariaAccessor("aria-valuetext");
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
@@ -2463,6 +2518,23 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Element.scrollTo, .{});
     pub const scrollTo = bridge.function(Element.scrollTo, .{});
     pub const scrollBy = bridge.function(Element.scrollBy, .{});
+
+    fn ariaAccessor(comptime attr: []const u8) js.bridge.Accessor {
+        const R = struct {
+            pub fn get(self: *const Element) ?[]const u8 {
+                return self.getAttributeSafe(.wrap(attr));
+            }
+
+            pub fn set(self: *Element, value: ?[]const u8, frame: *Frame) !void {
+                if (value) |v| {
+                    try self.setAttributeSafe(.wrap(attr), .wrap(v), frame);
+                } else {
+                    try self.removeAttribute(.wrap(attr), frame);
+                }
+            }
+        };
+        return bridge.accessor(R.get, R.set, .{ .ce_reactions = true });
+    }
 };
 
 pub const Build = struct {
@@ -2501,4 +2573,12 @@ pub const Build = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
+}
+
+test "Element: div chain slot size" {
+    // Guard against accidental growth: new Element fields (e.g. _flags) must
+    // fit in existing padding. Debug is larger from the _proto_canary fields.
+    const Div = @import("element/html/Div.zig");
+    const slot = comptime Factory.chainOffsetOf(Div, Div) + @sizeOf(Div);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 120 else 74, slot);
 }

@@ -281,3 +281,30 @@
     testing.expectEqual(false, r3.checked);
   }
 </script>
+
+<script id="nested_click_is_noop">
+  {
+    // click() while a click() on the same element is in progress is a no-op
+    // (the "click in progress" flag); a re-entrant handler must not recurse.
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+
+    let clicks = 0;
+    cb.addEventListener('click', () => {
+      clicks++;
+      cb.click();
+    });
+
+    cb.click();
+    testing.expectEqual(1, clicks, 'nested click() should not dispatch');
+    testing.expectEqual(true, cb.checked);
+
+    // The flag is cleared afterwards, so a fresh click() works again.
+    cb.click();
+    testing.expectEqual(2, clicks);
+    testing.expectEqual(false, cb.checked);
+
+    document.body.removeChild(cb);
+  }
+</script>

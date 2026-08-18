@@ -623,7 +623,7 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
     const arena = transfer.arena.allocator();
     if (try referrer.compute(arena, self.referrer_policy, self.referrerSource(), transfer.req.url)) |ref| {
-        try transfer.addHeader("Referer", ref, .{});
+        try transfer.setHeader("Referer", ref, .{});
         transfer.req.referrer_policy = self.referrer_policy;
     }
 }
@@ -638,15 +638,7 @@ pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) 
 
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
-
-    // fastpath
-    if (!std.mem.startsWith(u8, url, current_origin)) {
-        return false;
-    }
-
-    // Starting here, at least protocols are equals.
-    // Compare hosts (domain:port) strictly
-    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
+    return URL.isSameOrigin(url, current_origin);
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -851,15 +843,15 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
         if (opts.header) |hdr| {
             // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
             if (HttpClient.Header.parse(hdr)) |parsed| {
-                try transfer.addHeader(parsed.name, parsed.value, .{});
+                try transfer.setHeader(parsed.name, parsed.value, .{});
             }
         }
         if (opts.referer) |ref| {
-            try transfer.addHeader("Referer", ref, .{});
+            try transfer.setHeader("Referer", ref, .{});
             self._referrer = try self.arena.dupe(u8, ref);
             transfer.req.referrer_policy = opts.referrer_policy;
         }
@@ -2315,7 +2307,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
     {
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", "text/css,*/*;q=0.1", .{});
+        try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
         try self.headersForRequest(transfer);
     }
 
@@ -2505,6 +2497,12 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
+
+        // The shadow tree follows its host across documents: re-own it and
+        // run its adopted reactions too (spec: shadow-including descendants).
+        if (el.hostedShadowRoot(self)) |shadow_root| {
+            try self.adoptNodeTree(shadow_root.asNode(), old_owner, new_owner);
+        }
     }
 
     var it = node.childrenIterator();
@@ -2640,6 +2638,9 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
+        Element.Html.Custom.enqueueShadowTreeCallbacks(el, .disconnected, self) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
 
         popover.removeFromOpen(el, self);
 
@@ -2712,19 +2713,31 @@ pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*N
     // Every child shares source's root, and source itself doesn't move.
     const previous_root = source.getRootNode(.{});
 
+    // Fragment insertion adopts like single-node insertion does. Every child
+    // shares source's owner document, so one comparison covers them all.
+    const source_owner = source.ownerDocument(self);
+    const parent_owner = parent.ownerDocument(self) orelse parent.as(Document);
+    const adopting = source_owner != null and source_owner.? != parent_owner;
+
     var it = source.childrenIterator();
     while (it.next()) |child| {
         try moved.append(self.call_arena, child);
-        self.removeNode(source, child, .{ .reconnect_to = parent, .notify_observers = false });
+        self.removeNode(source, child, .{
+            .reconnect_to = if (adopting) null else parent,
+            .notify_observers = false,
+        });
+        if (adopting) {
+            try self.adoptNodeTree(child, source_owner.?, parent_owner);
+        }
         if (ref_node) |ref| {
             try self.insertNodeRelative(
                 parent,
                 child,
                 .{ .before = ref },
-                .{ .previous_root = previous_root, .notify_observers = false, .run_ready = false },
+                .{ .previous_root = previous_root, .adopting_to_new_document = adopting, .notify_observers = false, .run_ready = false },
             );
         } else {
-            try self.appendNode(parent, child, .{ .previous_root = previous_root, .notify_observers = false, .run_ready = false });
+            try self.appendNode(parent, child, .{ .previous_root = previous_root, .adopting_to_new_document = adopting, .notify_observers = false, .run_ready = false });
         }
     }
 
@@ -2914,6 +2927,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
         if (should_invoke_connected) {
             try Element.Html.Custom.enqueueConnectedCallbackOnElement(false, el, self);
+            try Element.Html.Custom.enqueueShadowTreeCallbacks(el, .connected, self);
         }
     }
 }
@@ -2985,11 +2999,15 @@ pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
 }
 
 pub fn getCustomizedBuiltInDefinition(self: *Frame, element: *Element) ?*CustomElementDefinition {
+    if (!element._flags.customized_builtin) {
+        return null;
+    }
     return self._customized_builtin_definitions.get(element);
 }
 
 pub fn setCustomizedBuiltInDefinition(self: *Frame, element: *Element, definition: *CustomElementDefinition) !void {
     try self._customized_builtin_definitions.put(self.arena, element, definition);
+    element._flags.customized_builtin = true;
 }
 
 // --- Live range update methods (DOM spec §4.2.3, §4.2.4, §4.7, §4.8) ---
@@ -3666,8 +3684,8 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo#hash"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1#hash"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
 
     try testing.expectEqual(false, frame.isSameOrigin("http://origin.com/")); // another proto
     try testing.expectEqual(false, frame.isSameOrigin("https://origin.com:123/")); // another port
