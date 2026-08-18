@@ -104,6 +104,11 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .body = request._body,
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
+        .credentials_mode = switch (request._credentials) {
+            .omit => .omit,
+            .@"same-origin" => .same_origin,
+            .include => .include,
+        },
         .cookie_origin = exec.url.*,
         .origin = exec.origin(),
         .redirect = switch (request._redirect) {
