@@ -199,6 +199,7 @@ const CommonOptions = .{
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8 },
     .{ .name = "block_urls", .type = ?[]const u8 },
+    .{ .name = "adblock_lists", .type = ?[]const u8 },
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "disable_subframes", .type = bool },
@@ -731,6 +732,14 @@ pub fn blockedUrlPatterns(self: *const Config) ?std.mem.SplitIterator(u8, .scala
     return std.mem.splitScalar(u8, patterns, ',');
 }
 
+pub fn adblockLists(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
+    const paths = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.adblock_lists,
+        else => unreachable,
+    } orelse return null;
+    return std.mem.splitScalar(u8, paths, ',');
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
@@ -995,6 +1004,18 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     var config = try Config.init(allocator, exec_name, command);
     config.command = invoked;
     return config;
+}
+
+test "Config: adblockLists splits comma-separated paths" {
+    var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .adblock_lists = "easylist.txt,easyprivacy.txt",
+    } });
+    defer config.deinit(std.testing.allocator);
+
+    var paths = config.adblockLists().?;
+    try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
+    try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
+    try std.testing.expectEqual(null, paths.next());
 }
 
 test "Config: blockedUrlPatterns splits comma-separated patterns" {
