@@ -678,6 +678,27 @@ test "browser.screenshot: fixed height, clip and scale" {
     try testing.expectEqual(40, std.mem.readInt(u32, aw.written()[20..24], .big));
 }
 
+test "browser.screenshot: raster is bounded" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    _ = try png(div.asNode(), .{ .width = 300000, .height = 8 }, &aw.writer, frame);
+    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[20..24], .big));
+
+    aw.clearRetainingCapacity();
+    _ = try png(div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
+    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
 test "browser.screenshot: json streams base64" {
     defer testing.test_session.closeAllPages();
     const frame = try testing.createFrame();

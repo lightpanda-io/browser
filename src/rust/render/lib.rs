@@ -218,8 +218,11 @@ const PRE_PAD: f32 = 8.0;
 const TEXT_COLOR: Rgb = Rgb(0x1f, 0x1f, 0x1f);
 const RULE_COLOR: Rgb = Rgb(0xcc, 0xcc, 0xcc);
 const PRE_BG: Rgb = Rgb(0xf4, 0xf4, 0xf4);
-/// Device pixels. Chrome's own full-page captures top out around here.
-const MAX_RASTER_HEIGHT: u32 = 16384;
+/// Device pixels per side. Chrome's own full-page captures top out around here.
+const MAX_RASTER_DIM: u64 = 16384;
+/// Device pixels in total, 4 bytes each: a 256MB ceiling on the pixmap. A 4K
+/// viewport captured full-page at 2x still fits.
+const MAX_RASTER_PIXELS: u64 = 64 << 20;
 
 type GlyphKey = (usize, u32, u32);
 
@@ -421,9 +424,14 @@ impl Renderer {
         // A clip never extends the strip: Chrome intersects it with the page
         // too, and callers probe with absurd heights (Playwright's fullPage
         // clip is 1e8 tall).
+        // Width and height are both client-controlled (viewport, clip scale),
+        // so bound the buffer.
         let out_h = if opts.height == 0 { content_h } else { opts.height };
-        let pw = ((opts.width as f32 * scale).ceil() as u32).max(1);
-        let ph = ((out_h as f32 * scale).ceil() as u32).clamp(1, MAX_RASTER_HEIGHT);
+        let pw = ((opts.width as f64 * scale as f64).ceil() as u64).clamp(1, MAX_RASTER_DIM);
+        let ph = ((out_h as f64 * scale as f64).ceil() as u64)
+            .clamp(1, MAX_RASTER_DIM)
+            .min((MAX_RASTER_PIXELS / pw).max(1));
+        let (pw, ph) = (pw as u32, ph as u32);
         let Some(mut pixmap) = Pixmap::new(pw, ph) else {
             return content_h;
         };
