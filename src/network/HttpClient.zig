@@ -837,7 +837,7 @@ fn isGated(self: *const Client, transfer: *const Transfer) bool {
 // ahead of the script that's blocking the parser.
 fn isLowPriority(resource_type: Request.ResourceType) bool {
     return switch (resource_type) {
-        .image => false, // EXPERIMENT
+        .image => true,
         .document, .xhr, .script, .fetch, .stylesheet, .eventsource => false,
     };
 }
