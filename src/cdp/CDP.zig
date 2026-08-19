@@ -578,6 +578,11 @@ pub const BrowserContext = struct {
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
 
+    // True when Runtime.evaluate has been run in the main world. Optimization
+    // so that, if it has _not_ and the page is on its initial about:blank, we
+    // can use the existing Frame/js.Context as-is.
+    main_world_touched: bool = false,
+
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
     scripts_on_new_document: std.ArrayList(ScriptOnNewDocument) = .empty,
