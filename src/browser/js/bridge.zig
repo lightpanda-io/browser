@@ -1200,6 +1200,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/PluginArray.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
+    @import("../webapi/Geolocation.zig"),
     @import("../webapi/CustomElementRegistry.zig"),
     @import("../webapi/ResizeObserver.zig"),
     @import("../webapi/IdleDeadline.zig"),

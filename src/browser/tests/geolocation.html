@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="./testing.js"></script>
+
+<script id=geo_shape>
+  testing.expectTrue('geolocation' in navigator);
+  testing.expectEqual('function', typeof navigator.geolocation.getCurrentPosition);
+  testing.expectEqual(2, GeolocationPositionError.POSITION_UNAVAILABLE);
+</script>
+
+<script id=geo_no_override type=module>
+  {
+    const state = await testing.async();
+    navigator.geolocation.getCurrentPosition(
+      () => { testing.fail('should not succeed without an override'); state.resolve(); },
+      (err) => { state.resolve(); state.done(() => { testing.expectEqual(2, err.code); }); }
+    );
+  }
+</script>

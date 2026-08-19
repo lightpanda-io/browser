@@ -28,11 +28,13 @@ const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const ModelContext = @import("ModelContext.zig");
+const Geolocation = @import("Geolocation.zig");
 
 const Navigator = @This();
 _pad: bool = false,
 _plugins: PluginArray = .{},
 _permissions: Permissions = .{},
+_geolocation: Geolocation = .{},
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 
@@ -135,6 +137,10 @@ pub fn getPlugins(self: *Navigator) *PluginArray {
 
 pub fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
+}
+
+pub fn getGeolocation(self: *Navigator) *Geolocation {
+    return &self._geolocation;
 }
 
 pub fn getStorage(self: *Navigator) *StorageManager {
@@ -254,6 +260,10 @@ pub const JsApi = struct {
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
+    // Geolocation.zig/GeolocationPositionError.zig are only registered in
+    // PageJsApis (not WorkerJsApis), so this accessor must stay window-only
+    // too, matching plugins/modelContext above.
+    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });
 };
