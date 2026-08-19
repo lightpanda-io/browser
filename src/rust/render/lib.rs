@@ -432,12 +432,14 @@ impl Renderer {
         }
 
         // Rasterize the requested strip (viewport or full page), then crop.
-        // A clip never extends the strip: Chrome intersects it with the page
-        // too, and callers probe with absurd heights (Playwright's fullPage
-        // clip is 1e8 tall).
-        // Width and height are both client-controlled (viewport, clip scale),
-        // so bound the buffer.
-        let out_h = if opts.height == 0 { content_h } else { opts.height };
+        // A clip reaching past the strip extends it, but never past the
+        // content.
+        let mut out_h = if opts.height == 0 { content_h } else { opts.height };
+        if opts.clip_w > 0.0 {
+            let reach = (opts.clip_y as f64 + opts.clip_h as f64).ceil();
+            // A NaN reach clamps to NaN and casts to 0, leaving out_h alone.
+            out_h = out_h.max(reach.clamp(0.0, content_h as f64) as u32);
+        }
         let pw = ((opts.width as f64 * scale as f64).ceil() as u64).clamp(1, MAX_RASTER_DIM);
         let ph = ((out_h as f64 * scale as f64).ceil() as u64)
             .clamp(1, MAX_RASTER_DIM)

@@ -693,6 +693,38 @@ test "browser.screenshot: fixed height, clip and scale" {
     try testing.expectEqual(40, std.mem.readInt(u32, aw.written()[20..24], .big));
 }
 
+test "browser.screenshot: a clip past the viewport extends the strip" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
+
+    const full = try contentHeight(div.asNode(), 300, frame);
+    try testing.expectEqual(true, full > 100);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    _ = try png(div.asNode(), .{
+        .width = 300,
+        .height = 100,
+        .clip = .{ .x = 0, .y = 0, .width = 300, .height = @floatFromInt(full) },
+    }, &aw.writer, frame);
+    try testing.expectEqual(300, std.mem.readInt(u32, aw.written()[16..20], .big));
+    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+
+    // Never past the content, so an absurd probe resolves to the full page
+    // instead of a 1e8-tall raster.
+    aw.clearRetainingCapacity();
+    _ = try png(div.asNode(), .{
+        .width = 300,
+        .height = 100,
+        .clip = .{ .x = 0, .y = 0, .width = 300, .height = 1e8 },
+    }, &aw.writer, frame);
+    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
 test "browser.screenshot: raster is bounded" {
     defer testing.test_session.closeAllPages();
     const frame = try testing.createFrame();
