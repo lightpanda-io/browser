@@ -39,8 +39,8 @@ pub const PositionOptions = struct {
 // existing js.Scheduler (frame.js.scheduler) — a simpler, already-proven
 // async primitive (see FileReader.ReadTask) that gives us "run later,
 // off this call stack" for free, including cleanup on frame teardown via
-// the finalizer. watchPosition (Task 4) can layer repeat-in-ms scheduling
-// on top of the same Task if it lands here.
+// the finalizer. watchPosition (a follow-up PR) can layer repeat-in-ms
+// scheduling on top of the same Task if it lands here.
 const Task = struct {
     success: js.Function.Global,
     error_cb: ?js.Function.Global,
@@ -138,7 +138,7 @@ pub fn getCurrentPosition(
     options: ?PositionOptions,
     frame: *Frame,
 ) !void {
-    _ = options; // unused until Task 3 (maximumAge/timeout) and watchPosition (Task 4)
+    _ = options; // unused until later work (maximumAge/timeout) and watchPosition (a follow-up PR)
 
     errdefer success.release();
     errdefer if (error_cb) |cb| cb.release();
@@ -165,7 +165,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
     pub const getCurrentPosition = bridge.function(Geolocation.getCurrentPosition, .{});
-    // watchPosition / clearWatch come in Task 4
+    // watchPosition / clearWatch come in a follow-up
 };
 
 pub const GeolocationCoordinates = struct {

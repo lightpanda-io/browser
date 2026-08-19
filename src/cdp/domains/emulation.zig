@@ -434,3 +434,58 @@ test "cdp.Emulation: navigator.geolocation reads the override" {
     const v = try ls.local.exec("window.__geo_ok", null);
     try testing.expect(v.isTrue());
 }
+
+test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permission is denied" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO3", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    // Denied is authoritative over the override: even though an override is
+    // set, the denied permission must still win and produce PERMISSION_DENIED.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        // Registers the callback synchronously; getCurrentPosition schedules
+        // delivery on frame.js.scheduler and returns before it runs.
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.exec(
+            \\ window.__geo_code = 0;
+            \\ navigator.geolocation.getCurrentPosition(p => {
+            \\   p;
+            \\ }, error => {
+            \\   window.__geo_code = error.code;
+            \\ });
+        , null);
+    }
+
+    // Drive the session loop so the scheduled Task fires: Runner._tick runs
+    // browser.runMacrotasks() (which drains frame.js.scheduler) on every tick
+    // for a loaded page, same primitive Runner.waitForSelector/waitForScript
+    // use to pump pending scheduler work under a CDP-loaded page.
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const v = try ls.local.exec("window.__geo_code === 1", null);
+    try testing.expect(v.isTrue());
+}
