@@ -46,14 +46,14 @@ pub const Opts = struct {
     };
 };
 
-pub fn png(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
-    const prepared = try prepare(node, opts, frame);
+pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
+    const prepared = try prepare(arena, node, opts, frame);
     return prepared.write(writer);
 }
 
 // get the height of the PNG if we were to render it.
-pub fn contentHeight(node: *Node, width: u32, frame: *Frame) !u32 {
-    const prepared = try prepare(node, .{ .width = width }, frame);
+pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
+    const prepared = try prepare(arena, node, .{ .width = width }, frame);
     var discard: std.Io.Writer.Discarding = .init(&.{});
     return prepared.render(&discard.writer, RENDER_MEASURE_ONLY);
 }
@@ -61,13 +61,13 @@ pub fn contentHeight(node: *Node, width: u32, frame: *Frame) !u32 {
 // The DOM walk, done up front so it can fail (allocation) before any output
 // starts. Rasterizing is then a pure write: `Prepared` can be embedded in a
 // std.json value and streams itself as a base64 string.
-pub fn prepare(node: *Node, opts: Opts, frame: *Frame) !Prepared {
+pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepared {
     if (opts.width == 0 or !(opts.scale > 0 and opts.scale <= 8)) {
         return error.InvalidScreenshotOptions;
     }
     var builder: Builder = .{
         .frame = frame,
-        .arena = frame.local_arena,
+        .arena = arena,
     };
     try builder.render(node);
     try builder.closeBlock();
@@ -639,24 +639,9 @@ const Builder = struct {
 };
 
 const testing = @import("../testing.zig");
-fn testPng(html: []const u8, width: u32) ![]const u8 {
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    errdefer aw.deinit();
-    _ = try png(div.asNode(), .{ .width = width }, &aw.writer, frame);
-    return aw.toOwnedSlice();
-}
-
 test "browser.screenshot: png signature and dimensions" {
     defer testing.test_session.closeAllPages();
     const out = try testPng("<h1>Title</h1><p>Hello <b>world</b> <a href='/x'>link</a></p>", 640);
-    defer testing.allocator.free(out);
 
     try testing.expectEqual(true, out.len > 100);
     try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
@@ -675,17 +660,16 @@ test "browser.screenshot: fixed height, clip and scale" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p>");
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    const content_height = try png(div.asNode(), .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const content_height = try png(testing.arena_allocator, div.asNode(), .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
     try testing.expectEqual(true, content_height > 50);
     try testing.expectEqual(600, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[20..24], .big));
 
-    try testing.expectEqual(content_height, try contentHeight(div.asNode(), 300, frame));
+    try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, frame));
 
     aw.clearRetainingCapacity();
-    _ = try png(div.asNode(), .{
+    _ = try png(frame.call_arena, div.asNode(), .{
         .width = 300,
         .clip = .{ .x = 10, .y = 10, .width = 100, .height = 40 },
     }, &aw.writer, frame);
@@ -701,12 +685,11 @@ test "browser.screenshot: a clip past the viewport extends the strip" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
 
-    const full = try contentHeight(div.asNode(), 300, frame);
+    const full = try contentHeight(testing.arena_allocator, div.asNode(), 300, frame);
     try testing.expectEqual(true, full > 100);
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    _ = try png(div.asNode(), .{
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    _ = try png(frame.call_arena, div.asNode(), .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = @floatFromInt(full) },
@@ -717,7 +700,7 @@ test "browser.screenshot: a clip past the viewport extends the strip" {
     // Never past the content, so an absurd probe resolves to the full page
     // instead of a 1e8-tall raster.
     aw.clearRetainingCapacity();
-    _ = try png(div.asNode(), .{
+    _ = try png(testing.arena_allocator, div.asNode(), .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = 1e8 },
@@ -733,15 +716,14 @@ test "browser.screenshot: raster is bounded" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
 
-    _ = try png(div.asNode(), .{ .width = 300000, .height = 8 }, &aw.writer, frame);
+    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 300000, .height = 8 }, &aw.writer, frame);
     try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[20..24], .big));
 
     aw.clearRetainingCapacity();
-    _ = try png(div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
+    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
     try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
 }
@@ -759,7 +741,7 @@ test "browser.screenshot: a refused write fails the capture" {
     // has to surface as an error and not as a truncated image.
     var buf: [64]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    try testing.expectError(error.WriteFailed, png(div.asNode(), .{ .width = 300 }, &w, frame));
+    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, div.asNode(), .{ .width = 300 }, &w, frame));
 }
 
 test "browser.screenshot: json streams base64" {
@@ -770,7 +752,7 @@ test "browser.screenshot: json streams base64" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
 
-    const prepared = try prepare(div.asNode(), .{ .width = 200 }, frame);
+    const prepared = try prepare(testing.arena_allocator, div.asNode(), .{ .width = 200 }, frame);
 
     var raw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer raw.deinit();
@@ -808,7 +790,7 @@ test "browser.screenshot: block extraction" {
         \\<div>   </div>
     );
 
-    var builder: Builder = .{ .arena = frame.call_arena, .frame = frame };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
     try builder.render(div.asNode());
     try builder.closeBlock();
 
@@ -822,7 +804,7 @@ test "browser.screenshot: block extraction" {
             return out.items;
         }
     };
-    const arena = frame.call_arena;
+    const arena = testing.arena_allocator;
 
     try testing.expectEqual(.heading, blocks[0].kind);
     try testing.expectEqual(2, blocks[0].level);
@@ -878,13 +860,13 @@ test "browser.screenshot: adjacent anchors" {
         \\<p><a href="/a">Log In</a><a href="/b">Sign Up</a><b>!</b> see <a href="/c">this</a>.</p>
     );
 
-    var builder: Builder = .{ .arena = frame.call_arena, .frame = frame };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
     try testing.expectEqual(1, blocks.len);
     var out: std.ArrayList(u8) = .empty;
-    for (blocks[0].spans[0..blocks[0].spans_len]) |sp| try out.appendSlice(frame.call_arena, sp.text[0..sp.len]);
+    for (blocks[0].spans[0..blocks[0].spans_len]) |sp| try out.appendSlice(testing.arena_allocator, sp.text[0..sp.len]);
     try testing.expectString("Log In Sign Up! see this.", out.items);
 }
 
@@ -900,7 +882,7 @@ test "browser.screenshot: standalone anchors get their own block" {
         \\<p>inline <a href="/x">link</a> here</p>
     );
 
-    var builder: Builder = .{ .arena = frame.call_arena, .frame = frame };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
@@ -926,11 +908,24 @@ test "browser.screenshot: shadow dom and slots" {
         \\<x-host><template shadowrootmode="open"><p>shadow <slot></slot></p></template>light</x-host>
     , frame);
 
-    var builder: Builder = .{ .arena = frame.call_arena, .frame = frame };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
     try testing.expectEqual(1, blocks.len);
     try testing.expectEqual(1, blocks[0].spans_len);
     try testing.expectEqual("shadow light", blocks[0].spans[0].text[0..blocks[0].spans[0].len]);
+}
+
+fn testPng(html: []const u8, width: u32) ![]const u8 {
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = width }, &aw.writer, frame);
+    return aw.written();
 }

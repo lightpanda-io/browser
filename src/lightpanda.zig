@@ -344,8 +344,10 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
 
             const frame = page.frame();
             if (opts.dump_mode == .png and frame != null) {
-                // Binary payload: streams itself into the envelope as base64.
-                const shot = try screenshot.prepare(frame.?.window._document.asNode(), .{
+                const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
+                defer arena.release();
+
+                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
                     .width = frame.?._page.getViewport().width,
                 }, frame.?);
                 try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
@@ -382,9 +384,13 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     switch (mode) {
         .html => try dump.root(frame.window._document, dump_opts, writer, frame),
         .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
-        .png => _ = try screenshot.png(frame.window._document.asNode(), .{
-            .width = frame._page.getViewport().width,
-        }, writer, frame),
+        .png => {
+            var arena: std.heap.ArenaAllocator = .init(app.allocator);
+            defer arena.deinit();
+            _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
+                .width = frame._page.getViewport().width,
+            }, writer, frame);
+        },
         .semantic_tree, .semantic_tree_text => {
             var registry = CDPNode.Registry.init(app.allocator);
             defer registry.deinit();

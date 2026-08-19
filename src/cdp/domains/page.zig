@@ -1008,7 +1008,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     }
 
     // Prepared streams itself as base64 straight into the outgoing message.
-    const shot = try lp.screenshot.prepare(frame.window._document.asNode(), opts, frame);
+    const shot = try lp.screenshot.prepare(cmd.arena, frame.window._document.asNode(), opts, frame);
     return cmd.sendResult(.{ .data = shot }, .{});
 }
 
@@ -1032,7 +1032,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
     const content_height: u32 = blk: {
         const bc = cmd.browser_context orelse break :blk height;
         const frame = bc.mainFrame() orelse break :blk height;
-        const h = lp.screenshot.contentHeight(frame.window._document.asNode(), width, frame) catch break :blk height;
+        const h = lp.screenshot.contentHeight(cmd.arena, frame.window._document.asNode(), width, frame) catch break :blk height;
         break :blk @max(height, h);
     };
 
