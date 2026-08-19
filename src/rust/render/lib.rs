@@ -30,9 +30,9 @@ use std::sync::{Mutex, OnceLock};
 
 use fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GlyphRun,
-    Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty,
-    TextStyle, WhiteSpaceCollapse,
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GlyphRun, Layout,
+    LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty, TextStyle,
+    WhiteSpaceCollapse,
 };
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
@@ -161,10 +161,14 @@ unsafe fn render_png(
             let Ok(text) = std::str::from_utf8(bytes) else {
                 return RC_INVALID;
             };
-            out_spans.push(Span { text, flags: s.flags, color: s.color });
+            out_spans.push(Span {
+                text,
+                flags: s.flags,
+                color: s.color,
+            });
         }
-        let marker = std::str::from_utf8(std::slice::from_raw_parts(b.marker, b.marker_len))
-            .unwrap_or("");
+        let marker =
+            std::str::from_utf8(std::slice::from_raw_parts(b.marker, b.marker_len)).unwrap_or("");
         doc.push(Block {
             kind: b.kind,
             level: b.level,
@@ -182,7 +186,11 @@ unsafe fn render_png(
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    let mut sink = Sink { ctx, write, failed: false };
+    let mut sink = Sink {
+        ctx,
+        write,
+        failed: false,
+    };
     let (h, rc) = r.render(&doc, opts, &mut sink);
     if !content_height.is_null() {
         *content_height = h;
@@ -342,7 +350,8 @@ impl Renderer {
             };
             prev_after = Some(after);
 
-            let indent = block.list_depth as f32 * LIST_INDENT + block.quote_depth as f32 * QUOTE_INDENT;
+            let indent =
+                block.list_depth as f32 * LIST_INDENT + block.quote_depth as f32 * QUOTE_INDENT;
             let quote_x = PAGE_MARGIN + block.list_depth as f32 * LIST_INDENT;
 
             if block.kind == BLOCK_RULE {
@@ -393,9 +402,9 @@ impl Renderer {
                     props.push(StyleProperty::Strikethrough(true));
                 }
                 if span.flags & SPAN_MONO != 0 && !is_pre {
-                    props.push(StyleProperty::FontFamily(FontFamily::Source(Cow::Borrowed(
-                        "monospace",
-                    ))));
+                    props.push(StyleProperty::FontFamily(FontFamily::Source(
+                        Cow::Borrowed("monospace"),
+                    )));
                     props.push(StyleProperty::FontSize(size * 0.9));
                 }
                 if span.flags & SPAN_HAS_COLOR != 0 {
@@ -420,7 +429,9 @@ impl Renderer {
             let marker = if block.marker.is_empty() {
                 None
             } else {
-                let mut b = self.lcx.ranged_builder(&mut self.fcx, block.marker, scale, true);
+                let mut b = self
+                    .lcx
+                    .ranged_builder(&mut self.fcx, block.marker, scale, true);
                 b.push_default(StyleProperty::FontSize(BASE_SIZE));
                 b.push_default(StyleProperty::Brush(TEXT_COLOR));
                 let mut ml = b.build(block.marker);
@@ -450,7 +461,11 @@ impl Renderer {
         // Rasterize the requested strip (viewport or full page), then crop.
         // A clip reaching past the strip extends it, but never past the
         // content.
-        let mut out_h = if opts.height == 0 { content_h } else { opts.height };
+        let mut out_h = if opts.height == 0 {
+            content_h
+        } else {
+            opts.height
+        };
         if opts.clip_w > 0.0 {
             let reach = (opts.clip_y as f64 + opts.clip_h as f64).ceil();
             // A NaN reach clamps to NaN and casts to 0, leaving out_h alone.
@@ -542,7 +557,14 @@ impl Renderer {
             w.write_image_data(view.data())?;
             w.finish()
         })();
-        (content_h, if encoded.is_ok() { RC_OK } else { RC_ENCODE_FAILED })
+        (
+            content_h,
+            if encoded.is_ok() {
+                RC_OK
+            } else {
+                RC_ENCODE_FAILED
+            },
+        )
     }
 
     fn draw_layout(&mut self, pixmap: &mut Pixmap, layout: &Layout<Rgb>, ox: f32, oy: f32) {
@@ -628,14 +650,19 @@ impl Renderer {
         let x0 = ox + gr.offset();
         for (deco, default_off, default_size) in [
             (&style.underline, m.underline_offset, m.underline_size),
-            (&style.strikethrough, m.strikethrough_offset, m.strikethrough_size),
+            (
+                &style.strikethrough,
+                m.strikethrough_offset,
+                m.strikethrough_size,
+            ),
         ] {
             let Some(d) = deco else { continue };
             let off = d.offset.unwrap_or(default_off);
             let sz = d.size.unwrap_or(default_size).max(1.0);
             let mut p2 = Paint::default();
             p2.set_color_rgba8(d.brush.0, d.brush.1, d.brush.2, 255);
-            if let Some(r) = Rect::from_xywh(x0, (baseline - off).round(), gr.advance(), sz.round()) {
+            if let Some(r) = Rect::from_xywh(x0, (baseline - off).round(), gr.advance(), sz.round())
+            {
                 pixmap.fill_rect(r, &p2, Transform::identity(), None);
             }
         }

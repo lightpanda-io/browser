@@ -541,7 +541,10 @@ pub extern "C" fn html5ever_parse_fragment(
         qname: context_qname.clone(),
         mathml_annotation_xml_integration_point: false,
     });
-    let mut context_attrs = CAttributeIterator { vec: vec![], pos: 0 };
+    let mut context_attrs = CAttributeIterator {
+        vec: vec![],
+        pos: 0,
+    };
     let context_elem = unsafe {
         (create_context_element_callback)(
             ctx,

@@ -20,8 +20,8 @@
 //! entry points; re-exporting them here keeps their symbols in the archive.
 //! Process-wide concerns (the allocator) live here, not in a domain crate.
 
-pub use lightpanda_render::*;
 pub use lightpanda_html5ever::*;
+pub use lightpanda_render::*;
 
 #[cfg(feature = "memstats")]
 #[global_allocator]
