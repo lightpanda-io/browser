@@ -1007,8 +1007,9 @@ const api_engines = .{
         .tag = SearchEngine.exa,
         .env_var = "EXA_API_KEY",
         .Client = exa.Client,
-        // highlights: Exa returns no snippet text unless contents is requested.
-        .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = true } },
+        // highlights: Exa returns no snippet text unless contents is requested;
+        // capped at 3 sentences since the default excerpts run long.
+        .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = .{ .numSentences = 3 } } },
         .format = formatExaMarkdown,
     },
 };
