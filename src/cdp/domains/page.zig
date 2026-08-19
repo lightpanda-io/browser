@@ -300,13 +300,8 @@ fn navigate(cmd: *CDP.Command) !void {
 
     const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
-    // A cross-document navigation replaces the JS global object. Even a
-    // freshly-created about:blank target must not reuse its bootstrap
-    // context in place: a client can run JS on the blank page (Runtime.evaluate)
-    // before the first Page.navigate, and those globals would leak into the
-    // navigated document (issue #3215). Route every root navigation through
-    // initiateRootNavigation so a fresh page/window/global is committed and
-    // the blank one is discarded.
+    // Always do a full navigate to clear any state (e.g. vs Runtime.evaluate)
+    // that might have been built-up in a dummy about:blank page
     try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
@@ -1631,12 +1626,8 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     try testing.expect(v.toBool());
 }
 
-test "cdp.frame: first navigation replaces the bootstrap about:blank global (#3215)" {
-    // Regression test for #3215. A JS global set on a freshly-created target's
-    // initial about:blank page must not survive the first Page.navigate: a
-    // cross-document navigation replaces the JS global object. The second
-    // navigation already reset globals correctly; the leak was scoped to the
-    // bootstrap about:blank context being reused as the first navigated page.
+// https://github.com/lightpanda-io/browser/issues/3215
+test "cdp.frame: first navigation replaces the bootstrap about:blank global" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
