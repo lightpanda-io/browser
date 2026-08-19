@@ -41,7 +41,11 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
         .enable => return enable(cmd),
         .disable => return disable(cmd),
-        else => return sendInspector(cmd, action),
+        else => {
+            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+            bc.main_world_touched = true;
+            return sendInspector(cmd, action);
+        },
     }
 }
 
