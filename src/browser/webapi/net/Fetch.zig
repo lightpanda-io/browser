@@ -43,6 +43,7 @@ _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
 _manual_redirect: bool,
+_no_cors: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -81,6 +82,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._owns_response = true,
         ._signal = request._signal,
         ._manual_redirect = request._redirect == .manual,
+        ._no_cors = request._mode == .@"no-cors",
     };
 
     const session = exec.session;
@@ -108,6 +110,12 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             .omit => .omit,
             .@"same-origin" => .same_origin,
             .include => .include,
+        },
+        .request_mode = switch (request._mode) {
+            .cors => .cors,
+            .@"no-cors" => .no_cors,
+            .@"same-origin" => .same_origin,
+            .navigate => .navigate,
         },
         .cookie_origin = exec.url.*,
         .origin = exec.origin(),
@@ -176,6 +184,17 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     res._url = try arena.dupeZ(u8, transfer.req.url);
     res._is_redirected = transfer.redirectCount().? > 0;
 
+    // no-cors mode: regardless of what the server returned, JS only ever sees
+    // an opaque response — status 0, no headers, no body, url "".
+    if (self._no_cors) {
+        res._status = 0;
+        res._status_text = "";
+        res._url = "";
+        res._type = .@"opaque";
+        res._is_redirected = false;
+        return .proceed;
+    }
+
     // redirect: "manual" surfaces the unfollowed 3xx as an opaque-redirect
     // filtered response: status 0, no headers, no body.
     if (self._manual_redirect and HttpClient.isRedirectStatus(res._status)) {
@@ -222,6 +241,10 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
         if (signal._aborted) {
             return error.Abort;
         }
+    }
+
+    if (self._no_cors) {
+        return;
     }
 
     try self._buf.appendSlice(self._response._arena.allocator(), data);
