@@ -2384,6 +2384,155 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     try self.fireElementEvent(element, comptime .wrap("load"));
 }
 
+// Asynchronous, unlike `loadExternalStylesheet`: nothing in the document
+// depends on the result, so there's no reason to block the parser on it.
+// The request does take a `_pending_loads` slot, so the window load event
+// waits for it the way the HTML spec says it should.
+pub fn loadImage(self: *Frame, image: *Element.Html.Image, src: []const u8) !void {
+    const session = self._session;
+    // Fragment-parsed images (innerHTML, DOMParser, ...) may never be
+    // attached, and may belong to another Document. Same call as
+    // `loadExternalStylesheet` makes. They still get the synthetic load the
+    // no-fetch path would have given them, so the two modes agree.
+    if (self._parse_mode == .fragment) {
+        return self.queueLoad(Factory.protoOf(image));
+    }
+
+    const arena = try session.getArena(.small, "Frame.loadImage");
+    defer arena.release();
+
+    const resolved = URL.resolve(arena.allocator(), self.base(), src, .{ .encoding = self.charset }) catch |err| {
+        // An unresolvable src is a load failure the same way a 404 is, and
+        // unlike a real fetch we can settle it without a request. No pending
+        // load was taken out yet, so queue rather than decrementing.
+        log.info(.http, "image resolve", .{ .err = err, .src = src });
+        image._complete = true;
+        return self.queueElementEvent(Factory.protoOf(image), .@"error");
+    };
+
+    // an in-flight image is a fixed-size record we can hand back the moment it
+    // settles, and a page can create a lot of them.
+    const load = try self._factory.create(ImageLoad{
+        .frame = self,
+        .image = image,
+        .generation = image._generation,
+    });
+    errdefer self._factory.destroy(load);
+
+    // New load event always sets `_complete` back to false.
+    image._complete = false;
+    self._pending_loads += 1;
+    errdefer {
+        image._complete = true;
+        self._pending_loads -= 1;
+    }
+
+    const transfer = try session.browser.http_client.newRequest(.{
+        .ctx = load,
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .image,
+        .notification = session.notification,
+        .headers_only = true,
+        .header_callback = ImageLoad.headerCallback,
+        .data_callback = ImageLoad.dataCallback,
+        .done_callback = ImageLoad.doneCallback,
+        .error_callback = ImageLoad.errorCallback,
+        .shutdown_callback = ImageLoad.shutdownCallback,
+    }, &self._http_owner);
+    {
+        // `deinit` fires no callbacks, so the errdefers above are still the
+        // ones responsible for undoing our state on this path.
+        errdefer transfer.deinit();
+        // Part of mimicking the real request: origins that content-negotiate
+        // (or that turn away clients which don't look like browsers) key off
+        // exactly this header.
+        try transfer.addHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", .{});
+        try self.headersForRequest(transfer);
+    }
+
+    // From here the transfer owns `load`. `submit` either succeeds or has
+    // already routed the failure through error_callback, which settles the
+    // ImageLoad and gives the pending-load slot back.
+    transfer.submit() catch |err| {
+        log.warn(.http, "image fetch", .{ .err = err, .url = resolved });
+    };
+}
+
+// One in-flight image fetch. Exactly one of done/error/shutdown runs, and
+// each releases the `_pending_loads` slot taken in `loadImage`.
+const ImageLoad = struct {
+    frame: *Frame,
+    image: *Element.Html.Image,
+    generation: u32,
+    status: u16 = 0,
+
+    fn headerCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.HeaderResult {
+        const self: *ImageLoad = @ptrCast(@alignCast(transfer.req.ctx));
+        self.status = transfer.responseStatus() orelse 0;
+        return .proceed;
+    }
+
+    fn dataCallback(_: *HttpClient.Transfer, _: []const u8) !void {
+        // Nothing should ever reach here.
+        unreachable;
+    }
+
+    fn doneCallback(ctx: *anyopaque) !void {
+        const self: *ImageLoad = @ptrCast(@alignCast(ctx));
+        const ok = self.status >= 200 and self.status < 300;
+        self.settle(if (ok) .load else .@"error");
+    }
+
+    fn errorCallback(ctx: *anyopaque, err: anyerror) void {
+        const self: *ImageLoad = @ptrCast(@alignCast(ctx));
+        log.info(.http, "image fetch", .{ .err = err, .status = self.status });
+        self.settle(.@"error");
+    }
+
+    fn shutdownCallback(ctx: *anyopaque) void {
+        const self: *ImageLoad = @ptrCast(@alignCast(ctx));
+        const frame = self.frame;
+        self.image._complete = true;
+        frame._factory.destroy(self);
+
+        // Teardown or a superseding navigation. Release the slot directly:
+        // `pendingLoadCompleted` could reach `documentIsComplete`, and
+        // running the load event on a frame that's being dismantled is
+        // exactly what we're being told to stop doing.
+        frame._pending_loads -|= 1;
+    }
+
+    fn settle(self: *ImageLoad, kind: QueuedEvent.Kind) void {
+        const frame = self.frame;
+        const image = self.image;
+        defer frame._factory.destroy(self);
+
+        // A later src assignment owns the element's events now; this
+        // response is only still here to give its pending-load slot back.
+        const superseded = self.generation != image._generation;
+        if (!superseded) {
+            image._complete = true;
+        }
+
+        if (!superseded and !frame.isGoingAway()) {
+            const name: String = switch (kind) {
+                .load => comptime .wrap("load"),
+                .@"error" => comptime .wrap("error"),
+            };
+            frame.fireElementEvent(image.asElement(), name) catch |err| {
+                log.warn(.js, "image event", .{ .err = err, .kind = kind });
+            };
+        }
+
+        frame.pendingLoadCompleted();
+    }
+};
+
 fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
     const event = try Event.initTrusted(name, .{}, self._page);
     try self._event_manager.dispatch(el.asEventTarget(), event);

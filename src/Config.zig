@@ -211,6 +211,26 @@ fn caPathValidator(
     }
 }
 
+// Sub-resources the browser actually requests. A comma-separated list so
+// more can be opted into individually as they land; only `image` fetches
+// today.
+pub const LoadResources = packed struct(u1) {
+    image: bool = false,
+};
+
+fn loadResourcesValidator(_: Allocator, args: *std.process.Args.Iterator, target: *LoadResources) !void {
+    const resources = args.next() orelse return error.MissingArgument;
+
+    var it = std.mem.splitScalar(u8, resources, ',');
+    while (it.next()) |resource| {
+        inline for (@typeInfo(LoadResources).@"struct".fields) |field| {
+            if (std.mem.eql(u8, field.name, resource)) {
+                @field(target, field.name) = true;
+            }
+        }
+    }
+}
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -245,6 +265,12 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{
+        .name = "load_resources",
+        .type = LoadResources,
+        .default = LoadResources{},
+        .validator = loadResourcesValidator,
+    },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
@@ -522,6 +548,13 @@ pub fn watchdogMs(self: *const Config) ?u32 {
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
+        else => unreachable,
+    };
+}
+
+pub fn loadResources(self: *const Config) LoadResources {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.load_resources,
         else => unreachable,
     };
 }
