@@ -994,6 +994,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     const viewport = cmd.cdp.browser.getViewport();
 
     var opts: lp.screenshot.Opts = .{
+        .scale = viewport.scale,
         .width = viewport.width,
         .height = if (params.captureBeyondViewport orelse false) 0 else viewport.height,
     };
@@ -1004,7 +1005,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
             .width = @floatCast(clip.width),
             .height = @floatCast(clip.height),
         };
-        opts.scale = @floatCast(clip.scale);
+        opts.scale *= @floatCast(clip.scale);
     }
 
     // Prepared streams itself as base64 straight into the outgoing message.
@@ -1301,6 +1302,44 @@ test "cdp.frame: captureScreenshot" {
         const png = try screenshotResult(&ctx, 12);
         try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
         try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    try ctx.processMessage(.{ .id = 13, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+        .width = 200,
+        .height = 100,
+        .deviceScaleFactor = 2,
+    } });
+
+    {
+        // deviceScaleFactor alone rasters at 2x; the viewport stays CSS px.
+        try ctx.processMessage(.{ .id = 14, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 14);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // clip.scale is a zoom on top of it, not a replacement: 2 * 2 = 4x.
+        try ctx.processMessage(.{ .id = 15, .method = "Page.captureScreenshot", .params = .{
+            .clip = .{ .x = 0, .y = 0, .width = 50, .height = 20, .scale = 2 },
+        } });
+        const png = try screenshotResult(&ctx, 15);
+        try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // A width/height of 0 keeps the current values, and so does a
+        // deviceScaleFactor of 0.
+        try ctx.processMessage(.{ .id = 16, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+            .width = 0,
+            .height = 0,
+            .deviceScaleFactor = 0,
+        } });
+        try ctx.processMessage(.{ .id = 17, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 17);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
     }
 }
 
