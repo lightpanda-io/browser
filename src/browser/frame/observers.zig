@@ -212,7 +212,7 @@ pub fn performScheduledResizeChecks(frame: *Frame) void {
 }
 
 // Only these attributes can change an element's size or visibility in our
-// styling model (StyleManager.isHidden + Element.getElementDimensions), and
+// styling model (StyleManager.isHidden + Element.getElementAxis), and
 // only for the element itself and its descendants — so a delivery is only
 // scheduled when an observed element is in the changed element's subtree.
 fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
