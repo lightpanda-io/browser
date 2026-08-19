@@ -55,17 +55,21 @@ fn performActions(cmd: *const BiDi.Command) !void {
 
     const bidi = cmd.bidi;
     const arena = try bidi.app.arena_pool.acquire(.small, "bidi input.Pending");
-    errdefer arena.release();
+    // run takes onwership of arena, so errdefer can lead to a double-free.
+    // explicit release on error instead, then transfer to run.
 
     const ticks = parseTicks(bidi, arena.allocator(), p.actions) catch |err| {
+        arena.release();
         if (err == error.OutOfMemory) {
             return err;
         }
-        arena.release();
         return cmd.sendError("invalid argument", errorMessage(err));
     };
 
-    const pending = try arena.allocator().create(Pending);
+    const pending = arena.allocator().create(Pending) catch |err| {
+        arena.release();
+        return err;
+    };
     pending.* = .{
         .bidi = bidi,
         .arena = arena,
@@ -91,22 +95,32 @@ fn releaseActions(cmd: *const BiDi.Command) !void {
         return cmd.sendError("no such frame", "no frame");
     };
 
-    // dispatch pops the released key/button off `pressed` itself
+    // dispatch pops the released key/button off `pressed` itself. The state
+    // is reset even if a dispatch fails (e.g. ExecutionTerminated), so nothing
+    // stays held into the next performActions, and the client gets a reply.
     const state = &bidi.input_state;
+    defer state.reset(bidi.app.allocator);
+
     for (state.sources.items) |*source| {
         switch (source.kind) {
             .key => while (source.key.pressed.getLastOrNull()) |cp| {
-                try dispatch(bidi, frame, source, &.{ .key_up = cp });
+                dispatch(bidi, frame, source, &.{ .key_up = cp }) catch |err| return dispatchFailed(cmd, err);
             },
             .pointer => while (source.pointer.pressed.getLastOrNull()) |button| {
-                try dispatch(bidi, frame, source, &.{ .pointer_up = button });
+                dispatch(bidi, frame, source, &.{ .pointer_up = button }) catch |err| return dispatchFailed(cmd, err);
             },
             .none, .wheel => {},
         }
     }
-    state.reset(bidi.app.allocator);
 
     return cmd.sendResult(struct {}{});
+}
+
+fn dispatchFailed(cmd: *const BiDi.Command, err: DispatchError) !void {
+    if (err == error.OutOfMemory) {
+        return err;
+    }
+    return cmd.sendError(errorCode(err), errorMessage(err));
 }
 
 // Spec: the input state map, keyed by top-level browsing context. We have one
@@ -238,17 +252,27 @@ const Pending = struct {
         self.arena.release();
     }
 
-    // Runs ticks until one has a duration
     fn run(self: *Pending) !void {
+        const parked = self.step() catch |err| {
+            self.deinit();
+            return err;
+        };
+        if (!parked) {
+            self.deinit();
+        }
+    }
+
+    // Runs ticks until one has a duration. True if parked in the scheduler.
+    fn step(self: *Pending) !bool {
         const bidi = self.bidi;
         while (self.next < self.ticks.len) {
             if (bidi.input_state.generation != self.generation) {
-                defer self.deinit();
-                return bidi.sendError(self.command_id, "unknown error", "input state was released while actions were pending");
+                try bidi.sendError(self.command_id, "unknown error", "input state was released while actions were pending");
+                return false;
             }
             const frame = bidi.user_context.session.currentFrame() orelse {
-                defer self.deinit();
-                return bidi.sendError(self.command_id, "no such frame", "no frame");
+                try bidi.sendError(self.command_id, "no such frame", "no frame");
+                return false;
             };
 
             const next = self.next;
@@ -259,28 +283,32 @@ const Pending = struct {
             for (tick) |ta| {
                 wait = @max(wait, ta.action.duration());
                 dispatch(bidi, frame, &bidi.input_state.sources.items[ta.source], &ta.action) catch |err| {
-                    defer self.deinit();
                     if (err == error.OutOfMemory) {
                         return err;
                     }
-                    return bidi.sendError(self.command_id, errorCode(err), errorMessage(err));
+                    try bidi.sendError(self.command_id, errorCode(err), errorMessage(err));
+                    return false;
                 };
             }
 
             if (wait > 0) {
-                return frame.js.scheduler.add(self, resumeFromScheduler, wait, .{ .name = "bidi.performActions", .finalizer = cancelled });
+                try frame.js.scheduler.add(self, resumeFromScheduler, wait, .{ .name = "bidi.performActions", .finalizer = cancelled });
+                return true;
             }
         }
 
-        defer self.deinit();
         try bidi.sendResult(self.command_id, struct {}{});
+        return false;
     }
 
     fn resumeFromScheduler(ctx: *anyopaque) !?u32 {
         const self: *Pending = @ptrCast(@alignCast(ctx));
+
+        // need to capture it here, run can free self
+        const command_id = self.command_id;
+
         self.run() catch |err| {
-            log.err(.bidi, "performActions", .{ .err = err, .id = self.command_id });
-            self.deinit();
+            log.err(.bidi, "performActions", .{ .err = err, .id = command_id });
         };
         return null;
     }
@@ -718,6 +746,10 @@ fn specialKey(cp: u21) KeyInfo {
     };
 }
 
+// slices into this literal are always valid
+const key_codes = "KeyAKeyBKeyCKeyDKeyEKeyFKeyGKeyHKeyIKeyJKeyKKeyLKeyMKeyNKeyOKeyPKeyQKeyRKeySKeyTKeyUKeyVKeyWKeyXKeyYKeyZ";
+const digit_codes = "Digit0Digit1Digit2Digit3Digit4Digit5Digit6Digit7Digit8Digit9";
+
 // The `code` of a printable character on a US layout.
 fn asciiCode(cp: u21) []const u8 {
     if (cp >= 128) {
@@ -725,9 +757,9 @@ fn asciiCode(cp: u21) []const u8 {
     }
     const c: u8 = @intCast(cp);
     return switch (c) {
-        'a'...'z' => &[_]u8{ 'K', 'e', 'y', std.ascii.toUpper(c) },
-        'A'...'Z' => &[_]u8{ 'K', 'e', 'y', c },
-        '0'...'9' => &[_]u8{ 'D', 'i', 'g', 'i', 't', c },
+        'a'...'z' => key_codes[(c - 'a') * 4 ..][0..4],
+        'A'...'Z' => key_codes[(c - 'A') * 4 ..][0..4],
+        '0'...'9' => digit_codes[(c - '0') * 6 ..][0..6],
         ' ' => "Space",
         '\n', '\r' => "Enter",
         '\t' => "Tab",
@@ -924,6 +956,12 @@ test "bidi.input: keys and modifiers" {
 
     try evaluate(&ctx, 4, context_id, "document.getElementById('inp').value");
     try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "string", .value = "aB" } }, .{ .id = 4 });
+
+    try evaluate(&ctx, 5, context_id, "window.codes.join(' ')");
+    try ctx.expectSentResult(.{ .type = "success", .result = .{
+        .type = "string",
+        .value = "KeyA KeyA ShiftLeft KeyB KeyB ShiftLeft NumpadEnter NumpadEnter",
+    } }, .{ .id = 5 });
 }
 
 test "bidi.input: pause parks the command, releaseActions undoes held input" {

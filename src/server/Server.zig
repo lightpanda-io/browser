@@ -77,6 +77,10 @@ json_version_response: []const u8,
 driver_mutex: std.Io.Mutex = .init,
 drivers: std.ArrayList(Driver) = .empty,
 
+// list of sockets that haven't yet (and might never) be updated to a driver
+// (needed for a clean shutdown).
+handshakes: std.ArrayList(posix.socket_t) = .empty,
+
 // Number of active conns, used to enforce the cdp-max-connections limit.
 active_conns: std.atomic.Value(u32) = .init(0),
 // Number of existing threads, used to deinit correctly.
@@ -198,6 +202,9 @@ pub fn shutdown(self: *Server) void {
     for (self.drivers.items) |*driver| {
         driver.shutdown();
     }
+    for (self.handshakes.items) |socket| {
+        sys_net.shutdown(socket, .recv) catch {};
+    }
 }
 
 pub fn deinit(self: *Server) void {
@@ -209,6 +216,7 @@ pub fn deinit(self: *Server) void {
 
     const allocator = self.app.allocator;
     self.drivers.deinit(allocator);
+    self.handshakes.deinit(allocator);
     self.cdp_pool.deinit(allocator);
     allocator.free(self.json_version_response);
     allocator.free(self.pollfds);
@@ -623,11 +631,30 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     defer _ = self.active_threads.fetchSub(1, .monotonic);
     defer _ = std.c.close(socket);
 
-    const route = Handshake.run(self.app, socket, self.json_version_response) orelse return;
+    const route = self.handshake(socket) orelse return;
     switch (route) {
         .cdp => self.serveCDP(socket, &active_conns_early_release),
         .bidi => self.serveBiDi(socket, &active_conns_early_release),
     }
+}
+
+fn handshake(self: *Server, socket: posix.socket_t) ?Handshake.Driver {
+    {
+        self.driver_mutex.lockUncancelable(lp.io);
+        defer self.driver_mutex.unlock(lp.io);
+        self.handshakes.append(self.app.allocator, socket) catch return null;
+    }
+    defer {
+        self.driver_mutex.lockUncancelable(lp.io);
+        defer self.driver_mutex.unlock(lp.io);
+        for (self.handshakes.items, 0..) |s, i| {
+            if (s == socket) {
+                _ = self.handshakes.swapRemove(i);
+                break;
+            }
+        }
+    }
+    return Handshake.run(self.app, socket, self.json_version_response);
 }
 
 // The socket is an upgraded websocket speaking CDP.

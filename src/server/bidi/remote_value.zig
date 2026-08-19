@@ -333,8 +333,16 @@ pub const Serializer = struct {
     };
 
     fn remote(self: *Serializer, value: js.Value, depth: u32, own: bool) Error!Remote {
-        const handle: ?[]const u8 = if (own and value.isObject()) blk: {
+        var handle_id: ?u32 = null;
+        // The reply carries the handle; if serializing the body throws (a
+        // throwing accessor, a Proxy trap) the client never learns it, so
+        // don't keep the global alive.
+        errdefer if (handle_id) |id| self.handles.release(id);
+
+        // Symbols have identity, so the spec lets them carry a handle too.
+        const handle: ?[]const u8 = if (own and (value.isObject() or value.isSymbol())) blk: {
             const id = try self.handles.add(value);
+            handle_id = id;
             break :blk try std.fmt.allocPrint(self.arena, "{d}", .{id});
         } else null;
 
@@ -363,8 +371,14 @@ pub const Serializer = struct {
         if (value.isBigInt()) {
             return .{ .bigint = try value.toStringSliceWithAlloc(self.arena) };
         }
+        if (value.isSymbol()) {
+            return .{ .other = "symbol" };
+        }
+
         if (value.isObject() == false) {
-            // A symbol. BiDi has no type for one.
+            // Should not be possible, we've exhausted every primitive. But,
+            // let's be defensive here.
+            log.warn(.bidi, "unexpected value type", .{});
             return .{ .other = "object" };
         }
 
