@@ -32,6 +32,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         clearDeviceMetricsOverride,
         setTouchEmulationEnabled,
         setUserAgentOverride,
+        setGeolocationOverride,
+        clearGeolocationOverride,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -41,6 +43,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .clearDeviceMetricsOverride => return clearDeviceMetricsOverride(cmd),
         .setTouchEmulationEnabled => return setTouchEmulationEnabled(cmd),
         .setUserAgentOverride => return setUserAgentOverride(cmd),
+        .setGeolocationOverride => return setGeolocationOverride(cmd),
+        .clearGeolocationOverride => return clearGeolocationOverride(cmd),
     }
 }
 
@@ -168,6 +172,36 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     try http_client.setUserAgentOverride(ua);
     bc.user_agent_changed = true;
 
+    return cmd.sendResult(null, .{});
+}
+
+fn setGeolocationOverride(cmd: *CDP.Command) !void {
+    const Params = struct {
+        latitude: ?f64 = null,
+        longitude: ?f64 = null,
+        accuracy: ?f64 = null,
+    };
+    // Absent params emulates "position unavailable" (Chrome semantics), so fall
+    // back to all-null defaults rather than erroring.
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const browser = &cmd.cdp.browser;
+    if (params.latitude) |lat| {
+        if (params.longitude) |lon| {
+            browser.geolocation_override = .{
+                .latitude = lat,
+                .longitude = lon,
+                .accuracy = params.accuracy orelse 0,
+            };
+            return cmd.sendResult(null, .{});
+        }
+    }
+    browser.geolocation_override = null;
+    return cmd.sendResult(null, .{});
+}
+
+fn clearGeolocationOverride(cmd: *CDP.Command) !void {
+    cmd.cdp.browser.geolocation_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -314,4 +348,37 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: setGeolocationOverride and clear" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO", .url = "cdp/dom1.html" });
+    const browser = bc.session.browser;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.8584, .longitude = 2.2945, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(48.8584, browser.geolocation_override.?.latitude);
+    try testing.expectEqual(2.2945, browser.geolocation_override.?.longitude);
+
+    // no coordinates => emulate "position unavailable" (stored as null)
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setGeolocationOverride" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect(browser.geolocation_override == null);
+
+    // re-set then clear
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 1.0, .longitude = 2.0, .accuracy = 5 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "Emulation.clearGeolocationOverride" });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(browser.geolocation_override == null);
 }

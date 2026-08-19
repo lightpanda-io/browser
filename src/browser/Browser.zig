@@ -29,6 +29,7 @@ const Watchdog = @import("../Watchdog.zig");
 const Session = @import("Session.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 const Viewport = @import("Viewport.zig");
+const GeolocationOverride = @import("GeolocationOverride.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
 
@@ -70,6 +71,13 @@ permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 // Every viewport consumer reads it through Page.getViewport so they all
 // observe the same (possibly overridden) value.
 viewport_override: ?Viewport = null,
+
+// Runtime geolocation override set via Emulation.setGeolocationOverride and
+// cleared via clearGeolocationOverride. Null means no override, which the
+// Geolocation Web API reports as POSITION_UNAVAILABLE. Scoped to the Browser so
+// it persists across page navigations, matching how Chrome scopes the override
+// to the connection.
+geolocation_override: ?GeolocationOverride = null,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
