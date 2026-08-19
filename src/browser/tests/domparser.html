@@ -442,3 +442,96 @@
   testing.expectEqual(true, r.hasAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang'));
 }
 </script>
+
+<script id=xml-content-type>
+{
+  const p = new DOMParser();
+  for (const type of ['text/xml', 'application/xml', 'application/xhtml+xml', 'image/svg+xml']) {
+    testing.expectEqual(type, p.parseFromString('<a/>', type).contentType);
+    testing.expectEqual(type, p.parseFromString('<a>', type).contentType);
+  }
+  testing.expectEqual('text/html', p.parseFromString('<p>', 'text/html').contentType);
+}
+</script>
+
+<script id=xml-element-namespaces>
+{
+  const doc = new DOMParser().parseFromString(
+    '<root xmlns="urn:foo"><a:b xmlns:a="urn:a" a:x="1"/><c xmlns=""/><svg xmlns="http://www.w3.org/2000/svg"/></root>', 'text/xml');
+  const root = doc.documentElement;
+  testing.expectEqual('urn:foo', root.namespaceURI);
+  testing.expectEqual('urn:foo', root.lookupNamespaceURI(null));
+
+  const ab = root.firstChild;
+  testing.expectEqual('a:b', ab.tagName);
+  testing.expectEqual('a:b', ab.nodeName);
+  testing.expectEqual('a', ab.prefix);
+  testing.expectEqual('b', ab.localName);
+  testing.expectEqual('urn:a', ab.namespaceURI);
+  testing.expectEqual('1', ab.getAttribute('a:x'));
+  testing.expectEqual(1, doc.getElementsByTagNameNS('urn:a', 'b').length);
+
+  testing.expectEqual(null, root.childNodes[1].namespaceURI);
+  testing.expectEqual('http://www.w3.org/2000/svg', root.childNodes[2].namespaceURI);
+  testing.expectEqual(true, root.childNodes[2] instanceof SVGElement);
+
+  const soap = new DOMParser().parseFromString(
+    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body/></soap:Envelope>', 'text/xml');
+  testing.expectEqual('soap:Envelope', soap.documentElement.tagName);
+  testing.expectEqual('Envelope', soap.documentElement.localName);
+  testing.expectEqual(1, soap.getElementsByTagName('soap:Body').length);
+  testing.expectEqual(1, soap.getElementsByTagNameNS('http://schemas.xmlsoap.org/soap/envelope/', 'Body').length);
+}
+</script>
+
+<script id=xml-parsererror>
+{
+  const p = new DOMParser();
+  const isError = (doc) => {
+    const root = doc.documentElement;
+    return root.localName === 'parsererror'
+      && root.namespaceURI === 'http://www.mozilla.org/newlayout/xml/parsererror.xml'
+      && doc.childNodes.length === 1;
+  };
+
+  // well-formedness errors -> <parsererror> document
+  for (const bad of [
+    '', '   ',
+    '<a>',                       // unclosed at EOF
+    '<a><b>c</a>',               // unclosed child
+    '<a><b></a></b>',            // mismatched
+    '<a/><b/>',                  // two roots
+    'text<a/>',                  // junk before root
+    '< a/>',
+    '<a b="1" b="2"/>',          // duplicate attribute
+    '<x:a>1</x:a>',              // undeclared prefix
+    '<a>&#0;</a>',
+  ]) {
+    testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
+  }
+
+  // legal documents must not be flagged
+  for (const good of [
+    '<a/>',
+    '<?xml version="1.0" encoding="UTF-8"?>\n<a/>\n',
+    '\uFEFF<a/>',
+    '<a><![CDATA[<x>]]><!-- c --><?pi d?></a><!-- trailing -->',
+    '<a b="x&quot;y&apos;&lt;&#169;"/>',
+    '<a xml:lang="en"> </a>',
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><body><p>a&nbsp;b</p></body></html>',
+    // DOCTYPE internal subset (old Illustrator exports); xml5ever has no DTD
+    // support, so the entities stay unexpanded, but the document must parse.
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [\n\t<!ENTITY ns_svg "http://www.w3.org/2000/svg">\n]>\n<svg xmlns="&ns_svg;"><rect/></svg>',
+    '<a>&undefined;</a>',
+    '<a>\x7F</a>',       // discouraged but legal code points
+  ]) {
+    testing.expectEqual(good + ' -> ok', good + (isError(p.parseFromString(good, 'text/xml')) ? ' -> error' : ' -> ok'));
+  }
+
+  // the doctype survives the internal-subset strip
+  const svg = p.parseFromString('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY x "y">]><svg/>', 'image/svg+xml');
+  testing.expectEqual('svg', svg.doctype.name);
+  testing.expectEqual('-//W3C//DTD SVG 1.1//EN', svg.doctype.publicId);
+  testing.expectEqual('svg', svg.documentElement.localName);
+}
+</script>

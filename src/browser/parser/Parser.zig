@@ -77,6 +77,7 @@ buf: std.ArrayList(u8),
 // innerHTML and DOMParser (per spec). Set from Options at init.
 allow_declarative_shadow: bool = false,
 
+xml_error: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
 
@@ -253,7 +254,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         createXMLElementCallback,
         getDataCallback,
         appendCallback,
-        parseErrorCallback,
+        xmlParseErrorCallback,
         popCallback,
         createCommentCallback,
         createProcessingInstruction,
@@ -430,6 +431,21 @@ fn parseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
     // std.debug.print("PEC: {s}\n", .{err.slice()});
 }
 
+// xml5ever xml error callback indicating a well-formedness violating.
+fn xmlParseErrorCallback(ctx: *anyopaque, err: h5e.StringSlice) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    const msg = err.slice();
+    if (std.mem.startsWith(u8, msg, "Bad character") and msg.len > "Bad character".len) {
+        // discouraged by legal code point
+        return;
+    }
+    if (std.mem.startsWith(u8, msg, "Invalid character reference")) {
+        // xml5ever doesn't know about this entity, but it could be valid
+        return;
+    }
+    self.xml_error = true;
+}
+
 fn popCallback(ctx: *anyopaque, node_ref: *anyopaque) callconv(.c) void {
     const self: *Parser = @ptrCast(@alignCast(ctx));
     if (self.terminated) {
@@ -488,10 +504,21 @@ fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque,
 }
 fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) !*anyopaque {
     const frame = self.frame;
-    const name = qname.local.slice();
+    const local = qname.local.slice();
+    // Elements are keyed by qualified name (prefix/localName split on ':'),
+    // like createElementNS. html5ever never sets a prefix; xml5ever does.
+    const name = if (qname.prefix.unwrap()) |prefix| blk: {
+        if (prefix.len == 0) break :blk local;
+        break :blk try std.fmt.allocPrint(frame.local_arena, "{s}:{s}", .{ prefix.slice(), local });
+    } else local;
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
     const node = try Frame.node_factory.createElementNS(frame, namespace, name, attributes);
+    if (namespace == .unknown and namespace_string.len > 0) {
+        // Same as Document.createElementNS: keep the URI so namespaceURI and
+        // lookupNamespaceURI can return it.
+        try frame._element_namespace_uris.put(frame.arena, node.as(Element), try frame.dupeString(namespace_string));
+    }
 
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
