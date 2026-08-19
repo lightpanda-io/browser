@@ -16,10 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const GeolocationOverride = @import("../GeolocationOverride.zig");
 const log = lp.log;
 
 const Geolocation = @This();
@@ -62,14 +62,51 @@ const Task = struct {
     fn run(ctx: *anyopaque) anyerror!?u32 {
         const self: *Task = @ptrCast(@alignCast(ctx));
         defer self.deinit();
-        deliverError(self.frame, self.error_cb);
+        deliver(self.frame, self.success, self.error_cb);
         return null;
     }
 };
 
-// Task 2 only implements the no-override error path: without a
-// Browser.geolocation_override, position is unavailable. Reading the
-// override into a GeolocationPosition for the success callback is Task 3.
+// Picks the success or error path based on permission + whether an override
+// is currently set. A denied permission always errors, even with an override
+// set, since Chrome treats "denied" as authoritative.
+fn deliver(frame: *Frame, success: js.Function.Global, error_cb: ?js.Function.Global) void {
+    const browser = frame._session.browser;
+    const perm = browser.permissions.get("geolocation") orelse .prompt;
+    if (perm != .denied) {
+        if (browser.geolocation_override) |ov| {
+            deliverSuccess(frame, success, ov);
+            return;
+        }
+    }
+    deliverError(frame, error_cb);
+}
+
+fn deliverSuccess(frame: *Frame, success: js.Function.Global, ov: GeolocationOverride) void {
+    const coords = frame.arena.create(GeolocationCoordinates) catch |alloc_err| {
+        log.err(.frame, "geolocation.deliverSuccess.alloc", .{ .err = alloc_err });
+        return;
+    };
+    coords.* = .{ ._latitude = ov.latitude, ._longitude = ov.longitude, ._accuracy = ov.accuracy };
+
+    const pos = frame.arena.create(GeolocationPosition) catch |alloc_err| {
+        log.err(.frame, "geolocation.deliverSuccess.alloc", .{ .err = alloc_err });
+        return;
+    };
+    pos.* = .{ ._coords = coords, ._timestamp = @floatFromInt(lp.datetime.milliTimestamp(.real)) };
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var caught: js.TryCatch.Caught = .{};
+    ls.toLocal(success).tryCall(void, .{pos}, &caught) catch |call_err| {
+        log.err(.frame, "geolocation.deliverSuccess", .{ .err = call_err, .caught = caught });
+    };
+}
+
+// Without a Browser.geolocation_override (or with permission denied),
+// position is unavailable.
 fn deliverError(frame: *Frame, error_cb: ?js.Function.Global) void {
     const err_cb = error_cb orelse return;
 
@@ -131,6 +168,77 @@ pub const JsApi = struct {
     // watchPosition / clearWatch come in Task 4
 };
 
+pub const GeolocationCoordinates = struct {
+    _latitude: f64,
+    _longitude: f64,
+    _accuracy: f64,
+    _altitude: ?f64 = null,
+    _altitude_accuracy: ?f64 = null,
+    _heading: ?f64 = null,
+    _speed: ?f64 = null,
+
+    pub fn getLatitude(self: *const GeolocationCoordinates) f64 {
+        return self._latitude;
+    }
+    pub fn getLongitude(self: *const GeolocationCoordinates) f64 {
+        return self._longitude;
+    }
+    pub fn getAccuracy(self: *const GeolocationCoordinates) f64 {
+        return self._accuracy;
+    }
+    pub fn getAltitude(self: *const GeolocationCoordinates) ?f64 {
+        return self._altitude;
+    }
+    pub fn getAltitudeAccuracy(self: *const GeolocationCoordinates) ?f64 {
+        return self._altitude_accuracy;
+    }
+    pub fn getHeading(self: *const GeolocationCoordinates) ?f64 {
+        return self._heading;
+    }
+    pub fn getSpeed(self: *const GeolocationCoordinates) ?f64 {
+        return self._speed;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(GeolocationCoordinates);
+        pub const Meta = struct {
+            pub const name = "GeolocationCoordinates";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+        pub const latitude = bridge.accessor(GeolocationCoordinates.getLatitude, null, .{});
+        pub const longitude = bridge.accessor(GeolocationCoordinates.getLongitude, null, .{});
+        pub const accuracy = bridge.accessor(GeolocationCoordinates.getAccuracy, null, .{});
+        pub const altitude = bridge.accessor(GeolocationCoordinates.getAltitude, null, .{});
+        pub const altitudeAccuracy = bridge.accessor(GeolocationCoordinates.getAltitudeAccuracy, null, .{});
+        pub const heading = bridge.accessor(GeolocationCoordinates.getHeading, null, .{});
+        pub const speed = bridge.accessor(GeolocationCoordinates.getSpeed, null, .{});
+    };
+};
+
+pub const GeolocationPosition = struct {
+    _coords: *GeolocationCoordinates,
+    _timestamp: f64,
+
+    pub fn getCoords(self: *const GeolocationPosition) *GeolocationCoordinates {
+        return self._coords;
+    }
+    pub fn getTimestamp(self: *const GeolocationPosition) f64 {
+        return self._timestamp;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(GeolocationPosition);
+        pub const Meta = struct {
+            pub const name = "GeolocationPosition";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+        pub const coords = bridge.accessor(GeolocationPosition.getCoords, null, .{});
+        pub const timestamp = bridge.accessor(GeolocationPosition.getTimestamp, null, .{});
+    };
+};
+
 pub const GeolocationPositionError = struct {
     _code: u16,
     _message: []const u8,
@@ -156,7 +264,7 @@ pub const GeolocationPositionError = struct {
 };
 
 pub fn registerTypes() []const type {
-    return &.{ Geolocation, GeolocationPositionError };
+    return &.{ Geolocation, GeolocationPosition, GeolocationCoordinates, GeolocationPositionError };
 }
 
 const testing = @import("../../testing.zig");

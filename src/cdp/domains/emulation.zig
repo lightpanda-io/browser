@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../Config.zig");
+const js = @import("../../browser/js/js.zig");
 
 const log = lp.log;
 
@@ -381,4 +382,55 @@ test "cdp.Emulation: setGeolocationOverride and clear" {
     try ctx.processMessage(.{ .id = 4, .method = "Emulation.clearGeolocationOverride" });
     try ctx.expectSentResult(null, .{ .id = 4 });
     try testing.expect(browser.geolocation_override == null);
+}
+
+test "cdp.Emulation: navigator.geolocation reads the override" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO2", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        // Registers the callback synchronously; getCurrentPosition schedules
+        // delivery on frame.js.scheduler and returns before it runs.
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.exec(
+            \\ window.__geo_ok = false;
+            \\ navigator.geolocation.getCurrentPosition(p => {
+            \\   window.__geo_ok = (Math.round(p.coords.latitude) === 48 && Math.round(p.coords.longitude) === 2);
+            \\ });
+        , null);
+    }
+
+    // Drive the session loop so the scheduled Task fires: Runner._tick runs
+    // browser.runMacrotasks() (which drains frame.js.scheduler) on every tick
+    // for a loaded page, same primitive Runner.waitForSelector/waitForScript
+    // use to pump pending scheduler work under a CDP-loaded page.
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const v = try ls.local.exec("window.__geo_ok", null);
+    try testing.expect(v.isTrue());
 }
