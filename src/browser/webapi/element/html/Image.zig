@@ -193,3 +193,7 @@ const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Image" {
     try testing.htmlRunner("element/html/image.html", .{});
 }
+
+test "WebApi: HTML.Image fetch" {
+    try testing.htmlRunner("element/html/image_fetch.html", .{ .load_resources = .{ .image = true } });
+}
