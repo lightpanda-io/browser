@@ -2479,7 +2479,6 @@ const ImageLoad = struct {
 
     fn dataCallback(_: *HttpClient.Transfer, _: []const u8) !void {
         // Nothing should ever reach here.
-        unreachable;
     }
 
     fn doneCallback(ctx: *anyopaque) !void {
