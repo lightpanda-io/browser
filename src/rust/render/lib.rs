@@ -104,9 +104,18 @@ pub struct LpRenderOpts {
 
 pub type LpWriteFn = extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize) -> bool;
 
+/// Return codes. Anything but OK means nothing usable reached `write`, so a
+/// caller must not treat what it received as a PNG.
+pub const RC_OK: i32 = 0;
+pub const RC_WRITE_REFUSED: i32 = 1;
+pub const RC_INVALID: i32 = 2;
+/// The pixmap could not be allocated, even after the MAX_RASTER_* clamps.
+pub const RC_NO_RASTER: i32 = 3;
+pub const RC_ENCODE_FAILED: i32 = 4;
+
 /// Renders `blocks` to PNG, streaming the encoded bytes to `write`.
-/// `content_height` receives the full-page height in CSS px. Returns 0 on
-/// success, 1 if `write` refused data, 2 on invalid input.
+/// `content_height` receives the full-page height in CSS px, and is filled in
+/// even when rendering fails. Returns one of the RC_* codes above.
 #[no_mangle]
 pub unsafe extern "C" fn lp_render_png(
     blocks: *const LpBlock,
@@ -117,7 +126,7 @@ pub unsafe extern "C" fn lp_render_png(
     write: LpWriteFn,
 ) -> i32 {
     if opts.width == 0 || !(opts.scale > 0.0) || opts.scale > 8.0 {
-        return 2;
+        return RC_INVALID;
     }
     let blocks = if blocks_len == 0 {
         &[][..]
@@ -135,7 +144,7 @@ pub unsafe extern "C" fn lp_render_png(
         for s in spans {
             let bytes = std::slice::from_raw_parts(s.text, s.len);
             let Ok(text) = std::str::from_utf8(bytes) else {
-                return 2;
+                return RC_INVALID;
             };
             out_spans.push(Span { text, flags: s.flags, color: s.color });
         }
@@ -159,14 +168,15 @@ pub unsafe extern "C" fn lp_render_png(
         .unwrap_or_else(|e| e.into_inner());
 
     let mut sink = Sink { ctx, write, failed: false };
-    let h = r.render(&doc, opts, &mut sink);
+    let (h, rc) = r.render(&doc, opts, &mut sink);
     if !content_height.is_null() {
         *content_height = h;
     }
+    // A refused write surfaces as an encode failure too; report the cause.
     if sink.failed {
-        1
+        RC_WRITE_REFUSED
     } else {
-        0
+        rc
     }
 }
 
@@ -299,8 +309,9 @@ impl Renderer {
         fams[0].0
     }
 
-    /// Returns the content height in CSS px.
-    fn render(&mut self, blocks: &[Block], opts: LpRenderOpts, sink: &mut Sink) -> u32 {
+    /// Returns the content height in CSS px, and RC_OK only if a complete
+    /// PNG reached `sink`.
+    fn render(&mut self, blocks: &[Block], opts: LpRenderOpts, sink: &mut Sink) -> (u32, i32) {
         let scale = opts.scale;
         let content_w = (opts.width as f32 - 2.0 * PAGE_MARGIN).max(1.0);
         let mut y = PAGE_MARGIN;
@@ -417,7 +428,7 @@ impl Renderer {
         y += PAGE_MARGIN;
         let content_h = y.ceil().max(1.0) as u32;
         if opts.flags & RENDER_MEASURE_ONLY != 0 {
-            return content_h;
+            return (content_h, RC_OK);
         }
 
         // Rasterize the requested strip (viewport or full page), then crop.
@@ -433,7 +444,7 @@ impl Renderer {
             .min((MAX_RASTER_PIXELS / pw).max(1));
         let (pw, ph) = (pw as u32, ph as u32);
         let Some(mut pixmap) = Pixmap::new(pw, ph) else {
-            return content_h;
+            return (content_h, RC_NO_RASTER);
         };
         pixmap.fill(Color::WHITE);
 
@@ -508,11 +519,12 @@ impl Renderer {
         // base64'd over CDP, so size matters.
         enc.set_deflate_compression(png::DeflateCompression::Level(2));
         enc.set_filter(png::Filter::Adaptive);
-        if let Ok(mut w) = enc.write_header() {
-            let _ = w.write_image_data(view.data());
-            let _ = w.finish();
-        }
-        content_h
+        let encoded = (|| -> Result<(), png::EncodingError> {
+            let mut w = enc.write_header()?;
+            w.write_image_data(view.data())?;
+            w.finish()
+        })();
+        (content_h, if encoded.is_ok() { RC_OK } else { RC_ENCODE_FAILED })
     }
 
     fn draw_layout(&mut self, pixmap: &mut Pixmap, layout: &Layout<Rgb>, ox: f32, oy: f32) {

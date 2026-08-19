@@ -98,11 +98,20 @@ pub const Prepared = struct {
             .flags = flags,
         }, &content_height, &sink, Sink.write);
 
-        if (rc == 0) {
+        if (rc == RC_OK) {
             return content_height;
         }
 
-        log.err(.browser, "screenshot render", .{ .rc = rc });
+        // Any non-zero rc means nothing usable was written, so this has to
+        // fail rather than hand back a truncated PNG. WriteFailed is the only
+        // error jsonStringify's signature can carry, hence the log line.
+        log.err(.browser, "screenshot render", .{ .reason = switch (rc) {
+            RC_WRITE_REFUSED => "write refused",
+            RC_INVALID => "invalid options",
+            RC_NO_RASTER => "raster allocation failed",
+            RC_ENCODE_FAILED => "png encoding failed",
+            else => "unknown",
+        }, .rc = rc });
         return error.WriteFailed;
     }
 
@@ -176,6 +185,12 @@ const SPAN_HAS_COLOR: u32 = 1 << 5;
 const BLOCK_TIGHT: u8 = 1 << 0;
 
 const RENDER_MEASURE_ONLY: u32 = 1 << 0;
+
+const RC_OK: i32 = 0;
+const RC_WRITE_REFUSED: i32 = 1;
+const RC_INVALID: i32 = 2;
+const RC_NO_RASTER: i32 = 3;
+const RC_ENCODE_FAILED: i32 = 4;
 
 const LINK_COLOR: u32 = 0x1a0dab;
 const MUTED_COLOR: u32 = 0x6b6b6b;
@@ -697,6 +712,22 @@ test "browser.screenshot: raster is bounded" {
     _ = try png(div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
     try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
+}
+
+test "browser.screenshot: a refused write fails the capture" {
+    defer testing.test_session.closeAllPages();
+    testing.silenceLog(&.{.browser});
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+
+    // Far too small for the PNG, so the sink refuses partway through. That
+    // has to surface as an error and not as a truncated image.
+    var buf: [64]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try testing.expectError(error.WriteFailed, png(div.asNode(), .{ .width = 300 }, &w, frame));
 }
 
 test "browser.screenshot: json streams base64" {
