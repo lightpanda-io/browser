@@ -110,6 +110,7 @@ pub const Prepared = struct {
             RC_INVALID => "invalid options",
             RC_NO_RASTER => "raster allocation failed",
             RC_ENCODE_FAILED => "png encoding failed",
+            RC_PANIC => "renderer panicked",
             else => "unknown",
         }, .rc = rc });
         return error.WriteFailed;
@@ -191,6 +192,7 @@ const RC_WRITE_REFUSED: i32 = 1;
 const RC_INVALID: i32 = 2;
 const RC_NO_RASTER: i32 = 3;
 const RC_ENCODE_FAILED: i32 = 4;
+const RC_PANIC: i32 = 5;
 
 const LINK_COLOR: u32 = 0x1a0dab;
 const MUTED_COLOR: u32 = 0x6b6b6b;

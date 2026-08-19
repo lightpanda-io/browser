@@ -112,12 +112,27 @@ pub const RC_INVALID: i32 = 2;
 /// The pixmap could not be allocated, even after the MAX_RASTER_* clamps.
 pub const RC_NO_RASTER: i32 = 3;
 pub const RC_ENCODE_FAILED: i32 = 4;
+pub const RC_PANIC: i32 = 5;
 
 /// Renders `blocks` to PNG, streaming the encoded bytes to `write`.
 /// `content_height` receives the full-page height in CSS px, and is filled in
 /// even when rendering fails. Returns one of the RC_* codes above.
 #[no_mangle]
 pub unsafe extern "C" fn lp_render_png(
+    blocks: *const LpBlock,
+    blocks_len: usize,
+    opts: LpRenderOpts,
+    content_height: *mut u32,
+    ctx: *mut c_void,
+    write: LpWriteFn,
+) -> i32 {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        render_png(blocks, blocks_len, opts, content_height, ctx, write)
+    }));
+    caught.unwrap_or(RC_PANIC)
+}
+
+unsafe fn render_png(
     blocks: *const LpBlock,
     blocks_len: usize,
     opts: LpRenderOpts,
