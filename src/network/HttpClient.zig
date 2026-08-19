@@ -417,6 +417,15 @@ fn isHostAdblocked(self: *const Client, url: [:0]const u8) bool {
     return blocker.matchHostname(hostname) == .blocked;
 }
 
+fn isCrossOriginModeAllowed(transfer: *const Transfer) bool {
+    const req = &transfer.req;
+    if (req.request_mode != .same_origin) {
+        return true;
+    }
+    const origin = req.origin orelse return false;
+    return URL.isSameOrigin(req.url, origin);
+}
+
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
@@ -1025,6 +1034,15 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             if (try self.cacheLookup(transfer)) {
                 return;
             }
+
+            if (!isCrossOriginModeAllowed(transfer) and !transfer.req.internal) {
+                log.warn(.http, "blocked by mode", .{
+                    .url = transfer.req.url,
+                    .mode = @tagName(transfer.req.request_mode),
+                });
+                return transfer.failAsync(error.ModeBlocked);
+            }
+
             if (self.obey_cors and !transfer.req.internal) {
                 switch (try self.cors.check(transfer)) {
                     .allowed => {},
@@ -1817,6 +1835,13 @@ pub const Request = struct {
         include,
     };
 
+    pub const RequestMode = enum {
+        cors,
+        no_cors,
+        same_origin,
+        navigate,
+    };
+
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,
@@ -1825,6 +1850,7 @@ pub const Request = struct {
     referrer_policy: ?referrer.Policy = null,
     basic_auth_credentials: ?[:0]const u8 = null,
     credentials_mode: CredentialsMode = .same_origin,
+    request_mode: RequestMode = .cors,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 

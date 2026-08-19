@@ -127,6 +127,15 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     const origin = req.origin orelse "null";
     try transfer.setHeader(ORIGIN, origin, .{});
 
+    if (req.request_mode == .no_cors) {
+        log.debug(.cors, "cross origin", .{
+            .url = req.url,
+            .origin = origin,
+            .mode = "no-cors",
+        });
+        return .allowed;
+    }
+
     if (!requiresPreflight(transfer)) {
         log.debug(.cors, "cross origin", .{
             .url = req.url,
