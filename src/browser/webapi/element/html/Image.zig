@@ -1,5 +1,6 @@
 const lp = @import("lightpanda");
 const std = @import("std");
+const log = lp.log;
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
@@ -7,10 +8,20 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
+const String = lp.String;
+
 const Image = @This();
 
 pub const Proto = HtmlElement;
-_pad: bool = false,
+
+// Bumped on every src assignment. An in-flight fetch carries the value it
+// was issued under; when they no longer match, a newer src has taken over
+// and the older response must not fire events on this element.
+_generation: u32 = 0,
+// Per spec, false only while a fetch is in flight. Without
+// `--load-resources image` there is never a fetch, so it never leaves true.
+_complete: bool = true,
+
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
@@ -48,10 +59,12 @@ pub fn getSrc(self: *const Image, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
-    // No need to check if `Image` is connected to DOM; this is a special case.
-    return self.imageAddedCallback(frame);
+    // Setting the attribute is enough: `_put` dispatches to
+    // `Build.attributeChange`, which starts the load. Calling
+    // `imageAddedCallback` here too would issue the request twice (the first
+    // one immediately superseded, so it costs a request and shows nothing).
+    // Connectivity still isn't checked — a detached `new Image()` loads.
+    return self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
@@ -74,17 +87,21 @@ pub fn getNaturalHeight(_: *const Image) u32 {
     return 0;
 }
 
-pub fn getComplete(_: *const Image) bool {
-    // Per spec, complete is true when: no src/srcset, src is empty,
-    // image is fully available, or image is broken (with no pending request).
-    // Since we never fetch images, they are in the "broken" state, which has
-    // complete=true. This is consistent with naturalWidth/naturalHeight=0.
-    return true;
+pub fn getComplete(self: *const Image) bool {
+    // Per spec, complete is true when: no src/srcset, src is empty, the
+    // image is fully available, or the image is broken with no pending
+    // request. Every one of those is "no fetch in flight", which is exactly
+    // what `_complete` tracks. Without `--load-resources image` nothing ever
+    // clears it.
+    return self._complete;
 }
 
-/// Used in `Page.nodeIsReady`.
+/// The one funnel for "this element's src became current": parser-created
+/// images (`Build.created`), `img.src = ...` (`setSrc`) and
+/// `setAttribute("src", ...)` (`Build.attributeChange`) all land here.
 pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
-    // if we're planning on navigating to another frame, don't trigger load event.
+    // if we're planning on navigating to another frame, don't trigger a load event
+    // or start fetching a resource.
     if (frame.isGoingAway()) {
         return;
     }
@@ -94,7 +111,28 @@ pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) return;
 
-    try frame.queueLoad(Factory.protoOf(self));
+    // If image loading not desired, we just do fake "load" event.
+    if (frame._session.load_resources.image == false) {
+        return frame.queueLoad(Factory.protoOf(self));
+    }
+
+    // A fetch still in flight for the previous src is stale as of right now,
+    // and this is the only place that knows it. Wrapping is fine: colliding
+    // needs a request to still be in flight 2^32 src assignments later, which
+    // outlives any transfer timeout by several orders of magnitude.
+    self._generation +%= 1;
+
+    // Deliberately not propagated. `newRequest` is declared `anyerror`, and
+    // this runs on DOM mutation paths with narrow declared error sets
+    // (`Node.cloneNode`'s `CloneError`, for one). Failing to even issue the
+    // request is the same observable outcome as the request failing, so
+    // report it the same way — `loadImage` has already unwound `_complete`
+    // and the pending-load slot by the time it returns an error.
+    frame.loadImage(self, src) catch |err| {
+        log.warn(.http, "image fetch", .{ .err = err, .src = src });
+        // On failure, queue "error" event.
+        return frame.queueElementEvent(Factory.protoOf(self), .@"error");
+    };
 }
 
 pub const JsApi = struct {
@@ -139,6 +177,15 @@ pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Image);
         return self.imageAddedCallback(frame);
+    }
+
+    // `img.src = ...` routes through `setSrc`, but `setAttribute("src", ...)`
+    // only reaches us here, and both have to (re)do fetch.
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+        return element.as(Image).imageAddedCallback(frame);
     }
 };
 

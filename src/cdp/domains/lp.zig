@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
+const Config = @import("../../Config.zig");
 
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
@@ -98,12 +99,14 @@ fn configureLoading(cmd: *CDP.Command) !void {
         subFrame: ?bool = null,
         worker: ?bool = null,
         externalStylesheets: ?bool = null,
+        images: ?bool = null,
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     if (params.subFrame) |v| bc.session.subframe_loading_enabled = v;
     if (params.worker) |v| bc.session.worker_loading_enabled = v;
     if (params.externalStylesheets) |v| bc.session.load_external_stylesheets = v;
+    if (params.images) |v| bc.session.load_resources.image = v;
     return cmd.sendResult(null, .{});
 }
 

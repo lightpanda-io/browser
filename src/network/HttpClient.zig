@@ -89,6 +89,12 @@ in_use: std.DoublyLinkedList = .{},
 // Queue for request that are waiting an available connection (aka, easy)
 pending_queue: std.DoublyLinkedList = .{},
 
+// Same, for resources nothing on the page is blocked on. Only drained once
+// `pending_queue` is empty, so a document full of images can't hold every
+// connection while a script or an XHR waits behind them. Within the queue
+// it's still FIFO. See `isLowPriority`.
+pending_low_queue: std.DoublyLinkedList = .{},
+
 // Queue for completed transfers that haven't had their callbacks executed yet
 dispatch_queue: std.DoublyLinkedList = .{},
 
@@ -443,6 +449,7 @@ pub fn abort(self: *Client) void {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.pending_queue.first == null);
+        std.debug.assert(self.pending_low_queue.first == null);
         std.debug.assert(self.dispatch_queue.first == null);
         std.debug.assert(self.gated_queue.first == null);
         std.debug.assert(self.in_use.first == null);
@@ -529,7 +536,7 @@ pub fn activity(self: *const Client) Activity {
         .http = self.http_active + self.dispatch_count + self.intercepted,
         .ws_events = self.ws_dispatch_count,
         .ws_conns = self.ws_active,
-        .pending = self.pending_queue.first != null,
+        .pending = self.pending_queue.first != null or self.pending_low_queue.first != null,
     };
 }
 
@@ -694,6 +701,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
             // doing some work (e.g. running tasks). Let's assert that we were
             // right in doing that, else we'll likely introduce latency.
             std.debug.assert(self.pending_queue.first == null);
+            std.debug.assert(self.pending_low_queue.first == null);
             std.debug.assert(self.dispatch_queue.first == null);
             std.debug.assert(self.ws_dispatch_queue.first == null);
         }
@@ -809,12 +817,34 @@ fn isGated(self: *const Client, transfer: *const Transfer) bool {
     return transfer.id != blocking_id;
 }
 
+// Resources the page's progress doesn't depend on. Images are fetched for
+// their status (so load/error is honest) and, with `--fetch-images headers`,
+// a page can queue dozens of them in one parse — none of which should come
+// ahead of the script that's blocking the parser.
+fn isLowPriority(resource_type: Request.ResourceType) bool {
+    return switch (resource_type) {
+        .image => false, // EXPERIMENT
+        .document, .xhr, .script, .fetch, .stylesheet, .eventsource => false,
+    };
+}
+
 fn startPending(self: *Client) !void {
-    while (self.pending_queue.popFirst()) |queue_node| {
+    // Strict priority: low-priority work only gets the connections normal
+    // work didn't want. `drainPending` returns false when it ran out of
+    // connections, at which point there's nothing left for the low queue.
+    if (try self.drainPending(&self.pending_queue)) {
+        _ = try self.drainPending(&self.pending_low_queue);
+    }
+}
+
+// Returns false if it stopped because no connection was available, true if
+// it emptied the queue.
+fn drainPending(self: *Client, queue: *std.DoublyLinkedList) !bool {
+    while (queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
         const conn = self.network.getConnection() orelse {
-            self.pending_queue.prepend(queue_node);
-            return;
+            queue.prepend(queue_node);
+            return false;
         };
         // Bridge state to .created so a failure inside makeRequest before
         // any commit cleans up via the failAsync below. makeRequest flips to
@@ -830,6 +860,7 @@ fn startPending(self: *Client) !void {
             return err;
         };
     }
+    return true;
 }
 
 const SubmitFrom = enum { start, after_intercept, network };
@@ -1033,6 +1064,13 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     // entry a second time on any early return below.
     transfer._cache_intent = .none;
 
+    // A headers_only transfer never read the body. Storing it would put an
+    // empty entry under the real cache key and every later full fetch of
+    // that URL (an XHR, a `full` image fetch) would hit it and get nothing.
+    if (transfer.req.headers_only) {
+        return;
+    }
+
     // could have been disabled while waiting of the response
     const cache = self.cache orelse return;
 
@@ -1211,11 +1249,19 @@ pub fn syncRequest(self: *Client, transfer: *Transfer) !SyncResponse {
 }
 
 fn processTransfer(self: *Client, transfer: *Transfer) !void {
-    if (self.network.getConnection()) |conn| {
-        return self.makeRequest(conn, transfer);
+    const low = isLowPriority(transfer.req.resource_type);
+    if (!low or self.pending_queue.first == null) {
+        if (self.network.getConnection()) |conn| {
+            return self.makeRequest(conn, transfer);
+        }
     }
 
-    self.pending_queue.append(&transfer._node);
+    transfer._queued_low = low;
+    if (low) {
+        self.pending_low_queue.append(&transfer._node);
+    } else {
+        self.pending_queue.append(&transfer._node);
+    }
     transfer.state = .queued;
 }
 
@@ -1433,6 +1479,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     const effective_err: ?anyerror = if (msg.err) |err| blk: {
         if (err == error.WriteError and transfer.res.callback_error == null and transfer.res.bytes_received > 0) {
             log.debug(.http, "WriteError downgraded", .{ .url = transfer.req.url, .bytes = transfer.res.bytes_received });
+            break :blk null;
+        }
+        // Our own headers_only abort, not a failure: fall through so the
+        // response is materialized and delivered with an empty body.
+        if (err == error.WriteError and transfer.res.headers_only_abort) {
             break :blk null;
         }
         break :blk err;
@@ -1677,6 +1728,7 @@ pub const Request = struct {
         fetch,
         stylesheet,
         eventsource,
+        image,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1690,6 +1742,7 @@ pub const Request = struct {
                 .fetch => "Fetch",
                 .stylesheet => "Stylesheet",
                 .eventsource => "EventSource",
+                .image => "Image",
             };
         }
     };
@@ -1697,6 +1750,12 @@ pub const Request = struct {
     // Fetch request redirect mode. `.follow` keeps navigations, XHR and
     // internal requests transparently following redirects.
     pub const RedirectMode = enum { follow, manual, @"error" };
+
+    // Largest body a headers_only transfer will read to the end rather than
+    // abort. Draining costs bandwidth but keeps the connection poolable;
+    // aborting saves bandwidth but forces a reconnect. 16 KiB is the rough
+    // break-even: about ten segments, versus a TCP handshake plus a TLS one.
+    pub const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
 
     frame_id: u32,
     loader_id: u32,
@@ -1712,6 +1771,16 @@ pub const Request = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
+
+    // Tear the transfer off the wire as soon as the first body byte arrives:
+    // the caller wants the status and the response headers, not the body.
+    // Unlike a HEAD, the request itself is byte-for-byte a normal GET, so
+    // origins and CDNs see (and answer) exactly what a real browser sends.
+    // The consumer still gets the usual start/header/done sequence with an
+    // empty body; `data_callback` never fires. Note the cost: aborting
+    // mid-response means the connection can't be drained, so libcurl closes
+    // it instead of returning it to the pool.
+    headers_only: bool = false,
 
     // The document frame this request belongs to, for CDP attribution.
     // This will be different than frame_id for Workers.
@@ -1991,10 +2060,16 @@ pub const Transfer = struct {
     // need to restore (and hence capture) the original headers.
     _intercept_original_headers: ?[]const RequestHeader = null,
 
-    // Linked into client.pending_queue while .queued; reused to link the
-    // retired transfer into client.graveyard (deinit unlinks it from the
-    // pending queue first, so the node is always free by then).
+    // Linked into client.pending_queue (or pending_low_queue, see
+    // _queued_low) while .queued; reused to link the retired transfer into
+    // client.graveyard (deinit unlinks it from the pending queue first, so
+    // the node is always free by then).
     _node: std.DoublyLinkedList.Node = .{},
+
+    // Which of the two pending queues _node is linked into. Only meaningful
+    // while state == .queued; set at enqueue, read when unlinking, because
+    // removing from the wrong list would corrupt both.
+    _queued_low: bool = false,
 
     // Buffered response ordered events awaiting dispatch.
     _events: std.ArrayList(Event) = .empty,
@@ -2166,9 +2241,13 @@ pub const Transfer = struct {
             self._conn = null;
         }
 
-        // Unlink from client.pending_queue if we were waiting for a handle.
+        // Unlink from the pending queue if we were waiting for a handle.
         if (self.state == .queued) {
-            self.client.pending_queue.remove(&self._node);
+            if (self._queued_low) {
+                self.client.pending_low_queue.remove(&self._node);
+            } else {
+                self.client.pending_queue.remove(&self._node);
+            }
         }
 
         // Same for the dispatch queue: a queued transfer (buffered, or
@@ -2522,7 +2601,11 @@ pub const Transfer = struct {
             }
         }
 
-        if (opts.check_content_length) {
+        // headers_only is exempt: the cap exists to bound how much body we
+        // buffer, and this transfer buffers none of it. Failing a 4 MB image
+        // we were never going to read would turn the size limit into a
+        // spurious `error` event on a perfectly good response.
+        if (opts.check_content_length and !self.req.headers_only) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -2935,6 +3018,29 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
+            if (transfer.req.headers_only) {
+                const drainable = if (transfer.getContentLength()) |cl|
+                    cl <= Request.HEADERS_ONLY_DRAIN_MAX
+                else
+                    // No Content-Length (chunked): we can't tell how much is
+                    // coming, so don't gamble on it being small.
+                    false;
+
+                if (drainable) {
+                    // Reuses the redirect machinery: consumed, never buffered,
+                    // so the response still completes with an empty body.
+                    res.skip_body = true;
+                    return @intCast(chunk_len);
+                }
+
+                // Returning writefunc_error is the only way to end a transfer
+                // early from a write callback; processOneMessage recognises
+                // the flag and treats the resulting CURLE_WRITE_ERROR as a
+                // completed response with an empty body.
+                res.headers_only_abort = true;
+                return http.writefunc_error;
+            }
+
             // Pre-size buffer from Content-Length.
             if (transfer.getContentLength()) |cl| {
                 if (cl > transfer.client.max_response_size) {
@@ -3207,6 +3313,12 @@ const Response = struct {
     skip_body: bool = false,
     first_data_received: bool = false,
 
+    // Set when dataCallback deliberately killed the transfer to satisfy
+    // `Request.headers_only`. processOneMessage uses it to tell our own
+    // abort apart from a real CURLE_WRITE_ERROR and deliver the response
+    // (headers, status, empty body) as a success.
+    headers_only_abort: bool = false,
+
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
     buffer: std.ArrayList(u8) = .empty,
@@ -3469,6 +3581,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.transfers = .empty;
     client.blocking_requests = .empty;
     client.pending_queue = .{};
+    client.pending_low_queue = .{};
     client.dispatch_queue = .{};
     client.gated_queue = .{};
     client.ws_dispatch_queue = .{};
