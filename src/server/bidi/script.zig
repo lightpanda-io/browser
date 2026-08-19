@@ -1171,6 +1171,7 @@ test "bidi.script: callFunction arguments" {
 }
 
 test "bidi.script: handles" {
+    testing.expectLog(&.{.bidi});
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1205,6 +1206,34 @@ test "bidi.script: handles" {
         .type = "success",
         .result = .{ .type = "number", .value = 7 },
     }, .{ .id = 2 });
+
+    // A symbol is a primitive with identity: it gets a handle and round-trips.
+    try ctx.processMessage(.{
+        .id = 10,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "window.sym = Symbol('s')",
+            .target = .{ .context = context_id },
+            .resultOwnership = "root",
+        },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "symbol", .handle = "2" } }, .{ .id = 10 });
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "script.callFunction",
+        .params = .{
+            .functionDeclaration = "(s) => s === window.sym",
+            .target = .{ .context = context_id },
+            .arguments = .{.{ .handle = "2" }},
+        },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "boolean", .value = true } }, .{ .id = 11 });
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "script.disown",
+        .params = .{ .handles = .{"2"}, .target = .{ .context = context_id } },
+    });
+    try ctx.expectSentResult(null, .{ .id = 12 });
 
     // A primitive has nothing to hold on to, so it gets no handle.
     try ctx.processMessage(.{
@@ -1244,6 +1273,43 @@ test "bidi.script: handles" {
         .params = .{ .handles = .{"1"}, .target = .{ .context = context_id } },
     });
     try ctx.expectSentResult(null, .{ .id = 6 });
+
+    // A value whose serialization throws gets its handle released again,
+    // since the client never learns the id. Ids aren't reused, so the next
+    // owned result proves 3 was minted then released: it takes 4, and 3 is
+    // unknown.
+    try ctx.processMessage(.{
+        .id = 7,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "({ get boom() { throw new Error('nope') } })",
+            .target = .{ .context = context_id },
+            .resultOwnership = "root",
+        },
+    });
+    try ctx.expectSentError("unknown error", "cannot serialize result", .{ .id = 7 });
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "script.evaluate",
+        .params = .{
+            .expression = "({n: 8})",
+            .target = .{ .context = context_id },
+            .resultOwnership = "root",
+        },
+    });
+    try ctx.expectSentResult(.{ .type = "success", .result = .{ .type = "object", .handle = "4" } }, .{ .id = 8 });
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "script.callFunction",
+        .params = .{
+            .functionDeclaration = "(o) => o.n",
+            .target = .{ .context = context_id },
+            .arguments = .{.{ .handle = "3" }},
+        },
+    });
+    try ctx.expectSentError("no such handle", null, .{ .id = 9 });
 }
 
 test "bidi.script: target validation" {
