@@ -249,7 +249,8 @@ const MAX_RASTER_DIM: u64 = 16384;
 /// viewport captured full-page at 2x still fits.
 const MAX_RASTER_PIXELS: u64 = 64 << 20;
 
-type GlyphKey = (usize, u32, u32);
+/// (font, glyph id). Deliberately not the size — see draw_glyph_run.
+type GlyphKey = (usize, u32);
 
 struct Renderer {
     fcx: FontContext,
@@ -564,7 +565,19 @@ impl Renderer {
         };
         let outlines = font_ref.outline_glyphs();
         let font_key = font.data.as_ref().as_ptr() as usize ^ (font.index as usize);
-        let size_key = font_size.to_bits();
+        // Outlines are cached in font units, not at the drawn size: font_size
+        // is the CSS size times a client-controlled scale, so keying on it let
+        // a caller mint a fresh copy of every glyph on every call, retained
+        // for the life of the process. Unhinted scaling is linear, so folding
+        // it into the transform below is equivalent and bounds the cache at
+        // (fonts x glyphs).
+        let upem = font_ref
+            .metrics(Size::unscaled(), LocationRef::default())
+            .units_per_em as f32;
+        if !(upem > 0.0) {
+            return;
+        }
+        let scale = font_size / upem;
 
         let style = gr.style();
         let mut paint = Paint::default();
@@ -577,8 +590,10 @@ impl Renderer {
             .skew()
             .map(|deg| (-deg.to_radians()).tan())
             .unwrap_or(0.0);
+        // Stroking happens in path space, which is now font units, so the
+        // width is upem/24 to still land at font_size/24 device px.
         let stroke = synth.embolden().then(|| Stroke {
-            width: font_size / 24.0,
+            width: upem / 24.0,
             ..Default::default()
         });
         for glyph in gr.glyphs() {
@@ -587,20 +602,21 @@ impl Renderer {
             x += glyph.advance;
             let path = self
                 .glyph_cache
-                .entry((font_key, glyph.id, size_key))
+                .entry((font_key, glyph.id))
                 .or_insert_with(|| {
                     let og = outlines.get(GlyphId::new(glyph.id))?;
                     let mut pen = TinyPen(PathBuilder::new());
                     og.draw(
-                        DrawSettings::unhinted(Size::new(font_size), LocationRef::default()),
+                        DrawSettings::unhinted(Size::unscaled(), LocationRef::default()),
                         &mut pen,
                     )
                     .ok()?;
                     pen.0.finish()
                 });
             if let Some(path) = path {
-                // Glyph outlines are y-up; flip onto the pixmap.
-                let t = Transform::from_row(1.0, 0.0, skew, -1.0, gx, gy);
+                // Outlines are y-up and in font units; scale and flip them
+                // onto the pixmap.
+                let t = Transform::from_row(scale, 0.0, skew * scale, -scale, gx, gy);
                 pixmap.fill_path(path, &paint, FillRule::Winding, t, None);
                 if let Some(stroke) = &stroke {
                     pixmap.stroke_path(path, &paint, stroke, t, None);
