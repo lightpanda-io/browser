@@ -60,6 +60,8 @@ _method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
+_async: bool = true,
+
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
@@ -191,7 +193,7 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32) void {
 
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
-pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
+pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
     // Abort any in-progress request
     if (self._http_transfer) |transfer| {
         transfer.abort(error.Abort);
@@ -210,6 +212,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     self._response_mime = null;
     self._response_headers.clearRetainingCapacity();
     self._request_body = null;
+    self._async = async_ orelse true;
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
@@ -311,12 +314,60 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
 
-    transfer.submit() catch |err| {
-        // don't releaseSelfRef, submit() has taken ownership and will call
-        // our error callback
+    if (self._async) {
+        transfer.submit() catch |err| {
+            // don't releaseSelfRef, submit() has taken ownership and will call
+            // our error callback
+            self._send_flag = false;
+            return err;
+        };
+        return;
+    }
+
+    var resp = transfer.submitSync() catch |err| {
         self._send_flag = false;
-        return err;
+        self.handleError(err);
+        self.releaseSelfRef();
+        return;
     };
+    defer resp.deinit();
+
+    self._http_transfer = null;
+    self._response_status = resp.status;
+    self._response_url = self._url;
+    self._response_len = resp.body.items.len;
+
+    // TODO: Headers.
+    self._response_headers = .empty;
+    self._response_mime = null;
+
+    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
+
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+
+    try self.stateChanged(.headers_received, exec);
+    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, exec);
+    try self.stateChanged(.loading, exec);
+    try self._proto.dispatch(.progress, .{
+        .total = self._response_len orelse 0,
+        .loaded = self._response_data.items.len,
+    }, exec);
+
+    try self.stateChanged(.done, exec);
+    const loaded = self._response_data.items.len;
+    try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded }, exec);
+    try self._proto.dispatch(.load_end, .{ .total = loaded, .loaded = loaded }, exec);
+
+    log.info(.http, "request complete", .{
+        .source = "xhr",
+        .url = self._url,
+        .status = self._response_status,
+        .len = self._response_data.items.len,
+    });
+
+    self.releaseSelfRef();
 }
 
 // https://xhr.spec.whatwg.org/#the-upload-attribute
