@@ -74,7 +74,11 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
     const progress = progress_ orelse Progress{};
     const event = (try ProgressEvent.initTrusted(
         comptime .wrap(typ),
-        .{ .total = progress.total, .loaded = progress.loaded },
+        .{
+            .total = progress.total,
+            .loaded = progress.loaded,
+            .lengthComputable = progress.length_computable,
+        },
         exec.page,
     )).asEvent();
 
@@ -173,6 +177,7 @@ const DispatchType = enum {
 const Progress = struct {
     loaded: usize = 0,
     total: usize = 0,
+    length_computable: bool = false,
 };
 
 pub const JsApi = struct {

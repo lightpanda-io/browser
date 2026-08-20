@@ -62,6 +62,7 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
             ._proto = undefined,
             ._total = opts.total,
             ._loaded = opts.loaded,
+            ._length_computable = opts.lengthComputable,
         },
     );
 

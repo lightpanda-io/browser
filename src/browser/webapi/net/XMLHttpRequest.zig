@@ -348,8 +348,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     try self.stateChanged(.done, exec);
     const loaded = self._response_data.items.len;
-    try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded }, exec);
-    try self._proto.dispatch(.load_end, .{ .total = loaded, .loaded = loaded }, exec);
+    try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
+    try self._proto.dispatch(.load_end, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
 
     log.info(.http, "request complete", .{
         .source = "xhr",
