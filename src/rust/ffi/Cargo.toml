@@ -6,7 +6,7 @@ edition = "2021"
 [lib]
 name = "lightpanda_ffi"
 path = "lib.rs"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 lightpanda-html5ever = { path = "../html5ever" }

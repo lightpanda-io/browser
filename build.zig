@@ -334,28 +334,14 @@ fn linkRust(b: *Build, mod: *Build.Module) void {
         "--manifest-path", "src/rust/ffi/Cargo.toml",
     });
 
-    // Track Rust sources so edits invalidate the cargo step's cache.
-    // Without this, Zig keys the step on argv only and won't re-run cargo
-    // when the sources change.
-    for ([_][]const u8{
-        "src/rust/Cargo.toml",
-        "src/rust/Cargo.lock",
-        "src/rust/ffi/Cargo.toml",
-        "src/rust/ffi/lib.rs",
-        "src/rust/html5ever/Cargo.toml",
-        "src/rust/html5ever/lib.rs",
-        "src/rust/html5ever/prescan.rs",
-        "src/rust/html5ever/sink.rs",
-        "src/rust/html5ever/types.rs",
-        "src/rust/html5ever/url.rs",
-        "src/rust/render/Cargo.toml",
-        "src/rust/render/lib.rs",
-        "src/rust/render/fonts/DejaVuSans.ttf",
-        "src/rust/render/fonts/DejaVuSans-Bold.ttf",
-        "src/rust/render/fonts/DejaVuSansMono.ttf",
-    }) |path| {
-        exec_cargo.addFileInput(b.path(path));
-    }
+    addDirInputs(b, exec_cargo, "src/rust", "target") catch |err| {
+        std.debug.panic("walk src/rust: {t}", .{err});
+    };
+
+    // Cargo reports progress on stderr; left uncaptured, Zig prints it as a
+    // "failed command: ..." diagnostic on a successful build. A non-zero exit
+    // still surfaces the captured output.
+    _ = exec_cargo.captureStdErr(.{});
 
     // TODO: We can prefer `--artifact-dir` once it become stable.
     const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "rust");
@@ -365,6 +351,24 @@ fn linkRust(b: *Build, mod: *Build.Module) void {
 
     const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblightpanda_ffi.a");
     mod.addObjectFile(obj);
+}
+
+/// Registers every file under `root` (relative to the build root) as an
+/// input of `run`, skipping the `skip_dir` subtree at any depth.
+fn addDirInputs(b: *Build, run: *Build.Step.Run, root: []const u8, skip_dir: []const u8) !void {
+    const io = b.graph.io;
+    var dir = try b.build_root.handle.openDir(io, root, .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(b.allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        switch (entry.kind) {
+            .directory => if (std.mem.eql(u8, entry.basename, skip_dir)) walker.leave(io),
+            .file => run.addFileInput(b.path(b.pathJoin(&.{ root, entry.path }))),
+            else => {},
+        }
+    }
 }
 
 fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool) void {

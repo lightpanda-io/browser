@@ -16,12 +16,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The one staticlib Zig links. Domain crates export their `extern "C"`
-//! entry points; re-exporting them here keeps their symbols in the archive.
-//! Process-wide concerns (the allocator) live here, not in a domain crate.
+//! The one staticlib Zig links. Domain crates define their own `extern "C"`
+//! entry points; `extern crate` is what pulls an otherwise-unreferenced crate
+//! into the archive (edition 2018+ drops unused `--extern` deps). Process-wide
+//! concerns (the allocator) live here, not in a domain crate.
 
-pub use lightpanda_html5ever::*;
-pub use lightpanda_render::*;
+extern crate lightpanda_html5ever;
+extern crate lightpanda_render;
 
 #[cfg(feature = "memstats")]
 #[global_allocator]
