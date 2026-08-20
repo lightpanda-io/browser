@@ -875,6 +875,16 @@ pub fn moveBefore(self: *Document, node: js.Value, child: js.Value, frame: *Fram
 }
 
 pub fn elementFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) !?*Element {
+    // CSSOM View requires the public hit-test APIs to reject coordinates
+    // outside the viewport before walking the document. Keep this check here
+    // so elementFromVerticalPoint can continue using document coordinates.
+    const viewport = frame._page.getViewport();
+    const width: f64 = @floatFromInt(viewport.width);
+    const height: f64 = @floatFromInt(viewport.height);
+    if (x < 0 or y < 0 or x > width or y > height) {
+        return null;
+    }
+
     return self.elementFromPointImpl(x, y, false, frame);
 }
 
