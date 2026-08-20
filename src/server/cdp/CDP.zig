@@ -23,27 +23,27 @@ const App = @import("../../App.zig");
 const Inbox = @import("../../Inbox.zig");
 const Notification = @import("../../Notification.zig");
 
-const WS = @import("../../network/WS.zig");
 const http = @import("../../network/http.zig");
-const Server = @import("../Server.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 
-const js = @import("../../browser/js/js.zig");
-const Browser = @import("../../browser/Browser.zig");
-const Session = @import("../../browser/Session.zig");
-const Frame = @import("../../browser/Frame.zig");
 const Page = @import("../../browser/Page.zig");
 const Mime = @import("../../browser/Mime.zig");
+const Frame = @import("../../browser/Frame.zig");
+const Browser = @import("../../browser/Browser.zig");
+const Session = @import("../../browser/Session.zig");
 const Element = @import("../../browser/webapi/Element.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
-const Connection = @import("../Connection.zig");
+const WS = @import("../WS.zig");
+const Link = @import("../Link.zig");
+const Server = @import("../Server.zig");
 const Driver = @import("../Driver.zig");
 const Incrementing = @import("id.zig").Incrementing;
 
 const fetch = @import("domains/fetch.zig");
 const network_domain = @import("domains/network.zig");
 
+const js = lp.js;
 const log = lp.log;
 const json = std.json;
 const posix = std.posix;
@@ -62,14 +62,9 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 const CDP = @This();
 
 app: *App,
-conn: Connection,
+conn: Link,
 browser: Browser,
 allocator: Allocator,
-
-// Server run-loop read-side handle for the CDP socket. Populated in
-// init; Server.serve calls registerLink(&cdp.link) after the
-// worker-side handshake completes, and unregisterLink before teardown.
-link: Server.Link,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -103,16 +98,11 @@ browser_context_arena: std.heap.ArenaAllocator,
 // Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
 streams: @import("domains/io.zig").Streams,
 
-pub fn init(
-    self: *CDP,
-    app: *App,
-    socket: posix.socket_t,
-) !void {
+pub fn init(self: *CDP, app: *App, socket: posix.socket_t) !void {
     const allocator = app.allocator;
 
     self.* = .{
         .app = app,
-        .link = undefined,
         .conn = undefined,
         .browser = undefined,
         .allocator = allocator,
@@ -124,20 +114,12 @@ pub fn init(
         .streams = .{ .allocator = allocator },
     };
 
-    const driver: Driver = .init(.{ .cdp = self });
+    const driver = Driver.init(.{ .cdp = self });
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, driver);
-    const http_client = &self.browser.http_client;
+    errdefer self.browser.deinit();
 
-    try self.conn.init(app, socket, .cdp, &http_client.inbox);
-    errdefer self.conn.deinit();
-
-    self.link = .{
-        .driver = driver,
-        .state = .live,
-        .socket = socket,
-        .handles = http_client.handles,
-    };
+    try self.conn.init(app, socket, .cdp, &self.browser.http_client.inbox);
 }
 
 pub fn deinit(self: *CDP) void {
@@ -1355,7 +1337,7 @@ pub const Command = struct {
 
 // When we parse a JSON message from the client, this is the structure
 // we always expect. Parsed on the Network thread inside
-// Connection.handleMessage; the slices reference the raw JSON bytes
+// Link.handleMessage; the slices reference the raw JSON bytes
 // (or arena allocations for fields that needed unescaping). Both
 // outlive the InputMessage for the inbox message's lifetime.
 pub const InputMessage = struct {

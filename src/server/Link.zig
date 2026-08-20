@@ -21,44 +21,43 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const Inbox = @import("../Inbox.zig");
-const WS = @import("../network/WS.zig");
-const sys_net = @import("../sys/net.zig");
 const ArenaPool = @import("../ArenaPool.zig");
+const sys_net = @import("../sys/net.zig");
 
+const WS = @import("WS.zig");
 const CDP = @import("cdp/CDP.zig");
+const Driver = @import("Driver.zig");
 
 const log = lp.log;
 const posix = std.posix;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-pub const Connection = @This();
+// The worker's end of an upgraded connection (the loop's is Server.WebSocket).
+// Reads/framing happen on the server run loop (readAvailable → inbox); the worker
+// thread is the sole writer (send*). The two sides touch disjoint state
+// (reader+inbox vs send_arena+socket write) so no lock is needed beyond the
+// inbox's own.
+const Link = @This();
 
-// is .starting until server.track is called
-const State = enum { starting, live };
-
-const Protocol = enum { cdp, bidi };
-
-// reference to http_client.inbox
 inbox: *Inbox,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
 socket_flags: usize,
-state: State = .starting,
-protocol: Protocol,
-reader: WS.Reader(true),
+protocol: Driver.Protocol,
+reader: WS.Reader,
 send_arena: ArenaAllocator,
 
 pub fn init(
-    self: *Connection,
+    self: *Link,
     app: *App,
     socket: posix.socket_t,
-    protocol: Protocol,
+    protocol: Driver.Protocol,
     inbox: *Inbox,
 ) !void {
     const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
-    const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
     if (lp.IS_TEST == false) {
-        lp.assert(socket_flags & nonblocking == nonblocking, "Connection.init blocking", .{});
+        const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
+        lp.assert(socket_flags & nonblocking == nonblocking, "Link.init blocking", .{});
     }
 
     const config = app.config;
@@ -75,19 +74,17 @@ pub fn init(
     };
 }
 
-pub fn deinit(self: *Connection) void {
+pub fn deinit(self: *Link) void {
     self.reader.deinit();
     self.send_arena.deinit();
 }
 
-pub fn send(self: *Connection, data: []const u8) !void {
+pub fn send(self: *Link, data: []const u8) !void {
     var pos: usize = 0;
     var changed_to_blocking: bool = false;
     defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
 
     defer if (changed_to_blocking) {
-        // We had to change our socket to blocking mode to get our write out
-        // We need to change it back to non-blocking.
         _ = sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
             log.err(.app, "ws restore nonblocking", .{ .err = err });
         };
@@ -96,15 +93,12 @@ pub fn send(self: *Connection, data: []const u8) !void {
     LOOP: while (pos < data.len) {
         const written = sys_net.write(self.socket, data[pos..]) catch |err| switch (err) {
             error.WouldBlock => {
-                // self.socket is nonblocking, because we don't want to block
-                // reads. But our life is a lot easier if we block writes,
-                // largely, because we don't have to maintain a queue of pending
-                // writes (which would each need their own allocations). So
-                // if we get a WouldBlock error, we'll switch the socket to
-                // blocking and switch it back to non-blocking after the write
-                // is complete. Doesn't seem particularly efficiently, but
-                // this should virtually never happen.
-                lp.assert(changed_to_blocking == false, "Connection.double block", .{});
+                // The socket is nonblocking so loop reads never stall. Writes
+                // are simpler if we can block: no per-connection pending-write
+                // queue with its own allocations. On WouldBlock we flip the
+                // socket to blocking for this write and flip it back after.
+                // Should virtually never happen.
+                lp.assert(changed_to_blocking == false, "Link double block", .{});
                 changed_to_blocking = true;
                 _ = try sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
                 continue :LOOP;
@@ -119,7 +113,7 @@ pub fn send(self: *Connection, data: []const u8) !void {
     }
 }
 
-pub fn sendPong(self: *Connection, data: []const u8) !void {
+pub fn sendPong(self: *Link, data: []const u8) !void {
     if (data.len == 0) {
         return self.send(&WS.EMPTY_PONG);
     }
@@ -133,61 +127,74 @@ pub fn sendPong(self: *Connection, data: []const u8) !void {
     return self.send(framed);
 }
 
-// Websocket frames have a variable length header. For server-client,
-// it could be anywhere from 2 to 10 bytes. Our IO.Loop doesn't have
-// writev, so we need to get creative. We'll JSON serialize to a
-// buffer, where the first 10 bytes are reserved. We can then backfill
-// the header and send the slice.
-pub fn sendJSON(self: *Connection, message: anytype, opts: std.json.Stringify.Options) !void {
+// Websocket frames have a variable-length header (2-10 bytes server->client).
+// We serialize into a buffer whose first 10 bytes are reserved, then
+// backfill the header right-aligned and send the slice.
+pub fn sendJSON(self: *Link, message: anytype, opts: std.json.Stringify.Options) !void {
     const allocator = self.send_arena.allocator();
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
-
-    // reserve space for the maximum possible header
     try aw.writer.writeAll(&[_]u8{0} ** 10);
     try std.json.Stringify.value(message, opts, &aw.writer);
     const framed = WS.fillHeader(aw.toArrayList());
     return self.send(framed);
 }
 
-pub fn sendJSONRaw(self: *Connection, buf: std.ArrayList(u8)) !void {
-    // Dangerous API!. We assume the caller has reserved the first 10
-    // bytes in `buf`.
+pub fn sendJSONRaw(self: *Link, buf: std.ArrayList(u8)) !void {
+    // Dangerous API! Assumes the caller reserved the first 10 bytes in buf.
     const framed = WS.fillHeader(buf);
     return self.send(framed);
 }
 
-pub fn feed(self: *Connection, data: []const u8) !bool {
-    var remaining = data;
-    while (remaining.len > 0) {
-        // we copy what will fit into our read buffer
+pub const Read = struct {
+    // false once a close frame was consumed: stop reading, the worker
+    // replies and disconnects itself
+    keep: bool,
+    // at least one frame landed in the inbox
+    pushed: bool,
+};
+
+// Server loop. The socket is readable
+pub fn readAvailable(self: *Link, budget: usize) !Read {
+    var pushed = false;
+    var remaining = budget;
+    while (remaining > 0) {
         const dst = self.reader.readBuf();
-        const used = @min(remaining.len, dst.len);
-        @memcpy(dst[0..used], remaining[0..used]);
-        self.reader.len += used;
-
-        // If we copied 1+ valid messages, this will process it.
-        if ((try self.processMessages()) == false) {
-            return false;
+        if (dst.len == 0) {
+            // a partial message already fills the buffer
+            return error.TooLarge;
         }
-
-        remaining = remaining[used..];
+        const want = dst[0..@min(dst.len, remaining)];
+        const n = posix.read(self.socket, want) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+        if (n == 0) {
+            return error.Closed;
+        }
+        self.reader.len += n;
+        if ((try self.processMessages(&pushed)) == false) {
+            return .{ .keep = false, .pushed = pushed };
+        }
+        remaining -= n;
+        if (n < want.len) {
+            // a short read: the socket is (very likely) drained
+            break;
+        }
     }
-    return true;
+    return .{ .keep = true, .pushed = pushed };
 }
 
-// Framing-only iteration over received bytes. Will process as many messages
-// as are buffered.
-fn processMessages(self: *Connection) !bool {
+fn processMessages(self: *Link, pushed: *bool) !bool {
     var reader = &self.reader;
     while (true) {
         const msg = (try reader.next()) orelse break;
 
         const keep = switch (msg.type) {
             .pong => true,
-            .ping, .text, .binary => try self.handleMessage(msg),
+            .ping, .text, .binary => try self.handleMessage(msg, pushed),
             .close => blk: {
-                _ = try self.handleMessage(msg);
+                _ = try self.handleMessage(msg, pushed);
                 break :blk false;
             },
         };
@@ -195,52 +202,46 @@ fn processMessages(self: *Connection) !bool {
         if (msg.cleanup_fragment) {
             reader.cleanup();
         }
-
         if (!keep) {
             return false;
         }
     }
-
-    // We might have read part of the next message. Our reader potentially
-    // has to move data around in its buffer to make space.
     reader.compact();
     return true;
 }
 
-fn handleMessage(self: *Connection, msg: WS.Message) !bool {
+fn handleMessage(self: *Link, msg: WS.Message, pushed: *bool) !bool {
     switch (msg.type) {
         .text, .binary => return switch (self.protocol) {
-            .cdp => self.pushCdp(msg.data),
-            .bidi => self.pushBiDi(msg.data),
+            .cdp => self.pushCdp(msg.data, pushed),
+            .bidi => self.pushBiDi(msg.data, pushed),
         },
         .ping => {
             const arena = try self.arena_pool.acquire(.tiny, "ws ping");
             errdefer arena.release();
             self.inbox.push(arena, .{ .ping = try arena.dupe(u8, msg.data) });
+            pushed.* = true;
             return true;
         },
         .close => {
             const arena = try self.arena_pool.acquire(.tiny, "ws close");
             self.inbox.push(arena, .close);
+            pushed.* = true;
             return true;
         },
         .pong => unreachable, // processMessages skips pong
     }
 }
 
-// Parse a CDP JSON frame on the Network thread and push it onto the
-// inbox already-parsed. The consumer's allowlist check works on
-// `input.method` directly (no substring matching against raw JSON),
-// and the worker doesn't re-parse on dispatch. On parse failure we
-// push `.disconnect(error.InvalidJSON)` so the worker tears down —
-// treated the same way as a fatal WS framing error.
-fn pushCdp(self: *Connection, bytes: []const u8) !bool {
-    // TODO: is it worth trying to pad this for the cost overhead of parsing?
+// Parse a CDP JSON frame on the run loop and push it already-parsed: the
+// consumer's allowlist works on input.method directly and the worker
+// doesn't re-parse. On parse failure push .disconnect(InvalidJSON) so the
+// worker tears down, same as a fatal framing error.
+fn pushCdp(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const arena = try self.arena_pool.acquire(bytes.len, "cdp data");
     errdefer arena.release();
 
     const raw = try arena.dupe(u8, bytes);
-
     const input = std.json.parseFromSliceLeaky(
         CDP.InputMessage,
         arena.allocator(),
@@ -248,27 +249,25 @@ fn pushCdp(self: *Connection, bytes: []const u8) !bool {
         .{ .ignore_unknown_fields = true },
     ) catch {
         self.inbox.push(arena, .{ .disconnect = error.InvalidJSON });
+        pushed.* = true;
         return false;
     };
 
-    self.inbox.push(arena, .{ .cdp = .{
-        .raw = raw,
-        .input = input,
-    } });
+    self.inbox.push(arena, .{ .cdp = .{ .raw = raw, .input = input } });
+    pushed.* = true;
     return true;
 }
 
-// BiDi frames are pushed raw; the worker parses them. Unlike CDP there's
-// no allowlist that needs the method name on this thread yet — when BiDi
-// grows request interception, this is where that parse would go.
-fn pushBiDi(self: *Connection, bytes: []const u8) !bool {
+// BiDi frames are pushed raw; the worker parses them.
+fn pushBiDi(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     const arena = try self.arena_pool.acquire(bytes.len, "bidi data");
     errdefer arena.release();
-
     self.inbox.push(arena, .{ .bidi = try arena.dupe(u8, bytes) });
+    pushed.* = true;
     return true;
 }
 
-pub fn shutdown(self: *Connection) void {
+// Called from the worker (Driver.shutdown) to break the loop's read.
+pub fn shutdown(self: *Link) void {
     sys_net.shutdown(self.socket, .recv) catch {};
 }

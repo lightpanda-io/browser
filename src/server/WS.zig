@@ -108,12 +108,17 @@ pub fn fillHeader(buf: std.ArrayList(u8)) []const u8 {
 const RECLAIM_TO = 256 * 1024;
 const RECLAIM_AFTER = 8;
 
-// WebSocket message reader. Given websocket message, acts as an iterator that
-// can return zero or more Messages. When next returns null, any incomplete
-// message will remain in reader.data
-pub fn Reader(comptime EXPECT_MASK: bool) type {
+pub const Reader = ReaderM(true);
+pub const ReaderNoMask = ReaderM(false);
+
+// WebSocket and HTTP aware reader. EXPECT_MASK is always true, (since this is
+// only used to read server mesages) except for testing, where we setup test
+// clients.
+fn ReaderM(comptime EXPECT_MASK: bool) type {
     return struct {
         allocator: Allocator,
+
+        buf: []u8,
 
         // position in buf of the start of the next message
         pos: usize = 0,
@@ -123,8 +128,6 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
         len: usize = 0,
 
         max_message_size: usize,
-
-        buf: []u8,
 
         fragments: ?Fragments = null,
 
@@ -537,7 +540,7 @@ fn feedAndDrain(reader: anytype, frame: []const u8) !void {
 
 test "reader: reclaims buffer after a run of small messages" {
     const allocator = testing.allocator;
-    var reader = try Reader(false).init(allocator, 4 * 1024 * 1024);
+    var reader = try ReaderNoMask.init(allocator, 4 * 1024 * 1024);
     defer reader.deinit();
 
     // A large message forces the buffer to grow well past RECLAIM_TO.
