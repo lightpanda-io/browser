@@ -68,9 +68,24 @@
 
 <script id="outside_viewport">
 {
-  // Test points outside all elements
-  const element = document.elementFromPoint(-1000, -1000);
-  testing.expectEqual(null, element);
+  // CSSOM View requires viewport-external coordinates to return null.
+  const outsidePoints = [
+    [-1, 0],
+    [0, -1],
+    [window.innerWidth + 1, 10],
+    [0, window.innerHeight + 1],
+    // Coordinates observed on Taobao before the traversal hotspot.
+    [1248, 1932576],
+  ];
+
+  for (const [x, y] of outsidePoints) {
+    testing.expectEqual(null, document.elementFromPoint(x, y));
+  }
+
+  // The CSSOM View bounds are strict: coordinates equal to the dimensions
+  // are not rejected by the viewport guard.
+  testing.expectTrue(document.elementFromPoint(window.innerWidth, 10) !== null);
+  testing.expectTrue(document.elementFromPoint(10, window.innerHeight) !== null);
 }
 </script>
 
@@ -209,11 +224,20 @@
 
 <script id="elementsFromPoint_outside">
 {
-  // Test with point outside all elements
-  const elements = document.elementsFromPoint(-1000, -1000);
+  // elementsFromPoint shares the viewport guard and returns an empty sequence.
+  const outsidePoints = [
+    [-1, 0],
+    [0, -1],
+    [window.innerWidth + 1, 10],
+    [0, window.innerHeight + 1],
+    [1248, 1932576],
+  ];
 
-  testing.expectTrue(Array.isArray(elements));
-  testing.expectEqual(0, elements.length);
+  for (const [x, y] of outsidePoints) {
+    const elements = document.elementsFromPoint(x, y);
+    testing.expectTrue(Array.isArray(elements));
+    testing.expectEqual(0, elements.length);
+  }
 }
 </script>
 
