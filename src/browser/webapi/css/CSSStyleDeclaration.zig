@@ -122,13 +122,12 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    var visibility_cache: Element.VisibilityCache = .{};
-    if (!element.checkVisibilityCached(&visibility_cache, frame)) {
+    if (!element.checkVisibilityCached(null, frame)) {
         return "auto";
     }
     const value = switch (dimension) {
-        .width => element.getClientWidthWithCache(frame, &visibility_cache),
-        .height => element.getClientHeightWithCache(frame, &visibility_cache),
+        .width => element.boxAxis(frame, .width),
+        .height => element.boxAxis(frame, .height),
     };
     return std.fmt.allocPrint(frame.local_arena, "{d}px", .{value}) catch "auto";
 }

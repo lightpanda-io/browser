@@ -2965,6 +2965,7 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
         const old = if (old_value) |o| o.str() else null;
         popover.attributeChanged(element, old, value.str(), self);
     } else if (name.eql(comptime .wrap("style"))) {
+        element._flags.has_inline_style = true;
         self.styleAttributeChanged(element, value.str());
     }
 }
@@ -2993,7 +2994,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
 }
 
 fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
-    const style = self._element_styles.get(element) orelse return;
+    const style = element.getStyle(self) orelse return;
     style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
         log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
     };

@@ -165,8 +165,10 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
             if (!connected or !target.checkVisibilityCached(&visibility_cache, frame)) {
                 break :blk .{ 0, 0 };
             }
-            const dims = target.getElementDimensions(frame);
-            break :blk .{ dims.width, dims.height };
+            break :blk .{
+                target.getElementAxis(frame, .width).value,
+                target.getElementAxis(frame, .height).value,
+            };
         };
 
         if (width == obs.last_width and height == obs.last_height) {

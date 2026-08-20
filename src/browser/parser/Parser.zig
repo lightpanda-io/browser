@@ -617,6 +617,7 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
         // putNew only adds if the attribute doesn't already exist
         try attr_list.putNew(name, value, frame);
     }
+    element.noteStyleAttribute();
 }
 
 fn getTemplateContentsCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque {

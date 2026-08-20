@@ -146,7 +146,13 @@ pub const Flags = packed struct(u8) {
     // approach
     click_in_progress: bool = false,
 
-    _unused: u5 = 0,
+    // The element may have inline style: a materialized entry in the frame's
+    // _element_styles, or a `style` attribute not yet materialized. Set once,
+    // never cleared. A clear bit lets the faux layout skip both the map probe
+    // and the attribute scan for the many elements that have neither.
+    has_inline_style: bool = false,
+
+    _unused: u4 = 0,
 };
 
 _type: Type,
@@ -979,11 +985,24 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
+    self._flags.has_inline_style = true;
     return gop.value_ptr.*;
 }
 
-fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+pub fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+    if (!self._flags.has_inline_style) {
+        return null;
+    }
     return self.ownerFrame(frame)._element_styles.get(self);
+}
+
+// Marks the element as possibly having inline style once a `style` attribute
+// lands on it. Attribute population paths that bypass attributeChange (the
+// parser, cloneNode) call this after filling the list.
+pub fn noteStyleAttribute(self: *Element) void {
+    if (self._attributes.hasSafe(comptime .wrap("style"))) {
+        self._flags.has_inline_style = true;
+    }
 }
 
 pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -1314,6 +1333,14 @@ pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *F
     return !self.ownerFrame(frame)._style_manager.isHidden(self, cache, .{});
 }
 
+// The element's own display:none only, no ancestor walk. For a child or
+// sibling of an element already known to be visible, that is the whole
+// answer: they share the visible ancestor chain — and the owner frame, which
+// the caller resolves once rather than per element.
+fn isVisibleSelf(self: *Element, style_manager: *StyleManager) bool {
+    return !style_manager.hasDisplayNone(self);
+}
+
 const CheckVisibilityOpts = struct {
     checkOpacity: bool = false,
     opacityProperty: bool = false,
@@ -1328,100 +1355,77 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     });
 }
 
-pub const Dimensions = struct {
-    width: f64,
-    height: f64,
-    // if the value is explicit (e.g. inline style, width attribute, ...) or defaulted
-    explicit_width: bool = false,
-    explicit_height: bool = false,
+pub const Axis = enum {
+    width,
+    height,
+
+    // The axis' value, and whether it's explicit or the default
+    pub const State = struct {
+        value: f64,
+        explicit: bool = false,
+    };
 };
 
-pub fn getElementDimensions(self: *Element, frame: *Frame) Dimensions {
-    var dims: Dimensions = .{ .width = 5.0, .height = 5.0 };
-
+pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
     if (self.getStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
-        if (CSS.parseDimensionViewport(decl.getPropertyValue("width", frame), frame)) |w| {
-            dims.width = w;
-            dims.explicit_width = true;
-        }
-        if (CSS.parseDimensionViewport(decl.getPropertyValue("height", frame), frame)) |h| {
-            dims.height = h;
-            dims.explicit_height = true;
+        if (CSS.parseDimensionViewport(decl.getPropertyValue(@tagName(axis), frame), frame)) |v| {
+            return .{ .value = v, .explicit = true };
         }
     }
 
-    if (dims.width == 5.0 or dims.height == 5.0) {
-        const tag = self.getTag();
-
+    switch (self.getTag()) {
         // Root containers get large default size to contain descendant positions.
         // With calculateDocumentPosition using linear depth scaling (100px per level),
         // even very deep trees (100 levels) stay within 10,000px.
         // 100M pixels is plausible for very long documents.
-        if (tag == .html or tag == .body) {
-            if (dims.width == 5.0) dims.width = 1920.0;
-            if (dims.height == 5.0) dims.height = 100_000_000.0;
-        } else if (tag == .img or tag == .iframe) {
-            if (self.getAttributeSafe(comptime .wrap("width"))) |w| {
-                if (std.fmt.parseFloat(f64, w)) |parsed| {
-                    dims.width = parsed;
-                    dims.explicit_width = true;
+        .html, .body => return .{ .value = if (axis == .width) 1920.0 else 100_000_000.0 },
+        .img, .iframe => {
+            if (self.getAttributeSafe(comptime .wrap(@tagName(axis)))) |attr| {
+                if (std.fmt.parseFloat(f64, attr)) |parsed| {
+                    return .{ .value = parsed, .explicit = true };
                 } else |_| {}
             }
-            if (self.getAttributeSafe(comptime .wrap("height"))) |h| {
-                if (std.fmt.parseFloat(f64, h)) |parsed| {
-                    dims.height = parsed;
-                    dims.explicit_height = true;
-                } else |_| {}
-            }
-        }
+        },
+        else => {},
     }
 
-    return dims;
+    return .{ .value = 5.0 };
 }
 
 // We can't do this correctly without full styles and more rendering. We also
 // can't just ignore the children since some sites append nodes until a certain
 // width / height treshold is reached. If the size isn't explicit, we fallback
-// to contentWidth/contentHeight
+// to the content size.
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    var visibility_cache: VisibilityCache = .{};
-    return self.getClientWidthWithCache(frame, &visibility_cache);
-}
-
-pub fn getClientWidthWithCache(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
-    if (!self.checkVisibilityCached(visibility_cache, frame)) {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-
-    const dims = self.getElementDimensions(frame);
-
-    const tag = self.getTag();
-    if (tag == .html or tag == .body or dims.explicit_width) {
-        return dims.width;
-    }
-
-    return @max(dims.width, self.contentWidth(frame, visibility_cache));
+    return self.boxAxis(frame, .width);
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
-    var visibility_cache: VisibilityCache = .{};
-    return self.getClientHeightWithCache(frame, &visibility_cache);
-}
-
-pub fn getClientHeightWithCache(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
-    if (!self.checkVisibilityCached(visibility_cache, frame)) {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
+    return self.boxAxis(frame, .height);
+}
 
-    const dims = self.getElementDimensions(frame);
-
-    const tag = self.getTag();
-    if (tag == .html or tag == .body or dims.explicit_height) {
-        return dims.height;
+// Caller must have made sure self is visible.
+pub fn boxAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+    const own = self.getElementAxis(frame, axis);
+    if (own.explicit) {
+        // an explicitly set value always wins
+        return own.value;
     }
 
-    return @max(dims.height, self.contentHeight(frame, visibility_cache));
+    const tag = self.getTag();
+    if (tag == .html or tag == .body) {
+        // html/body return their set value regardless of children.
+        return own.value;
+    }
+
+    return @max(own.value, self.contentAxis(frame, axis));
 }
 
 pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
@@ -1440,17 +1444,11 @@ pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
 
 // Some cases need the bounding rect but have already done the visibility check.
 pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
-    const y = calculateDocumentPosition(self.asNode());
-    const dims = self.getElementDimensions(frame);
-
-    // Use sibling position for x coordinate to ensure siblings have different x values
-    const x = calculateSiblingPosition(self.asNode());
-
     return .{
-        .x = x,
-        .y = y,
-        .width = dims.width,
-        .height = dims.height,
+        .x = self.horizontalPosition(frame),
+        .y = calculateDocumentPosition(self.asNode()),
+        .width = self.boxAxis(frame, .width),
+        .height = self.boxAxis(frame, .height),
     };
 }
 
@@ -1507,12 +1505,11 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
-    var visibility_cache: VisibilityCache = .{};
-    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
 
-    const height = self.getElementDimensions(frame).height;
+    const height = self.getElementAxis(frame, .height).value;
 
     const tag = self.getTag();
     // As in getScrollWidth: the root containers carry artificial giant
@@ -1521,54 +1518,29 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
         return height;
     }
 
-    return @max(height, self.contentHeight(frame, &visibility_cache));
-}
-
-// The height of the direct child elements stacked vertically, the counterpart
-// of contentWidth.
-//
-// Note that the two assume contradictory arrangements — contentWidth lays the
-// children out in a row, this stacks them. That is deliberate. We can't detect
-// the real layout mode (see contentWidth), so each axis independently assumes
-// the arrangement that produces overflow. Together they bound the content
-// extent per axis rather than describing one coherent layout: reporting no
-// overflow when there is some is what wedges measure-then-mutate loops,
-// while the reverse merely over-reports.
-fn contentHeight(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
-    var total: f64 = 0;
-
-    var child = self.asNode().firstChild();
-    while (child) |node| : (child = node.nextSibling()) {
-        if (node.is(Element)) |el| {
-            if (el.checkVisibilityCached(visibility_cache, frame)) {
-                total += el.getElementDimensions(frame).height;
-            }
-        }
-    }
-
-    return total;
+    return @max(height, self.contentAxis(frame, .height));
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
-    var visibility_cache: VisibilityCache = .{};
-    if (!self.checkVisibilityCached(&visibility_cache, frame)) {
+    if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
 
-    const width = self.getElementDimensions(frame).width;
+    const width = self.getElementAxis(frame, .width).value;
 
     const tag = self.getTag();
     // The root containers carry artificial giant defaults (1920 and
-    // 100_000_000, see getElementDimensions). Stacking their children on
+    // 100_000_000, see getElementAxis). Stacking their children on
     // top would inflate a value sites read to detect page overflow.
     if (tag == .html or tag == .body) {
         return width;
     }
 
-    return @max(width, self.contentWidth(frame, &visibility_cache));
+    return @max(width, self.contentAxis(frame, .width));
 }
 
-// The width of the direct child elements laid end to end on a single row.
+// One axis of the direct child elements' size: laid end to end on a single
+// row for the width, stacked for the height.
 //
 // The dummy layout engine has no line-breaking, and an element only overflows
 // horizontally when its children don't wrap (white-space:nowrap, a flex row, an
@@ -1578,30 +1550,30 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // rules for `display:none` and `visibility` alone.
 //
 // Only direct children are measured, never the whole subtree. This runs on
-// every scrollWidth read, and recursing would make an element's cost O(subtree)
-// rather than O(fan-out).
+// every size read, and recursing would make an element's cost O(subtree)
+// rather than O(fan-out). It also keeps an ancestor from growing in lockstep
+// with its descendants, so "append until the track outgrows its shell" still
+// crosses the threshold.
 //
 // Growing with the child count is the point: JS that appends content until
 // `scrollWidth` passes a threshold (the infinite-marquee idiom) never
 // terminates when the metric ignores what it just inserted.
 //
-// Text children are not measured, matching contentHeight. Estimating a text run
-// from its length would need a per-character advance, which in turn has to track
-// font-size or "shrink the font until it fits" loops stop converging — and it
-// would report overflow for practically every element containing text, since a
-// few words already exceed the default box. Element children are what content
-// grown by script actually consists of.
-fn contentWidth(self: *Element, frame: *Frame, visibility_cache: *VisibilityCache) f64 {
+// Text children are not measured. Estimating a text run from its length would
+// need a per-character advance, which in turn has to track font-size or
+// "shrink the font until it fits" loops stop converging — and it would report
+// overflow for practically every element containing text, since a few words
+// already exceed the default box. Element children are what content grown by
+// script actually consists of.
+fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
+    const style_manager = &self.ownerFrame(frame)._style_manager;
 
-    // The cache arrives seeded by the caller's own visibility walk, and
-    // siblings share that ancestor chain, so the loop costs one own-element
-    // check per child rather than N ancestor walks.
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         if (node.is(Element)) |el| {
-            if (el.checkVisibilityCached(visibility_cache, frame)) {
-                total += el.getElementDimensions(frame).width;
+            if (el.isVisibleSelf(style_manager)) {
+                total += el.getElementAxis(frame, axis).value;
             }
         }
     }
@@ -1610,19 +1582,11 @@ fn contentWidth(self: *Element, frame: *Frame, visibility_cache: *VisibilityCach
 }
 
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
-        return 0.0;
-    }
-    const dims = self.getElementDimensions(frame);
-    return dims.height;
+    return self.getClientHeight(frame);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
-        return 0.0;
-    }
-    const dims = self.getElementDimensions(frame);
-    return dims.width;
+    return self.getClientWidth(frame);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
@@ -1636,7 +1600,7 @@ pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
     if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
-    return calculateSiblingPosition(self.asNode());
+    return self.horizontalPosition(frame);
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
@@ -1754,28 +1718,40 @@ fn countSubtreeNodes(node: *Node) f64 {
     return count;
 }
 
-// Calculates horizontal position using the same approach as y,
-// just scaled differently for visual distinction
-fn calculateSiblingPosition(node: *Node) f64 {
-    var position: f64 = 0.0;
-    var current = node;
+// The horizontal position follows the same single-row assumption as
+// contentAxis: an element sits to the right of the visible element
+// siblings before it.
 
-    // Walk up to root, counting preceding nodes (same as y)
+// translateX is commonly used to shift elements around, e.g. in a carousel to
+// shift things around. So we honor any transform: translateX inline styles.
+pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
+    var x: f64 = 0.0;
+    var current = self.asNode();
+    const style_manager = &self.ownerFrame(frame)._style_manager;
+
+    if (self.getStyle(frame)) |style| {
+        x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+    }
+
     while (current.parentNode()) |parent| {
-        // Count all previous siblings and their descendants
-        var sibling = parent.firstChild();
-        while (sibling) |s| {
-            if (s == current) break;
-            position += countSubtreeNodes(s);
-            sibling = s.nextSibling();
+        if (parent.is(Element)) |el| {
+            if (el.getStyle(frame)) |style| {
+                x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
+            }
         }
-
-        // Count the parent itself
-        position += 1.0;
+        var sibling = parent.firstChild();
+        while (sibling) |s| : (sibling = s.nextSibling()) {
+            if (s == current) break;
+            if (s.is(Element)) |el| {
+                if (el.isVisibleSelf(style_manager)) {
+                    x += el.getElementAxis(frame, .width).value;
+                }
+            }
+        }
         current = parent;
     }
 
-    return position * 5.0; // 5px per node
+    return x;
 }
 
 pub fn getElementsByTagName(self: *Element, tag_name: []const u8, frame: *Frame) !Node.GetElementsByTagNameResult {

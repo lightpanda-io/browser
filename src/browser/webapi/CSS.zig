@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const units = @import("../css/units.zig");
+const Tokenizer = @import("../css/Tokenizer.zig");
 
 const CSS = @This();
 _pad: bool = false,
@@ -44,6 +45,46 @@ pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
         .vw => parsed.value * @as(f64, @floatFromInt(frame._page.getViewport().width)) / 100.0,
         else => null,
     };
+}
+
+// Extract the X value from a transfrom. This could come from a translate,
+// translatex, translate3d or matrix function.
+pub fn parseTranslateX(value: []const u8) f64 {
+    var total: f64 = 0.0;
+    var tokenizer: Tokenizer = .{ .input = value };
+    while (tokenizer.next()) |token| {
+        const name = switch (token) {
+            .function => |name| name,
+            else => continue,
+        };
+        const x_arg: usize = blk: {
+            if (std.ascii.eqlIgnoreCase(name, "translatex") or std.ascii.eqlIgnoreCase(name, "translate") or std.ascii.eqlIgnoreCase(name, "translate3d")) {
+                // x is the first arg in all these cases
+                break :blk 0;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "matrix")) {
+                // x is the 4th arg in the matrix
+                break :blk 4;
+            }
+            continue;
+        };
+
+        var arg: usize = 0;
+        while (tokenizer.next()) |t| {
+            switch (t) {
+                .close_parenthesis => break,
+                .comma => arg += 1,
+                .number => |n| if (arg == x_arg) {
+                    total += n.value;
+                },
+                .dimension => |d| if (arg == x_arg and std.ascii.eqlIgnoreCase(d.unit, "px")) {
+                    total += d.value;
+                },
+                else => {},
+            }
+        }
+    }
+    return total;
 }
 
 /// Escapes a CSS identifier string
