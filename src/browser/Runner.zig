@@ -583,3 +583,35 @@ test "Runner: idle notifications advance past a resolved condition" {
     try testing.expectEqual(true, frame._notified_network_idle == .done);
     try testing.expectEqual(true, frame._notified_network_almost_idle == .done);
 }
+
+test "Runner: waits out a throttled navigation" {
+    const session = testing.test_session;
+    const http_client = &session.browser.http_client;
+
+    // Enable the per-host navigation throttle for this test only, and spend
+    // 127.0.0.1's slot so the navigation below has to wait ~300ms.
+    const network = http_client.network;
+    network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 300, 1);
+    defer {
+        network.rate_limiter.?.deinit();
+        network.rate_limiter = null;
+    }
+    const start = lp.datetime.milliTimestamp(.boot);
+    _ = try network.rate_limiter.?.reserve("127.0.0.1", start);
+
+    const page = try session.createPage();
+    defer page.close();
+    try page.navigate("http://127.0.0.1:9582/src/browser/tests/runner/runner1.html", .{});
+    try testing.expectEqual(1, http_client.delayed_count);
+    // A delayed navigation is in-flight work: the wait must not resolve early.
+    try testing.expectEqual(false, http_client.activity().idle());
+
+    var runner = session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+    try testing.expectEqual(true, elapsed >= 250);
+    try testing.expectEqual(0, http_client.delayed_count);
+
+    const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
+    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}

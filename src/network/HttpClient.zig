@@ -89,6 +89,10 @@ in_use: std.DoublyLinkedList = .{},
 // Queue for request that are waiting an available connection (aka, easy)
 pending_queue: std.DoublyLinkedList = .{},
 
+// Transfers waiting out the per-host navigation throttle, ordered by _run_at.
+delayed_queue: std.DoublyLinkedList = .{},
+delayed_count: usize = 0,
+
 // Queue for completed transfers that haven't had their callbacks executed yet
 dispatch_queue: std.DoublyLinkedList = .{},
 
@@ -443,6 +447,7 @@ pub fn abort(self: *Client) void {
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.transfers.size == 0);
         std.debug.assert(self.pending_queue.first == null);
+        std.debug.assert(self.delayed_queue.first == null);
         std.debug.assert(self.dispatch_queue.first == null);
         std.debug.assert(self.gated_queue.first == null);
         std.debug.assert(self.in_use.first == null);
@@ -526,7 +531,7 @@ pub const Activity = struct {
 
 pub fn activity(self: *const Client) Activity {
     return .{
-        .http = self.http_active + self.dispatch_count + self.intercepted,
+        .http = self.http_active + self.dispatch_count + self.intercepted + self.delayed_count,
         .ws_events = self.ws_dispatch_count,
         .ws_conns = self.ws_active,
         .pending = self.pending_queue.first != null,
@@ -658,12 +663,12 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (dispatched == false and processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
         // Nothing was dispatched, no messages were processed and nothing is
         // waiting for dispatch. We need to wait for I/O.
-        if (running > 0 or self.cdp_link_active) {
+        if (running > 0 or self.cdp_link_active or self.delayed_queue.first != null) {
             {
                 self.heartbeat.enterWait();
                 defer self.heartbeat.exitWait();
                 // The network layer will wake this up if there's acticity.
-                try self.handles.poll(&.{}, @intCast(timeout_ms));
+                try self.handles.poll(&.{}, @intCast(self.clampToDelayed(timeout_ms)));
             }
             // poll only waits, so we do the perform -> process dance again
             _ = try self.handles.perform();
@@ -694,12 +699,24 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
             // doing some work (e.g. running tasks). Let's assert that we were
             // right in doing that, else we'll likely introduce latency.
             std.debug.assert(self.pending_queue.first == null);
+            std.debug.assert(self.delayed_queue.first == null);
             std.debug.assert(self.dispatch_queue.first == null);
             std.debug.assert(self.ws_dispatch_queue.first == null);
         }
     }
 
     return waited;
+}
+
+// Never sleep past the next delayed transfer's start time.
+fn clampToDelayed(self: *const Client, timeout_ms: u32) u32 {
+    const node = self.delayed_queue.first orelse return timeout_ms;
+    const transfer: *const Transfer = @fieldParentPtr("_node", node);
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (transfer._run_at <= now) {
+        return 0;
+    }
+    return @intCast(@min(timeout_ms, transfer._run_at - now));
 }
 
 // Deliver completed response. This is the ONLY place user callbacks run,
@@ -810,6 +827,7 @@ fn isGated(self: *const Client, transfer: *const Transfer) bool {
 }
 
 fn startPending(self: *Client) !void {
+    try self.startDelayed();
     while (self.pending_queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
         const conn = self.network.getConnection() orelse {
@@ -829,6 +847,57 @@ fn startPending(self: *Client) !void {
             }
             return err;
         };
+    }
+}
+
+// Enter the pipeline for every delayed transfer whose time has come.
+fn startDelayed(self: *Client) !void {
+    if (self.delayed_queue.first == null) {
+        return;
+    }
+    const now = lp.datetime.milliTimestamp(.boot);
+    while (self.delayed_queue.first) |node| {
+        const transfer: *Transfer = @fieldParentPtr("_node", node);
+        if (transfer._run_at > now) {
+            // these are added to the queue in order, so we can exit as soon as
+            // we hit the first future _run_at.
+            return;
+        }
+        self.delayed_count -= 1;
+        self.delayed_queue.remove(node);
+
+        transfer.state = .created;
+        self.pipeline(transfer, .start) catch |err| {
+            // Same as startPending: this can run from a tick(.sync_wait), and
+            // error_callback JS must not fire on a blocking request's stack.
+            if (transfer.state == .created) {
+                transfer.failAsync(err);
+            }
+            return err;
+        };
+    }
+}
+
+// Hold the transfer out of the pipeline until `run_at` (ms, boot clock).
+fn delay(self: *Client, transfer: *Transfer, run_at: u64) void {
+    transfer._run_at = run_at;
+    transfer.state = .delayed;
+    self.delayed_count += 1;
+
+    // Ordered insert; reservations for one host are monotonic, so this is
+    // usually an append.
+    var node = self.delayed_queue.last;
+    while (node) |n| {
+        const other: *const Transfer = @fieldParentPtr("_node", n);
+        if (other._run_at <= run_at) {
+            break;
+        }
+        node = n.prev;
+    }
+    if (node) |n| {
+        self.delayed_queue.insertAfter(n, &transfer._node);
+    } else {
+        self.delayed_queue.prepend(&transfer._node);
     }
 }
 
@@ -1721,6 +1790,9 @@ pub const Request = struct {
     // these do not need to be deferred and do not obey robots.txt.
     internal: bool = false,
 
+    // Whether this request should (possibly) be throttled based on the RateLimiter
+    throttle: bool = false,
+
     // Set by syncRequest; only used to label the http_requests metric.
     sync: bool = false,
 
@@ -1973,6 +2045,9 @@ pub const Transfer = struct {
 
     start_time: u64,
 
+    // Earliest start time (ms, boot clock) while .delayed.
+    _run_at: u64 = 0,
+
     _notified_fail: bool = false,
 
     // Set when conn is temporarily detached from transfer during redirect
@@ -1991,9 +2066,10 @@ pub const Transfer = struct {
     // need to restore (and hence capture) the original headers.
     _intercept_original_headers: ?[]const RequestHeader = null,
 
-    // Linked into client.pending_queue while .queued; reused to link the
-    // retired transfer into client.graveyard (deinit unlinks it from the
-    // pending queue first, so the node is always free by then).
+    // Linked into client.pending_queue while .queued and client.delayed_queue
+    // while .delayed; reused to link the retired transfer into
+    // client.graveyard (deinit unlinks it from those queues first, so the
+    // node is always free by then).
     _node: std.DoublyLinkedList.Node = .{},
 
     // Buffered response ordered events awaiting dispatch.
@@ -2043,6 +2119,11 @@ pub const Transfer = struct {
         // On client.queue, waiting for a libcurl handle. `_node` is
         // linked into client.queue.
         queued,
+
+        // On client.delayed_queue, waiting for its per-host navigation slot
+        // (`_run_at`) before entering the pipeline. `_node` is linked into
+        // client.delayed_queue.
+        delayed,
 
         // Response events are buffered on `_events`, waiting for dispatch
         // to deliver them. `_queue_node` is linked into
@@ -2144,6 +2225,23 @@ pub const Transfer = struct {
             return;
         }
 
+        if (self.req.throttle) {
+            if (self.client.network.rate_limiter) |*rl| {
+                const now = lp.datetime.milliTimestamp(.boot);
+                const run_at = rl.reserve(URL.getHostname(self.req.url), now) catch |err| {
+                    self.abortPipelineError(err);
+                    return err;
+                };
+                if (run_at > now) {
+                    const d = run_at - now;
+                    lp.metrics.http_navigation_delay_ms.observe(@intCast(d));
+                    log.debug(.http, "navigation delayed", .{ .url = self.req.url, .ms = d });
+                    self.client.delay(self, run_at);
+                    return;
+                }
+            }
+        }
+
         self.client.pipeline(self, .start) catch |err| {
             self.abortPipelineError(err);
             return err;
@@ -2166,9 +2264,13 @@ pub const Transfer = struct {
             self._conn = null;
         }
 
-        // Unlink from client.pending_queue if we were waiting for a handle.
+        // Unlink from client.pending_queue if we were waiting for a handle,
+        // or from client.delayed_queue if we were waiting for our slot.
         if (self.state == .queued) {
             self.client.pending_queue.remove(&self._node);
+        } else if (self.state == .delayed) {
+            self.client.delayed_queue.remove(&self._node);
+            self.client.delayed_count -= 1;
         }
 
         // Same for the dispatch queue: a queued transfer (buffered, or
@@ -3463,6 +3565,8 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.transfers = .empty;
     client.blocking_requests = .empty;
     client.pending_queue = .{};
+    client.delayed_queue = .{};
+    client.delayed_count = 0;
     client.dispatch_queue = .{};
     client.gated_queue = .{};
     client.ws_dispatch_queue = .{};
@@ -3470,6 +3574,8 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.graveyard = .{};
     client.dispatch_count = 0;
     client.intercepted = 0;
+    client.http_active = 0;
+    client.ws_active = 0;
     client.cache = null;
     client.serve_mode = false;
     client.obey_robots = false;
@@ -4190,4 +4296,122 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
         try testing.expectEqual(0, client.transfers.count());
         try testing.expectEqual(null, owner.transfers.first);
     }
+}
+
+test "HttpClient: throttled navigations wait for their per-host slot" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var net: Network = undefined;
+    net.cache = null;
+    net.adblocker = null;
+    net.web_bot_auth = null;
+    // An empty pool makes processTransfer queue a started transfer instead
+    // of putting it on the wire — .queued IS "entered the pipeline".
+    net.available = .{};
+    net.conn_mutex = .init;
+    net.rate_limiter = @import("RateLimiter.zig").init(testing.allocator, 60_000, 1);
+    defer net.rate_limiter.?.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.processGraveyard();
+    client.network = &net;
+    defer client.transfers.deinit(testing.allocator);
+
+    const Helper = struct {
+        fn newTransfer(c: *Client, p: *ArenaPool, id: u32, url: [:0]const u8, throttle: bool) !*Transfer {
+            const arena = try p.acquire(.small, "test");
+            const transfer = try arena.create(Transfer);
+            transfer.* = .{
+                .arena = arena,
+                .owner = null,
+                .req = .{
+                    .frame_id = 0,
+                    .loader_id = 0,
+                    .method = .GET,
+                    .url = url,
+                    .cookie_jar = null,
+                    .cookie_origin = "",
+                    .resource_type = .document,
+                    .notification = undefined,
+                    .shutdown_callback = noopShutdown,
+                    .ctx = undefined,
+                    .throttle = throttle,
+                },
+                .client = c,
+                .id = id,
+                .start_time = 0,
+            };
+            try c.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+            return transfer;
+        }
+    };
+
+    // First navigation to a host goes straight through.
+    const a1 = try Helper.newTransfer(&client, &pool, 1, "http://a.example.com/1", true);
+    try a1.submit();
+    try testing.expectEqual(true, a1.state == .queued);
+    try testing.expectEqual(0, client.delayed_count);
+
+    // Later ones to the same host wait, in reservation order.
+    const a2 = try Helper.newTransfer(&client, &pool, 2, "http://a.example.com/2", true);
+    try a2.submit();
+    try testing.expectEqual(true, a2.state == .delayed);
+    const a3 = try Helper.newTransfer(&client, &pool, 3, "http://A.EXAMPLE.COM/3", true);
+    try a3.submit();
+    try testing.expectEqual(true, a3.state == .delayed);
+    try testing.expectEqual(true, a2._run_at < a3._run_at);
+
+    // Other hosts are independent, and non-throttled requests never wait.
+    const b1 = try Helper.newTransfer(&client, &pool, 4, "http://b.example.com/1", true);
+    try b1.submit();
+    try testing.expectEqual(true, b1.state == .queued);
+    const b2 = try Helper.newTransfer(&client, &pool, 5, "http://b.example.com/2", true);
+    try b2.submit();
+    try testing.expectEqual(true, b2.state == .delayed);
+    const a4 = try Helper.newTransfer(&client, &pool, 6, "http://a.example.com/sub", false);
+    try a4.submit();
+    try testing.expectEqual(true, a4.state == .queued);
+
+    // delayed_queue is ordered by _run_at: a2 <= b2 < a3
+    try testing.expectEqual(3, client.delayed_count);
+    try testing.expectEqual(3, client.activity().http);
+    {
+        var node = client.delayed_queue.first;
+        var order: [3]u32 = undefined;
+        for (&order) |*o| {
+            const t: *Transfer = @fieldParentPtr("_node", node.?);
+            o.* = t.id;
+            node = node.?.next;
+        }
+        try testing.expectEqual(null, node);
+        try testing.expectEqual(.{ 2, 5, 3 }, order);
+    }
+
+    // The tick's poll never sleeps past the next slot.
+    const clamped = client.clampToDelayed(200);
+    try testing.expectEqual(true, clamped <= 200);
+    // and nothing is due yet
+    try client.startPending();
+    try testing.expectEqual(3, client.delayed_count);
+
+    // Tearing down a delayed transfer unlinks it.
+    b2.deinit();
+    try testing.expectEqual(2, client.delayed_count);
+
+    // Once its time comes, a delayed transfer enters the pipeline.
+    a2._run_at = 0;
+    try client.startPending();
+    try testing.expectEqual(true, a2.state == .queued);
+    try testing.expectEqual(true, a3.state == .delayed);
+    try testing.expectEqual(1, client.delayed_count);
+    try testing.expectEqual(a3, @as(*Transfer, @fieldParentPtr("_node", client.delayed_queue.first.?)));
+
+    for ([_]*Transfer{ a1, a2, a3, b1, a4 }) |t| {
+        t.deinit();
+    }
+    try testing.expectEqual(0, client.delayed_count);
+    try testing.expectEqual(null, client.delayed_queue.first);
+    try testing.expectEqual(null, client.pending_queue.first);
 }

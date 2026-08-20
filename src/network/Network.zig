@@ -32,6 +32,7 @@ const http = @import("http.zig");
 const IpFilter = @import("IpFilter.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
+const RateLimiter = @import("RateLimiter.zig");
 const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
 
 const Cache = @import("cache/Cache.zig");
@@ -91,6 +92,7 @@ config: *const Config,
 x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
+rate_limiter: ?RateLimiter,
 /// Hostname dictionaries built from `--adblock-lists`. Parsed once here and
 /// never mutated afterwards, so every HttpClient can share this one copy.
 adblocker: ?AdBlocker,
@@ -276,6 +278,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
         .cache = cache,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
+        .rate_limiter = if (config.httpNavDelay()) |ms| RateLimiter.init(allocator, ms, config.httpNavBurst()) else null,
         .adblocker = adblocker,
 
         .ws_pool = .empty,
@@ -306,6 +309,9 @@ pub fn deinit(self: *Network) void {
     self.ws_pool.deinit(self.allocator);
 
     self.robot_store.deinit();
+    if (self.rate_limiter) |*rl| {
+        rl.deinit();
+    }
     if (self.web_bot_auth) |wba| {
         wba.deinit(self.allocator);
     }
@@ -854,3 +860,33 @@ fn loadFromDirectory(
     }
     return count;
 }
+
+pub fn HostHashMap(comptime V: type) type {
+    return std.HashMapUnmanaged([]const u8, V, HostContext, 80);
+}
+
+// Case-insensitive host key for host-keyed map
+const HostContext = struct {
+    pub fn hash(_: HostContext, value: []const u8) u64 {
+        var key = value;
+        var buf: [128]u8 = undefined;
+        var h = std.hash.Wyhash.init(value.len);
+
+        while (key.len >= 128) {
+            const lower = std.ascii.lowerString(buf[0..], key[0..128]);
+            h.update(lower);
+            key = key[128..];
+        }
+
+        if (key.len > 0) {
+            const lower = std.ascii.lowerString(buf[0..key.len], key);
+            h.update(lower);
+        }
+
+        return h.final();
+    }
+
+    pub fn eql(_: HostContext, a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
