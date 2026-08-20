@@ -72,6 +72,8 @@ const PSEUDO_POLLFDS = 2;
 
 app: *App,
 max_connections: usize,
+protocols: Handshake.Protocols,
+bidi_session_url: []const u8,
 json_version_response: []const u8,
 
 driver_mutex: std.Io.Mutex = .init,
@@ -151,17 +153,27 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     pollfds[1] = .{ .fd = listener, .events = posix.POLL.IN, .revents = 0 };
     log.note(.app, "server running", .{ .address = bound_address });
 
-    const json_version_response = try buildJSONVersionResponse(app, bound_address.getPort());
+    const port = bound_address.getPort();
+    const json_version_response = try buildJSONVersionResponse(app, port);
+    errdefer allocator.free(json_version_response);
+
+    const bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ app.config.advertiseHost(), port });
+    errdefer allocator.free(bidi_session_url);
 
     self.* = .{
         .app = app,
         .cdp_pool = .empty,
         .json_version_response = json_version_response,
+        .bidi_session_url = bidi_session_url,
         .max_connections = max_connections,
         .listener = listener,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
         .poll_snapshot = poll_snapshot,
+        .protocols = switch (app.config.protocol()) {
+            .cdp => .{ .cdp = true },
+            .webdriver => .{ .webdriver = true },
+        },
     };
     return self;
 }
@@ -219,6 +231,7 @@ pub fn deinit(self: *Server) void {
     self.handshakes.deinit(allocator);
     self.cdp_pool.deinit(allocator);
     allocator.free(self.json_version_response);
+    allocator.free(self.bidi_session_url);
     allocator.free(self.pollfds);
     allocator.free(self.poll_snapshot);
     for (self.wakeup_pipe) |fd| {
@@ -634,11 +647,11 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     const route = self.handshake(socket) orelse return;
     switch (route) {
         .cdp => self.serveCDP(socket, &active_conns_early_release),
-        .bidi => self.serveBiDi(socket, &active_conns_early_release),
+        .bidi => |session_id| self.serveBiDi(socket, session_id, &active_conns_early_release),
     }
 }
 
-fn handshake(self: *Server, socket: posix.socket_t) ?Handshake.Driver {
+fn handshake(self: *Server, socket: posix.socket_t) ?Handshake.Route {
     {
         self.driver_mutex.lockUncancelable(lp.io);
         defer self.driver_mutex.unlock(lp.io);
@@ -654,7 +667,11 @@ fn handshake(self: *Server, socket: posix.socket_t) ?Handshake.Driver {
             }
         }
     }
-    return Handshake.run(self.app, socket, self.json_version_response);
+    return Handshake.run(self.app, socket, &.{
+        .protocols = self.protocols,
+        .json_version_response = self.json_version_response,
+        .bidi_session_url = self.bidi_session_url,
+    });
 }
 
 // The socket is an upgraded websocket speaking CDP.
@@ -684,15 +701,17 @@ fn serveCDP(self: *Server, socket: posix.socket_t, active_conns_early_release: *
     self.serve(.init(.{ .cdp = cdp }), active_conns_early_release);
 }
 
-// The socket is an upgraded websocket speaking WebDriver BiDi.
-fn serveBiDi(self: *Server, socket: posix.socket_t, active_conns_early_release: *bool) void {
+// The socket is an upgraded websocket speaking WebDriver BiDi. session_id is
+// set when the client came through a classic POST /session, which already
+// created the session it's about to use.
+fn serveBiDi(self: *Server, socket: posix.socket_t, session_id: ?[36]u8, active_conns_early_release: *bool) void {
     const allocator = self.app.allocator;
 
     // heap-allocated: BiDi embeds a Browser
     const bidi = allocator.create(BiDi) catch @panic("OOM");
     defer allocator.destroy(bidi);
 
-    bidi.init(self.app, socket) catch |err| {
+    bidi.init(self.app, socket, session_id) catch |err| {
         log.err(.app, "BiDi init", .{ .err = err });
         return;
     };
@@ -1345,6 +1364,139 @@ test "server: 404" {
         "Not found", res);
 }
 
+test "server: classic session bootstrap" {
+    // What Selenium does before it speaks BiDi: a classic POST /session
+    // that hands back the websocket URL, then a DELETE on quit.
+    const session_id = blk: {
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const body = "{\"capabilities\":{\"firstMatch\":[{}],\"alwaysMatch\":{\"browserName\":\"firefox\",\"webSocketUrl\":true}}}";
+        const res = try c.httpRequest(std.fmt.comptimePrint("POST /session HTTP/1.1\r\n" ++
+            "Content-Type: application/json;charset=UTF-8\r\n" ++
+            "Content-Length: {d}\r\n\r\n" ++
+            "{s}", .{ body.len, body }));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\r\nConnection: Close\r\n") != null);
+
+        const json = res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+        defer parsed.deinit();
+
+        const value = parsed.value.object.get("value").?.object;
+        const id = value.get("sessionId").?.string;
+        try testing.expectEqual(36, id.len);
+
+        const capabilities = value.get("capabilities").?.object;
+        try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+        try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
+        const ws_url = capabilities.get("webSocketUrl").?.string;
+        try testing.expectEqual("ws://127.0.0.1:9583/session/", ws_url[0 .. ws_url.len - 36]);
+        try testing.expectEqual(id, ws_url[ws_url.len - 36 ..]);
+
+        break :blk id[0..36].*;
+    };
+
+    {
+        // The session already exists on the advertised URL: no session.new
+        // needed (or possible), everything else works as usual.
+        var c = try createTestClient();
+        defer c.deinit();
+        var path_buf: [64]u8 = undefined;
+        try c.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+
+        try c.bidiCommand("{\"id\":1,\"method\":\"session.status\"}");
+        try assertBidiMessage(&c, .{ .type = "success", .id = 1, .result = .{ .ready = false, .message = "session already started" } });
+
+        try c.bidiCommand("{\"id\":2,\"method\":\"session.new\",\"params\":{\"capabilities\":{}}}");
+        try assertBidiMessage(&c, .{ .type = "error", .id = 2, .@"error" = "session not created", .message = "session already exists" });
+
+        try c.bidiCommand("{\"id\":3,\"method\":\"browsingContext.getTree\"}");
+        try assertBidiMessage(&c, .{ .type = "success", .id = 3, .result = .{ .contexts = .{} } });
+    }
+
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        var request_buf: [128]u8 = undefined;
+        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{&session_id}));
+        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: 14\r\n" ++
+            "Connection: Close\r\n" ++
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+            "{\"value\":null}", res);
+    }
+}
+
+test "server: classic session bootstrap errors" {
+    {
+        // the body can arrive after the headers
+        var c = try createTestClient();
+        defer c.deinit();
+        const body = "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"firefox\"}}}";
+        try sys_net.writeAll(c.socket, std.fmt.comptimePrint("POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body.len}));
+        lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
+        const res = try c.httpRequest(body);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"session not created\",\"message\":\"only WebDriver BiDi sessions are supported; request the webSocketUrl capability\",\"stacktrace\":\"\"}}"));
+    }
+
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try c.httpRequest("POST /session HTTP/1.1\r\nContent-Length: 8\r\n\r\nnot json");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid argument\",\"message\":\"invalid JSON body\",\"stacktrace\":\"\"}}"));
+    }
+
+    try assertHTTPError(404, "Not found", "POST /session/abc HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+    try assertHTTPError(404, "Not found", "DELETE /session HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+    // a websocket upgrade on /session/<id> needs a real session id
+    try assertHTTPError(404, "Not found", "GET /session/abc HTTP/1.1\r\n\r\n");
+}
+
+test "server: protocol gate" {
+    // The test server serves both; the CLI only ever enables one.
+    const protocols = &testing.test_cdp_server.?.protocols;
+    defer protocols.* = .{ .cdp = true, .webdriver = true };
+
+    protocols.* = .{ .cdp = true };
+    try assertHTTPError(404, "Not found", "GET /status HTTP/1.1\r\n\r\n");
+    try assertHTTPError(404, "Not found", "POST /session HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}");
+    try assertHTTPError(404, "Not found", "DELETE /session/x HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+    try assertHTTPError(404, "Not found", "GET /session HTTP/1.1\r\n" ++
+        "Connection: upgrade\r\nUpgrade: websocket\r\nsec-websocket-version:13\r\nsec-websocket-key: k\r\n\r\n");
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+    }
+
+    protocols.* = .{ .webdriver = true };
+    try assertHTTPError(404, "Not found", "GET /json/version HTTP/1.1\r\n\r\n");
+    try assertHTTPError(404, "Not found", "GET /json/list HTTP/1.1\r\n\r\n");
+    try assertHTTPError(404, "Not found", "GET / HTTP/1.1\r\n" ++
+        "Connection: upgrade\r\nUpgrade: websocket\r\nsec-websocket-version:13\r\nsec-websocket-key: k\r\n\r\n");
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try c.httpRequest("GET /status HTTP/1.1\r\n\r\n");
+        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: 37\r\n" ++
+            "Connection: Close\r\n" ++
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+            "{\"value\":{\"ready\":true,\"message\":\"\"}}", res);
+    }
+    {
+        // /metrics is protocol-neutral
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try c.httpRequestAlloc("GET /metrics HTTP/1.1\r\n\r\n");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+    }
+}
+
 test "server: get /json/version" {
     {
         // twice on the same connection
@@ -1374,7 +1526,6 @@ test "server: get /json/protocol" {
     defer c.deinit();
 
     const res = try c.httpRequestAlloc("GET /json/protocol HTTP/1.1\r\n\r\n");
-    defer testing.allocator.free(res);
 
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
@@ -1566,24 +1717,23 @@ const TestClient = struct {
         try sys_net.writeAll(self.socket, req);
 
         var response: std.ArrayList(u8) = .empty;
-        defer response.deinit(testing.allocator);
         while (true) {
             const n = try posix.read(self.socket, &self.buf);
             if (n == 0) {
-                return response.toOwnedSlice(testing.allocator);
+                return response.items;
             }
-            try response.appendSlice(testing.allocator, self.buf[0..n]);
+            try response.appendSlice(testing.arena_allocator, self.buf[0..n]);
         }
     }
 
-    fn handshake(self: *TestClient, comptime path: []const u8) !void {
-        const request =
-            "GET " ++ path ++ "   HTTP/1.1\r\n" ++
+    fn handshake(self: *TestClient, path: []const u8) !void {
+        var request_buf: [256]u8 = undefined;
+        const request = try std.fmt.bufPrint(&request_buf, "GET {s}   HTTP/1.1\r\n" ++
             "Connection: upgrade\r\n" ++
             "Upgrade: websocket\r\n" ++
             "sec-websocket-version:13\r\n" ++
             "sec-websocket-key: this is my key\r\n" ++
-            "Custom:  Header-Value\r\n\r\n";
+            "Custom:  Header-Value\r\n\r\n", .{path});
 
         const res = try self.httpRequest(request);
         try testing.expectEqual("HTTP/1.1 101 Switching Protocols\r\n" ++

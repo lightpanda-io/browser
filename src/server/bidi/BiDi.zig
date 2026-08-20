@@ -53,8 +53,8 @@ message_arena: std.heap.ArenaAllocator,
 // Allocations that live for the whole session (subscriptions).
 session_arena: std.heap.ArenaAllocator,
 
-// The active session, created by session.new
-session_id: ?[36]u8 = null,
+// The active session
+session_id: ?[36]u8,
 
 browser: Browser,
 notification: *Notification,
@@ -89,7 +89,7 @@ const InputMessage = struct {
     method: ?[]const u8 = null,
 };
 
-pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
+pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, session_id: ?[36]u8) !void {
     const allocator = app.allocator;
     self.* = .{
         .app = app,
@@ -98,6 +98,7 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t) !void {
         .browser = undefined,
         .user_context = undefined,
         .notification = undefined,
+        .session_id = session_id,
         .node_registry = .init(allocator),
         .handles = .{ .allocator = allocator },
         .message_arena = std.heap.ArenaAllocator.init(allocator),

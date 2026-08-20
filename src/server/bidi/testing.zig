@@ -60,7 +60,7 @@ pub const TestContext = struct {
 
     pub fn bidi(self: *TestContext) *BiDi {
         if (!self.bidi_initialized) {
-            self.bidi_.init(base.test_app, self.bidi_socket) catch |err| @panic(@errorName(err));
+            self.bidi_.init(base.test_app, self.bidi_socket, null) catch |err| @panic(@errorName(err));
             self.bidi_initialized = true;
         }
         return &self.bidi_;

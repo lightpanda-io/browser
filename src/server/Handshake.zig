@@ -26,7 +26,9 @@ const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const sys_net = @import("../sys/net.zig");
+const uuidv4 = @import("../id.zig").uuidv4;
 const header_parser = @import("../network/header_parser.zig");
+const bidi_session = @import("bidi/session.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -35,27 +37,46 @@ const Handshake = @This();
 
 pub const Driver = enum { cdp, bidi };
 
+// Which driver an upgraded socket is handed to.
+pub const Route = union(Driver) {
+    cdp,
+    bidi: ?[36]u8, // the sessionId
+};
+
+// Which route families are served.
+pub const Protocols = struct {
+    cdp: bool = false,
+    webdriver: bool = false,
+};
+
+// What every handshake on a server needs; built once by Server.
+pub const Options = struct {
+    protocols: Protocols,
+    bidi_session_url: []const u8,
+    json_version_response: []const u8,
+};
+
 app: *App,
 len: usize = 0,
 socket: posix.socket_t,
 // cdpMaxHTTPMessageSize is a u14, so this covers any configured limit.
 buf: [std.math.maxInt(u14) + 1]u8 = undefined,
-json_version_response: []const u8,
+options: *const Options,
 
 const Result = union(enum) {
     more,
     close,
-    upgrade: Driver,
+    upgrade: Route,
 };
 
 // Runs the HTTP phase to completion. Returns the route to hand the
 // upgraded socket to, or null if the connection is done (plain HTTP
 // request served, error, timeout or disconnect).
-pub fn run(app: *App, socket: posix.socket_t, json_version_response: []const u8) ?Driver {
+pub fn run(app: *App, socket: posix.socket_t, options: *const Options) ?Route {
     var self = Handshake{
         .app = app,
         .socket = socket,
-        .json_version_response = json_version_response,
+        .options = options,
     };
 
     while (true) {
@@ -97,13 +118,10 @@ fn processHttpRequest(self: *Handshake) !Result {
         return error.RequestTooLarge;
     }
 
-    // we're only expecting [body-less] GET requests.
-    if (std.mem.endsWith(u8, request, "\r\n\r\n") == false) {
-        // we need more data, put any more data here
-        return .more;
-    }
+    // Wait for the whole header block; put any more data here.
+    const head_len = (std.mem.indexOf(u8, request, "\r\n\r\n") orelse return .more) + 4;
 
-    return self.handleHttpRequest(request) catch |err| {
+    return self.handleHttpRequest(request, head_len) catch |err| {
         switch (err) {
             error.NotFound => self.sendHttpError(404, "Not found"),
             error.ForbiddenOrigin => self.sendHttpError(403, "Origin not allowed"),
@@ -123,14 +141,27 @@ fn processHttpRequest(self: *Handshake) !Result {
     };
 }
 
-fn handleHttpRequest(self: *Handshake, request: []u8) !Result {
+fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
     if (request.len < 18) {
         // 18 is [generously] the smallest acceptable HTTP request
         return error.InvalidRequest;
     }
 
+    // The classic WebDriver session bootstrap is the only thing with a body.
+    if (std.mem.startsWith(u8, request, "POST ") or std.mem.startsWith(u8, request, "DELETE ")) {
+        if (!self.options.protocols.webdriver) {
+            return error.NotFound;
+        }
+        return self.handleWebDriverRequest(request, head_len);
+    }
+
     if (std.mem.eql(u8, request[0..4], "GET ") == false) {
         return error.NotFound;
+    }
+
+    // Everything else is a body-less GET: the header block is the request.
+    if (head_len != request.len) {
+        return .more;
     }
 
     const url_end = std.mem.indexOfScalarPos(u8, request, 4, ' ') orelse {
@@ -139,19 +170,45 @@ fn handleHttpRequest(self: *Handshake, request: []u8) !Result {
 
     const url = request[4..url_end];
 
+    if (std.mem.eql(u8, url, "/metrics") and self.app.config.metricsEndpointEnabled()) {
+        try self.sendMetrics();
+        self.shutdown();
+        return .close;
+    }
+
+    if (self.options.protocols.webdriver) {
+        if (std.mem.eql(u8, url, "/session")) {
+            // /session is the path Firefox advertises its BiDi endpoint on
+            try self.upgrade(request);
+            return .{ .upgrade = .{ .bidi = null } };
+        }
+
+        if (std.mem.startsWith(u8, url, "/session/") and url.len == "/session/".len + 36) {
+            // The URL a POST /session handed out; the session id is the suffix.
+            var session_id: [36]u8 = undefined;
+            @memcpy(&session_id, url["/session/".len..]);
+            try self.upgrade(request);
+            return .{ .upgrade = .{ .bidi = session_id } };
+        }
+
+        if (std.mem.eql(u8, url, "/status")) {
+            // WebDriver's discovery endpoint; `ready` is whether a new session
+            // can be created, which the bootstrap never refuses.
+            return self.sendWebDriver("200 OK", .{ .ready = true, .message = "" });
+        }
+    }
+
+    if (!self.options.protocols.cdp) {
+        return error.NotFound;
+    }
+
     if (std.mem.eql(u8, url, "/")) {
         try self.upgrade(request);
         return .{ .upgrade = .cdp };
     }
 
-    if (std.mem.eql(u8, url, "/session")) {
-        // /session is the path Firefox advertises its BiDi endpoint on
-        try self.upgrade(request);
-        return .{ .upgrade = .bidi };
-    }
-
     if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
-        try self.send(self.json_version_response);
+        try self.send(self.options.json_version_response);
         // Chromedp (a Go driver) does an http request to /json/version
         // then to / (websocket upgrade) using a different connection.
         // Since we only allow 1 connection at a time, the 2nd one (the
@@ -176,13 +233,124 @@ fn handleHttpRequest(self: *Handshake, request: []u8) !Result {
         return .close;
     }
 
-    if (std.mem.eql(u8, url, "/metrics") and self.app.config.metricsEndpointEnabled()) {
-        try self.sendMetrics();
-        self.shutdown();
-        return .close;
+    return error.NotFound;
+}
+
+// TODO: Temporary solution that provides the bare minimum for Selenium to
+// connect. Serve a few of the (classic) WebDriver HTTP API. It's obvious that
+// Handshake.zig needs to become a more generic HTTP server/router, but that
+// can be done after the experimental BiDi code lands.
+fn handleWebDriverRequest(self: *Handshake, request: []const u8, head_len: usize) !Result {
+    // A malformed request line or header maps to a 400 in processHttpRequest.
+    const method, const path, _, var header_iterator = header_parser.parseRequest(request) catch {
+        return error.InvalidProtocol;
+    };
+
+    var content_length: usize = 0;
+    while (header_iterator.next() catch return error.InvalidRequest) |header| {
+        if (std.ascii.eqlIgnoreCase(header.key, "content-length")) {
+            content_length = std.fmt.parseInt(usize, header.value, 10) catch return error.InvalidRequest;
+        }
     }
 
+    const total_len = head_len + content_length;
+    if (request.len < total_len) {
+        return .more;
+    }
+    if (request.len > total_len) {
+        return error.InvalidRequest;
+    }
+    const body = request[head_len..total_len];
+
+    switch (method) {
+        .post => if (std.mem.eql(u8, path, "/session")) {
+            return self.newSession(body);
+        },
+        .delete => if (std.mem.startsWith(u8, path, "/session/")) {
+            return self.sendWebDriver("200 OK", null);
+        },
+        else => {},
+    }
     return error.NotFound;
+}
+
+fn newSession(self: *Handshake, body: []const u8) !Result {
+    const allocator = self.app.allocator;
+
+    const Capability = struct { webSocketUrl: ?bool = null };
+    const parsed = std.json.parseFromSlice(struct {
+        capabilities: ?struct {
+            alwaysMatch: ?Capability = null,
+            firstMatch: ?[]const Capability = null,
+        } = null,
+    }, allocator, body, .{ .ignore_unknown_fields = true }) catch {
+        return self.sendWebDriver("400 Bad Request", .{
+            .@"error" = "invalid argument",
+            .message = "invalid JSON body",
+            .stacktrace = "",
+        });
+    };
+    defer parsed.deinit();
+
+    // Without the capability the client intends to drive the session over
+    // HTTP, which this server doesn't serve: tell it now rather than 404
+    // its first real command.
+    if (!requestsWebSocketUrl(parsed.value.capabilities)) {
+        return self.sendWebDriver("500 Internal Server Error", .{
+            .@"error" = "session not created",
+            .message = "only WebDriver BiDi sessions are supported; request the webSocketUrl capability",
+            .stacktrace = "",
+        });
+    }
+
+    var session_id: [36]u8 = undefined;
+    uuidv4(&session_id);
+
+    const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ self.options.bidi_session_url, &session_id });
+    defer allocator.free(url);
+
+    return self.sendWebDriver("200 OK", .{
+        .sessionId = &session_id,
+        .capabilities = bidi_session.Capabilities{
+            .userAgent = self.app.config.http_headers.user_agent,
+            .webSocketUrl = url,
+        },
+    });
+}
+
+fn requestsWebSocketUrl(capabilities: anytype) bool {
+    const caps = capabilities orelse return false;
+    if (caps.alwaysMatch) |always| {
+        if (always.webSocketUrl == true) {
+            return true;
+        }
+    }
+    for (caps.firstMatch orelse &.{}) |first| {
+        if (first.webSocketUrl == true) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Answers a classic WebDriver request with {"value": value} and closes.
+fn sendWebDriver(self: *Handshake, comptime status: []const u8, value: anytype) !Result {
+    const allocator = self.app.allocator;
+
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    defer aw.deinit();
+    try std.json.Stringify.value(.{ .value = value }, .{}, &aw.writer);
+    const body = aw.written();
+
+    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 " ++ status ++ "\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        "{s}", .{ body.len, body });
+    defer allocator.free(response);
+    try self.send(response);
+    self.shutdown();
+    return .close;
 }
 
 fn upgrade(self: *Handshake, request: []u8) !void {
