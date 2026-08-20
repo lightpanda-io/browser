@@ -116,7 +116,8 @@ jobs:
           echo "value=$args" >> "$GITHUB_OUTPUT"
 
       - run: |
-          ./lightpanda serve --port 9222 ${{ steps.args.outputs.value }} &
+          ./lightpanda serve --port 9222 --protocol cdp ${{ steps.args.outputs.value }} &
+          ./lightpanda serve --port 9223 --protocol webdriver ${{ steps.args.outputs.value }} &
 
       - run: |
           go run runner/main.go

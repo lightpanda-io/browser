@@ -67,17 +67,41 @@ fn new(cmd: *const BiDi.Command) !void {
 
     return cmd.sendResult(.{
         .sessionId = &bidi.session_id.?,
-        .capabilities = .{
-            .acceptInsecureCerts = false,
-            .browserName = "Lightpanda",
-            .browserVersion = lp.build_config.version,
-            .platformName = platform_name,
-            .setWindowRect = false,
+        .capabilities = Capabilities{
             .userAgent = cmd.bidi.app.config.http_headers.user_agent,
-            .proxy = struct {}{},
         },
     });
 }
+
+pub const Capabilities = struct {
+    acceptInsecureCerts: bool = false,
+    browserName: []const u8 = "Lightpanda",
+    browserVersion: []const u8 = lp.build_config.version,
+    platformName: []const u8 = platform_name,
+    setWindowRect: bool = false,
+    userAgent: []const u8,
+    proxy: struct {} = .{},
+    webSocketUrl: ?[]const u8 = null, // only reported for the classic handshake
+
+    // ugh, are you kidding me? All this so we don't emit the webSocketUrl
+    // when it's null.
+    pub fn jsonStringify(self: *const Capabilities, jws: anytype) !void {
+        try jws.beginObject();
+        inline for (std.meta.fields(Capabilities)) |field| {
+            const value = @field(self, field.name);
+            if (@typeInfo(field.type) == .optional) {
+                if (value) |v| {
+                    try jws.objectField(field.name);
+                    try jws.write(v);
+                }
+            } else {
+                try jws.objectField(field.name);
+                try jws.write(value);
+            }
+        }
+        try jws.endObject();
+    }
+};
 
 fn end(cmd: *const BiDi.Command) !void {
     try cmd.sendResult(struct {}{});
