@@ -306,15 +306,15 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         }
     }
 
-    // Held for abort() / open() / deinit; the error, shutdown and done
-    // callbacks clear it.
-    self._http_transfer = transfer;
-
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
 
     if (self._async) {
+        // Held for abort() / open() / deinit; the error, shutdown and done
+        // callbacks clear it.
+        self._http_transfer = transfer;
+
         transfer.submit() catch |err| {
             // don't releaseSelfRef, submit() has taken ownership and will call
             // our error callback
@@ -332,7 +332,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     };
     defer resp.deinit();
 
-    self._http_transfer = null;
     self._response_status = resp.status;
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
