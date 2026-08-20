@@ -347,6 +347,10 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) void {
         exec_cargo.addFileInput(b.path(path));
     }
 
+    // don't let cargo's progress report (sent to stderr) cause Zig's build to
+    // print a 'failed command: ...' message. (non-zero status still outputs the error)
+    _ = exec_cargo.captureStdErr(.{});
+
     // TODO: We can prefer `--artifact-dir` once it become stable.
     const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
 
