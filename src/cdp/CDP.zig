@@ -1556,5 +1556,5 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .notification = undefined,
         .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
     }, null);
-    try testing.expectError(error.ClientDisconnected, client.syncRequest(transfer));
+    try testing.expectError(error.ClientDisconnected, transfer.submitSync());
 }
