@@ -346,14 +346,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     exec.js.localScope(&ls);
     defer ls.deinit();
 
-    try self.stateChanged(.headers_received, exec);
-    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, exec);
-    try self.stateChanged(.loading, exec);
-    try self._proto.dispatch(.progress, .{
-        .total = self._response_len orelse 0,
-        .loaded = self._response_data.items.len,
-    }, exec);
-
     try self.stateChanged(.done, exec);
     const loaded = self._response_data.items.len;
     try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded }, exec);
