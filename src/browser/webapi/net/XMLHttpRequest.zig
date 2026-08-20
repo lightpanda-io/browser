@@ -187,7 +187,13 @@ pub fn getTimeout(self: *const XMLHttpRequest) u32 {
     return self._timeout;
 }
 
-pub fn setTimeout(self: *XMLHttpRequest, value: u32) void {
+pub fn setTimeout(self: *XMLHttpRequest, value: u32) !void {
+    // https://xhr.spec.whatwg.org/#the-timeout-attribute
+    // Throw if the request is sync OR if it is already sent.
+    if (!self._async and self._ready_state != .unsent) {
+        return error.InvalidAccessError;
+    }
+
     self._timeout = value;
 }
 
@@ -213,6 +219,12 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     self._response_headers.clearRetainingCapacity();
     self._request_body = null;
     self._async = async_ orelse true;
+
+    // https://xhr.spec.whatwg.org/#the-timeout-attribute
+    // Throw if the request is sync OR if it is already sent.
+    if (self._timeout != 0 and !self._async) {
+        return error.InvalidAccessError;
+    }
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
