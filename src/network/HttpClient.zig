@@ -181,8 +181,7 @@ blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 // heuristics add this in.
 intercepted: usize = 0,
 
-// null or referencing network.cache
-cache: ?*Cache,
+cache: *Cache,
 
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
@@ -218,7 +217,7 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .allocator = allocator,
         .cdp = cdp,
         .inbox = .{},
-        .cache = if (network.cache) |*c| c else null,
+        .cache = &network.cache,
 
         .use_proxy = http_proxy != null,
         .http_proxy = http_proxy,
@@ -265,6 +264,7 @@ pub fn deinit(self: *Client) void {
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit();
+    self.cache.maintenance(lp.datetime.timestamp(.real));
 }
 
 // Look up a live transfer by its id. Returns null if the transfer has been
@@ -317,9 +317,9 @@ pub fn obeyRobots(self: *Client, enable: bool) !void {
 
 pub fn disableCache(self: *Client, disable: bool) void {
     if (disable) {
-        self.cache = null;
+        self.cache = &Cache.noop;
     } else {
-        self.cache = if (self.network.cache) |*c| c else null;
+        self.cache = &self.network.cache;
     }
 }
 
@@ -984,7 +984,7 @@ fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
 // the response; on an expired-with-validators entry the request becomes a
 // conditional revalidation.
 fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
-    const cache = self.cache orelse return false;
+    const cache = self.cache.active() orelse return false;
 
     const req = &transfer.req;
     if (req.method != .GET or req.streaming or req.skip_cache) {
@@ -1067,7 +1067,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
     // could have been disabled in-between
-    const cache = self.cache orelse return false;
+    const cache = self.cache.active() orelse return false;
 
     const stale = transfer._cache_intent.revalidate;
     transfer._cache_intent = .none;
@@ -1103,7 +1103,7 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     transfer._cache_intent = .none;
 
     // could have been disabled while waiting of the response
-    const cache = self.cache orelse return;
+    const cache = self.cache.active() orelse return;
 
     const arena = transfer.arena;
     const rh = &(transfer.res.header orelse return);
@@ -3582,7 +3582,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.intercepted = 0;
     client.http_active = 0;
     client.ws_active = 0;
-    client.cache = null;
+    client.cache = &Cache.noop;
     client.serve_mode = false;
     client.obey_robots = false;
     client.robots = .{
@@ -3951,7 +3951,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
     // Only network.config (httpMaxRedirects, which ignores its config),
     // network.cache and the (empty) connection pool are read on this path.
     var net: Network = undefined;
-    net.cache = null;
+    net.cache = Cache.noop;
     net.adblocker = null;
     // An empty pool makes processTransfer queue the re-issued request
     // instead of putting it on the wire — the queue IS the capture.
@@ -4309,7 +4309,7 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
     defer pool.deinit();
 
     var net: Network = undefined;
-    net.cache = null;
+    net.cache = Cache.noop;
     net.adblocker = null;
     net.web_bot_auth = null;
     // An empty pool makes processTransfer queue a started transfer instead

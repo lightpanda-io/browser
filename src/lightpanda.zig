@@ -60,8 +60,6 @@ pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
 
-pub const Updater = @import("Updater.zig");
-
 pub var metrics = @import("Metrics.zig"){};
 
 pub const IS_TEST = @import("builtin").is_test;
@@ -395,14 +393,10 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
 }
 
 pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
-    var client = try Updater.init(allocator, config);
-    defer client.deinit();
-
     const stdout = std.Io.File.stdout();
     var buf: [4096]u8 = undefined;
     var writer = stdout.writer(io, &buf);
-    const w = &writer.interface;
-    try client.inform(w);
+    try @import("Updater.zig").inform(allocator, config, &writer.interface);
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any

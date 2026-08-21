@@ -26,17 +26,15 @@ const Config = @import("../Config.zig");
 const CDP = @import("../cdp/CDP.zig");
 const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
-const crypto = @import("../sys/libcrypto.zig");
 
 const http = @import("http.zig");
 const IpFilter = @import("IpFilter.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
 const WebBotAuth = @import("WebBotAuth.zig");
 const RateLimiter = @import("RateLimiter.zig");
-const CurlDebugAllocator = @import("CurlDebugAllocator.zig");
+const Certificates = @import("Certificates.zig");
 
 const Cache = @import("cache/Cache.zig");
-const SqliteCache = @import("cache/SqliteCache.zig");
 const AdBlocker = @import("adblock/AdBlocker.zig");
 
 const log = lp.log;
@@ -86,13 +84,12 @@ const PSEUDO_POLLFDS = 2;
 allocator: Allocator,
 
 app: *App,
-cache: ?Cache,
+cache: Cache,
 config: *const Config,
-/// Holds certificate bundle.
-x509_store: *crypto.X509_STORE,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 rate_limiter: ?RateLimiter,
+certificates: Certificates,
 /// Hostname dictionaries built from `--adblock-lists`. Parsed once here and
 /// never mutated afterwards, so every HttpClient can share this one copy.
 adblocker: ?AdBlocker,
@@ -143,31 +140,11 @@ cdp_start: usize,
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
 
-/// Calling `init` also calls this function; only marked public for situations
-/// networking is needed without `App`.
-pub fn globalInit(allocator: Allocator) void {
-    // Only route curl's own allocations through our allocator in Debug, so the
-    // leak detector sees them. In Release it'd just wrap c_allocator (curl's
-    // default malloc anyway) at the cost of a per-allocation header.
-    const curl_allocator = comptime if (lp.IS_DEBUG) CurlDebugAllocator.interface() else null;
-    if (comptime lp.IS_DEBUG) {
-        CurlDebugAllocator.init(allocator);
-    }
-
-    libcurl.curl_global_init(.{ .ssl = true }, curl_allocator) catch |err| {
+pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
+    libcurl.curl_global_init(.{ .ssl = true }, null) catch |err| {
         lp.assert(false, "curl global init", .{ .err = err });
     };
-}
-
-/// Calling `deinit` also calls this function; only marked public for situations
-/// networking is needed without `App`.
-pub fn globalDeinit() void {
-    libcurl.curl_global_cleanup();
-}
-
-pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
-    globalInit(allocator);
-    errdefer globalDeinit();
+    errdefer libcurl.curl_global_cleanup();
 
     const pipe = try sys_net.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
@@ -186,22 +163,8 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
     pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
-    const x509_store = blk: {
-        if (config.tlsVerifyHost()) {
-            break :blk try prepareX509Store(allocator, config);
-        }
-        // Verification is off, so the store is never consulted — but still
-        // take ownership of a user-supplied one so the flags compose and
-        // nothing leaks.
-        if (config.customCertStore()) |store| {
-            log.warn(.app, "custom CA ignored", .{ .arg = "--ca-cert, --ca-path", .reason = "TLS verification disabled" });
-            break :blk store;
-        }
-        break :blk crypto.X509_STORE_new() orelse {
-            return error.FailedToCreateX509Store;
-        };
-    };
-    errdefer crypto.X509_STORE_free(x509_store);
+    const certificates = try Certificates.init(allocator, config);
+    errdefer certificates.deinit();
 
     // IP filter for blocking requests to private/internal networks.
     const block_private = config.blockPrivateNetworks();
@@ -227,7 +190,7 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
     var available: DoublyLinkedList = .{};
     for (0..count) |i| {
-        connections[i] = try http.Connection.init(x509_store, config, ip_filter);
+        connections[i] = try http.Connection.init(certificates, config, ip_filter);
         available.append(&connections[i].node);
     }
 
@@ -240,30 +203,14 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     var adblocker = try AdBlocker.fromConfig(allocator, config);
     errdefer if (adblocker) |*blocker| blocker.deinit();
 
-    const cache = if (config.httpCacheDir()) |cache_dir_path|
-        Cache{
-            .kind = .{
-                .sqlite = SqliteCache.init(
-                    allocator,
-                    .{ .path = cache_dir_path },
-                    config.httpCacheEntryLimit(),
-                ) catch |e| {
-                    log.err(.cache, "failed to init", .{
-                        .kind = "SqliteCache",
-                        .path = cache_dir_path,
-                        .err = e,
-                    });
-                    return e;
-                },
-            },
-        }
-    else
-        null;
+    var cache = try Cache.init(allocator, config);
+    errdefer cache.deinit();
 
     return .{
-        .allocator = allocator,
+        .app = app,
         .config = config,
-        .x509_store = x509_store,
+        .allocator = allocator,
+        .certificates = certificates,
 
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
@@ -272,8 +219,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
 
         .available = available,
         .connections = connections,
-
-        .app = app,
 
         .cache = cache,
         .robot_store = RobotStore.init(allocator),
@@ -299,7 +244,7 @@ pub fn deinit(self: *Network) void {
     self.allocator.free(self.pollfds);
     self.allocator.free(self.cdp_poll_snapshot);
 
-    crypto.X509_STORE_free(self.x509_store);
+    self.certificates.deinit();
 
     for (self.connections) |*conn| {
         conn.deinit();
@@ -318,14 +263,14 @@ pub fn deinit(self: *Network) void {
 
     if (self.adblocker) |*blocker| blocker.deinit();
 
-    if (self.cache) |*cache| cache.deinit();
+    self.cache.deinit();
 
     if (self.ip_filter) |f| {
         f.deinit(self.allocator);
         self.allocator.destroy(f);
     }
 
-    globalDeinit();
+    libcurl.curl_global_cleanup();
 }
 
 pub fn bind(
@@ -720,7 +665,7 @@ pub fn releaseConnection(self: *Network, conn: *http.Connection) void {
             self.ws_count -= 1;
         },
         else => {
-            conn.reset(self.config, self.x509_store, self.ip_filter) catch |err| {
+            conn.reset(self.config, self.certificates, self.ip_filter) catch |err| {
                 lp.assert(false, "couldn't reset curl easy", .{ .err = err });
             };
             self.conn_mutex.lockUncancelable(lp.io);
@@ -745,7 +690,7 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     };
 
     // don't do this under lock
-    conn.* = http.Connection.init(self.x509_store, self.config, self.ip_filter) catch {
+    conn.* = http.Connection.init(self.certificates, self.config, self.ip_filter) catch {
         self.ws_mutex.lockUncancelable(lp.io);
         defer self.ws_mutex.unlock(lp.io);
         self.ws_pool.destroy(conn);
@@ -755,110 +700,6 @@ pub fn newConnection(self: *Network) ?*http.Connection {
     };
 
     return conn;
-}
-
-/// NEVER give full ownership of store to `SSL_CTX`, always rely on ref counting.
-/// Allocations made through passed `allocator` are freed before this function returns.
-pub fn prepareX509Store(allocator: Allocator, config: *const Config) !*crypto.X509_STORE {
-    // A user-supplied store replaces system trust entirely.
-    if (config.customCertStore()) |store| {
-        return store;
-    }
-    return storeFromSystemCA(allocator);
-}
-
-/// Creates an X509_STORE from system root CA.
-fn storeFromSystemCA(allocator: Allocator) !*crypto.X509_STORE {
-    const store = crypto.X509_STORE_new() orelse return error.FailedToCreateX509Store;
-    errdefer crypto.X509_STORE_free(store);
-
-    var count: usize = 0;
-    defer {
-        if (count == 0) {
-            log.warn(.app, "No certificates loaded", .{});
-        }
-    }
-
-    switch (comptime builtin.os.tag) {
-        .linux, .openbsd, .netbsd, .freebsd => blk: {
-            // Iterate over known directories; this may or may not succeed.
-            const cwd = std.Io.Dir.cwd();
-            inline for ([_][]const u8{
-                "/etc/ssl/certs", // Debian/Ubuntu/Gentoo/Alpine, SUSE
-                "/etc/pki/tls/certs", // Fedora/RHEL
-            }) |dir_path| {
-                count += try loadFromDirectory(allocator, store, cwd, dir_path);
-                if (count > 0) break :blk;
-            }
-
-            // Iterate over known files.
-            inline for ([_][*:0]const u8{
-                "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Gentoo
-                "/etc/pki/tls/certs/ca-bundle.crt", // Fedora/RHEL 6
-                "/etc/ssl/ca-bundle.pem", // OpenSUSE
-                "/etc/pki/tls/cacert.pem", // OpenELEC
-                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
-                "/etc/ssl/cert.pem", // Alpine, *BSD
-            }) |file| {
-                if (crypto.X509_STORE_load_locations(store, file, null) == 1) {
-                    count += 1;
-                    break :blk;
-                }
-            }
-        },
-        else => {
-            // Prefer stdlib's cert scanner.
-            var bundle: std.crypto.Certificate.Bundle = .empty;
-            try bundle.rescan(allocator, lp.io, std.Io.Clock.now(.real, lp.io));
-            defer bundle.deinit(allocator);
-
-            const bytes = bundle.bytes.items;
-            var it = bundle.map.valueIterator();
-            while (it.next()) |index| {
-                // d2i_X509 reads the cert's own DER length header to find its end and
-                // advances `ptr` past it, so we just hand it the rest of the buffer.
-                var ptr: [*]const u8 = bytes.ptr + index.*;
-                const x509 = crypto.d2i_X509(null, &ptr, @intCast(bytes.len - index.*)) orelse {
-                    log.warn(.app, "Skipping unparseable system cert", .{});
-                    continue;
-                };
-                defer crypto.X509_free(x509); // add_cert takes its own ref; drop ours.
-
-                const result = crypto.X509_STORE_add_cert(store, x509);
-                if (result != 1) {
-                    log.warn(.app, "Failed to add X509 cert to store", .{});
-                }
-                count += 1;
-            }
-        },
-    }
-
-    return store;
-}
-
-/// Loads certificates from given `path`; returning how many CA loaded.
-fn loadFromDirectory(
-    allocator: Allocator,
-    store: *crypto.X509_STORE,
-    cwd: std.Io.Dir,
-    dir_path: []const u8,
-) Allocator.Error!usize {
-    var count: usize = 0;
-    var dir = cwd.openDir(lp.io, dir_path, .{ .iterate = true }) catch return count;
-    defer dir.close(lp.io);
-
-    var it = dir.iterate();
-    while (it.next(lp.io) catch return count) |entry| {
-        if (entry.kind != .file and entry.kind != .sym_link) continue;
-
-        const path = try std.fs.path.joinZ(allocator, &.{ dir_path, entry.name });
-        defer allocator.free(path);
-
-        if (crypto.X509_STORE_load_locations(store, path, null) == 1) {
-            count += 1;
-        }
-    }
-    return count;
 }
 
 pub fn HostHashMap(comptime V: type) type {
