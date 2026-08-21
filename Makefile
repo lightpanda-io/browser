@@ -31,6 +31,8 @@ else
 	$(error "Unhandled kernel: $(kernel)")
 endif
 
+LIB_EXT := $(if $(filter macos,$(OS)),dylib,so)
+
 
 # Prebuilt V8
 # -----------
@@ -77,7 +79,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 lib lib-example test-lib run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -114,6 +116,26 @@ build-dev:
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
+
+## Run the C ABI unit tests
+test-lib:
+	@$(ZIG) build $(ZIGFLAGS) test-lib -freference-trace
+
+# -Ddev_fast=false: dev_fast links V8 shared, but liblightpanda.so must stay
+# self-contained (no DT_NEEDED on libc_v8.so), so lib embeds the static V8.
+## Build the C shared library (zig-out/lib + zig-out/include)
+lib:
+	@printf "\033[36mBuilding C shared library...\033[0m\n"
+	@$(ZIG) build lib -Ddev_fast=false || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mBuild OK: zig-out/lib/liblightpanda.$(LIB_EXT)\033[0m\n"
+
+## Link and run the C example against the shared library (needs network)
+lib-example: lib
+	@mkdir -p zig-out/bin
+	@cc examples/c/fetch.c $$(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs lightpanda) \
+		-Wl,-rpath,$(BC)zig-out/lib -o zig-out/bin/fetch-example
+	@./zig-out/bin/fetch-example https://example.com > /dev/null \
+		&& printf "\033[33mExample OK\033[0m\n"
 
 ## Run the server in release mode
 run: build

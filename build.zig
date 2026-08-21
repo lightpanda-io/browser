@@ -22,6 +22,12 @@ const builtin = @import("builtin");
 const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
 
+// A host linking its own curl/zlib/... must not bind to liblightpanda's
+// bundled copies. ELF hides them via src/lightpanda.map; Mach-O has no
+// version-script equivalent, so they are hidden at compile time.
+// Unconditional: the executable exports nothing either way.
+const hide_symbols = "-fvisibility=hidden";
+
 const Build = blk: {
     if (builtin.zig_version.order(min_zig_version) == .lt) {
         @compileError(std.fmt.comptimePrint(
@@ -201,6 +207,124 @@ pub fn build(b: *Build) !void {
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
+
+    {
+        // c api
+        const c_api_module = createCApiModule(b, lightpanda_module);
+
+        const c_api_check = b.addLibrary(.{
+            .name = "c_api_check",
+            .root_module = c_api_module,
+        });
+        check.dependOn(&c_api_check.step);
+
+        // A shared V8 would leave liblightpanda.so with a DT_NEEDED on
+        // libc_v8.so; the artifact must stay self-contained.
+        const lib_step = b.step("lib", "Build the C shared library");
+        if (!shared_v8) {
+            const shared_lib = b.addLibrary(.{
+                .name = "lightpanda",
+                .linkage = .dynamic,
+                .use_llvm = true,
+                .root_module = c_api_module,
+            });
+            shared_lib.version_script = b.path("src/lightpanda.map");
+            shared_lib.linker_allow_shlib_undefined = false;
+            const install_so = b.addInstallArtifact(shared_lib, .{});
+            // Gate the install on the export check so an installed library
+            // is always a checked one (see hide_symbols for why).
+            const Query = struct { nm: []const u8, awk: []const u8 };
+            const leak_query: ?Query = switch (target.result.os.tag) {
+                // The version script keeps everything but lp_* local, so
+                // anything else in the dynamic table is a leak.
+                .linux => .{
+                    .nm = "nm -D",
+                    .awk = "$2 == \"T\" && $3 !~ /^lp_/ { print $3 }",
+                },
+                // V8's own C++ symbols stay exported on Mach-O, so only the
+                // bundled C libraries — the ones include/lightpanda.h
+                // promises absent — can be asserted.
+                .macos => .{
+                    .nm = "nm -gU",
+                    .awk = "$2 == \"T\" && $3 ~ /^_(AES|ASN1|BIO|Brotli|EVP|OPENSSL|RSA|SSL|X509|adler32|crc32|curl|deflate|inflate|nghttp2|sqlite3)/ { print $3 }",
+                },
+                else => null,
+            };
+            if (leak_query) |query| {
+                const export_check = b.addSystemCommand(&.{
+                    "sh", "-ec",
+                    // Two statements, not `test -z "$(nm ... | awk ...)"`: there
+                    // a failing nm yields no output and the check passes. The
+                    // bare assignment lets -e see nm's status.
+                    b.fmt(
+                        \\symbols=$({s} "$0")
+                        \\leaked=$(printf '%s\n' "$symbols" | awk '{s}')
+                        \\test -z "$leaked" ||
+                        \\  {{ echo "liblightpanda exports bundled dependency symbols:" >&2
+                        \\    printf '%s\n' "$leaked" | head -20 >&2; exit 1; }}
+                        \\: > "$1"
+                    , .{ query.nm, query.awk }),
+                });
+                export_check.addFileArg(shared_lib.getEmittedBin());
+                _ = export_check.addOutputFileArg("export-check-ok");
+                install_so.step.dependOn(&export_check.step);
+            }
+            lib_step.dependOn(&install_so.step);
+            lib_step.dependOn(&b.addInstallHeaderFile(b.path("include/lightpanda.h"), "lightpanda.h").step);
+            const shared_pc = pkgConfigFile(b, version_string);
+            lib_step.dependOn(&b.addInstallLibFile(shared_pc, "pkgconfig/lightpanda.pc").step);
+        } else {
+            lib_step.dependOn(&b.addFail("lib needs V8 linked statically: pass -Ddev_fast=false and a libc_v8.a (or no) -Dprebuilt_v8_path").step);
+        }
+
+        // Own binary: the two test suites must not share one V8 platform.
+        // The ABI-sync test compares c_api.zig's mirrors against the header
+        // itself. Test-only import: the .so module must not depend on the
+        // header, or every header edit relinks it.
+        const lib_tests_module = createCApiModule(b, lightpanda_module);
+        const header_translate_c = b.addTranslateC(.{
+            .root_source_file = b.path("include/lightpanda.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        lib_tests_module.addImport("lightpanda_h", header_translate_c.createModule());
+        const lib_tests = b.addTest(.{
+            .root_module = lib_tests_module,
+            .use_llvm = true,
+            .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
+        });
+        const test_lib_step = b.step("test-lib", "Run the C ABI unit tests");
+        test_lib_step.dependOn(&b.addRunArtifact(lib_tests).step);
+    }
+}
+
+fn createCApiModule(b: *Build, lightpanda: *Build.Module) *Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = lightpanda.resolved_target.?,
+        .optimize = lightpanda.optimize.?,
+        .link_libc = true,
+        .link_libcpp = true,
+        .sanitize_c = lightpanda.sanitize_c,
+        .sanitize_thread = lightpanda.sanitize_thread,
+    });
+    mod.addImport("lightpanda", lightpanda);
+    return mod;
+}
+
+fn pkgConfigFile(b: *Build, version: []const u8) Build.LazyPath {
+    return b.addWriteFiles().add("lightpanda.pc", b.fmt(
+        \\prefix=${{pcfiledir}}/../..
+        \\libdir=${{prefix}}/lib
+        \\includedir=${{prefix}}/include
+        \\
+        \\Name: lightpanda
+        \\Description: Lightpanda headless browser C library
+        \\Version: {s}
+        \\Cflags: -I${{includedir}}
+        \\Libs: -L${{libdir}} -llightpanda
+        \\
+    , .{version}));
 }
 
 const ExeConfig = struct {
@@ -370,8 +494,13 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     const lib = dep.artifact("sqlite3");
     lib.root_module.sanitize_c = enable_csan;
     lib.root_module.sanitize_thread = is_tsan;
+    lib.root_module.pic = true;
 
     const macros = [_]struct { []const u8, []const u8 }{
+        // The amalgamation is one translation unit, so everything not static is
+        // tagged SQLITE_API; redefining it hides the lot. `-fvisibility=hidden`
+        // is not reachable here — the sources belong to the dependency.
+        .{ "SQLITE_API", "__attribute__((visibility(\"hidden\")))" },
         .{ "SQLITE_DEFAULT_FILE_PERMISSIONS", "0600" },
         .{ "SQLITE_DEFAULT_MEMSTATUS", "0" },
         .{ "SQLITE_DEFAULT_WAL_SYNCHRONOUS", "1" },
@@ -460,6 +589,7 @@ fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
         .optimize = optimize,
         .link_libc = true,
         .sanitize_thread = is_tsan,
+        .pic = true,
     });
 }
 
@@ -472,6 +602,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     mod.addCSourceFiles(.{
         .root = dep.path(""),
         .flags = &.{
+            hide_symbols,
             "-DHAVE_SYS_TYPES_H",
             "-DHAVE_STDINT_H",
             "-DHAVE_STDDEF_H",
@@ -502,6 +633,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
         .root = dep.path("c/common"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "transform.c",  "shared_dictionary.c", "platform.c",
             "dictionary.c", "context.c",           "constants.c",
@@ -509,6 +641,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     });
     mod.addCSourceFiles(.{
         .root = dep.path("c/dec"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "bit_reader.c", "decode.c", "huffman.c",
             "prefix.c",     "state.c",  "static_init.c",
@@ -516,6 +649,7 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     });
     mod.addCSourceFiles(.{
         .root = dep.path("c/enc"),
+        .flags = &.{hide_symbols},
         .files = &.{
             "backward_references.c",        "backward_references_hq.c", "bit_cost.c",
             "block_splitter.c",             "brotli_bit_stream.c",      "cluster.c",
@@ -536,6 +670,7 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
         .target = target,
         .optimize = optimize,
         .force_pic = true,
+        .hidden_visibility = true,
     });
 
     const ssl = dep.artifact("ssl");
@@ -569,6 +704,7 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     mod.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{
+            hide_symbols,
             "-DNGHTTP2_STATICLIB",
             "-DHAVE_TIME_H",
             "-DHAVE_ARPA_INET_H",
@@ -847,6 +983,7 @@ fn buildCurl(
     mod.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{
+            hide_symbols,
             "-D_GNU_SOURCE",
             "-DHAVE_CONFIG_H",
             "-DCURL_STATICLIB",
