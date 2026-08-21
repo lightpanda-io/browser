@@ -37,14 +37,30 @@ skipped: usize = 0,
 
 pub const Error = error{ OutOfMemory, ReadFailed };
 
+/// One rule-shaped line. Dropped lines are surfaced rather than swallowed
+/// because an `@@` rule we cannot read still tells the caller that something
+/// on that hostname is not meant to be blocked.
+pub const Item = union(enum) {
+    filter: NetworkFilter,
+    /// Already counted in `skipped`; the caller only inspects it.
+    dropped: Dropped,
+};
+
+pub const Dropped = struct {
+    line: []const u8,
+    /// Why the filter parser refused it. Null when the line never reached it
+    /// (AdGuard `$$` syntax).
+    reason: ?NetworkFilter.ParseError,
+};
+
 pub fn init(reader: *std.Io.Reader) Parser {
     return .{ .reader = reader };
 }
 
-/// Returns the next network filter, or null at end of list. Allocations come
-/// from `arena`; the returned filter borrows from it and from the reader's
+/// Returns the next rule-shaped line, or null at end of list. Allocations
+/// come from `arena`; the result borrows from it and from the reader's
 /// buffer, so it only stays valid until the following call.
-pub fn next(self: *Parser, arena: Allocator) Error!?NetworkFilter {
+pub fn next(self: *Parser, arena: Allocator) Error!?Item {
     while (try self.takeLine()) |raw_line| {
         var stripped: []const u8 = raw_line;
         if (self.first_line) {
@@ -57,15 +73,21 @@ pub fn next(self: *Parser, arena: Allocator) Error!?NetworkFilter {
 
         switch (LineClass.fromLine(line)) {
             .empty, .comment => {},
-            .unsupported => self.skipped += 1,
+            .unsupported => {
+                self.skipped += 1;
+                return .{ .dropped = .{ .line = line, .reason = null } };
+            },
             .network => {
                 if (NetworkFilter.parse(arena, line)) |filter| {
-                    return filter;
+                    return .{ .filter = filter };
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     // Anything else is a line outside the supported subset
                     // or malformed; either way it is not ours to enforce.
-                    else => self.skipped += 1,
+                    else => {
+                        self.skipped += 1;
+                        return .{ .dropped = .{ .line = line, .reason = err } };
+                    },
                 }
             },
         }
@@ -154,7 +176,18 @@ test "adblock.Parser: line classification" {
     try testing.expectEqual(.unsupported, LineClass.fromLine("example.com$$script[data-x]"));
 }
 
-test "adblock.Parser: yields one filter per next() call" {
+/// The next item that is a filter, skipping over dropped lines.
+fn nextFilter(parser: *Parser, arena: Allocator) !?NetworkFilter {
+    while (try parser.next(arena)) |item| {
+        switch (item) {
+            .filter => |filter| return filter,
+            .dropped => {},
+        }
+    }
+    return null;
+}
+
+test "adblock.Parser: yields one item per next() call" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -167,13 +200,19 @@ test "adblock.Parser: yields one filter per next() call" {
     var parser: Parser = .init(&reader);
 
     const first = (try parser.next(arena)).?;
-    try testing.expectString("ads.example.com", first.hostname);
+    try testing.expectString("ads.example.com", first.filter.hostname);
 
+    // The cosmetic line comes back as dropped rather than being swallowed,
+    // with the reason the filter parser gave.
     const second = (try parser.next(arena)).?;
-    try testing.expectString("tracker.net", second.hostname);
+    try testing.expectString("example.com##.ad-banner", second.dropped.line);
+    try testing.expectEqual(error.UnsupportedPattern, second.dropped.reason.?);
 
-    // The header, the cosmetic line and the end of the list all yield
-    // nothing, and next() keeps returning null once drained.
+    const third = (try parser.next(arena)).?;
+    try testing.expectString("tracker.net", third.filter.hostname);
+
+    // The header and the end of the list yield nothing, and next() keeps
+    // returning null once drained.
     try testing.expect(try parser.next(arena) == null);
     try testing.expect(try parser.next(arena) == null);
 }
@@ -195,7 +234,7 @@ test "adblock.Parser: only rule-shaped lines count as skipped" {
     var parser: Parser = .init(&reader);
 
     var count: usize = 0;
-    while (try parser.next(arena)) |_| count += 1;
+    while (try nextFilter(&parser, arena)) |_| count += 1;
 
     // The header, the comment and the blank line are not rules.
     try testing.expectEqual(1, count);
@@ -220,14 +259,14 @@ test "adblock.Parser: a line too long for the buffer is skipped" {
     var reader = text_reader.limited(.unlimited, &buf);
     var parser: Parser = .init(&reader.interface);
 
-    const first = (try parser.next(arena)).?;
+    const first = (try nextFilter(&parser, arena)).?;
     try testing.expectString("ads.example.com", first.hostname);
 
     // The oversized line was stepped over, not treated as end of list.
-    const second = (try parser.next(arena)).?;
+    const second = (try nextFilter(&parser, arena)).?;
     try testing.expectString("tracker.net", second.hostname);
 
-    try testing.expect(try parser.next(arena) == null);
+    try testing.expect(try nextFilter(&parser, arena) == null);
     // It is still a line we could not load, and it says so.
     try testing.expectEqual(1, parser.skipped);
 }
@@ -265,7 +304,7 @@ test "adblock.Parser: full list" {
     // A filter only borrows the reader's buffer until the next call, so
     // assert on each one as it comes out.
     var count: usize = 0;
-    while (try parser.next(arena)) |filter| : (count += 1) {
+    while (try nextFilter(&parser, arena)) |filter| : (count += 1) {
         switch (count) {
             // "-banner-468x60." is not hostname-shaped (leading '-'), so it
             // stays a plain pattern rather than becoming a hostname filter.
