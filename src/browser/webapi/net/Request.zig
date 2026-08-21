@@ -61,9 +61,9 @@ pub const InitOpts = struct {
     credentials: Credentials = .@"same-origin",
     headers: ?Headers.InitOpts = null,
     method: ?[]const u8 = null,
+    mode: Mode = .cors,
     priority: ?[]const u8 = null,
     redirect: Redirect = .follow,
-    mode: Mode = .cors,
     signal: ?*AbortSignal = null,
 };
 
