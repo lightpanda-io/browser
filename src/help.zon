@@ -328,7 +328,8 @@
     \\common options:
     \\  --adblock-lists <LIST>
     \\          EasyList-syntax filter files to load. Can be passed multiple times.
-    \\          Requests to a hostname blocked by any list are failed before they leave.
+    \\          Requests a list blocks are failed before they leave; the URL,
+    \\          resource type, party and $domain= of each one decide.
     \\          e.g. --adblock-lists easylist.txt --adblock-lists easyprivacy.txt
     \\  --block-cidrs <CIDR>
     \\          Additional CIDR ranges to block. Can be passed multiple times.
