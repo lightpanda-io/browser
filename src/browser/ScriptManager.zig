@@ -97,6 +97,38 @@ pub fn tailHook(base: *ScriptManagerBase) void {
     }
 }
 
+const CorsSettings = struct {
+    request_mode: HttpClient.Request.RequestMode,
+    credentials_mode: HttpClient.Request.CredentialsMode,
+};
+
+// Follows the "create a potential-CORS request"
+// (https://html.spec.whatwg.org/multipage/urls-and-fetching.html#create-a-potential-cors-request)
+// in order to properly set the request_mode and credentials_mode.
+fn corsSettings(element: ?*Element, is_module: bool) CorsSettings {
+    const mode: enum { no_cors, anonymous, use_credentials } = blk: {
+        const co = if (element) |e| e.getAttributeSafe(comptime .wrap("crossorigin")) else null;
+
+        const value = co orelse {
+            // Missing-value default: No CORS for classic scripts, Anonymous for modules.
+            break :blk if (is_module) .anonymous else .no_cors;
+        };
+
+        if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
+            break :blk .use_credentials;
+        }
+
+        // Empty-value and invalid-value defaults are both Anonymous.
+        break :blk .anonymous;
+    };
+
+    return switch (mode) {
+        .no_cors => .{ .request_mode = .no_cors, .credentials_mode = .same_origin },
+        .anonymous => .{ .request_mode = .cors, .credentials_mode = .same_origin },
+        .use_credentials => .{ .request_mode = .cors, .credentials_mode = .include },
+    };
+}
+
 // Returns true when a fetch was started: the link's load/error event fires
 // when the fetch settles. false (duplicate hint) = no event will fire.
 // element is null when the hint came from the prescan rather than a <link>.
@@ -130,6 +162,8 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         log.debug(.http, "script queue", .{ .url = owned_url, .ctx = "preload" });
     }
 
+    const settings = corsSettings(if (element) |e| e.asElement() else null, false);
+
     try frame.makeRequest(.{
         .ctx = script,
         .url = owned_url,
@@ -140,6 +174,8 @@ pub fn preloadScript(self: *ScriptManager, element: ?*Element.Html, url: []const
         .cookie_origin = frame.url,
         .origin = frame.origin,
         .resource_type = .script,
+        .request_mode = settings.request_mode,
+        .credentials_mode = settings.credentials_mode,
         .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -348,6 +384,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.status = pre.status;
                 script.complete = true;
             } else {
+                const settings = corsSettings(script_element.asElement(), kind == .module);
+
                 const transfer = try self.base.client.newRequest(.{
                     .url = remote_url,
                     .method = .GET,
@@ -357,6 +395,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .cookie_origin = frame.url,
                     .origin = frame.origin,
                     .resource_type = .script,
+                    .request_mode = settings.request_mode,
+                    .credentials_mode = settings.credentials_mode,
                     .notification = frame._session.notification,
                     .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
                 }, &frame._http_owner);
@@ -395,6 +435,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     defer self.base.endEvaluationWindow(was_evaluating);
 
     errdefer self.base.scriptList(script).remove(&script.node);
+
+    const settings = corsSettings(script_element.asElement(), kind == .module);
+
     try frame.makeRequest(.{
         .ctx = script,
         .url = remote_url,
@@ -405,6 +448,8 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .cookie_origin = frame.url,
         .origin = frame.origin,
         .resource_type = .script,
+        .request_mode = settings.request_mode,
+        .credentials_mode = settings.credentials_mode,
         .notification = frame._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
