@@ -99,8 +99,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
     var app = try App.init(allocator, &args);
     defer app.deinit();
 
-    try sighandler.on(lp.Network.stop, .{&app.network});
-
     app.telemetry.record(.{ .run = {} });
 
     defer if (app.config.dumpMetricsOnExit()) {
@@ -133,7 +131,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
 
             try sighandler.on(lp.Server.shutdown, .{server});
 
-            app.network.run();
+            server.run();
         },
         .fetch => |opts| {
             const urls = opts.url.items;
@@ -207,10 +205,10 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
             log.opts.format = .logfmt;
 
             // --port serves MCP over HTTP instead of stdio. It and --cdp-port
-            // both need app.network's single listener, so they can't combine.
+            // each run their accept loop on this thread, so they can't combine.
             if (opts.port) |port| {
                 if (opts.cdp_port != null) {
-                    log.fatal(.mcp, "port conflicts with cdp-port", .{ .hint = "both need the single network listener" });
+                    log.fatal(.mcp, "port conflicts with cdp-port", .{ .hint = "both need the main thread for their accept loop" });
                     return error.InvalidArgument;
                 }
                 const address = std.Io.net.IpAddress.parse(opts.host, port) catch |err| {
@@ -219,8 +217,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 };
                 const http_server = try lp.mcp.HttpServer.init(allocator, app);
                 defer http_server.deinit();
-                // Shutdown rides the already-registered Network.stop handler:
-                // a signal stops the accept loop, run() returns, deinit joins.
+                // A signal stops the accept loop, run() returns, deinit joins.
+                try sighandler.on(lp.mcp.HttpServer.stop, .{http_server});
                 http_server.run(address) catch |err| {
                     log.fatal(.mcp, "mcp http error", .{ .err = err });
                     return err;
@@ -241,14 +239,14 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
 
             var mcp_err: ?anyerror = null;
             {
-                var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app, &mcp_err });
+                var worker_thread = try std.Thread.spawn(.{}, mcpThread, .{ allocator, app, cdp_server, &mcp_err });
                 defer worker_thread.join();
 
                 // mcp talks over stdio on mcpThread. Only run the CDP accept/read
                 // loop when an optional CDP server was started; otherwise the main
                 // thread just waits for the worker.
-                if (cdp_server != null) {
-                    app.network.run();
+                if (cdp_server) |s| {
+                    s.run();
                 }
             }
             if (mcp_err) |err| return err;
@@ -292,8 +290,6 @@ fn agentThread(
     cancelled: *bool,
     sig_bridge: *lp.Agent.SigBridge,
 ) void {
-    defer app.network.stop();
-
     var agent_instance = lp.Agent.init(allocator, app, opts) catch |err| {
         if (err == error.UserCancelled) {
             cancelled.* = true;
@@ -351,8 +347,6 @@ const FetchTerminator = struct {
 };
 
 fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetch_opts: lp.FetchOpts, err_out: *?anyerror) void {
-    defer app.network.stop();
-
     var browser: lp.Browser = undefined;
     browser.init(app, .{}, null) catch |err| {
         err_out.* = err;
@@ -373,8 +367,10 @@ fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetc
     };
 }
 
-fn mcpThread(allocator: std.mem.Allocator, app: *App, err_out: *?anyerror) void {
-    defer app.network.stop();
+fn mcpThread(allocator: std.mem.Allocator, app: *App, cdp_server: ?*lp.Server, err_out: *?anyerror) void {
+    defer if (cdp_server) |s| {
+        s.shutdown();
+    };
 
     var stdout = std.Io.File.stdout().writerStreaming(lp.io, &.{});
     var mcp_server: *lp.mcp.Server = lp.mcp.Server.init(allocator, app, &stdout.interface) catch |err| {

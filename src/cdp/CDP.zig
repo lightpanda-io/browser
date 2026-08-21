@@ -25,7 +25,7 @@ const Notification = @import("../Notification.zig");
 
 const WS = @import("../network/WS.zig");
 const http = @import("../network/http.zig");
-const Network = @import("../network/Network.zig");
+const Server = @import("../Server.zig");
 const Transfer = @import("../network/HttpClient.zig").Transfer;
 
 const js = @import("../browser/js/js.zig");
@@ -62,11 +62,10 @@ conn: Connection,
 browser: Browser,
 allocator: Allocator,
 
-// Network-thread read-side handle for the CDP socket. Populated in
-// init; Server.handleConnection calls network.registerCdp(&cdp.link)
-// after the worker-side handshake completes, and unregisterCdp before
-// teardown.
-link: Network.CdpLink,
+// Server run-loop read-side handle for the CDP socket. Populated in
+// init; Server.handleConnection calls registerLink(&cdp.link) after the
+// worker-side handshake completes, and unregisterLink before teardown.
+link: Server.Link,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -143,10 +142,10 @@ pub fn deinit(self: *CDP) void {
     self.browser_context_arena.deinit();
     self.conn.deinit();
 }
-// Called by Network when readable bytes arrive on the CDP socket.
-// Feeds them through the WS framer and pushes each parsed frame into
-// the worker's inbox. Returns false if a close frame was seen (or a
-// fatal frame error) so Network drops the link from its poll set.
+// Called by the Server run loop when readable bytes arrive on the CDP
+// socket. Feeds them through the WS framer and pushes each parsed frame
+// into the worker's inbox. Returns false if a close frame was seen (or a
+// fatal frame error) so the loop drops the link from its poll set.
 //
 // One network read can carry more bytes than the reader's current
 // free space — large CDP messages (Page.addScriptToEvaluateOnNewDocument,
@@ -167,8 +166,8 @@ pub fn onData(self: *CDP, data: []const u8) anyerror!bool {
     return true;
 }
 
-// Called by Network when it drops the link unsolicited (peer EOF, read
-// error, poll HUP/ERR). Push a disconnect into the inbox so the
+// Called by the Server run loop when it drops the link unsolicited (peer
+// EOF, read error, poll HUP/ERR). Push a disconnect into the inbox so the
 // worker's drainInbox surfaces error.ClientDisconnected.
 pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     const arena = self.browser.arena_pool.acquire(.tiny, "cdp disconnect") catch |e| switch (e) {
@@ -178,14 +177,14 @@ pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
 }
 
-// Called by Network to try to force the Worker to shutdown. Protects against a
-// stuck worker.
-pub fn terminateFromNetwork(self: *CDP) void {
+// Called by the Server run loop to try to force the Worker to shutdown.
+// Protects against a stuck worker.
+pub fn terminateFromServer(self: *CDP) void {
     self.browser.env.requestTerminate();
 }
 
 // Called in the Worker to dispatch a single CDP message bubbled up by
-// HttpClient.drainInbox. The Network thread already parsed the JSON
+// HttpClient.drainInbox. The Server run loop already parsed the JSON
 // when it pushed the message to the inbox, so we skip straight to
 // dispatchParsed without re-parsing. `c.raw` and `c.arena` outlive
 // this call (they're owned by the inbox Message which drainInbox
@@ -1493,9 +1492,9 @@ test "cdp: disconnect latches so the worker keeps exiting" {
 
     const client = &ctx.cdp().browser.http_client;
 
-    // Simulate the Network thread delivering a peer disconnect into the
-    // worker's inbox — the dropCdp(notify=true) path used on peer EOF and,
-    // since #2510, on shutdown via shutdownCdpLinks.
+    // Simulate the Server run loop delivering a peer disconnect into the
+    // worker's inbox — the dropLink(notify=true) path used on peer EOF and,
+    // since #2510, on shutdown via shutdownLinks.
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
         client.inbox.push(arena, .{ .disconnect = null });
