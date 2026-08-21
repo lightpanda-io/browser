@@ -211,25 +211,9 @@ fn caPathValidator(
     }
 }
 
-// Sub-resources the browser actually requests. A comma-separated list so
-// more can be opted into individually as they land; only `image` fetches
-// today.
 pub const LoadResources = packed struct(u1) {
     image: bool = false,
 };
-
-fn loadResourcesValidator(_: Allocator, args: *std.process.Args.Iterator, target: *LoadResources) !void {
-    const resources = args.next() orelse return error.MissingArgument;
-
-    var it = std.mem.splitScalar(u8, resources, ',');
-    while (it.next()) |resource| {
-        inline for (@typeInfo(LoadResources).@"struct".fields) |field| {
-            if (std.mem.eql(u8, field.name, resource)) {
-                @field(target, field.name) = true;
-            }
-        }
-    }
-}
 
 /// Common CLI args.
 const CommonOptions = .{
@@ -263,12 +247,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
-    .{
-        .name = "load_resources",
-        .type = LoadResources,
-        .default = LoadResources{},
-        .validator = loadResourcesValidator,
-    },
+    .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },

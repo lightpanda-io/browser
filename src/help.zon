@@ -346,19 +346,14 @@
     \\          contribute to computed styles (and therefore to visibility checks like
     \\          display, visibility, opacity, pointer-events).
     \\          Defaults to false, except in agent mode with an LLM, where it is on.
-    \\  --load-resources <LIST>
-    \\          Comma-separated list of sub-resources to actually request.
-    \\          Defaults to empty, i.e. none of them.
-    \\          Allowed values: "image".
-    \\          "image" requests <img> sources so that load/error events reflect the
-    \\          real HTTP status, instead of load firing for any non-empty src. The
-    \\          request stops at the end of the response headers, so only a small
-    \\          image's body is ever transferred, and images are never decoded:
-    \\          naturalWidth/naturalHeight stay 0 either way.
-    \\          Requested images delay the window load event, and therefore
-    \\          --wait-until load. They are fetched at a lower priority than
-    \\          scripts, stylesheets and XHR, and never take a connection one of
-    \\          those is waiting for.
+    \\  --load-resources <RESOURCE>
+    \\          Sub-resource to actually request. Can be passed multiple times.
+    \\          Defaults to requesting none of them.
+    \\          Allowed values:
+    \\              image     <img> sources, so that load/error reflects the real
+    \\                        HTTP status. Only the response headers are read;
+    \\                        images are never decoded, so naturalWidth and
+    \\                        naturalHeight stay 0. Delays the window load event.
     \\  --http-cache-dir <PATH>
     \\          Directory used as a filesystem cache for network resources. Omitting
     \\          this disables caching.
