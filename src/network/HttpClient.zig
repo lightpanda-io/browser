@@ -382,23 +382,58 @@ fn clearUrlBlocklist(self: *Client) void {
 /// Every reason a request is refused before it reaches the network:
 /// `--block-urls` patterns and the `--adblock-lists` filters both land here
 /// so that no call site can apply one without the other.
-fn isUrlBlocked(self: *const Client, url: [:0]const u8, internal: bool) bool {
-    if (internal) return false;
+fn isUrlBlocked(self: *const Client, req: *const Request) bool {
+    if (req.internal) return false;
     if (self.url_blocklist) |*blocklist| {
-        if (blocklist.isBlocked(url)) return true;
+        if (blocklist.isBlocked(req.url)) return true;
     }
-    return self.isHostAdblocked(url);
+    return self.isAdblocked(req);
 }
 
-fn isHostAdblocked(self: *const Client, url: [:0]const u8) bool {
+/// Longest URL we will match filters against.
+/// Anything past this is not a resource a filter list has an opinion about.
+const ADBLOCK_URL_MAX = 8 * 1024;
+
+fn isAdblocked(self: *const Client, req: *const Request) bool {
     const blocker = if (self.network.adblocker) |*b| b else return false;
-    const host = URL.getHostname(url);
-    if (host.len == 0 or host.len > 253) return false;
-    // The trie expects normalized (lowercase) hostnames; URLs aren't
-    // guaranteed to arrive that way.
-    var buf: [253]u8 = undefined;
-    const hostname = std.ascii.lowerString(&buf, host);
-    return blocker.matchHostname(hostname) == .blocked;
+
+    var url_buf: [ADBLOCK_URL_MAX]u8 = undefined;
+    const url = normalizeForAdblock(req.url, &url_buf) orelse return false;
+
+    var source_buf: [253]u8 = undefined;
+    const top_level = req.resource_type == .document and !req.is_subframe;
+    const source_host = if (top_level) "" else URL.getOriginHostname(req.cookie_origin);
+    const source = if (source_host.len == 0 or source_host.len > source_buf.len)
+        ""
+    else
+        std.ascii.lowerString(&source_buf, source_host);
+
+    return blocker.match(.init(url, source, adblockResourceType(req))) == .blocked;
+}
+
+fn normalizeForAdblock(url: [:0]const u8, buf: []u8) ?[]const u8 {
+    const end = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
+    const trimmed = url[0..end];
+
+    const upper = for (trimmed, 0..) |c, i| {
+        if (std.ascii.isUpper(c)) break i;
+    } else return trimmed;
+
+    if (trimmed.len > buf.len) return null;
+    const out = buf[0..trimmed.len];
+    @memcpy(out[0..upper], trimmed[0..upper]);
+    _ = std.ascii.lowerString(out[upper..], trimmed[upper..]);
+    return out;
+}
+
+fn adblockResourceType(req: *const Request) AdBlocker.ResourceTypes {
+    return switch (req.resource_type) {
+        .document => if (req.is_subframe) .{ .subdocument = true } else .{ .document = true },
+        .script => .{ .script = true },
+        .stylesheet => .{ .stylesheet = true },
+        .xhr, .fetch => .{ .xmlhttprequest = true },
+        .eventsource => .{ .other = true },
+    };
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
@@ -869,7 +904,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             continue :sw SubmitFrom.after_intercept;
         },
         .after_intercept => {
-            if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
+            if (self.isUrlBlocked(&transfer.req)) {
                 log.info(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
             }
@@ -1521,7 +1556,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         });
                     }
 
-                    if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
+                    if (self.isUrlBlocked(&transfer.req)) {
                         log.info(.http, "blocked url", .{ .url = transfer.req.url });
                         self.removeConn(msg.conn);
                         transfer._conn = null;
@@ -1720,6 +1755,11 @@ pub const Request = struct {
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
     internal: bool = false,
+
+    // Whether a `.document` request is loading a nested frame rather than the
+    // top-level page. The reason why is filter lists separate the two ($document vs
+    // $subdocument), and only ever block the latter.
+    is_subframe: bool = false,
 
     // Set by syncRequest; only used to label the http_requests metric.
     sync: bool = false,
@@ -3511,7 +3551,32 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
     try testing.expectEqual(null, client.url_blocklist);
 }
 
-test "HttpClient: adblock verdicts apply per request hostname" {
+const TestRequest = struct {
+    url: [:0]const u8,
+    document: [:0]const u8 = "",
+    resource_type: Request.ResourceType = .document,
+    is_subframe: bool = false,
+    internal: bool = false,
+};
+
+fn testIsUrlBlocked(client: *const Client, opts: TestRequest) bool {
+    const req: Request = .{
+        .frame_id = 0,
+        .loader_id = 0,
+        .method = .GET,
+        .url = opts.url,
+        .cookie_jar = null,
+        .cookie_origin = opts.document,
+        .resource_type = opts.resource_type,
+        .is_subframe = opts.is_subframe,
+        .internal = opts.internal,
+        .notification = undefined,
+        .shutdown_callback = noopShutdown,
+    };
+    return client.isUrlBlocked(&req);
+}
+
+test "HttpClient: adblock verdicts apply per request" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
@@ -3523,18 +3588,65 @@ test "HttpClient: adblock verdicts apply per request hostname" {
     var list: std.Io.Reader = .fixed(
         \\||ads.example.com^
         \\@@||good.ads.example.com^
+        \\||typed.example.com^$script
+        \\||partied.example.com^$third-party
+        \\||framed.example.com^$subdocument
     );
     try blocker.parse(&list);
+    try blocker.build();
     client.network.adblocker = blocker;
     defer client.network.adblocker = null;
 
-    try testing.expect(client.isUrlBlocked("https://ads.example.com/pixel.gif", false));
+    try testing.expect(testIsUrlBlocked(&client, .{ .url = "https://ads.example.com/pixel.gif" }));
     // Hostnames are matched case-insensitively and without the port.
-    try testing.expect(client.isUrlBlocked("https://SUB.ADS.EXAMPLE.COM:8443/x", false));
-    try testing.expect(!client.isUrlBlocked("https://good.ads.example.com/app.js", false));
-    try testing.expect(!client.isUrlBlocked("https://example.com/", false));
+    try testing.expect(testIsUrlBlocked(&client, .{ .url = "https://SUB.ADS.EXAMPLE.COM:8443/x" }));
+    try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://good.ads.example.com/app.js" }));
+    try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://example.com/" }));
     // Internal transfers (robots.txt, ...) are never adblocked.
-    try testing.expect(!client.isUrlBlocked("https://ads.example.com/", true));
+    try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://ads.example.com/", .internal = true }));
+
+    // The request's own type decides, not just its hostname.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://typed.example.com/a.js",
+        .resource_type = .script,
+    }));
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://typed.example.com/a.json",
+        .resource_type = .xhr,
+    }));
+
+    // A `.document` request is $subdocument only inside a nested frame.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://framed.example.com/",
+        .is_subframe = true,
+    }));
+    try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://framed.example.com/" }));
+
+    // The document URL decides the party; without one the request is first
+    // party to itself.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://partied.example.com/x.js",
+        .document = "https://news.com/",
+        .resource_type = .script,
+    }));
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://partied.example.com/x.js",
+        .document = "https://www.partied.example.com/",
+        .resource_type = .script,
+    }));
+
+    // A top-level navigation is its own context: the page it was clicked on
+    // does not make it third-party...
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://partied.example.com/",
+        .document = "https://news.com/",
+    }));
+    // ...but a subframe loading the same URL keeps its document's context.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://partied.example.com/",
+        .document = "https://news.com/",
+        .is_subframe = true,
+    }));
 }
 
 test "HttpClient: URL blocking exempts internal transfers" {
@@ -3546,8 +3658,11 @@ test "HttpClient: URL blocking exempts internal transfers" {
     defer client.clearUrlBlocklist();
 
     try client.setBlockedUrls(&.{"*example.test*"});
-    try testing.expect(client.isUrlBlocked("https://example.test/script.js", false));
-    try testing.expect(!client.isUrlBlocked("https://example.test/robots.txt", true));
+    try testing.expect(testIsUrlBlocked(&client, .{ .url = "https://example.test/script.js" }));
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://example.test/robots.txt",
+        .internal = true,
+    }));
 }
 
 fn testTransfer(arena: *lp.Arena) Transfer {

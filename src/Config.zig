@@ -235,9 +235,9 @@ const CommonOptions = .{
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
     .{ .name = "user_agent", .type = ?[]const u8, .validator = userAgentValidator },
     .{ .name = "block_private_networks", .type = bool },
-    .{ .name = "block_cidrs", .type = ?[]const u8 },
-    .{ .name = "block_urls", .type = ?[]const u8 },
-    .{ .name = "adblock_lists", .type = ?[]const u8 },
+    .{ .name = "block_cidrs", .type = ?[]const u8, .validator = accumulateValidator },
+    .{ .name = "block_urls", .type = ?[]const u8, .validator = accumulateValidator },
+    .{ .name = "adblock_lists", .type = ?[]const u8, .validator = accumulateValidator },
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "disable_subframes", .type = bool },
@@ -1166,6 +1166,30 @@ test "Config: parseArgs refuses an invalid --http-header" {
     }
 }
 
+test "Config: parseArgs accumulates repeated list flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const argv = [_][*:0]const u8{
+        "lightpanda",         "fetch",
+        "--adblock-lists",    "easylist.txt",
+        "--adblock-lists",    "easyprivacy.txt,annoyances.txt",
+        "--block-cidrs",      "10.0.0.0/8",
+        "--block-cidrs",      "-10.0.0.42/32",
+        "http://example.com",
+    };
+    const proc_args: std.process.Args = .{ .vector = &argv };
+    const config = try parseArgs(arena.allocator(), proc_args);
+
+    var paths = config.adblockLists().?;
+    try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
+    try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
+    try std.testing.expectEqualStrings("annoyances.txt", paths.next().?);
+    try std.testing.expectEqual(null, paths.next());
+
+    try std.testing.expectEqualStrings("10.0.0.0/8,-10.0.0.42/32", config.blockCidrs().?);
+}
+
 test "Config: parseArgs collects --http-header" {
     // The parsed headers are owned by the allocator for the process lifetime;
     // an arena stands in for main's.
@@ -1211,6 +1235,18 @@ test "Config: httpHeaders accessor" {
         try std.testing.expectEqualStrings("X-Extra", headers[0].name);
         try std.testing.expectEqualStrings("1", headers[0].value);
     }
+}
+
+/// For comma-separated flags the help documents as repeatable: each
+/// occurrence appends to what earlier ones left, so "--x a --x b" equals
+/// "--x a,b" instead of the last flag silently winning.
+fn accumulateValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const existing = field.* orelse {
+        field.* = try allocator.dupe(u8, str);
+        return;
+    };
+    field.* = try std.mem.join(allocator, ",", &.{ existing, str });
 }
 
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {

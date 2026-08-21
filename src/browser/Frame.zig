@@ -830,6 +830,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = opts.initiator_url orelse self.url,
         .resource_type = .document,
+        .is_subframe = self.parent != null,
         .notification = self._session.notification,
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
