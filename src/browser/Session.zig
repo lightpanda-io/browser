@@ -117,12 +117,7 @@ _console_capture: bool = false,
 load_external_stylesheets: bool = false,
 
 // Sub-resources to actually request. Off by default: a driver that only
-// reads the DOM shouldn't pay for bytes it never looks at. Set from the
-// `--load-resources` CLI flag at session init; the LP.configureLoading CDP
-// method can flip it per-session. When `image` is set,
-// `Image.imageAddedCallback` routes to `Frame.loadImage` and an <img>'s
-// load/error event reflects the real HTTP status instead of always being
-// a synthetic load.
+// reads the DOM shouldn't pay for bytes it never looks at.
 load_resources: Config.LoadResources = .{},
 
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
