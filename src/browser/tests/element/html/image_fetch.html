@@ -9,7 +9,7 @@
   complete successfully — that's what makes these a test of the fetch path
   and not just of the event plumbing.
 
-  /images/ok.png is over Request.HEADERS_ONLY_DRAIN_MAX (abort branch),
+  /images/ok.png is over the headers-only drain threshold (abort branch),
   /images/small.png is under it (drain branch).
 -->
 
@@ -69,9 +69,8 @@
 </script>
 
 <script id="img-many-share-one-connection" type=module>
-  // A page's worth of small images. They queue at low priority behind
-  // anything else, and each drained body returns its connection to the
-  // pool, so this must settle without starving or stalling.
+  // A page's worth of small images. Each drained body returns its
+  // connection to the pool, so this must settle without stalling.
   const state = await testing.async();
   const results = await Promise.all(
     Array.from({ length: 12 }, (_, i) => new Promise(resolve => {
@@ -86,6 +85,24 @@
   await state.done(() => {
     testing.expectEqual(12, results.length);
     testing.expectEqual(true, results.every(r => r === "load"));
+  });
+</script>
+
+<script id="img-chunked-body-loads" type=module>
+  // No Content-Length, so the drain/abort decision can't be made up front.
+  // Small enough to drain; either way it must report the real status.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/chunked.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
   });
 </script>
 
@@ -202,6 +219,28 @@
     // The superseded 404 is dropped; only the winning fetch reports.
     testing.expectEqual(1, events.length);
     testing.expectEqual("load", events[0]);
+  });
+</script>
+
+<script id="img-removing-src-supersedes" type=module>
+  // removeAttribute has to invalidate the in-flight fetch the same way a
+  // reassignment does, and leave the element complete.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const events = [];
+  img.addEventListener("load", () => events.push("load"));
+  img.addEventListener("error", () => events.push("error"));
+
+  img.src = "/images/ok.png";
+  img.removeAttribute("src");
+
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, events.length);
+    testing.expectEqual(true, img.complete);
   });
 </script>
 
