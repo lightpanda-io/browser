@@ -769,11 +769,7 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
     self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
     const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const env_var: [:0]const u8 = switch (selected) {
-        .tavily => "TAVILY_API_KEY",
-        .brave => "BRAVE_API_KEY",
-        .auto, .duckduckgo => return,
-    };
+    const env_var = browser_tools.searchEnvVar(selected) orelse return;
     if (std.c.getenv(env_var) == null) {
         self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{env_var});
     }
@@ -1458,7 +1454,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave then Tavily (when their API keys are set) and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave, Tavily, then Exa (when their API keys are set) and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
                 .{ @tagName(browser_tools.search_engine), settings.remembered_path },
             ),
         }
