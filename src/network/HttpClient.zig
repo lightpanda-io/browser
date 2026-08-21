@@ -190,14 +190,17 @@ obey_robots: bool,
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
 
-pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
-    var handles = try http.Handles.init(network.config);
+pub fn init(self: *Client, app: *lp.App, cdp: ?*CDP) !void {
+    const config = app.config;
+    const allocator = app.allocator;
+
+    var handles = try http.Handles.init(config);
     errdefer handles.deinit();
 
-    const http_proxy = network.config.httpProxy();
+    const http_proxy = config.httpProxy();
 
     var url_blocklist: ?UrlBlocklist = null;
-    if (network.config.blockedUrlPatterns()) |initial_patterns| {
+    if (config.blockedUrlPatterns()) |initial_patterns| {
         var patterns: std.ArrayList([]const u8) = .empty;
         defer patterns.deinit(allocator);
 
@@ -211,10 +214,12 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
     }
     errdefer if (url_blocklist) |*blocklist| blocklist.deinit();
 
+    const network = &app.network;
+
     self.* = Client{
         .handles = handles,
         .network = network,
-        .allocator = allocator,
+        .allocator = app.allocator,
         .cdp = cdp,
         .inbox = .{},
         .cache = &network.cache,
@@ -224,14 +229,14 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
         .tls_verify = network.config.tlsVerifyHost(),
         .max_response_size = network.config.httpMaxResponseSize() orelse 1 * 1024 * 1024 * 1024, // 1 GiB
 
-        .serve_mode = network.config.mode == .serve,
-        .obey_robots = network.config.obeyRobots(),
+        .serve_mode = config.mode == .serve,
+        .obey_robots = config.obeyRobots(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
         },
         .url_blocklist = url_blocklist,
-        .arena_pool = &network.app.arena_pool,
+        .arena_pool = &app.arena_pool,
     };
 }
 

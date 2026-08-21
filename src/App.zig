@@ -67,7 +67,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
 
-    app.network = try Network.init(allocator, app, config);
+    app.network = try Network.init(app);
     errdefer app.network.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);

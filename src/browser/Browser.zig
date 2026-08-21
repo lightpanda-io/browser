@@ -128,7 +128,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .watchdog_entry = undefined,
     };
     self.env.protectHeapLimit();
-    try self.http_client.init(allocator, &app.network, cdp);
+    try self.http_client.init(app, cdp);
 
     self.watchdog_entry = .{
         .env = &self.env,

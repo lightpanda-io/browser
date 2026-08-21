@@ -81,10 +81,8 @@ pub const CdpLink = struct {
 // Number of fixed pollfds entries (wakeup pipe + listener).
 const PSEUDO_POLLFDS = 2;
 
-allocator: Allocator,
-
-app: *App,
 cache: Cache,
+allocator: Allocator,
 config: *const Config,
 robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
@@ -140,11 +138,14 @@ cdp_start: usize,
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
 
-pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
+pub fn init(app: *App) !Network {
     libcurl.curl_global_init(.{ .ssl = true }, null) catch |err| {
         lp.assert(false, "curl global init", .{ .err = err });
     };
     errdefer libcurl.curl_global_cleanup();
+
+    const config = app.config;
+    const allocator = app.allocator;
 
     const pipe = try sys_net.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
@@ -207,7 +208,6 @@ pub fn init(allocator: Allocator, app: *App, config: *const Config) !Network {
     errdefer cache.deinit();
 
     return .{
-        .app = app,
         .config = config,
         .allocator = allocator,
         .certificates = certificates,
