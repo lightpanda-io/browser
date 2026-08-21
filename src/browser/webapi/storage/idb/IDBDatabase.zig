@@ -63,8 +63,8 @@ pub fn asEventTarget(self: *IDBDatabase) *EventTarget {
 }
 
 const CreateObjectStoreOptions = struct {
-    keyPath: ?Key.KeyPath = null,
     autoIncrement: bool = false,
+    keyPath: ?Key.KeyPath = null,
 };
 
 // Only callable while the upgrade transaction is live and active, hence the checks

@@ -64,13 +64,13 @@ const ResolvedOptions = struct {
 };
 
 pub const ObserveOptions = struct {
-    attributes: ?bool = null,
+    attributeFilter: ?[]const []const u8 = null,
     attributeOldValue: ?bool = null,
-    childList: bool = false,
+    attributes: ?bool = null,
     characterData: ?bool = null,
     characterDataOldValue: ?bool = null,
+    childList: bool = false,
     subtree: bool = false,
-    attributeFilter: ?[]const []const u8 = null,
 };
 
 pub fn init(callback: js.Function.Global, frame: *Frame) !*MutationObserver {

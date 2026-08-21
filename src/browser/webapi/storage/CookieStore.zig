@@ -213,14 +213,14 @@ const GetInput = union(enum) {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/set
 const CookieInit = struct {
-    name: []const u8,
-    value: []const u8,
+    domain: ?[]const u8 = null,
     expires: ?f64 = null,
     maxAge: ?f64 = null,
-    domain: ?[]const u8 = null,
+    name: []const u8,
+    partitioned: bool = false,
     path: []const u8 = "/",
     sameSite: SameSite = .strict,
-    partitioned: bool = false,
+    value: []const u8,
 };
 
 const SetInput = union(enum) {
@@ -230,10 +230,10 @@ const SetInput = union(enum) {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/CookieStore/delete
 const DeleteOptions = struct {
-    name: []const u8,
     domain: ?[]const u8 = null,
-    path: []const u8 = "/",
+    name: []const u8,
     partitioned: bool = false,
+    path: []const u8 = "/",
 };
 
 const DeleteInput = union(enum) {
@@ -595,17 +595,17 @@ pub const JsApi = struct {
 // NOTE: Per spec, name and value are the only valid fields. All other fields
 // are experimental. Chrome exposes them all, so we do too.
 pub const CookieListItem = struct {
+    domain: ?String = null,
+    expires: ?f64 = null,
     name: String,
+    partitioned: bool = false,
+    path: String = String.wrap("/"),
+    sameSite: []const u8 = "strict",
+    secure: bool = false,
     // Optional because a deletion change-event reports the removed cookie with
     // `value` omitted (serialized as undefined via the `deleted` accessor's
     // null_as_undefined). For get/getAll and `changed` items it is always set.
     value: ?String = null,
-    domain: ?String = null,
-    path: String = String.wrap("/"),
-    expires: ?f64 = null,
-    secure: bool = false,
-    sameSite: []const u8 = "strict",
-    partitioned: bool = false,
 };
 
 const testing = @import("../../../testing.zig");

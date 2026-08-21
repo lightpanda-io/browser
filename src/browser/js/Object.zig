@@ -50,6 +50,14 @@ pub fn get(self: Object, key: anytype) !js.Value {
     };
 }
 
+pub fn getSymbol(self: Object, symbol: *const v8.Symbol) !js.Value {
+    const handle = v8.v8__Object__Get(self.handle, self.local.handle, @ptrCast(symbol)) orelse return error.JsException;
+    return .{
+        .handle = handle,
+        .local = self.local,
+    };
+}
+
 pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.Caller.CallOpts) !bool {
     const ctx = self.local.ctx;
 

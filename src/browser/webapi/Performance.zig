@@ -527,9 +527,9 @@ pub const Measure = struct {
 
     const Options = struct {
         detail: ?js.Value = null,
-        start: ?TimestampOrMark,
-        end: ?TimestampOrMark,
         duration: ?f64 = null,
+        end: ?TimestampOrMark,
+        start: ?TimestampOrMark,
 
         const TimestampOrMark = union(enum) {
             timestamp: f64,

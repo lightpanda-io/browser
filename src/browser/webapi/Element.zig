@@ -1343,8 +1343,8 @@ fn isVisibleSelf(self: *Element, style_manager: *StyleManager) bool {
 
 const CheckVisibilityOpts = struct {
     checkOpacity: bool = false,
-    opacityProperty: bool = false,
     checkVisibilityCSS: bool = false,
+    opacityProperty: bool = false,
     visibilityProperty: bool = false,
 };
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
@@ -1847,9 +1847,9 @@ const ScrollToOpts = union(enum) {
     opts: Opts,
 
     const Opts = struct {
-        top: ?i32 = null,
-        left: ?i32 = null,
         behavior: []const u8 = "",
+        left: ?i32 = null,
+        top: ?i32 = null,
     };
 };
 
@@ -2428,11 +2428,11 @@ pub const JsApi = struct {
     pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .ce_reactions = true });
 
     const ShadowRootInit = struct {
-        mode: String,
-        delegatesFocus: bool = false,
-        slotAssignment: ?String = null,
         clonable: bool = false,
+        delegatesFocus: bool = false,
+        mode: String,
         serializable: bool = false,
+        slotAssignment: ?String = null,
     };
     fn _attachShadow(self: *Element, init: ShadowRootInit, frame: *Frame) !*ShadowRoot {
         const mode: ShadowRoot.Mode = blk: {

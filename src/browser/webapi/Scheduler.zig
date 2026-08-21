@@ -49,8 +49,8 @@ const TaskState = struct {
 };
 
 const PostTaskOptions = struct {
-    priority: ?Priority = null,
     delay: ?u32 = null,
+    priority: ?Priority = null,
     signal: ?*AbortSignal = null,
 };
 

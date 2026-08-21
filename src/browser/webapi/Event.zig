@@ -395,6 +395,11 @@ pub fn populateFromOptions(self: *Event, opts: anytype) void {
 }
 
 pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
+    // Web IDL reads inherited dictionaries least-derived first, each level's
+    // own members in lexicographic order — which the concatenation below plus
+    // this per-level check produce.
+    js.Local.assertDictionaryFieldOrder(additions);
+
     var all_fields: []const std.builtin.Type.StructField = &.{};
 
     if (@hasField(T, "_proto")) {
@@ -405,7 +410,11 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
                 const ProtoType = @typeInfo(field.type).pointer.child;
                 if (@hasDecl(ProtoType, "Options")) {
                     const parent_options = @typeInfo(ProtoType.Options);
-                    all_fields = all_fields ++ parent_options.@"struct".fields;
+                    for (parent_options.@"struct".fields) |f| {
+                        if (!std.mem.eql(u8, f.name, js.Local.dictionary_group_marker)) {
+                            all_fields = all_fields ++ &[_]std.builtin.Type.StructField{f};
+                        }
+                    }
                 }
             }
         }
@@ -414,14 +423,18 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
     const additions_info = @typeInfo(additions);
     all_fields = all_fields ++ additions_info.@"struct".fields;
 
-    var names: [all_fields.len][:0]const u8 = undefined;
-    var types: [all_fields.len]type = undefined;
-    var attrs: [all_fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    const marker_default: void = {};
+    var names: [all_fields.len + 1][:0]const u8 = undefined;
+    var types: [all_fields.len + 1]type = undefined;
+    var attrs: [all_fields.len + 1]std.builtin.Type.StructField.Attributes = undefined;
     for (all_fields, 0..) |f, i| {
         names[i] = f.name;
         types[i] = f.type;
         attrs[i] = .{ .@"comptime" = f.is_comptime, .@"align" = f.alignment, .default_value_ptr = f.default_value_ptr };
     }
+    names[all_fields.len] = js.Local.dictionary_group_marker;
+    types[all_fields.len] = void;
+    attrs[all_fields.len] = .{ .default_value_ptr = @ptrCast(&marker_default) };
     return @Struct(.auto, null, &names, &types, &attrs);
 }
 

@@ -36,12 +36,12 @@ _tools: std.ArrayList(*Tool) = .empty,
 pub const init: ModelContext = .{};
 
 pub const Annotations = struct {
-    readOnlyHint: bool = false,
-    untrustedContentHint: bool = false,
     // Not in the W3C spec yet. The CDP `WebMCP.Annotation` type has an
     // `autosubmit` field; storing it here means the CDP follow-up won't have
     // to re-shape this struct.
     autoSubmitHint: bool = false,
+    readOnlyHint: bool = false,
+    untrustedContentHint: bool = false,
 };
 
 pub const Tool = struct {
@@ -60,12 +60,12 @@ pub const Tool = struct {
 };
 
 const ToolDict = struct {
+    annotations: ?Annotations = null,
+    description: []const u8,
+    execute: js.Function.Global,
+    inputSchema: ?js.Object.Global = null,
     name: []const u8,
     title: ?[]const u8 = null,
-    description: []const u8,
-    inputSchema: ?js.Object.Global = null,
-    execute: js.Function.Global,
-    annotations: ?Annotations = null,
 };
 
 const RegisterToolOptions = struct {

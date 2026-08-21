@@ -45,21 +45,21 @@ pub const Init = union(enum) {
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
     pub const RsaHashedKeyGen = struct {
-        name: []const u8,
-        /// This should be at least 2048.
-        /// Some organizations are now recommending that it should be 4096.
-        modulusLength: u32,
-        publicExponent: js.TypedArray(u8),
         hash: union(enum) {
             string: []const u8,
             object: struct { name: []const u8 },
         },
+        /// This should be at least 2048.
+        /// Some organizations are now recommending that it should be 4096.
+        modulusLength: u32,
+        name: []const u8,
+        publicExponent: js.TypedArray(u8),
     };
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/AesKeyGenParams
     pub const AesKeyGen = struct {
-        name: []const u8,
         length: u32,
+        name: []const u8,
     };
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/EcKeyGenParams
@@ -70,8 +70,6 @@ pub const Init = union(enum) {
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/HmacKeyGenParams
     pub const HmacKeyGen = struct {
-        /// Always HMAC.
-        name: []const u8,
         /// Its also possible to pass this in an object.
         hash: union(enum) {
             string: []const u8,
@@ -79,6 +77,8 @@ pub const Init = union(enum) {
         },
         /// If omitted, default is the block size of the chosen hash function.
         length: ?usize,
+        /// Always HMAC.
+        name: []const u8,
     };
     /// Alias.
     pub const HmacImport = HmacKeyGen;
@@ -112,17 +112,17 @@ pub const Derive = union(enum) {
     };
 
     pub const Pbkdf2Params = struct {
-        name: []const u8,
         hash: Hash,
-        salt: js.TypedArray(u8),
         iterations: u32,
+        name: []const u8,
+        salt: js.TypedArray(u8),
     };
 
     pub const HkdfParams = struct {
-        name: []const u8,
         hash: Hash,
-        salt: js.TypedArray(u8),
         info: js.TypedArray(u8),
+        name: []const u8,
+        salt: js.TypedArray(u8),
     };
 };
 
@@ -130,8 +130,8 @@ pub const Derive = union(enum) {
 /// produce. HMAC carries a hash; AES carries a length. Probed in that order so
 /// the more specific shapes win.
 pub const DerivedKey = union(enum) {
-    hmac: struct { name: []const u8, hash: Derive.Hash, length: ?u32 = null },
-    keyed: struct { name: []const u8, length: u32 },
+    hmac: struct { hash: Derive.Hash, length: ?u32 = null, name: []const u8 },
+    keyed: struct { length: u32, name: []const u8 },
     object: struct { name: []const u8 },
     name: []const u8,
 };
@@ -141,12 +141,12 @@ pub const DerivedKey = union(enum) {
 /// JS value coerces to a string).
 pub const Import = union(enum) {
     hmac: struct {
-        name: []const u8,
         hash: union(enum) {
             string: []const u8,
             object: struct { name: []const u8 },
         },
         length: ?u32 = null,
+        name: []const u8,
     },
     ec: struct { name: []const u8, namedCurve: []const u8 },
     object: struct { name: []const u8 },
@@ -181,12 +181,12 @@ pub const KeyData = union(enum) {
     /// `kty` and `k`; `d` marks an asymmetric private key. The rest are accepted
     /// for forward-compatibility.
     pub const Jwk = struct {
-        kty: []const u8,
-        k: ?[]const u8 = null,
-        d: ?[]const u8 = null,
         alg: ?[]const u8 = null,
-        use: ?[]const u8 = null,
+        d: ?[]const u8 = null,
         ext: ?bool = null,
+        k: ?[]const u8 = null,
+        kty: []const u8,
+        use: ?[]const u8 = null,
     };
 };
 
@@ -195,11 +195,11 @@ pub const KeyData = union(enum) {
 /// is the fallback form.
 pub const Encrypt = union(enum) {
     params: struct {
-        name: []const u8,
-        iv: ?js.TypedArray(u8) = null,
-        counter: ?js.TypedArray(u8) = null,
-        length: ?u32 = null,
         additionalData: ?js.TypedArray(u8) = null,
+        counter: ?js.TypedArray(u8) = null,
+        iv: ?js.TypedArray(u8) = null,
+        length: ?u32 = null,
+        name: []const u8,
         tagLength: ?u32 = null,
     },
     name: []const u8,

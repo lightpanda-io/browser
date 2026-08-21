@@ -68,17 +68,17 @@ _screen_y: f64,
 _shift_key: bool,
 
 pub const MouseEventOptions = struct {
-    screenX: f64 = 0.0,
-    screenY: f64 = 0.0,
+    altKey: bool = false,
+    button: i32 = 0,
+    buttons: u16 = 0,
     clientX: f64 = 0.0,
     clientY: f64 = 0.0,
     ctrlKey: bool = false,
-    shiftKey: bool = false,
-    altKey: bool = false,
     metaKey: bool = false,
-    button: i32 = 0,
-    buttons: u16 = 0,
     relatedTarget: ?*EventTarget = null,
+    screenX: f64 = 0.0,
+    screenY: f64 = 0.0,
+    shiftKey: bool = false,
 };
 
 pub const Options = Event.inheritOptions(

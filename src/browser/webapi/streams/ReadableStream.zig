@@ -55,15 +55,15 @@ _cancel: ?Cancel = null,
 _collected: bool = false,
 
 const UnderlyingSource = struct {
-    start: ?js.Function = null,
-    pull: ?js.Function.Global = null,
     cancel: ?js.Function.Global = null,
+    pull: ?js.Function.Global = null,
+    start: ?js.Function = null,
     type: ?[]const u8 = null,
 };
 
 const QueueingStrategy = struct {
-    size: ?js.Function = null,
     highWaterMark: u32 = 1,
+    size: ?js.Function = null,
 };
 
 pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, exec: *const Execution) !*ReadableStream {
@@ -104,6 +104,17 @@ pub fn initWithData(data: []const u8, exec: *const Execution) !*ReadableStream {
 
     // For Phase 1: immediately enqueue all data and close
     try stream._controller.enqueue(.{ .uint8array = .{ .values = data } });
+    try stream._controller.close();
+
+    return stream;
+}
+
+pub fn initWithText(text: []const u8, exec: *const Execution) !*ReadableStream {
+    const stream = try init(null, null, exec);
+
+    if (text.len > 0) {
+        try stream._controller.enqueue(.{ .string = text });
+    }
     try stream._controller.close();
 
     return stream;
@@ -281,8 +292,8 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution
 /// pipeThrough(transform) — pipes this readable stream through a transform stream,
 /// returning the readable side. `transform` is a JS object with `readable` and `writable` properties.
 const PipeTransform = struct {
-    writable: *WritableStream,
     readable: *ReadableStream,
+    writable: *WritableStream,
 };
 
 pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {

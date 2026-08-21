@@ -37,10 +37,10 @@ _gamma: ?f64 = null,
 _absolute: bool = false,
 
 const DeviceOrientationEventOptions = struct {
+    absolute: bool = false,
     alpha: ?f64 = null,
     beta: ?f64 = null,
     gamma: ?f64 = null,
-    absolute: bool = false,
 };
 
 const Options = Event.inheritOptions(DeviceOrientationEvent, DeviceOrientationEventOptions);

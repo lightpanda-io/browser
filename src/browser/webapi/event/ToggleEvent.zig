@@ -37,8 +37,8 @@ _new_state: []const u8 = "",
 _source: ?*HtmlElement = null,
 
 const ToggleEventOptions = struct {
-    oldState: []const u8 = "",
     newState: []const u8 = "",
+    oldState: []const u8 = "",
     source: ?*HtmlElement = null,
 };
 

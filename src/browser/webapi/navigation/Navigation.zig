@@ -296,9 +296,9 @@ pub fn replaceEntry(
 }
 
 const NavigateOptions = struct {
-    state: ?js.Value = null,
-    info: ?js.Value = null,
     history: ?[]const u8 = null,
+    info: ?js.Value = null,
+    state: ?js.Value = null,
 };
 
 pub fn navigateInner(
@@ -415,8 +415,8 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
 }
 
 pub const ReloadOptions = struct {
-    state: ?js.Value = null,
     info: ?js.Value = null,
+    state: ?js.Value = null,
 };
 
 pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !NavigationReturn {

@@ -38,8 +38,8 @@ _url: []const u8 = "",
 
 const StorageEventOptions = struct {
     key: ?[]const u8 = null,
-    oldValue: ?[]const u8 = null,
     newValue: ?[]const u8 = null,
+    oldValue: ?[]const u8 = null,
     url: []const u8 = "",
 };
 

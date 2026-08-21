@@ -476,8 +476,8 @@ fn addIndexEntries(self: *IDBObjectStore, local: *const js.Local, arena: Allocat
 }
 
 const CreateIndexOptions = struct {
-    unique: bool = false,
     multiEntry: bool = false,
+    unique: bool = false,
 };
 
 // Only callable during an upgrade (versionchange transaction).
