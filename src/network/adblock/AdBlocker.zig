@@ -25,6 +25,7 @@ const Allocator = std.mem.Allocator;
 const Config = @import("../../Config.zig");
 
 const Parser = @import("Parser.zig");
+const Engine = @import("Engine.zig");
 const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
 
@@ -32,18 +33,41 @@ const log = lp.log;
 
 const AdBlocker = @This();
 
+pub const Request = Engine.Request;
+pub const ResourceTypes = NetworkFilter.ResourceTypes;
+
 allocator: Allocator,
+/// Owns everything the filters point at.
+arena: std.heap.ArenaAllocator,
+
+/// Filters kept for per-request matching. Filled by `parse`, pruned and
+/// partitioned by `build`; the `Engine`s index into it, so it must not move
+/// after that.
+filters: std.ArrayList(NetworkFilter),
+/// Filled while parsing, consumed by `build`.
+badfilters: std.AutoHashMapUnmanaged(u64, void),
+built: bool,
 trie: HostnameTrie,
 blocked: u32,
-/// $important hostname blocks: they beat exceptions.
+/// `$important` hostname blocks: they beat exceptions.
 blocked_important: u32,
 /// Pure-hostname `@@` exceptions.
 allowed: u32,
+/// Hostnames named by an `@@` rule we could not read at all.
 suppressed: u32,
-/// Rules that reached a trie, across every list parsed so far.
+
+blocking: Engine,
+blocking_important: Engine,
+exceptions: Engine,
+/// `@@…$important` exceptions, indexed apart because they outrank the
+/// `$important` blocks while plain exceptions do not — one engine returning
+/// its first match could not tell the two apart.
+exceptions_important: Engine,
+
+/// Rules that reached a trie or an index, across every list parsed so far.
 rules_loaded: usize,
 /// Rules the lists carry and we do not apply, across those same lists: the
-/// ones the parser could not read, plus the ones no trie can express.
+/// ones the parser could not read, plus the ones no matcher can express.
 rules_skipped: usize,
 
 /// Read buffer for filter lists, and therefore the longest line we can see.
@@ -60,14 +84,33 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
 
     return .{
         .allocator = allocator,
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .filters = .empty,
+        .badfilters = .empty,
+        .built = false,
         .trie = trie,
         .blocked = blocked,
         .blocked_important = blocked_important,
         .allowed = allowed,
         .suppressed = suppressed,
+        .blocking = .empty,
+        .blocking_important = .empty,
+        .exceptions = .empty,
+        .exceptions_important = .empty,
         .rules_loaded = 0,
         .rules_skipped = 0,
     };
+}
+
+pub fn deinit(self: *AdBlocker) void {
+    self.blocking.deinit(self.allocator);
+    self.blocking_important.deinit(self.allocator);
+    self.exceptions.deinit(self.allocator);
+    self.exceptions_important.deinit(self.allocator);
+    self.badfilters.deinit(self.allocator);
+    self.filters.deinit(self.allocator);
+    self.trie.deinit(self.allocator);
+    self.arena.deinit();
 }
 
 /// Builds the blocker from `--adblock-lists`, or null when the option is
@@ -91,9 +134,11 @@ pub fn fromConfig(allocator: Allocator, config: *const Config) !?AdBlocker {
     }
 
     if (adblocker) |*blocker| {
+        try blocker.build();
         log.info(.app, "adblock lists loaded", .{
             .loaded = blocker.rules_loaded,
             .skipped = blocker.rules_skipped,
+            .indexed = blocker.filters.items.len,
         });
     }
     return adblocker;
@@ -109,11 +154,9 @@ fn loadList(blocker: *AdBlocker, path: []const u8, buf: []u8) !void {
     try blocker.parse(&file_reader.interface);
 }
 
-pub fn deinit(self: *AdBlocker) void {
-    self.trie.deinit(self.allocator);
-}
-
 pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
+    std.debug.assert(!self.built);
+
     var scratch_instance = std.heap.ArenaAllocator.init(self.allocator);
     defer scratch_instance.deinit();
     const scratch = scratch_instance.allocator();
@@ -123,75 +166,186 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
     // ones we drop below, and on a real list they are the bulk of them.
     defer self.rules_skipped += parser.skipped;
 
-    while (try parser.next(scratch)) |filter| {
-        // Nothing survives the iteration but the trie entry, so the
-        // scratch arena is recycled rather than grown per filter.
+    const arena = self.arena.allocator();
+    while (try parser.next(scratch)) |item| {
+        // Everything here borrows the reader's buffer and the scratch arena,
+        // both of which the next call reuses, so what we keep is copied out.
         defer _ = scratch_instance.reset(.retain_capacity);
 
-        // Filters the tries cannot express (patterns, type/party/domain
-        // constraints) are dropped: deciding those needs a request engine
-        // we do not have yet, and retaining them costs tens of MB on a
-        // list like EasyList.
-        const root = self.trieRoot(&filter) orelse {
+        const filter = switch (item) {
+            // The parser already counted it; all we want is whether it was an
+            // exception, in which case its hostname stops being blockable.
+            .dropped => |dropped| {
+                if (!mayUnblock(dropped.reason)) continue;
+                var buf: [253]u8 = undefined;
+                if (exceptionHostname(dropped.line, &buf)) |hostname| {
+                    try self.addToTrie(self.suppressed, hostname);
+                }
+                continue;
+            },
+            .filter => |filter| filter,
+        };
+
+        if (!isSupported(&filter)) {
             self.rules_skipped += 1;
             continue;
-        };
-        // Duplicate and subdomain-of-existing entries drop.
-        self.trie.add(self.allocator, root, filter.hostname) catch |err| switch (err) {
-            error.OutOfMemory, error.TrieFull => |e| return e,
-            // trieRoot never routes a filter without one.
-            error.InvalidHostname => unreachable,
-        };
+        }
+
+        if (filter.badfilter) {
+            // It cancels a rule that may not have been read yet, so it can
+            // only be resolved once every list is in. It is not a rule we
+            // apply either way.
+            self.rules_skipped += 1;
+            try self.badfilters.put(self.allocator, identity(&filter), {});
+            continue;
+        }
+
+        try self.filters.append(self.allocator, try dupe(arena, &filter));
         self.rules_loaded += 1;
     }
 }
 
+fn mayUnblock(reason: ?NetworkFilter.ParseError) bool {
+    const err = reason orelse return false;
+    return switch (err) {
+        error.UnsupportedOption, error.UnsupportedPattern, error.NoSupportedDomains => true,
+        else => false,
+    };
+}
+
+/// The hostname an unreadable `@@||host…` rule is about, lowercased into
+/// `buf`. Null for anything else.
+fn exceptionHostname(line: []const u8, buf: []u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, "@@||")) return null;
+    const rest = line[4..];
+
+    const end = std.mem.indexOfAny(u8, rest, "/^$*|") orelse rest.len;
+    if (end == 0 or end > buf.len) return null;
+
+    const hostname = std.ascii.lowerString(buf[0..end], rest[0..end]);
+    // A hostname is what the trie can store; "example.*" and friends are not.
+    for (hostname) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or switch (c) {
+            '.', '-', '_' => true,
+            else => false,
+        };
+        if (!ok) return null;
+    }
+    if (std.mem.indexOfScalar(u8, hostname, '.') == null) return null;
+    return hostname;
+}
+
+/// Resolves `$badfilter`, then splits what is left between the tries and the
+/// indexes. Must run once, after every list is parsed, and before any match.
+pub fn build(self: *AdBlocker) !void {
+    std.debug.assert(!self.built);
+    self.built = true;
+
+    const arena = self.arena.allocator();
+
+    // Whole-hostname filters go to a trie; the rest keep their slot in
+    // `filters` so the engines can index them.
+    var blocking: std.ArrayList(u32) = .empty;
+    defer blocking.deinit(self.allocator);
+    var important: std.ArrayList(u32) = .empty;
+    defer important.deinit(self.allocator);
+    var exceptions: std.ArrayList(u32) = .empty;
+    defer exceptions.deinit(self.allocator);
+    var exceptions_important: std.ArrayList(u32) = .empty;
+    defer exceptions_important.deinit(self.allocator);
+
+    var kept: usize = 0;
+    for (self.filters.items) |filter| {
+        if (self.badfilters.count() != 0 and self.badfilters.contains(identity(&filter))) {
+            self.rules_loaded -= 1;
+            self.rules_skipped += 1;
+            continue;
+        }
+
+        if (isWholeHostname(&filter)) {
+            const root = if (filter.exception)
+                self.allowed
+            else if (filter.important)
+                self.blocked_important
+            else
+                self.blocked;
+            try self.addToTrie(root, filter.hostname);
+            continue;
+        }
+
+        const index: u32 = @intCast(kept);
+        self.filters.items[kept] = filter;
+        kept += 1;
+
+        const list = if (filter.exception)
+            (if (filter.important) &exceptions_important else &exceptions)
+        else if (filter.important)
+            &important
+        else
+            &blocking;
+        try list.append(self.allocator, index);
+    }
+    self.filters.shrinkAndFree(self.allocator, kept);
+
+    // Rarest-token selection is only meaningful across the whole corpus, so
+    // the counts are taken once and shared by the three engines.
+    var histogram: Engine.Histogram = .empty;
+    defer histogram.deinit(self.allocator);
+    for (self.filters.items) |*filter| {
+        try Engine.count(&histogram, self.allocator, filter);
+    }
+
+    const filters = self.filters.items;
+    self.blocking = try .build(self.allocator, arena, filters, blocking.items, &histogram);
+    self.blocking_important = try .build(self.allocator, arena, filters, important.items, &histogram);
+    self.exceptions = try .build(self.allocator, arena, filters, exceptions.items, &histogram);
+    self.exceptions_important = try .build(self.allocator, arena, filters, exceptions_important.items, &histogram);
+}
+
+fn addToTrie(self: *AdBlocker, root: u32, hostname: []const u8) !void {
+    // Duplicate and subdomain-of-existing entries drop.
+    self.trie.add(self.allocator, root, hostname) catch |err| switch (err) {
+        error.OutOfMemory, error.TrieFull => |e| return e,
+        // Callers never route a filter without a hostname here.
+        error.InvalidHostname => unreachable,
+    };
+}
+
 pub const Verdict = enum { none, allowed, blocked };
 
-/// `.none` means no hostname-wide verdict applies. Filters that need more
-/// than a hostname match are not represented here at all.
-pub fn matchHostname(self: *const AdBlocker, hostname: []const u8) Verdict {
+/// The verdict for one request. uBO's order: `@@…$important` outranks
+/// `$important` blocks, which outrank exceptions, which outrank plain blocks...
+pub fn match(self: *const AdBlocker, request: Request) Verdict {
+    std.debug.assert(self.built);
+
+    const hostname = request.url.hostname();
     // A hostname something might unblock stays undecided, whatever else
     // matches it.
     if (self.trie.matches(self.suppressed, hostname) != null) return .none;
+
+    // `@@…$important` is what a list writes to beat a `$important` block, so
+    // it has to be looked at before one.
+    if (self.exceptions_important.match(request) != null) return .allowed;
+
     if (self.trie.matches(self.blocked_important, hostname) != null) return .blocked;
+    if (self.blocking_important.match(request) != null) return .blocked;
+
+    if (self.exceptions.match(request) != null) return .allowed;
     if (self.trie.matches(self.allowed, hostname) != null) return .allowed;
+
     if (self.trie.matches(self.blocked, hostname) != null) return .blocked;
+    if (self.blocking.match(request) != null) return .blocked;
+
     return .none;
 }
 
-/// The trie holding this filter, or null when it carries no hostname-wide
-/// meaning we can represent.
-fn trieRoot(self: *const AdBlocker, filter: *const NetworkFilter) ?u32 {
-    // An exception or a $badfilter can only ever *unblock*. Where one is
-    // narrower than a whole hostname we cannot evaluate it here — but
-    // ignoring it is not neutral either, because the rule it cancels may
-    // well be a plain block we did keep:
-    //
-    //   ||adsafeprotected.com^
-    //   @@||adsafeprotected.com/iasPET.$script,domain=reuters.com|...
-    //
-    // uBO blocks that host everywhere but those sites; keeping only the
-    // first line blocks it on those sites too, and breaks them. So the
-    // hostname goes to `suppressed` and stops being blockable at all. We
-    // lose most of the block's value to save the pages it would break,
-    // which is the direction we want to fail in.
-    if (filter.exception or filter.badfilter) {
-        // Cosmetic-realm exceptions never unblock network requests.
-        if (filter.exception and (filter.generichide or filter.specifichide or filter.elemhide)) {
-            return null;
-        }
-        if (filter.exception and !filter.badfilter and isWholeHostname(filter)) {
-            return self.allowed;
-        }
-        // `@@/ads/^$script` and friends name no hostname to key on: there
-        // is nothing we can do with them until there is an engine.
-        if (filter.hostname.len == 0) return null;
-        return self.suppressed;
-    }
-
-    if (!isWholeHostname(filter)) return null;
-    return if (filter.important) self.blocked_important else self.blocked;
+/// Whether we can evaluate this filter at all.
+fn isSupported(filter: *const NetworkFilter) bool {
+    // No regex engine to run them with.
+    if (filter.kind == .regex) return false;
+    // Cosmetic-realm exceptions never say anything about network requests.
+    if (filter.generichide or filter.specifichide or filter.elemhide) return false;
+    return true;
 }
 
 /// Whether the filter's whole effect is "every request to this hostname and
@@ -203,12 +357,172 @@ fn isWholeHostname(filter: *const NetworkFilter) bool {
     if (!filter.require_separator) return false;
     // `||host^|` pins the URL end to the separator: narrower.
     if (filter.left_anchor or filter.right_anchor) return false;
-    if (filter.has_domains) return false;
+    // `@@…$important` has to be consulted before the `$important` blocks,
+    // which is an order the fixed trie sequence cannot express.
+    if (filter.exception and filter.important) return false;
+    if (!filter.domains.isEmpty()) return false;
     if (!filter.first_party or !filter.third_party) return false;
-    return filter.types.bits() == NetworkFilter.ResourceTypes.all.bits();
+    return filter.types.bits() == ResourceTypes.all.bits();
 }
 
+/// Copies a filter out of the parser's scratch memory into the arena.
+fn dupe(arena: Allocator, filter: *const NetworkFilter) !NetworkFilter {
+    var out = filter.*;
+    out.hostname = try arena.dupe(u8, filter.hostname);
+    out.pattern = try arena.dupe(u8, filter.pattern);
+    out.domains = .{
+        .included = try dupeEntries(arena, filter.domains.included),
+        .excluded = try dupeEntries(arena, filter.domains.excluded),
+    };
+    return out;
+}
+
+fn dupeEntries(arena: Allocator, entries: []const domain.Entry) ![]const domain.Entry {
+    if (entries.len == 0) return &.{};
+    const out = try arena.alloc(domain.Entry, entries.len);
+    for (entries, out) |entry, *slot| {
+        slot.* = .{ .name = try arena.dupe(u8, entry.name), .entity = entry.entity };
+    }
+    return out;
+}
+
+/// What `$badfilter` compares two rules by: everything the rule says except
+/// the `$badfilter` option itself.
+fn identity(filter: *const NetworkFilter) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(filter.hostname);
+    hasher.update(filter.pattern);
+    // Entries are separated (names never contain NUL) and carry their entity
+    // flag: "$domain=amazon.*" and "$domain=amazon" are different rules, as
+    // are entry lists that merely concatenate alike.
+    for (filter.domains.included) |entry| {
+        hasher.update(entry.name);
+        hasher.update(&.{ 0, @intFromBool(entry.entity) });
+    }
+    hasher.update("|");
+    for (filter.domains.excluded) |entry| {
+        hasher.update(entry.name);
+        hasher.update(&.{ 0, @intFromBool(entry.entity) });
+    }
+    hasher.update(&std.mem.toBytes(filter.types.bits()));
+    hasher.update(&.{
+        @intFromEnum(filter.kind),
+        @intFromBool(filter.exception),
+        @intFromBool(filter.important),
+        @intFromBool(filter.first_party),
+        @intFromBool(filter.third_party),
+        @intFromBool(filter.hostname_anchor),
+        @intFromBool(filter.left_anchor),
+        @intFromBool(filter.right_anchor),
+        @intFromBool(filter.require_separator),
+    });
+    return hasher.final();
+}
+
+const domain = @import("domain.zig");
 const testing = @import("../../testing.zig");
+
+fn testLoad(blocker: *AdBlocker, list: []const u8) !void {
+    var reader: Io.Reader = .fixed(list);
+    try blocker.parse(&reader);
+    try blocker.build();
+}
+
+fn expectVerdict(
+    blocker: *const AdBlocker,
+    expected: Verdict,
+    url: []const u8,
+    source: []const u8,
+    kind: ResourceTypes,
+) !void {
+    // `match` takes a lowercased URL, as the real caller hands it; patterns
+    // are lowercased too, so a rule spelled "/embed/C-iDzdvIg1Y" still lands.
+    var buf: [512]u8 = undefined;
+    const lowered = std.ascii.lowerString(buf[0..url.len], url);
+    try testing.expectEqual(expected, blocker.match(.init(lowered, source, kind)));
+}
+
+const script: ResourceTypes = .{ .script = true };
+const xhr: ResourceTypes = .{ .xmlhttprequest = true };
+const image: ResourceTypes = .{ .image = true };
+const document: ResourceTypes = .{ .document = true };
+const frame: ResourceTypes = .{ .subdocument = true };
+
+test "adblock.AdBlocker: the doubleclick rules from EasyList" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\||ad.doubleclick.net^
+        \\||g.doubleclick.net^
+        \\||doubleclick.net^$popup
+        \\||ad.doubleclick.net/ddm/clk/$domain=ad.doubleclick.net
+        \\@@||doubleclick.net/ddm/$image,domain=aetv.com|fyi.tv|history.com
+        \\@@||g.doubleclick.net/gampad/ads$xmlhttprequest,domain=bloomberg.com|samsclub.com
+        \\@@||pubads.g.doubleclick.net/ssai/
+        \\@@||static.doubleclick.net/instream/ad_status.js$script,domain=ignboards.com
+    );
+
+    // The exceptions no longer cost the blocks their hostnames: this is the
+    // regression the whole engine exists for.
+    try expectVerdict(&blocker, .blocked, "https://ad.doubleclick.net/x.gif", "news.com", image);
+    try expectVerdict(&blocker, .blocked, "https://g.doubleclick.net/gampad/ads?a=1", "news.com", xhr);
+
+    // ...and each exception applies exactly where it was written to.
+    try expectVerdict(&blocker, .allowed, "https://g.doubleclick.net/gampad/ads?a=1", "bloomberg.com", xhr);
+    // Same site, wrong type.
+    try expectVerdict(&blocker, .blocked, "https://g.doubleclick.net/gampad/ads?a=1", "bloomberg.com", script);
+    // Right type, wrong site.
+    try expectVerdict(&blocker, .blocked, "https://g.doubleclick.net/gampad/ads?a=1", "example.com", xhr);
+    // Right everything, wrong path.
+    try expectVerdict(&blocker, .blocked, "https://g.doubleclick.net/pagead/ads", "bloomberg.com", xhr);
+
+    try expectVerdict(&blocker, .allowed, "https://static.doubleclick.net/instream/ad_status.js", "ignboards.com", script);
+    // The unconditional exception carves one path out of the block covering
+    // the whole subtree, and leaves the rest of it blocked.
+    try expectVerdict(&blocker, .allowed, "https://pubads.g.doubleclick.net/ssai/x", "history.com", xhr);
+    try expectVerdict(&blocker, .blocked, "https://pubads.g.doubleclick.net/other", "history.com", xhr);
+
+    // We issue no popup requests, so $popup filters never fire — but they no
+    // longer take the rest of doubleclick.net down with them either.
+    try expectVerdict(&blocker, .none, "https://doubleclick.net/x", "news.com", xhr);
+}
+
+test "adblock.AdBlocker: the youtube rules from EasyList" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\||youtube.com/pagead/
+        \\||youtube.com/youtubei/v1/player/ad_break
+        \\||youtube.com/embed/C-iDzdvIg1Y$domain=biznews.com
+        \\||googlesyndication.com^$domain=blogto.com|youtube.com
+        \\||youtube.com/get_video_info?*adunit$~third-party
+        \\@@||youtube.com/get_video_info?$xmlhttprequest,domain=music.youtube.com|tv.youtube.com
+    );
+
+    try expectVerdict(&blocker, .blocked, "https://www.youtube.com/pagead/lvz?ei=x", "youtube.com", xhr);
+    try expectVerdict(&blocker, .blocked, "https://www.youtube.com/youtubei/v1/player/ad_break?x=1", "youtube.com", xhr);
+    try expectVerdict(&blocker, .none, "https://www.youtube.com/watch?v=x", "youtube.com", document);
+
+    // $domain= scopes an embed block to the one site that needed it. The
+    // embed is an iframe, and a filter with no type option covers every type
+    // but a top-level document — which is why this is `frame`, not
+    // `document`.
+    try expectVerdict(&blocker, .blocked, "https://www.youtube.com/embed/C-iDzdvIg1Y", "biznews.com", frame);
+    try expectVerdict(&blocker, .none, "https://www.youtube.com/embed/C-iDzdvIg1Y", "example.com", frame);
+    try expectVerdict(&blocker, .none, "https://www.youtube.com/embed/C-iDzdvIg1Y", "biznews.com", document);
+
+    // A `$domain=` list matches subdomains of its entries.
+    try expectVerdict(&blocker, .blocked, "https://pagead2.googlesyndication.com/x", "www.blogto.com", script);
+    try expectVerdict(&blocker, .none, "https://pagead2.googlesyndication.com/x", "example.com", script);
+
+    // $~third-party: same site only.
+    try expectVerdict(&blocker, .blocked, "https://www.youtube.com/get_video_info?a=adunit", "youtube.com", xhr);
+    try expectVerdict(&blocker, .none, "https://www.youtube.com/get_video_info?a=adunit", "example.com", xhr);
+    // The exception outranks it where it applies.
+    try expectVerdict(&blocker, .allowed, "https://www.youtube.com/get_video_info?a=adunit", "music.youtube.com", xhr);
+}
 
 test "adblock.AdBlocker: parse accumulates across lists" {
     var blocker: AdBlocker = try .init(testing.allocator);
@@ -222,110 +536,152 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     );
     try blocker.parse(&first);
 
-    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
-    try testing.expectEqual(.blocked, blocker.matchHostname("sub.ads.example.com"));
-    // The type-restricted exception cannot be evaluated, so it suppresses
-    // its hostname instead of allowing it.
-    try testing.expectEqual(.none, blocker.matchHostname("cdn.example.com"));
-
-    // The block and the exception loaded; the cosmetic line is a rule the
-    // list carries and we do not apply, so it counts as skipped even though
-    // it never reached a trie.
-    try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(1, blocker.rules_skipped);
-
     var second: Io.Reader = .fixed(
         \\||tracker.net^$third-party,domain=news.com|~sports.news.com
     );
     try blocker.parse(&second);
+    try blocker.build();
 
-    try testing.expectEqual(.none, blocker.matchHostname("tracker.net"));
-    // The counts carry across lists, like the entries do.
-    try testing.expectEqual(2, blocker.rules_loaded);
-    try testing.expectEqual(2, blocker.rules_skipped);
-    // The first list's entries survived the second parse.
-    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
+    try expectVerdict(&blocker, .blocked, "https://ads.example.com/x", "news.com", script);
+    try expectVerdict(&blocker, .blocked, "https://sub.ads.example.com/x", "news.com", script);
+    // The type-restricted exception now applies to scripts only.
+    try expectVerdict(&blocker, .allowed, "https://cdn.example.com/x.js", "news.com", script);
+    try expectVerdict(&blocker, .none, "https://cdn.example.com/x.png", "news.com", image);
+
+    // The party and $domain= constrained block, from the second list.
+    try expectVerdict(&blocker, .blocked, "https://tracker.net/x", "news.com", script);
+    try expectVerdict(&blocker, .none, "https://tracker.net/x", "sports.news.com", script);
+    try expectVerdict(&blocker, .none, "https://tracker.net/x", "other.com", script);
+
+    // Three rules loaded across the two lists; the cosmetic line is a rule
+    // the list carries and we do not apply, so it counts as skipped.
+    try testing.expectEqual(3, blocker.rules_loaded);
+    try testing.expectEqual(1, blocker.rules_skipped);
 }
 
-test "adblock.AdBlocker: rules that might unblock suppress their hostname" {
+test "adblock.AdBlocker: verdict precedence" {
     var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();
 
-    var list: Io.Reader = .fixed(
-        // The easylist pair: without the exception we would break reuters.com.
-        \\||adsafeprotected.com^
-        \\@@||adsafeprotected.com/iasPET.$script,domain=independent.co.uk|reuters.com
-        // uBO's unbreak.txt shape: a $badfilter cancelling a block we kept.
-        \\||unbreak.example.com^
-        \\||unbreak.example.com^$badfilter
-        // Suppression outranks $important: we cannot tell which of our
-        // entries the exception cancels.
-        \\||strict.example.com^$important
-        \\@@||strict.example.com^$xhr
-    );
-    try blocker.parse(&list);
-
-    try testing.expectEqual(.none, blocker.matchHostname("adsafeprotected.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("sub.adsafeprotected.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("unbreak.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("strict.example.com"));
-}
-
-test "adblock.AdBlocker: hostname verdict precedence" {
-    var blocker: AdBlocker = try .init(testing.allocator);
-    defer blocker.deinit();
-
-    var list: Io.Reader = .fixed(
+    try testLoad(&blocker,
         \\||ads.example.com^
         \\@@||good.ads.example.com^
         \\||evil.com^$important
         \\@@||evil.com^
+        \\||strict.example.com^$important,script
+        \\@@||strict.example.com^$script
+        \\||both.example.com^$important,script
+        \\@@||both.example.com^$important,script
+        // Both sides pure hostnames, so both would otherwise be tries.
+        \\||pure.example.com^$important
+        \\@@||pure.example.com^$important
     );
-    try blocker.parse(&list);
 
-    try testing.expectEqual(.blocked, blocker.matchHostname("ads.example.com"));
+    try expectVerdict(&blocker, .blocked, "https://ads.example.com/x", "a.com", script);
     // The exception wins over the plain block...
-    try testing.expectEqual(.allowed, blocker.matchHostname("good.ads.example.com"));
-    try testing.expectEqual(.allowed, blocker.matchHostname("x.good.ads.example.com"));
-    try testing.expectEqual(.blocked, blocker.matchHostname("other.ads.example.com"));
-    // ...but $important beats the exception.
-    try testing.expectEqual(.blocked, blocker.matchHostname("evil.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("example.com"));
+    try expectVerdict(&blocker, .allowed, "https://good.ads.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .allowed, "https://x.good.ads.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://other.ads.example.com/x", "a.com", script);
+    // ...but $important beats the exception, whichever side is indexed.
+    try expectVerdict(&blocker, .blocked, "https://evil.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://strict.example.com/x.js", "a.com", script);
+    // ...and $important on the exception takes it back.
+    try expectVerdict(&blocker, .allowed, "https://both.example.com/x.js", "a.com", script);
+    try expectVerdict(&blocker, .allowed, "https://pure.example.com/x.js", "a.com", script);
+
+    try expectVerdict(&blocker, .none, "https://example.com/x", "a.com", script);
+}
+
+test "adblock.AdBlocker: $badfilter removes its target" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        // The uBO unbreak.txt shape: a $badfilter cancelling a block, whether
+        // that block lives in a trie...
+        \\||unbreak.example.com^
+        \\||unbreak.example.com^$badfilter
+        // ...or in an index.
+        \\||other.example.com^$script
+        \\||other.example.com^$script,badfilter
+        // A $badfilter only cancels the rule it names exactly.
+        \\||kept.example.com^$script
+        \\||kept.example.com^$image,badfilter
+        // "amazon.*" and "amazon" are different rules, not the same one.
+        \\||entity.example.com^$script,domain=amazon.*
+        \\||entity.example.com^$script,domain=amazon,badfilter
+    );
+
+    try expectVerdict(&blocker, .none, "https://unbreak.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .none, "https://other.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://kept.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://entity.example.com/x", "www.amazon.com", script);
+}
+
+test "adblock.AdBlocker: exceptions we cannot read suppress their hostname" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\||unreadable.example.com^
+        \\@@||unreadable.example.com/api/$denyallow=cdn.com
+        // A rewriting option excepts the rewriting, never the block...
+        \\||modified.example.com^
+        \\@@||modified.example.com/x.js$redirect-rule=noopjs,script
+        // ...and neither does a rule uBO rejects as well.
+        \\||malformed.example.com^
+        \\@@||malformed.example.com^$notarealoption
+        \\||plain.example.com^
+    );
+
+    // $denyallow narrows a block in ways we cannot evaluate, so we cannot
+    // tell what the exception excepts — the hostname stops being blockable
+    // rather than break the page the rule was written for.
+    try expectVerdict(&blocker, .none, "https://unreadable.example.com/x", "a.com", script);
+
+    try expectVerdict(&blocker, .blocked, "https://modified.example.com/x.js", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://malformed.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://plain.example.com/x", "a.com", script);
 }
 
 test "adblock.AdBlocker: trie absorbs every pure-hostname form" {
     var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();
 
-    var list: Io.Reader = .fixed(
+    try testLoad(&blocker,
         \\||anchored.example.com^
         \\bare-hostname.example.com
         \\0.0.0.0 hosts-style.example.io
     );
-    try blocker.parse(&list);
 
-    try testing.expectEqual(.blocked, blocker.matchHostname("anchored.example.com"));
-    try testing.expectEqual(.blocked, blocker.matchHostname("bare-hostname.example.com"));
-    try testing.expectEqual(.blocked, blocker.matchHostname("hosts-style.example.io"));
+    try expectVerdict(&blocker, .blocked, "https://anchored.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://bare-hostname.example.com/x", "a.com", script);
+    try expectVerdict(&blocker, .blocked, "https://hosts-style.example.io/x", "a.com", script);
+    // Pure-hostname filters block top-level documents too.
+    try expectVerdict(&blocker, .blocked, "https://anchored.example.com/", "a.com", document);
 }
 
-test "adblock.AdBlocker: constrained filters stay out of the trie" {
+test "adblock.AdBlocker: an important exception is found whatever matches first" {
     var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();
 
-    var list: Io.Reader = .fixed(
-        \\||no-caret.example.com
-        \\||typed.example.com^$script
-        \\||party.example.com^$third-party
-        \\||sited.example.com^$domain=news.com
-        \\@@||cosmetic.example.com^$generichide
+    // The plain exception is written first, so a single first-match engine
+    // would return it and never see the important one behind it.
+    try testLoad(&blocker,
+        \\||tracker.com^$important,script
+        \\@@||tracker.com^$script
+        \\@@||tracker.com/x.js$important,script
     );
-    try blocker.parse(&list);
 
-    try testing.expectEqual(.none, blocker.matchHostname("no-caret.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("typed.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("party.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("sited.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("bad.example.com"));
-    try testing.expectEqual(.none, blocker.matchHostname("cosmetic.example.com"));
+    try expectVerdict(&blocker, .allowed, "https://tracker.com/x.js", "a.com", script);
+    // Off the important exception's path, the $important block still wins.
+    try expectVerdict(&blocker, .blocked, "https://tracker.com/other.js", "a.com", script);
+}
+
+test "adblock.AdBlocker: an empty blocker decides nothing" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+    try blocker.build();
+
+    try expectVerdict(&blocker, .none, "https://example.com/x", "example.com", script);
 }
