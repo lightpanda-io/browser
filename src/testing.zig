@@ -973,17 +973,13 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
-    // Image routes for element/html/image_fetch.html. Every body here is
-    // non-empty, so libcurl always reaches the write callback — which is
-    // where `--fetch-images headers` decides what to do. A `load` event off
-    // any of these proves that decision ended in a successful response.
-    //
-    // ok.png is deliberately larger than Request.HEADERS_ONLY_DRAIN_MAX so
-    // it takes the abort branch; small.png is deliberately under it so it
-    // takes the drain-and-keep-the-connection branch. Both must behave
-    // identically as far as the DOM is concerned.
+    // Bodies are non-empty so that libcurl always reaches the write callback,
+    // which is where a headers_only request decides whether to drain or abort.
+    // ok.png takes the abort branch, small.png the drain branch; both must
+    // behave identically as far as the DOM is concerned.
     if (std.mem.eql(u8, path, "/images/ok.png")) {
-        const body = try arena_allocator.alloc(u8, 64 * 1024);
+        // > HttpClient.Request.HEADERS_ONLY_DRAIN_MAX
+        const body = try arena_allocator.alloc(u8, 16 * 1024 + 1);
         @memset(body, 'x');
         return req.respond(body, .{
             .extra_headers = &.{
@@ -992,8 +988,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
-    // startsWith, not eql: the concurrency test appends ?n= to get distinct
-    // URLs (and so distinct transfers) off one route.
+    // startsWith, not eql: a caller can append a query string to get distinct
+    // URLs (and so distinct transfers) off this one route.
     if (std.mem.startsWith(u8, path, "/images/small.png")) {
         const body = try arena_allocator.alloc(u8, 1024);
         @memset(body, 'x');
@@ -1002,6 +998,22 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "image/png" },
             },
         });
+    }
+
+    // No Content-Length: whether the body is small enough to drain can only
+    // be decided as it arrives.
+    if (std.mem.eql(u8, path, "/images/chunked.png")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "image/svg+xml" },
+                },
+            },
+        });
+        try res.writer.writeAll("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        try res.writer.flush();
+        return res.end();
     }
 
     if (std.mem.eql(u8, path, "/images/404.png")) {
