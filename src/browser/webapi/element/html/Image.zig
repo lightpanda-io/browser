@@ -179,9 +179,16 @@ pub const Build = struct {
         return self.imageAddedCallback(frame);
     }
 
-    // `img.src = ...` routes through `setSrc`, but `setAttribute("src", ...)`
-    // only reaches us here, and both have to (re)do fetch.
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+        return element.as(Image).imageAddedCallback(frame);
+    }
+
+    // Removing the src leaves no request to make, but any in-flight one still
+    // has to be invalidated.
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
         if (!name.eql(comptime .wrap("src"))) {
             return;
         }
