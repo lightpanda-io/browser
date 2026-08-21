@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../Config.zig");
+const js = @import("../../browser/js/js.zig");
 
 const log = lp.log;
 
@@ -32,6 +33,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         clearDeviceMetricsOverride,
         setTouchEmulationEnabled,
         setUserAgentOverride,
+        setGeolocationOverride,
+        clearGeolocationOverride,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -41,6 +44,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .clearDeviceMetricsOverride => return clearDeviceMetricsOverride(cmd),
         .setTouchEmulationEnabled => return setTouchEmulationEnabled(cmd),
         .setUserAgentOverride => return setUserAgentOverride(cmd),
+        .setGeolocationOverride => return setGeolocationOverride(cmd),
+        .clearGeolocationOverride => return clearGeolocationOverride(cmd),
     }
 }
 
@@ -168,6 +173,36 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     try http_client.setUserAgentOverride(ua);
     bc.user_agent_changed = true;
 
+    return cmd.sendResult(null, .{});
+}
+
+fn setGeolocationOverride(cmd: *CDP.Command) !void {
+    const Params = struct {
+        latitude: ?f64 = null,
+        longitude: ?f64 = null,
+        accuracy: ?f64 = null,
+    };
+    // Absent params emulates "position unavailable" (Chrome semantics), so fall
+    // back to all-null defaults rather than erroring.
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const browser = &cmd.cdp.browser;
+    if (params.latitude) |lat| {
+        if (params.longitude) |lon| {
+            browser.geolocation_override = .{
+                .latitude = lat,
+                .longitude = lon,
+                .accuracy = params.accuracy orelse 0,
+            };
+            return cmd.sendResult(null, .{});
+        }
+    }
+    browser.geolocation_override = null;
+    return cmd.sendResult(null, .{});
+}
+
+fn clearGeolocationOverride(cmd: *CDP.Command) !void {
+    cmd.cdp.browser.geolocation_override = null;
     return cmd.sendResult(null, .{});
 }
 
@@ -314,4 +349,264 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: setGeolocationOverride and clear" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO", .url = "cdp/dom1.html" });
+    const browser = bc.session.browser;
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.8584, .longitude = 2.2945, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(48.8584, browser.geolocation_override.?.latitude);
+    try testing.expectEqual(2.2945, browser.geolocation_override.?.longitude);
+
+    // no coordinates => emulate "position unavailable" (stored as null)
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setGeolocationOverride" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect(browser.geolocation_override == null);
+
+    // re-set then clear
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 1.0, .longitude = 2.0, .accuracy = 5 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "Emulation.clearGeolocationOverride" });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect(browser.geolocation_override == null);
+}
+
+test "cdp.Emulation: navigator.geolocation reads the override" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO2", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        // Registers the callback synchronously; getCurrentPosition schedules
+        // delivery on the calling context's scheduler and returns before it runs.
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.exec(
+            \\ window.__geo_ok = false;
+            \\ navigator.geolocation.getCurrentPosition(p => {
+            \\   window.__geo_ok = (Math.round(p.coords.latitude) === 48 && Math.round(p.coords.longitude) === 2);
+            \\   // outlives both the callback and the position wrapper
+            \\   window.__geo_coords = p.coords;
+            \\   window.__geo_json = JSON.stringify(p);
+            \\ });
+        , null);
+    }
+
+    // Drive the session loop so the scheduled Task fires: Runner._tick runs
+    // browser.runMacrotasks() (which drains frame.js.scheduler) on every tick
+    // for a loaded page, same primitive Runner.waitForSelector/waitForScript
+    // use to pump pending scheduler work under a CDP-loaded page.
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const v = try ls.local.exec("window.__geo_ok && Math.round(window.__geo_coords.latitude) === 48", null);
+    try testing.expect(v.isTrue());
+
+    // toJSON nests a plain object, so the coords survive JSON.stringify
+    const j = try ls.local.exec(
+        \\ (() => {
+        \\   const p = JSON.parse(window.__geo_json);
+        \\   return Math.round(p.coords.latitude) === 48 && p.coords.altitude === null && p.timestamp > 0;
+        \\ })()
+    , null);
+    try testing.expect(j.isTrue());
+}
+
+test "cdp.Emulation: navigator.geolocation watchPosition delivers the override" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO4", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        // The second watch is cleared before the scheduler gets to run either,
+        // so only the first one may report.
+        _ = try ls.local.exec(
+            \\ window.__geo_watched = 0;
+            \\ window.__geo_cleared = 0;
+            \\ navigator.geolocation.watchPosition(p => { window.__geo_watched = p.coords.latitude; });
+            \\ const id = navigator.geolocation.watchPosition(() => { window.__geo_cleared += 1; });
+            \\ navigator.geolocation.clearWatch(id);
+        , null);
+    }
+
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const v = try ls.local.exec("window.__geo_watched === 48 && window.__geo_cleared === 0", null);
+    try testing.expect(v.isTrue());
+}
+
+test "cdp.Emulation: navigator.geolocation needs an explicit permission grant" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO5", .url = "cdp/dom1.html" });
+
+    // An override with no grant leaves the permission at "prompt", which headless
+    // Chrome resolves as denied.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try testing.expectEqual(1, try errorCodeFor(bc));
+}
+
+test "cdp.Emulation: navigator.geolocation granted without an override is POSITION_UNAVAILABLE" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO6", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.grantPermissions",
+        .params = .{ .permissions = &[_][]const u8{"geolocation"} },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    try testing.expectEqual(2, try errorCodeFor(bc));
+}
+
+// Runs getCurrentPosition, pumps the scheduler, and returns the code the error
+// callback saw (0 if the success callback ran instead).
+fn errorCodeFor(bc: *CDP.BrowserContext) !i32 {
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.exec(
+            \\ window.__geo_code = 0;
+            \\ navigator.geolocation.getCurrentPosition(
+            \\   () => { window.__geo_code = 0; },
+            \\   (err) => { window.__geo_code = err.code; },
+            \\ );
+        , null);
+    }
+
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    return (try ls.local.exec("window.__geo_code", null)).toZig(i32);
+}
+
+test "cdp.Emulation: navigator.geolocation errors PERMISSION_DENIED when permission is denied" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-GEO3", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Browser.setPermission",
+        .params = .{ .permission = .{ .name = "geolocation" }, .setting = "denied" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1, .session_id = null });
+
+    // Denied is authoritative over the override: even though an override is
+    // set, the denied permission must still win and produce PERMISSION_DENIED.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setGeolocationOverride",
+        .params = .{ .latitude = 48.0, .longitude = 2.0, .accuracy = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        // Registers the callback synchronously; getCurrentPosition schedules
+        // delivery on the calling context's scheduler and returns before it runs.
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.exec(
+            \\ window.__geo_code = 0;
+            \\ navigator.geolocation.getCurrentPosition(p => {
+            \\   p;
+            \\ }, error => {
+            \\   window.__geo_code = error.code;
+            \\ });
+        , null);
+    }
+
+    // Drive the session loop so the scheduled Task fires: Runner._tick runs
+    // browser.runMacrotasks() (which drains frame.js.scheduler) on every tick
+    // for a loaded page, same primitive Runner.waitForSelector/waitForScript
+    // use to pump pending scheduler work under a CDP-loaded page.
+    var runner = bc.session.runner(.{});
+    _ = try runner.tickForFrame(bc.page_handle.?.frame_id, 1000, .{ .until = .done });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const v = try ls.local.exec("window.__geo_code === 1", null);
+    try testing.expect(v.isTrue());
 }
