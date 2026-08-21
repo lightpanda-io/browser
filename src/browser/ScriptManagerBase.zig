@@ -49,6 +49,12 @@ pub const Owner = union(enum) {
         };
     }
 
+    pub fn origin(self: Owner) ?[]const u8 {
+        return switch (self) {
+            inline else => |g| g.origin,
+        };
+    }
+
     pub fn frameId(self: Owner) u32 {
         return switch (self) {
             inline else => |g| g._frame_id,
@@ -266,6 +272,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .loader_id = owner.loaderId(),
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),
+        .origin = owner.origin(),
         .resource_type = .script,
         .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -461,6 +468,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),
+        .origin = owner.origin(),
         .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,

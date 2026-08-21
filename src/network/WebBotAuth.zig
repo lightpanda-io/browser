@@ -248,6 +248,7 @@ test "signRequest: adds headers with correct names" {
             .url = "https://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = @import("HttpClient.zig").noopShutdown,

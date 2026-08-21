@@ -184,6 +184,7 @@ fn connect(self: *EventSource) !void {
         .loader_id = exec.loaderId(),
         .cookie_jar = if (cookie_support) &session.cookie_jar else null,
         .cookie_origin = exec.url.*,
+        .origin = exec.origin(),
         .resource_type = .eventsource,
         .streaming = true,
         .notification = session.notification,

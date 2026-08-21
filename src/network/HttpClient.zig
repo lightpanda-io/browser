@@ -34,6 +34,7 @@ const http = @import("http.zig");
 const Network = @import("Network.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
+const CorsGate = @import("CorsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
 
 pub const BlockPattern = UrlBlocklist.Pattern;
@@ -183,8 +184,10 @@ cache: ?*Cache,
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
 obey_robots: bool,
+obey_cors: bool,
 
 robots: RobotsGate,
+cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
 
 pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) !void {
@@ -223,10 +226,12 @@ pub fn init(self: *Client, allocator: Allocator, network: *Network, cdp: ?*CDP) 
 
         .serve_mode = network.config.mode == .serve,
         .obey_robots = network.config.obeyRobots(),
+        .obey_cors = network.config.obeyCors(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
         },
+        .cors = .{ .single_flight = .init(allocator) },
         .url_blocklist = url_blocklist,
         .arena_pool = &network.app.arena_pool,
     };
@@ -258,6 +263,7 @@ pub fn deinit(self: *Client) void {
 
     self.clearUrlBlocklist();
     self.robots.deinit();
+    self.cors.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.inbox.deinit();
@@ -401,6 +407,15 @@ fn isHostAdblocked(self: *const Client, url: [:0]const u8) bool {
     return blocker.matchHostname(hostname) == .blocked;
 }
 
+fn isCrossOriginModeAllowed(transfer: *const Transfer) bool {
+    const req = &transfer.req;
+    if (req.request_mode != .same_origin) {
+        return true;
+    }
+    const origin = req.origin orelse return false;
+    return URL.isSameOrigin(req.url, origin);
+}
+
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
@@ -450,6 +465,7 @@ pub fn abort(self: *Client) void {
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
         std.debug.assert(self.robots.single_flight.count() == 0);
+        std.debug.assert(self.cors.single_flight.count() == 0);
     }
 }
 
@@ -578,8 +594,9 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // cheap and can solve some nasty UAF.
         owned.url = try arena.dupeZ(u8, req.url);
         owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
-        if (req.credentials) |c| {
-            owned.credentials = try arena.dupeZ(u8, c);
+        owned.origin = if (req.origin) |o| try arena.dupe(u8, o) else null;
+        if (req.basic_auth_credentials) |c| {
+            owned.basic_auth_credentials = try arena.dupeZ(u8, c);
         }
 
         // The body can be larger, so callers can signal, via the
@@ -832,7 +849,7 @@ fn startPending(self: *Client) !void {
     }
 }
 
-const SubmitFrom = enum { start, after_intercept, network };
+const SubmitFrom = enum { start, after_intercept, after_cors, network };
 
 // Process a transfer, passing it through our pipeline. A transfer an move off
 // the pipeline(e.g. while parked waiting for a robots.txt check) and then
@@ -874,9 +891,26 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 return transfer.failAsync(error.UrlBlocked);
             }
             if (try self.cacheLookup(transfer)) {
-                // response came from the cache, we're done
                 return;
             }
+
+            if (!isCrossOriginModeAllowed(transfer) and !transfer.req.internal) {
+                log.warn(.http, "blocked by mode", .{
+                    .url = transfer.req.url,
+                    .mode = @tagName(transfer.req.request_mode),
+                });
+                return transfer.failAsync(error.ModeBlocked);
+            }
+
+            if (self.obey_cors and !transfer.req.internal) {
+                switch (try self.cors.check(transfer)) {
+                    .allowed => {},
+                    .pending => return,
+                }
+            }
+            continue :sw SubmitFrom.after_cors;
+        },
+        .after_cors => {
             if (self.obey_robots and !transfer.req.internal) {
                 switch (try self.robots.check(transfer)) {
                     .allowed => {
@@ -901,7 +935,13 @@ pub fn resumeAfterRobots(self: *Client, transfer: *Transfer) !void {
     return self.pipeline(transfer, .network);
 }
 
-fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
+// CorsGate resumption after a preflight resolves as allowed. Re-enters
+// right after the CORS step (not .after_intercept)
+pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
+    return self.pipeline(transfer, .after_cors);
+}
+
+pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
     for (headers) |hdr| {
         if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
             return hdr.value;
@@ -1596,6 +1636,16 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
     try transfer.materializeResponse(msg.conn, .{});
 
+    // Validate the headers for the response with CORS.
+    if (transfer._cors_cross_origin) {
+        CorsGate.validateResponse(transfer) catch |err| {
+            self.removeConn(msg.conn);
+            transfer._conn = null;
+            transfer.failAsync(err);
+            return true;
+        };
+    }
+
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
     if (!transfer.req.internal) {
@@ -1698,6 +1748,22 @@ pub const Request = struct {
     // internal requests transparently following redirects.
     pub const RedirectMode = enum { follow, manual, @"error" };
 
+    pub const CredentialsMode = enum {
+        // Never send credentials, even same-origin.
+        omit,
+        // Send credentials only for same-origin requests.
+        same_origin,
+        // Always send credentials, including cross-origin.
+        include,
+    };
+
+    pub const RequestMode = enum {
+        cors,
+        no_cors,
+        same_origin,
+        navigate,
+    };
+
     frame_id: u32,
     loader_id: u32,
     method: Method,
@@ -1705,10 +1771,13 @@ pub const Request = struct {
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     cookie_origin: [:0]const u8,
+    origin: ?[]const u8,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
-    credentials: ?[:0]const u8 = null,
+    basic_auth_credentials: ?[:0]const u8 = null,
+    credentials_mode: CredentialsMode = .same_origin,
+    request_mode: RequestMode = .cors,
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
@@ -2033,6 +2102,8 @@ pub const Transfer = struct {
     // everything and sits on client.graveyard
     _retired: bool = false,
 
+    _cors_cross_origin: bool = false,
+
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
         // or a re-entry like continueTransfer / unpark) before any commit
@@ -2080,6 +2151,9 @@ pub const Transfer = struct {
 
         // RobotsGate holds the transfer pending a robots.txt fetch.
         robots,
+
+        // CorsGate holds the tranfer pending a CORS preflight.
+        cors,
     };
 
     pub const HeaderResult = enum {
@@ -2115,7 +2189,7 @@ pub const Transfer = struct {
             return;
         }
         switch (self.state.parked) {
-            .robots => {},
+            .robots, .cors => {},
             .intercept_request, .intercept_auth => {
                 lp.assert(self.client.intercepted > 0, "Transfer.leaveIntercept", .{ .value = self.client.intercepted });
                 self.client.intercepted -= 1;
@@ -2186,8 +2260,12 @@ pub const Transfer = struct {
 
         // And for the robots gate: RobotsGate.pending holds a raw *Transfer
         // while we're parked.
-        if (self.state == .parked and self.state.parked == .robots) {
-            self.client.robots.remove(self);
+        if (self.state == .parked) {
+            switch (self.state.parked) {
+                .cors => self.client.cors.remove(self),
+                .robots => self.client.robots.remove(self),
+                .intercept_auth, .intercept_request => {},
+            }
         }
 
         // A pending revalidation entry owns cache resources (possibly an
@@ -2585,7 +2663,7 @@ pub const Transfer = struct {
         }
 
         // add credentials
-        if (req.credentials) |creds| {
+        if (req.basic_auth_credentials) |creds| {
             if (self._auth_challenge != null and self._auth_challenge.?.source == .proxy) {
                 try conn.setProxyCredentials(creds);
             } else {
@@ -2753,7 +2831,7 @@ pub const Transfer = struct {
     }
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
-        self.req.credentials = userpwd;
+        self.req.basic_auth_credentials = userpwd;
     }
 
     pub const RequestHeader = struct {
@@ -3561,6 +3639,7 @@ fn testTransfer(arena: *lp.Arena) Transfer {
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -3739,6 +3818,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -3806,6 +3886,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3874,6 +3955,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .body = "payload",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3918,6 +4000,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .body = "payload",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -3986,6 +4069,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4054,6 +4138,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
             .url = "http://example.com/",
             .cookie_jar = null,
             .cookie_origin = "",
+            .origin = "",
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4132,6 +4217,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4169,6 +4255,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .url = "http://example.com/",
                 .cookie_jar = null,
                 .cookie_origin = "",
+                .origin = "",
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,

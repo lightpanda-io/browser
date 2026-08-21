@@ -46,6 +46,7 @@ _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
 _redirect: Redirect,
+_mode: Mode,
 _signal: ?*AbortSignal,
 _body_used: bool = false,
 
@@ -60,6 +61,7 @@ pub const InitOpts = struct {
     credentials: Credentials = .@"same-origin",
     headers: ?Headers.InitOpts = null,
     method: ?[]const u8 = null,
+    mode: Mode = .cors,
     priority: ?[]const u8 = null,
     redirect: Redirect = .follow,
     signal: ?*AbortSignal = null,
@@ -88,6 +90,14 @@ const Cache = enum {
     @"no-cache",
     @"force-cache",
     @"only-if-cached",
+    pub const js_enum_from_string = true;
+};
+
+const Mode = enum {
+    cors,
+    @"no-cors",
+    @"same-origin",
+    navigate,
     pub const js_enum_from_string = true;
 };
 
@@ -148,6 +158,11 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
+    const mode = switch (input) {
+        .url => opts.mode,
+        .request => |r| if (opts_ != null) opts.mode else r._mode,
+    };
+
     const self = try arena.create(Request);
     self.* = .{
         ._url = url,
@@ -157,6 +172,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._cache = opts.cache,
         ._credentials = opts.credentials,
         ._redirect = opts.redirect,
+        ._mode = mode,
         ._body = body,
         ._signal = signal,
     };
@@ -214,6 +230,10 @@ pub fn getCredentials(self: *const Request) []const u8 {
 
 pub fn getRedirect(self: *const Request) []const u8 {
     return @tagName(self._redirect);
+}
+
+pub fn getMode(self: *const Request) []const u8 {
+    return @tagName(self._mode);
 }
 
 pub fn getSignal(self: *const Request) ?*AbortSignal {
@@ -356,6 +376,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
+        ._mode = self._mode,
         ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
     };
@@ -379,6 +400,7 @@ pub const JsApi = struct {
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
     pub const redirect = bridge.accessor(Request.getRedirect, null, .{});
+    pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});
