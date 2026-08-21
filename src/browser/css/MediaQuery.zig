@@ -25,6 +25,8 @@
 //!   - Media types: `all`, `screen`, `print`, `speech`, `tv`
 //!   - Features: `width` / `min-width` / `max-width`,
 //!               `height` / `min-height` / `max-height`,
+//!               `device-width` / `min-device-width` / `max-device-width`,
+//!               `device-height` / `min-device-height` / `max-device-height`,
 //!               `orientation` (portrait | landscape).
 //!   - Length values: `<int>px`, `<int>em` (1em = 16px), `<int>rem`,
 //!     and bare `0`.
@@ -272,13 +274,29 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
     return evalBoolean(trimmed, viewport);
 }
 
+const max_feature_name_len = 17;
+
+/// Map the deprecated `device-*` features onto their viewport counterparts.
+/// `device-width` is the width of the output device; we have no separate
+/// screen geometry, and `window.screen.width` already reports the viewport
+/// (see webapi/Screen.zig), so both stay consistent.
+fn stripDevice(lname: []const u8) []const u8 {
+    if (std.mem.eql(u8, lname, "device-width")) return "width";
+    if (std.mem.eql(u8, lname, "min-device-width")) return "min-width";
+    if (std.mem.eql(u8, lname, "max-device-width")) return "max-width";
+    if (std.mem.eql(u8, lname, "device-height")) return "height";
+    if (std.mem.eql(u8, lname, "min-device-height")) return "min-height";
+    if (std.mem.eql(u8, lname, "max-device-height")) return "max-height";
+    return lname;
+}
+
 fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_feature_name_len) {
         return false;
     }
 
-    var buf: [16]u8 = undefined;
-    const lname = std.ascii.lowerString(&buf, name);
+    var buf: [max_feature_name_len]u8 = undefined;
+    const lname = stripDevice(std.ascii.lowerString(&buf, name));
     if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
         return viewport.width >= px;
@@ -312,11 +330,11 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
 }
 
 fn evalBoolean(name: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > max_feature_name_len) {
         return false;
     }
-    var buf: [16]u8 = undefined;
-    const lname = std.ascii.lowerString(&buf, name);
+    var buf: [max_feature_name_len]u8 = undefined;
+    const lname = stripDevice(std.ascii.lowerString(&buf, name));
 
     if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
     if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
@@ -408,6 +426,41 @@ test "MediaQuery: min-height / max-height / height" {
     try testing.expect(!matches("(max-height: 1079px)", v));
     try testing.expect(matches("(height: 1080px)", v));
     try testing.expect(!matches("(height: 1081px)", v));
+}
+
+test "MediaQuery: device-width / device-height" {
+    const v = Viewport.default;
+    try testing.expect(matches("(min-device-width: 1px)", v));
+    try testing.expect(matches("(min-device-width: 1920px)", v));
+    try testing.expect(!matches("(min-device-width: 1921px)", v));
+    try testing.expect(matches("(max-device-width: 1920px)", v));
+    try testing.expect(!matches("(max-device-width: 1919px)", v));
+    try testing.expect(matches("(device-width: 1920px)", v));
+    try testing.expect(!matches("(device-width: 1919px)", v));
+
+    try testing.expect(matches("(min-device-height: 1080px)", v));
+    try testing.expect(!matches("(min-device-height: 1081px)", v));
+    try testing.expect(matches("(max-device-height: 1080px)", v));
+    try testing.expect(!matches("(max-device-height: 1079px)", v));
+    try testing.expect(matches("(device-height: 1080px)", v));
+    try testing.expect(!matches("(device-height: 1081px)", v));
+
+    // boolean form and case-insensitivity
+    try testing.expect(matches("(device-width)", v));
+    try testing.expect(matches("(device-height)", v));
+    try testing.expect(matches("(MIN-DEVICE-WIDTH: 1px)", v));
+
+    // same unit and malformed-value handling as the non-device features
+    try testing.expect(matches("(min-device-width: 120em)", v)); // 1920px
+    try testing.expect(!matches("(min-device-width: 121em)", v));
+    try testing.expect(!matches("(min-device-width: -1999px)", v));
+    try testing.expect(!matches("(min-device-width: foo)", v));
+    try testing.expect(matches("(min-device-width: 0)", v));
+
+    // `device-*` on a viewport smaller than the query, and combined queries
+    const small = Viewport{ .width = 375, .height = 667 };
+    try testing.expect(!matches("(min-device-width: 1024px)", small));
+    try testing.expect(matches("(max-device-width: 480px) and (orientation: portrait)", small));
 }
 
 test "MediaQuery: orientation" {
