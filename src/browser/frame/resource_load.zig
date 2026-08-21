@@ -169,13 +169,24 @@ const ImageLoad = struct {
     fn settle(self: *ImageLoad, kind: Frame.QueuedEvent.Kind) void {
         const frame = self.frame;
         const img = self.image;
-        defer frame._factory.destroy(self);
 
         // A later src assignment owns the element's events now; this response
         // is only still here to give its pending-load slot back.
-        if (self.generation == img._generation) {
+        const current = self.generation == img._generation;
+        if (current) {
             img._complete = true;
+        }
 
+        // Released before anything below, because everything below can run JS
+        // and none of it reads `self` again.
+        frame._factory.destroy(self);
+
+        if (frame.isGoingAway()) {
+            frame._pending_loads -|= 1;
+            return;
+        }
+
+        if (current) {
             // Queued, not dispatched: `submit` can fail synchronously, which
             // puts us inside html5ever parsing, and an event handler is free
             // to navigate. Queueing also puts these events ahead of window
