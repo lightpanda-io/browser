@@ -73,6 +73,18 @@ http_response_size_bytes: Histogram(&.{
     2 * 1024 * 1024,
     4 * 1024 * 1024,
 }) = .{},
+http_navigation_delay_ms: Histogram(&.{
+    10,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    30000,
+}) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
 
@@ -101,6 +113,7 @@ const help = .{
     .http_redirects = "HTTP redirect hops followed",
     .http_duration_ms = "HTTP request wall-clock duration in milliseconds",
     .http_response_size_bytes = "HTTP response body size in bytes",
+    .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
 };

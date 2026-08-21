@@ -96,32 +96,7 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    pub const RobotsMap = std.HashMapUnmanaged([]const u8, RobotsEntry, struct {
-        const Context = @This();
-
-        pub fn hash(_: Context, value: []const u8) u32 {
-            var key = value;
-            var buf: [128]u8 = undefined;
-            var h = std.hash.Wyhash.init(value.len);
-
-            while (key.len >= 128) {
-                const lower = std.ascii.lowerString(buf[0..], key[0..128]);
-                h.update(lower);
-                key = key[128..];
-            }
-
-            if (key.len > 0) {
-                const lower = std.ascii.lowerString(buf[0..key.len], key);
-                h.update(lower);
-            }
-
-            return @truncate(h.final());
-        }
-
-        pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
-            return std.ascii.eqlIgnoreCase(a, b);
-        }
-    }, 80);
+    pub const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
 
     allocator: std.mem.Allocator,
     map: RobotsMap,

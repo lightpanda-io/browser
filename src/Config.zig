@@ -218,6 +218,8 @@ const CommonOptions = .{
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },
     .{ .name = "http_max_host_open", .type = ?u8 },
+    .{ .name = "http_nav_delay", .type = ?u32 },
+    .{ .name = "http_nav_burst", .type = ?u32 },
     .{ .name = "http_timeout", .type = ?u31 },
     .{ .name = "http_connect_timeout", .type = ?u31 },
     .{ .name = "http_header", .type = HttpHeader, .multiple = true, .validator = httpHeaderValidator },
@@ -572,6 +574,22 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_max_host_open orelse 6,
         else => unreachable,
     };
+}
+
+pub fn httpNavDelay(self: *const Config) ?u32 {
+    const ms = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_delay,
+        else => unreachable,
+    } orelse return null;
+    return if (ms == 0) null else ms;
+}
+
+pub fn httpNavBurst(self: *const Config) u32 {
+    const burst = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_burst,
+        else => unreachable,
+    } orelse 1;
+    return @max(burst, 1);
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {

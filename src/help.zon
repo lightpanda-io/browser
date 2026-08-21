@@ -377,6 +377,15 @@
     \\          Limits the acceptable response size for any request
     \\          e.g. XHR, fetch, script loading.
     \\          Defaults to 1 GiB.
+    \\  --http-nav-burst <INT>
+    \\          Number of top-level navigations to an idle host allowed to
+    \\          start without waiting for --http-nav-delay. After a burst,
+    \\          navigations are spaced by --http-nav-delay again.
+    \\          Defaults to 1.
+    \\  --http-nav-delay <INT>
+    \\          Minimum time in ms between two top-level navigations to the same
+    \\          host (see --http-nav-burst). Disable by setting to 0.
+    \\          Defaults to 0.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.
