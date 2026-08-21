@@ -101,7 +101,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .method = request._method,
         .frame_id = exec.frameId(),
         .loader_id = exec.loaderId(),
-        .body = request._body,
+        .body = request.bodyBytes(),
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
         .cookie_origin = exec.url.*,
