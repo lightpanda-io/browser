@@ -856,6 +856,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .throttle = self.parent == null,
         .cookie_origin = opts.initiator_url,
         .resource_type = .document,
+        .is_subframe = self.parent != null,
+        .notification = self._session.notification,
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
