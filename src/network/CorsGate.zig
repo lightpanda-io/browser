@@ -62,7 +62,7 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
         transfer.unpark();
 
         if (!allowed) {
-            log.warn(.http, "blocked by cors (preflight)", .{ .url = transfer.req.url });
+            log.warn(.cors, "preflight blocked", .{ .url = transfer.req.url });
             transfer.failAsync(error.CorsBlocked);
             continue;
         }
