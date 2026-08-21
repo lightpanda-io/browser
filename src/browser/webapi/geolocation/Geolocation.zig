@@ -35,9 +35,9 @@ pub const Override = struct {
 };
 
 const PositionOptions = struct {
-    timeout: ?u32 = null,
-    maximumAge: u32 = 0,
     enableHighAccuracy: bool = false,
+    maximumAge: u32 = 0,
+    timeout: ?u32 = null,
 };
 
 // Last id handed out by watchPosition. 0 is a sentinel indicating that the
