@@ -24,25 +24,24 @@ const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
-const HTMLDocument = @import("HTMLDocument.zig");
 const Document = @import("Document.zig");
+const HTMLDocument = @import("HTMLDocument.zig");
 
 const DOMParser = @This();
 
-// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
-_pad: bool = false,
+_frame: *Frame,
 
-pub fn init() DOMParser {
-    return .{};
+pub fn init(frame: *Frame) !*DOMParser {
+    return frame._factory.create(DOMParser{ ._frame = frame });
 }
 
 pub fn parseFromString(
-    _: *const DOMParser,
+    self: *const DOMParser,
     html: []const u8,
     mime_type: []const u8,
-    frame: *Frame,
 ) !*Document {
-    const target_mime = std.meta.stringToEnum(SupportedType, mime_type) orelse return error.NotSupported;
+    const frame = self._frame;
+    const target_mime = std.meta.stringToEnum(SupportedType, mime_type) orelse return error.TypeError;
 
     switch (target_mime) {
         .@"text/html" => {
@@ -64,6 +63,7 @@ pub fn parseFromString(
             const doc = try frame._factory.document(HTMLDocument{
                 ._proto = undefined,
             });
+            doc.asDocument()._url = frame.url;
 
             var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
             if (normalized.len == 0) {
@@ -86,6 +86,7 @@ pub fn parseFromString(
         else => {
             const xml_doc = (try Frame.parse.xmlDocument(frame, html)) orelse try parserErrorDocument(frame);
             const doc = xml_doc.asDocument();
+            doc._url = frame.url;
             doc._content_type = @tagName(target_mime);
             return doc;
         },
@@ -121,7 +122,6 @@ pub const JsApi = struct {
         pub const name = "DOMParser";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const constructor = bridge.constructor(DOMParser.init, .{});

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+The document DOMParser.parseFromString produces takes its URL from the
+DOMParser's own realm (the frame it was constructed in), not from the realm
+whose parseFromString is invoked.
+-->
+
+<iframe id=if_dp src="support/cross_realm_collection.html"></iframe>
+
+<script id=document_url_follows_the_parser_realm>
+  testing.onload(() => {
+    const iwin = document.getElementById('if_dp').contentWindow;
+    const child_url = iwin.document.URL;
+    testing.expectEqual(true, child_url !== document.URL);
+
+    for (const type of ['text/html', 'text/xml']) {
+      const local = new DOMParser();
+      const remote = new iwin.DOMParser();
+
+      let doc = local.parseFromString('<a/>', type);
+      testing.expectEqual(document.URL, doc.URL);
+      testing.expectEqual(document.URL, doc.baseURI);
+
+      doc = remote.parseFromString('<a/>', type);
+      testing.expectEqual(child_url, doc.URL);
+      testing.expectEqual(child_url, doc.documentURI);
+      testing.expectEqual(child_url, doc.baseURI);
+
+      // method from the other realm, parser from this one (and vice versa)
+      doc = iwin.DOMParser.prototype.parseFromString.call(local, '<a/>', type);
+      testing.expectEqual(document.URL, doc.URL);
+      doc = DOMParser.prototype.parseFromString.call(remote, '<a/>', type);
+      testing.expectEqual(child_url, doc.URL);
+    }
+  });
+</script>
