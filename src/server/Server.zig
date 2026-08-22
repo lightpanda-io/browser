@@ -160,6 +160,12 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ app.config.advertiseHost(), port });
     errdefer allocator.free(bidi_session_url);
 
+    var protocols: Handshake.Protocols = .{};
+    for (app.config.protocols()) |p| switch (p) {
+        .cdp => protocols.cdp = true,
+        .webdriver => protocols.webdriver = true,
+    };
+
     self.* = .{
         .app = app,
         .cdp_pool = .empty,
@@ -170,10 +176,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
         .poll_snapshot = poll_snapshot,
-        .protocols = switch (app.config.protocol()) {
-            .cdp => .{ .cdp = true },
-            .webdriver => .{ .webdriver = true },
-        },
+        .protocols = protocols,
     };
     return self;
 }
@@ -1456,7 +1459,7 @@ test "server: classic session bootstrap errors" {
 }
 
 test "server: protocol gate" {
-    // The test server serves both; the CLI only ever enables one.
+    // The test server serves both; --protocol picks which a real server does.
     const protocols = &testing.test_cdp_server.?.protocols;
     defer protocols.* = .{ .cdp = true, .webdriver = true };
 
