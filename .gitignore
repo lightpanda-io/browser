@@ -6,5 +6,5 @@
 /zig-pkg/
 zig-out
 lightpanda.id
-/src/html5ever/target/
+/src/rust/target/
 src/snapshot.bin

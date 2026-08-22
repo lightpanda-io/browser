@@ -20,7 +20,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const screenshot_png = @embedFile("screenshot.png");
 const screenshot_pdf = @embedFile("screenshot.pdf");
 
 const id = @import("../id.zig");
@@ -970,7 +969,6 @@ fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSiz
     return buf;
 }
 
-// Return a fake screenshot
 fn captureScreenshot(cmd: *CDP.Command) !void {
     const Params = struct {
         format: ?[]const u8 = "png",
@@ -983,7 +981,6 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     const params = try cmd.params(Params) orelse Params{};
 
     const format = params.format orelse "png";
-
     if (!std.mem.eql(u8, format, "png")) {
         log.warn(.not_implemented, "Page.captureScreenshot params", .{ .format = format });
         return cmd.sendError(-32000, "unsupported screenshot format.", .{});
@@ -991,20 +988,29 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     if (params.quality != null) {
         log.warn(.not_implemented, "Page.captureScreenshot params", .{ .quality = params.quality });
     }
-    if (params.clip != null) {
-        log.warn(.not_implemented, "Page.captureScreenshot params", .{ .clip = params.clip });
-    }
-    if (params.fromSurface orelse false or params.captureBeyondViewport orelse false or params.optimizeForSpeed orelse false) {
-        log.warn(.not_implemented, "Page.captureScreenshot params", .{
-            .fromSurface = params.fromSurface,
-            .captureBeyondViewport = params.captureBeyondViewport,
-            .optimizeForSpeed = params.optimizeForSpeed,
-        });
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const viewport = cmd.cdp.browser.getViewport();
+
+    var opts: lp.screenshot.Opts = .{
+        .scale = viewport.scale,
+        .width = viewport.width,
+        .height = if (params.captureBeyondViewport orelse false) 0 else viewport.height,
+    };
+    if (params.clip) |clip| {
+        opts.clip = .{
+            .x = @floatCast(clip.x),
+            .y = @floatCast(clip.y),
+            .width = @floatCast(clip.width),
+            .height = @floatCast(clip.height),
+        };
+        opts.scale *= @floatCast(clip.scale);
     }
 
-    return cmd.sendResult(.{
-        .data = base64Encode(screenshot_png),
-    }, .{});
+    // Prepared streams itself as base64 straight into the outgoing message.
+    const shot = try lp.screenshot.prepare(cmd.arena, frame.window._document.asNode(), opts, frame);
+    return cmd.sendResult(.{ .data = shot }, .{});
 }
 
 // Return a fake pdf
@@ -1021,6 +1027,15 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
     const viewport = cmd.cdp.browser.getViewport();
     const width = viewport.width;
     const height = viewport.height;
+
+    // Full-page height as our text rendering lays it out, so a fullPage
+    // screenshot (getLayoutMetrics → captureScreenshot) is consistent.
+    const content_height: u32 = blk: {
+        const bc = cmd.browser_context orelse break :blk height;
+        const frame = bc.mainFrame() orelse break :blk height;
+        const h = lp.screenshot.contentHeight(cmd.arena, frame.window._document.asNode(), width, frame) catch break :blk height;
+        break :blk @max(height, h);
+    };
 
     return cmd.sendResult(.{
         .layoutViewport = .{
@@ -1043,7 +1058,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
             .x = 0,
             .y = 0,
             .width = width,
-            .height = height,
+            .height = content_height,
         },
         .cssLayoutViewport = .{
             .pageX = 0,
@@ -1065,7 +1080,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
             .x = 0,
             .y = 0,
             .width = width,
-            .height = height,
+            .height = content_height,
         },
     }, .{});
 }
@@ -1266,12 +1281,82 @@ test "cdp.frame: captureScreenshot" {
         try ctx.expectSentError(-32000, "unsupported screenshot format.", .{ .id = 10 });
     }
 
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    // Keep the payload small: the test transport buffers 32KB frames.
+    try ctx.processMessage(.{ .id = 10, .method = "Emulation.setDeviceMetricsOverride", .params = .{ .width = 400, .height = 300 } });
+
     {
+        // Viewport-sized: the PNG header carries the size.
         try ctx.processMessage(.{ .id = 11, .method = "Page.captureScreenshot" });
-        try ctx.expectSentResult(.{
-            .data = base64Encode(screenshot_png),
-        }, .{ .id = 11 });
+        const png = try screenshotResult(&ctx, 11);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(300, std.mem.readInt(u32, png[20..24], .big));
     }
+
+    {
+        // clip + scale crops after layout and scales the raster.
+        try ctx.processMessage(.{ .id = 12, .method = "Page.captureScreenshot", .params = .{
+            .clip = .{ .x = 0, .y = 0, .width = 100, .height = 40, .scale = 2 },
+        } });
+        const png = try screenshotResult(&ctx, 12);
+        try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    try ctx.processMessage(.{ .id = 13, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+        .width = 200,
+        .height = 100,
+        .deviceScaleFactor = 2,
+    } });
+
+    {
+        // deviceScaleFactor alone rasters at 2x; the viewport stays CSS px.
+        try ctx.processMessage(.{ .id = 14, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 14);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // clip.scale is a zoom on top of it, not a replacement: 2 * 2 = 4x.
+        try ctx.processMessage(.{ .id = 15, .method = "Page.captureScreenshot", .params = .{
+            .clip = .{ .x = 0, .y = 0, .width = 50, .height = 20, .scale = 2 },
+        } });
+        const png = try screenshotResult(&ctx, 15);
+        try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // A width/height of 0 keeps the current values, and so does a
+        // deviceScaleFactor of 0.
+        try ctx.processMessage(.{ .id = 16, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+            .width = 0,
+            .height = 0,
+            .deviceScaleFactor = 0,
+        } });
+        try ctx.processMessage(.{ .id = 17, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 17);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
+    }
+}
+
+fn screenshotResult(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = msg.object;
+        const got = obj.get("id") orelse continue;
+        if (got != .integer or got.integer != msg_id) continue;
+        const data = obj.get("result").?.object.get("data").?.string;
+        const decoder = std.base64.standard.Decoder;
+        const out = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(data));
+        try decoder.decode(out, data);
+        try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
+        return out;
+    }
+    return error.ResultNotFound;
 }
 
 test "cdp.frame: printToPDF" {
