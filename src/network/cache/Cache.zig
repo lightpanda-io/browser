@@ -18,8 +18,12 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
 const Http = @import("../http.zig");
+
 const SqliteCache = @import("SqliteCache.zig");
+
+pub var noop: Cache = .{ .kind = .noop };
 
 const log = lp.log;
 
@@ -28,47 +32,85 @@ const log = lp.log;
 pub const Cache = @This();
 
 kind: union(enum) {
+    noop: void,
     sqlite: SqliteCache,
 },
 
+pub fn init(allocator: std.mem.Allocator, config: *const lp.Config) !Cache {
+    const cache_path = config.httpCacheDir() orelse {
+        return .{ .kind = .noop };
+    };
+
+    const sqlite = SqliteCache.init(
+        allocator,
+        .{ .path = cache_path },
+        config.httpCacheEntryLimit(),
+    ) catch |err| {
+        log.err(.cache, "failed to init", .{
+            .kind = "SqliteCache",
+            .path = cache_path,
+            .err = err,
+        });
+        return err;
+    };
+
+    return .{
+        .kind = .{ .sqlite = sqlite },
+    };
+}
+
 pub fn deinit(self: *Cache) void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.deinit(),
+    };
+}
+
+pub fn active(self: *Cache) ?*Cache {
+    return switch (self.kind) {
+        .noop => null,
+        inline else => self,
     };
 }
 
 pub fn get(self: *Cache, arena: std.mem.Allocator, req: CacheGetRequest) !CacheGetResult {
     return switch (self.kind) {
+        .noop => .miss,
         inline else => |*c| c.get(arena, req),
     };
 }
 
 pub fn put(self: *Cache, req: CachePutRequest, body: []const u8) !void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.put(req, body),
     };
 }
 
 pub fn evict(self: *Cache, url: []const u8) void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.evict(url),
     };
 }
 
 pub fn renew(self: *Cache, arena: std.mem.Allocator, req: RenewResponse) !void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.renew(arena, req),
     };
 }
 
 pub fn clear(self: *Cache) !void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.clear(),
     };
 }
 
 pub fn maintenance(self: *Cache, now: u64) void {
     return switch (self.kind) {
+        .noop => {},
         inline else => |*c| c.maintenance(now),
     };
 }

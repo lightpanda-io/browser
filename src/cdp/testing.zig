@@ -20,7 +20,7 @@ const std = @import("std");
 
 const CDP = @import("CDP.zig");
 
-const base = @import("../testing.zig");
+pub const base = @import("../testing.zig");
 
 const json = std.json;
 const posix = std.posix;

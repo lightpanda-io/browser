@@ -128,7 +128,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .watchdog_entry = undefined,
     };
     self.env.protectHeapLimit();
-    try self.http_client.init(allocator, &app.network, cdp);
+    try self.http_client.init(app, cdp);
 
     self.watchdog_entry = .{
         .env = &self.env,
@@ -153,9 +153,6 @@ pub fn deinit(self: *Browser) void {
     // fire — only now is it safe to free the pool backing their parameters.
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
-    if (self.http_client.cache) |cache| {
-        cache.maintenance(lp.datetime.timestamp(.real));
-    }
     self.http_client.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);

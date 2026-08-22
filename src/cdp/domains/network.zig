@@ -216,14 +216,14 @@ fn clearBrowserCache(cmd: *CDP.Command) !void {
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const network = bc.cdp.browser.http_client.network;
-    if (network.cache) |*c| try c.clear();
+    try network.cache.clear();
     return cmd.sendResult(null, .{});
 }
 
 fn canClearBrowserCache(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const network = bc.cdp.browser.http_client.network;
-    return cmd.sendResult(.{ .result = network.cache != null }, .{});
+    return cmd.sendResult(.{ .result = network.cache.active() != null }, .{});
 }
 
 fn clearBrowserCookies(cmd: *CDP.Command) !void {
@@ -1030,7 +1030,7 @@ test "cdp.Network: setCacheDisabled" {
         .params = .{ .cacheDisabled = true },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-    try testing.expect(client.cache == null);
+    try testing.expectEqual(null, client.cache.active());
 }
 
 test "cdp.Network: configured CDP ignores setCacheDisabled" {
@@ -1041,7 +1041,7 @@ test "cdp.Network: configured CDP ignores setCacheDisabled" {
     var cache: Cache = undefined;
     const client = &ctx.cdp().browser.http_client;
     client.cache = &cache;
-    defer client.cache = null;
+    defer client.cache = &testing.base.test_app.network.cache;
 
     try ctx.processMessage(.{
         .id = 1,
