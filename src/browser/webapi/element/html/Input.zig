@@ -262,13 +262,23 @@ pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
     return try self.ensureFileList(frame);
 }
 
-/// Replaces the selected file list and fires `input` + `change` events.
-/// Used by CDP `DOM.setFileInputFiles` and any future DataTransfer-style setter.
-///
+/// Simulates the user selecting files: replaces the file list and fires
+/// `input` + `change`. Used by CDP `DOM.setFileInputFiles`.
+pub fn selectFiles(self: *Input, files: []const *File, frame: *Frame) !void {
+    try self.replaceFiles(files, frame);
+
+    // A file input fires `input` then `change`, both as plain bubbling Events
+    // (not InputEvents — `inputType`/`data` only apply to editable text inputs).
+    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), input_evt);
+    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
+}
+
 /// The FileList holds a reference on each File (whose backing arena is reference
 /// counted via its Blob proto), so we acquire on the incoming files and release
 /// the outgoing ones; the frame releases whatever remains at teardown.
-pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
+fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     if (self._input_type != .file) {
         return error.InvalidStateError;
     }
@@ -285,13 +295,19 @@ pub fn setFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     }
 
     fl._files = dupe;
+}
 
-    // A file input fires `input` then `change`, both as plain bubbling Events
-    // (not InputEvents — `inputType`/`data` only apply to editable text inputs).
-    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), input_evt);
-    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
+/// The `files` IDL setter. Unlike a user picking files (selectFiles), an
+/// assignment fires no input/change event.
+pub fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
+    if (self._input_type != .file) {
+        return;
+    }
+    const list = list_ orelse return;
+    if (self._files == list) {
+        return;
+    }
+    return self.replaceFiles(list._files, frame);
 }
 
 /// JS-binding wrapper for the `value` getter: for type=file, return the spec
@@ -1292,7 +1308,7 @@ pub const JsApi = struct {
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
-    pub const files = bridge.accessor(Input.getFiles, null, .{});
+    pub const files = bridge.accessor(Input.getFiles, Input.setFiles, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{ .ce_reactions = true });
