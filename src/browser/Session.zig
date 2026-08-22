@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
+const Config = @import("../Config.zig");
 
 const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
@@ -115,6 +116,10 @@ _console_capture: bool = false,
 // (synchronous fetch + parse + register on `document.styleSheets`).
 load_external_stylesheets: bool = false,
 
+// Sub-resources to actually request. Off by default: a driver that only
+// reads the DOM shouldn't pay for bytes it never looks at.
+load_resources: Config.LoadResources = .{},
+
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
 /// ticks; once `check` returns true the wait returns `error.Cancelled`.
 /// The agent installs this so SIGINT can abort an in-flight tool call
@@ -180,6 +185,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
         ._console_messages = .init(allocator),
         .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
+        .load_resources = browser.app.config.loadResources(),
     };
     errdefer self._console_messages.deinit();
 }
