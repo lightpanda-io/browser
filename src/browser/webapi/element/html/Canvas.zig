@@ -16,22 +16,26 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
 const std = @import("std");
-const log = lp.log;
-const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
+const lp = @import("lightpanda");
+
 const Frame = @import("../../../Frame.zig");
-const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Blob = @import("../../Blob.zig");
-const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
-const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
-const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
+const Node = @import("../../Node.zig");
+const Element = @import("../../Element.zig");
 
+const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
+const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
+const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
+
+const HtmlElement = @import("../Html.zig");
+
+const js = lp.js;
+const log = lp.log;
 const Execution = js.Execution;
+const BlankPNG = OffscreenCanvas.BlankPNG;
 
 const Canvas = @This();
 
@@ -99,61 +103,25 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
     return drawing_context;
 }
 
-/// Largest canvas a real browser backs with a bitmap (16384 x 16384). Past
-/// that, and at zero size, there are no pixels to serialize.
-const max_area = 16384 * 16384;
-
-const png_mime = "image/png";
-
-/// A 1x1 fully transparent PNG.
-///
-/// We have no rasterizer - every `CanvasRenderingContext2D` draw call is a
-/// no-op - so a canvas is always blank and every canvas serializes to this
-/// same image. A real browser's output would carry the canvas' dimensions,
-/// but nothing here can observe them (`Image.naturalWidth` is always 0), and
-/// a constant keeps serialization O(1) no matter how large the canvas or how
-/// often a page (typically a fingerprinting script) asks for it.
-const blank_png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
-const blank_png_data_url = "data:" ++ png_mime ++ ";base64," ++ blank_png_base64;
-const blank_png = blk: {
-    const decoder = std.base64.standard.Decoder;
-    var buf: [decoder.calcSizeForSlice(blank_png_base64) catch unreachable]u8 = undefined;
-    decoder.decode(&buf, blank_png_base64) catch unreachable;
-    const decoded = buf;
-    break :blk decoded;
-};
-
-/// Whether the canvas has pixels to serialize at all. Both serializers answer
-/// with the spec's "no data" values when it doesn't.
 fn hasBitmap(self: *const Canvas) bool {
-    const width = self.getWidth();
-    const height = self.getHeight();
-    return width > 0 and height > 0 and @as(u64, width) * height <= max_area;
+    return BlankPNG.hasBitmap(self.getWidth(), self.getHeight());
 }
 
-/// Serializes the canvas, always as `blank_png`. Per spec an unsupported
+/// Serializes the canvas, always as the blank PNG. Per spec an unsupported
 /// `type` falls back to image/png, and with nothing drawn there is no lossy
 /// encoding for `quality` to control, so both arguments are ignored.
 pub fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64) []const u8 {
     // Per spec, a canvas with no pixels serializes to this exact string.
-    return if (self.hasBitmap()) blank_png_data_url else "data:,";
+    return if (self.hasBitmap()) BlankPNG.data_url else "data:,";
 }
 
 /// Same image as `toDataURL`, handed to `callback` as a Blob from a task.
 /// A canvas with no pixels calls back with null, per spec.
 pub fn toBlob(self: *const Canvas, callback: js.Function.Global, _: ?[]const u8, _: ?f64, exec: *Execution) !void {
-    const blob: ?*Blob = if (self.hasBitmap()) try Blob.initFromBytes(&blank_png, png_mime, exec) else null;
-    errdefer if (blob) |b| b.releaseRef(exec.page);
-
-    // The Blob outlives this call, so it needs a reference of its own until
-    // the task has handed it to the callback.
-    if (blob) |b| {
-        b.acquireRef();
-    }
-
     const task = try exec._factory.create(ToBlobCallback{
         .exec = exec,
-        .blob = blob,
+        // The spec checks the bitmap now, not when the task runs.
+        .has_bitmap = self.hasBitmap(),
         .callback = callback,
     });
     errdefer exec._factory.destroy(task);
@@ -166,11 +134,9 @@ pub fn toBlob(self: *const Canvas, callback: js.Function.Global, _: ?[]const u8,
 
 const ToBlobCallback = struct {
     exec: *Execution,
-    blob: ?*Blob,
+    has_bitmap: bool,
     callback: js.Function.Global,
 
-    // `run` and `cancelled` are mutually exclusive, so each releases exactly
-    // once.
     fn cancelled(ctx: *anyopaque) void {
         const self: *ToBlobCallback = @ptrCast(@alignCast(ctx));
         self.deinit();
@@ -178,24 +144,35 @@ const ToBlobCallback = struct {
 
     fn deinit(self: *ToBlobCallback) void {
         self.callback.release();
-        if (self.blob) |b| {
-            b.releaseRef(self.exec.page);
-        }
         self.exec._factory.destroy(self);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ToBlobCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        const exec = self.exec;
+
+        var blob: ?*Blob = null;
+        if (self.has_bitmap) {
+            const b = try BlankPNG.blob(exec);
+            // The page can hold on to the Blob, in which case the JS wrapper
+            // takes its own ref; ours only has to cover the call.
+            b.acquireRef();
+            blob = b;
+        }
+        defer if (blob) |b| {
+            b.releaseRef(exec.page);
+        };
 
         var ls: js.Local.Scope = undefined;
-        self.exec.js.localScope(&ls);
+        exec.js.localScope(&ls);
         defer ls.deinit();
 
-        ls.toLocal(self.callback).call(void, .{self.blob}) catch |err| {
-            self.exec.page.recordJsError(err);
+        ls.toLocal(self.callback).call(void, .{blob}) catch |err| {
+            exec.page.recordJsError(err);
             log.warn(.js, "canvas.toBlob", .{ .err = err });
         };
+        ls.local.runMicrotasks();
         return null;
     }
 };

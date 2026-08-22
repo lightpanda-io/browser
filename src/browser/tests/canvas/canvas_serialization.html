@@ -81,6 +81,8 @@
   testing.expectEqual('function', typeof canvas.toBlob);
 
   canvas.toBlob(function(blob) {
+    // A thrown TypeError in here is only logged, so guard before dereferencing.
+    testing.expectEqual(true, blob instanceof Blob);
     testing.expectEqual('image/png', blob.type);
     testing.expectEqual(67, blob.size);
   });
@@ -92,8 +94,26 @@
   const canvas = document.getElementById('c');
   let called = false;
   canvas.toBlob(function() { called = true; });
-  // The callback runs from a task, never synchronously.
+  // The callback runs from a task, never synchronously...
   testing.expectEqual(false, called);
+  // ...but before any task queued after it.
+  setTimeout(function() { testing.expectEqual(true, called); }, 0);
+}
+</script>
+
+<script id=toBlob_drains_microtasks>
+{
+  const canvas = document.getElementById('c');
+  const order = [];
+  canvas.toBlob(function() {
+    order.push('callback');
+    Promise.resolve().then(function() { order.push('microtask'); });
+  });
+  setTimeout(function() {
+    order.push('timer');
+    // The microtask checkpoint follows the callback's task, as for any task.
+    testing.expectEqual('callback,microtask,timer', order.join(','));
+  }, 0);
 }
 </script>
 
