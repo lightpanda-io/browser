@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const CDP = @import("../CDP.zig");
-const Frame = @import("../../browser/Frame.zig");
+const Frame = @import("../../../browser/Frame.zig");
 
 const dom_button = Frame.user_input.mouse_button;
 
@@ -61,7 +61,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return;
     const frame = bc.mainFrame() orelse return;
 
-    const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
+    const KeyboardEvent = @import("../../../browser/webapi/event/KeyboardEvent.zig");
     const keyboard_event = try KeyboardEvent.initTrusted(switch (params.type) {
         .keyDown => comptime .wrap("keydown"),
         .keyUp => comptime .wrap("keyup"),

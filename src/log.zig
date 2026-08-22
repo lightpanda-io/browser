@@ -23,6 +23,7 @@ pub const Scope = enum {
     app,
     dom,
     bug,
+    bidi,
     browser,
     cdp,
     console,

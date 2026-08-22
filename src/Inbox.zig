@@ -28,7 +28,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const CDP = @import("cdp/CDP.zig");
+const CDP = @import("server/cdp/CDP.zig");
 
 const DoublyLinkedList = std.DoublyLinkedList;
 
@@ -120,14 +120,20 @@ pub const Message = struct {
         // consumer's use of `input`.
         cdp: Cdp,
 
+        // A BiDi text/binary frame, raw (owned). Unlike CDP it isn't
+        // parsed on the Network thread — nothing on that side needs the
+        // method name yet.
+        bidi: []u8,
+
         // WS ping frame body (≤125 bytes per spec). Consumer is
         // expected to echo via pong on its thread.
         ping: []u8,
 
-        // Peer-initiated close frame. Consumer is expected to send a
-        // close reply and tear the connection down. The peer's close
-        // body is dropped — historically we always reply CLOSE_NORMAL
-        // (status 1000) regardless of what the peer sent.
+        // A close frame was received from the peer, or the worker decided
+        // to close (BiDi's session.end). Consumer is expected to send the
+        // close frame and tear the connection down. A peer's close body is
+        // dropped — we always send CLOSE_NORMAL (status 1000) regardless of
+        // what the peer sent.
         close: void,
 
         // No allocation; conveys "no more messages will arrive on

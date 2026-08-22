@@ -26,10 +26,10 @@ const screenshot_pdf = @embedFile("screenshot.pdf");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
-const js = @import("../../browser/js/js.zig");
-const URL = @import("../../browser/URL.zig");
-const Frame = @import("../../browser/Frame.zig");
-const Notification = @import("../../Notification.zig");
+const js = @import("../../../browser/js/js.zig");
+const URL = @import("../../../browser/URL.zig");
+const Frame = @import("../../../browser/Frame.zig");
+const Notification = @import("../../../Notification.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;

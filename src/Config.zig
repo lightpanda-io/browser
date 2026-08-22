@@ -350,6 +350,8 @@ const Commands = cli.Builder(.{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "port", .type = u16, .default = 9222 },
             .{ .name = "advertise_host", .type = ?[]const u8 },
+            // Repeatable; one server can speak several on the same port.
+            .{ .name = "protocol", .type = Protocol, .multiple = true },
             .{ .name = "timeout", .type = ?u31 },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
@@ -801,6 +803,19 @@ pub fn adblockLists(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
         else => unreachable,
     } orelse return null;
     return std.mem.splitScalar(u8, paths, ',');
+}
+
+pub const Protocol = enum {
+    cdp,
+    webdriver,
+};
+
+pub fn protocols(self: *const Config) []const Protocol {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.protocol.items.len == 0) &.{.cdp} else opts.protocol.items,
+        .mcp => &.{.cdp},
+        else => unreachable,
+    };
 }
 
 pub fn maxConnections(self: *const Config) u16 {
