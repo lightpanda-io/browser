@@ -48,6 +48,14 @@
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.
+    \\  --protocol <PROTOCOL>
+    \\          Automation protocol to serve. Can be passed multiple times to
+    \\          serve several on the same port.
+    \\          Defaults to cdp.
+    \\          Allowed values:
+    \\              cdp        Chrome DevTools Protocol (WebSocket on /).
+    \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
+    \\                         classic WebDriver session endpoints.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]

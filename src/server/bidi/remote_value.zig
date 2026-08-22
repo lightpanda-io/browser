@@ -484,12 +484,13 @@ pub const Serializer = struct {
         defer self.unsee();
 
         const next_depth = depth + 1;
-        var names = try object.nameIterator();
-        var list: std.ArrayList(Property) = try .initCapacity(self.arena, names.count);
-        while (try names.next()) |name| {
-            const owned = try self.arena.dupe(u8, name);
-            const value = try object.get(owned);
-            list.appendAssumeCapacity(.{ .name = owned, .value = try self.remote(value, next_depth, false) });
+        var it = try object.iterator();
+        var list: std.ArrayList(Property) = try .initCapacity(self.arena, it.count);
+        while (try it.next()) |entry| {
+            list.appendAssumeCapacity(.{
+                .name = try self.arena.dupe(u8, entry.name),
+                .value = try self.remote(entry.value, next_depth, false),
+            });
         }
         return list.items;
     }

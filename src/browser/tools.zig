@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
 const NodeRegistry = @import("../NodeRegistry.zig");
-const LimitedWriter = @import("../LimitedWriter.zig");
 
 const DOMNode = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
