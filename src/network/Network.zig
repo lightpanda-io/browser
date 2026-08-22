@@ -18,13 +18,10 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 const Config = @import("../Config.zig");
 
-const CDP = @import("../cdp/CDP.zig");
-const sys_net = @import("../sys/net.zig");
 const libcurl = @import("../sys/libcurl.zig");
 
 const http = @import("http.zig");
@@ -37,49 +34,10 @@ const Certificates = @import("Certificates.zig");
 const Cache = @import("cache/Cache.zig");
 const AdBlocker = @import("adblock/AdBlocker.zig");
 
-const log = lp.log;
-const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const DoublyLinkedList = std.DoublyLinkedList;
 
 const Network = @This();
-
-const Listener = struct {
-    socket: posix.socket_t,
-    ctx: *anyopaque,
-    onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
-};
-
-// Read side of a CDP WebSocket, registered with the Network thread so
-// bytes are read off the socket from here and dispatched into the CDP
-// layer via direct method calls on `cdp`. Network never sends on the
-// socket — the worker is the sole writer. After registerCdp returns,
-// the worker must not call posix.read on this socket directly.
-// unregisterCdp is synchronous: it blocks until Network confirms the
-// link has been dropped from its poll set and won't touch it again.
-pub const CdpLink = struct {
-    cdp: *CDP,
-    state: State,
-    socket: posix.socket_t,
-    // The worker's HttpClient.Handles (by value — it's one pointer
-    // wide). Network calls handles.wakeup() to unblock the worker
-    // from curl_multi_poll whenever it pushes to the worker's inbox.
-    handles: http.Handles,
-    node: DoublyLinkedList.Node = .{},
-
-    pub const State = enum {
-        live,
-        // Worker called unregisterCdp; Network will drop the link on
-        // its next loop iteration and signal cdp_unregister.
-        unregistering,
-        // Network has dropped the link from its poll set. The worker
-        // can safely free anything the link's callbacks closed over.
-        removed,
-    };
-};
-
-// Number of fixed pollfds entries (wakeup pipe + listener).
-const PSEUDO_POLLFDS = 2;
 
 cache: Cache,
 allocator: Allocator,
@@ -88,8 +46,6 @@ robot_store: RobotStore,
 web_bot_auth: ?WebBotAuth,
 rate_limiter: ?RateLimiter,
 certificates: Certificates,
-/// Hostname dictionaries built from `--adblock-lists`. Parsed once here and
-/// never mutated afterwards, so every HttpClient can share this one copy.
 adblocker: ?AdBlocker,
 
 connections: []http.Connection,
@@ -100,40 +56,6 @@ ws_pool: std.heap.MemoryPool(http.Connection),
 ws_count: usize = 0,
 ws_max: u8,
 ws_mutex: std.Io.Mutex = .init,
-
-pollfds: []posix.pollfd,
-listener: ?Listener = null,
-accept: std.atomic.Value(bool) = .init(true),
-
-// Wakeup pipe: workers write to [1], main thread polls [0]
-wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
-
-shutdown: std.atomic.Value(bool) = .init(false),
-
-// Registered CDP read endpoints. Producer-side (the worker doing
-// register/unregister) and consumer-side (this thread's run loop) are
-// serialized by cdp_mutex. cdp_unregister signals when a link
-// transitions to .removed so unregisterCdp can return.
-cdp_links: DoublyLinkedList = .{},
-cdp_mutex: std.Io.Mutex = .init,
-cdp_unregister: std.Io.Condition = .init,
-// Per-iteration snapshot of CdpLinks whose sockets are in pollfds.
-// Sized at maxConnections at init time so we never allocate inside
-// run(). Parallel to pollfds[cdp_start..cdp_start + cdp_poll_count].
-// Persists across iterations; only rebuilt when `cdp_dirty` is set.
-cdp_poll_snapshot: []?*CdpLink,
-cdp_poll_count: usize = 0,
-
-// Set whenever the cdp_links list changes (register / unregister /
-// natural drop). prepareCdpPollFds rebuilds the snapshot only when
-// this is true; idle iterations skip the rebuild. Network run() ticks
-// hundreds of times per second, and the link set is stable between
-// connection lifecycle events, so the steady-state cost of the CDP
-// poll prep is one mutex acquire + one bool read.
-cdp_dirty: bool = false,
-
-// Location in pollfds where cdp sockets start
-cdp_start: usize,
 
 /// Optional IP filter for blocking requests to private/internal networks (--block-private-networks).
 ip_filter: ?*IpFilter = null,
@@ -146,23 +68,6 @@ pub fn init(app: *App) !Network {
 
     const config = app.config;
     const allocator = app.allocator;
-
-    const pipe = try sys_net.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
-
-    // pollfds layout:
-    //   [0]                                  wakeup pipe
-    //   [1]                                  listener
-    //   [PSEUDO_POLLFDS .. + max_cdp]        CDP socket fds
-    const max_cdp = config.maxConnections();
-    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + max_cdp);
-    errdefer allocator.free(pollfds);
-
-    const cdp_poll_snapshot = try allocator.alloc(?*CdpLink, max_cdp);
-    errdefer allocator.free(cdp_poll_snapshot);
-    @memset(cdp_poll_snapshot, null);
-
-    @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-    pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
 
     const certificates = try Certificates.init(allocator, config);
     errdefer certificates.deinit();
@@ -212,11 +117,6 @@ pub fn init(app: *App) !Network {
         .allocator = allocator,
         .certificates = certificates,
 
-        .pollfds = pollfds,
-        .wakeup_pipe = pipe,
-        .cdp_poll_snapshot = cdp_poll_snapshot,
-        .cdp_start = PSEUDO_POLLFDS,
-
         .available = available,
         .connections = connections,
 
@@ -234,16 +134,6 @@ pub fn init(app: *App) !Network {
 }
 
 pub fn deinit(self: *Network) void {
-    for (&self.wakeup_pipe) |*fd| {
-        if (fd.* >= 0) {
-            _ = std.c.close(fd.*);
-            fd.* = -1;
-        }
-    }
-
-    self.allocator.free(self.pollfds);
-    self.allocator.free(self.cdp_poll_snapshot);
-
     self.certificates.deinit();
 
     for (self.connections) |*conn| {
@@ -271,380 +161,6 @@ pub fn deinit(self: *Network) void {
     }
 
     libcurl.curl_global_cleanup();
-}
-
-pub fn bind(
-    self: *Network,
-    address: *sys_net.IpAddress,
-    ctx: *anyopaque,
-    on_accept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
-) !void {
-    if (self.listener != null) return error.TooManyListeners;
-
-    self.accept.store(true, .release);
-
-    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
-    const listener = try sys_net.socket(sys_net.family(address), flags, posix.IPPROTO.TCP);
-    errdefer _ = std.c.close(listener);
-
-    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    if (@hasDecl(posix.TCP, "NODELAY")) {
-        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-    }
-
-    const sa = sys_net.sockaddrFromAddress(address);
-    try sys_net.bind(listener, sa.ptr(), sa.len);
-    try sys_net.listen(listener, self.config.maxPendingConnections());
-
-    // When the caller requests port 0, the OS assigns an ephemeral port; read
-    // the actual bound address back so callers (e.g. logging) see the real port.
-    var bound: posix.sockaddr.storage = undefined;
-    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    try sys_net.getsockname(listener, @ptrCast(&bound), &bound_len);
-    address.* = sys_net.addressFromSockaddr(@ptrCast(&bound));
-
-    self.listener = .{
-        .socket = listener,
-        .ctx = ctx,
-        .onAccept = on_accept,
-    };
-    self.pollfds[1] = .{
-        .fd = listener,
-        .events = posix.POLL.IN,
-        .revents = 0,
-    };
-}
-
-pub fn unbind(self: *Network) void {
-    self.accept.store(false, .release);
-    self.wakeupPoll();
-}
-
-// Hand a CDP WebSocket's read side over to the main network thread. The caller
-// owns the link and must keep it alive until unregisterCdp is called.
-// The caller must not read from the socket.
-pub fn registerCdp(self: *Network, link: *CdpLink) void {
-    self.cdp_mutex.lockUncancelable(lp.io);
-    self.cdp_links.append(&link.node);
-    self.cdp_dirty = true;
-    self.cdp_mutex.unlock(lp.io);
-    self.wakeupPoll();
-}
-
-// Synchronous teardown. Blocks the caller until this thread has
-// dropped the link from its poll set and won't invoke any of the
-// link's callbacks. Safe to call after Network has already dropped
-// the link unsolicited (state == .removed) — returns immediately in
-// that case.
-pub fn unregisterCdp(self: *Network, link: *CdpLink) void {
-    self.cdp_mutex.lockUncancelable(lp.io);
-    defer self.cdp_mutex.unlock(lp.io);
-    if (link.state == .live) {
-        link.state = .unregistering;
-        self.cdp_dirty = true;
-        self.wakeupPoll();
-    }
-
-    while (link.state != .removed) {
-        // condition variable, waiting for a signal
-        self.cdp_unregister.waitUncancelable(lp.io, &self.cdp_mutex);
-    }
-}
-
-const DropCdpOpts = struct {
-    // on_disconnect is fired iff `notify` is true. false when the worker already
-    // knows the link is dead.
-    notify: bool,
-
-    // Set when we know the peer is dead. Can help unblock a blocked worker's send()
-    shutdown_socket: bool = false,
-};
-
-// Drop a link from the poll set. Caller must hold cdp_mutex.
-fn dropCdp(self: *Network, link: *CdpLink, err: ?anyerror, opts: DropCdpOpts) void {
-    self.cdp_links.remove(&link.node);
-    link.state = .removed;
-    self.cdp_dirty = true;
-
-    if (opts.shutdown_socket) {
-        sys_net.shutdown(link.socket, .both) catch {};
-    }
-
-    if (opts.notify) {
-        link.cdp.terminateFromNetwork();
-
-        // notify=true means the worker hasn't been told yet — push the
-        // disconnect into the inbox and break it out of curl_multi_poll.
-        // notify=false paths have already woken the worker (close frame
-        // case) or are about to be unblocked via cdp_unregister.broadcast
-        // (unregister case); no extra wakeup needed.
-        link.cdp.onLinkDisconnect(err);
-        link.handles.wakeup() catch |e| {
-            lp.log.warn(.cdp, "CDP link wakeup", .{ .err = e });
-        };
-    }
-}
-
-// Build the CDP portion of pollfds and snapshot the matching *CdpLink
-// pointers so we can correlate revents after poll() returns. Called
-// before poll, under cdp_mutex.
-fn prepareCdpPollFds(self: *Network) void {
-    const cdp_start = self.cdp_start;
-
-    self.cdp_mutex.lockUncancelable(lp.io);
-    defer self.cdp_mutex.unlock(lp.io);
-
-    // Idle fast-path: link set unchanged since last rebuild, so the
-    // snapshot + pollfds entries from the previous iteration are still
-    // correct. Kernel will overwrite `revents` in the next poll() call.
-    if (!self.cdp_dirty) {
-        return;
-    }
-    self.cdp_dirty = false;
-
-    @memset(self.pollfds[cdp_start..], .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var i: usize = 0;
-    var it = self.cdp_links.first;
-    while (it) |node| : (it = node.next) {
-        lp.assert(i < self.cdp_poll_snapshot.len, "CDP poll snapshot overflow", .{ .i = i, .len = self.cdp_poll_snapshot.len });
-        const link: *CdpLink = @fieldParentPtr("node", node);
-        if (link.state != .live) {
-            // Will be handled in processCdpEvents; don't poll its fd.
-            continue;
-        }
-
-        self.pollfds[cdp_start + i] = .{
-            .fd = link.socket,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-        self.cdp_poll_snapshot[i] = link;
-        i += 1;
-    }
-    self.cdp_poll_count = i;
-}
-
-// Per-iteration CDP handling: process pending unregistrations, then
-// process revents on each polled link. Called after poll().
-fn processCdpEvents(self: *Network) void {
-    var any_removed = false;
-    const cdp_start = self.cdp_start;
-
-    self.cdp_mutex.lockUncancelable(lp.io);
-    defer self.cdp_mutex.unlock(lp.io);
-
-    // First pass: pending unregister requests.
-    var it = self.cdp_links.first;
-    while (it) |node| {
-        const next = node.next;
-        const link: *CdpLink = @fieldParentPtr("node", node);
-        if (link.state == .unregistering) {
-            self.dropCdp(link, null, .{ .notify = false });
-            any_removed = true;
-        }
-        it = next;
-    }
-
-    // Second pass: revents on the snapshot. Skip links the first pass
-    // (or a prior natural drop) has already removed.
-    for (self.cdp_poll_snapshot[0..self.cdp_poll_count], 0..) |link_opt, i| {
-        const link = link_opt orelse continue;
-        if (link.state != .live) {
-            continue;
-        }
-        const pfd = self.pollfds[cdp_start + i];
-        if (pfd.revents == 0) {
-            continue;
-        }
-
-        const fatal_events: i16 = comptime @intCast(posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL);
-        if (pfd.revents & fatal_events != 0) {
-            self.dropCdp(link, null, .{ .notify = true, .shutdown_socket = true });
-            any_removed = true;
-            continue;
-        }
-
-        if (pfd.revents & posix.POLL.IN == 0) {
-            continue;
-        }
-
-        var buf: [16 * 1024]u8 = undefined;
-        const n = posix.read(link.socket, &buf) catch |err| switch (err) {
-            error.WouldBlock => continue,
-            else => {
-                lp.log.warn(.cdp, "CDP read", .{ .err = err });
-                self.dropCdp(link, err, .{ .notify = true, .shutdown_socket = true });
-                any_removed = true;
-                continue;
-            },
-        };
-
-        if (n == 0) {
-            // peer EOF
-            self.dropCdp(link, null, .{ .notify = true, .shutdown_socket = true });
-            any_removed = true;
-            continue;
-        }
-
-        const keep = link.cdp.onData(buf[0..n]) catch |err| {
-            // Fatal frame/feed error. Whatever messages on_bytes
-            // managed to push are still in the inbox; the failing
-            // frame was NOT pushed, and the worker has no way to
-            // know it should exit. Drop with notify=true so
-            // on_disconnect surfaces a .disconnect into the inbox.
-            // dropCdp wakes the worker.
-            lp.log.info(.cdp, "CDP onData", .{ .err = err });
-            self.dropCdp(link, err, .{ .notify = true });
-            any_removed = true;
-            continue;
-        };
-
-        // on_bytes succeeded — wake the worker so it observes anything
-        // new in the inbox (data / ping / close).
-        link.handles.wakeup() catch |err| {
-            lp.log.warn(.cdp, "CDP link wakeup", .{ .err = err });
-        };
-
-        if (!keep) {
-            // Close frame: the handler already pushed .close. Worker's
-            // drainInbox will call on_disconnect itself after replying,
-            // so we drop without re-notifying.
-            self.dropCdp(link, null, .{ .notify = false });
-            any_removed = true;
-        }
-    }
-
-    if (any_removed) {
-        self.cdp_unregister.broadcast(lp.io);
-    }
-}
-
-// On shutdown, force-disconnect every still-live CDP link. Each link's
-// worker thread blocks in curl_multi_poll and is woken ONLY by this
-// (Network) thread via dropCdp -> handles.wakeup(). If the run loop
-// exits with links still live, those workers never wake and
-// Server.deinit() spins on active_threads forever (issue #2510).
-// Mirrors the peer-EOF path in processCdpEvents: dropCdp(notify=true)
-// pushes a .disconnect into the worker's inbox and wakes it, so
-// cdp.tick() returns false and the worker exits.
-fn shutdownCdpLinks(self: *Network) void {
-    self.cdp_mutex.lockUncancelable(lp.io);
-    defer self.cdp_mutex.unlock(lp.io);
-
-    var it = self.cdp_links.first;
-    while (it) |node| {
-        it = node.next;
-        const link: *CdpLink = @fieldParentPtr("node", node);
-        if (link.state == .live) {
-            self.dropCdp(link, null, .{ .notify = true });
-        }
-    }
-
-    self.cdp_unregister.broadcast(lp.io);
-}
-
-pub fn run(self: *Network) void {
-    var drain_buf: [64]u8 = undefined;
-
-    const poll_fd = &self.pollfds[0];
-    const listen_fd = &self.pollfds[1];
-
-    // Receiving a shutdown command does not terminate existing connections: we
-    // stop accepting new ones but leave in-flight requests to external code to
-    // terminate. This loop only services the listener and the CDP read sockets;
-    // page fetches run on per-worker HttpClient multis and telemetry on its own
-    // thread, so nothing here drives libcurl.
-    while (true) {
-        if (self.listener != null and !self.accept.load(.acquire)) {
-            _ = std.c.close(self.listener.?.socket);
-            self.listener = null;
-            self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
-        }
-
-        self.prepareCdpPollFds();
-
-        // wait until we get a CDP message or a signal on the wakeup pipe
-        _ = posix.poll(self.pollfds, -1) catch |err| {
-            lp.log.err(.app, "poll", .{ .err = err });
-            continue;
-        };
-
-        // check wakeup pipe
-        if (poll_fd.revents != 0) {
-            poll_fd.revents = 0;
-            while (true)
-                _ = posix.read(self.wakeup_pipe[0], &drain_buf) catch break;
-        }
-
-        // accept new connections
-        if (listen_fd.revents != 0) {
-            listen_fd.revents = 0;
-            self.acceptConnections();
-        }
-
-        self.processCdpEvents();
-
-        if (self.shutdown.load(.acquire)) {
-            // Drain any live CDP links so their workers can exit (issue #2510),
-            // then stop. Page fetches and telemetry don't run on this loop, so
-            // there is nothing else to flush here.
-            self.shutdownCdpLinks();
-            break;
-        }
-    }
-
-    if (self.listener) |listener| {
-        sys_net.shutdown(listener.socket, .both) catch |err| blk: {
-            if (err == error.SocketNotConnected and builtin.os.tag != .linux) {
-                // This error is normal/expected on BSD/MacOS. We probably
-                // shouldn't bother calling shutdown at all, but I guess this
-                // is safer.
-                break :blk;
-            }
-            lp.log.warn(.app, "listener shutdown", .{ .err = err });
-        };
-        _ = std.c.close(listener.socket);
-    }
-}
-
-fn wakeupPoll(self: *Network) void {
-    _ = sys_net.write(self.wakeup_pipe[1], &.{1}) catch {};
-}
-
-pub fn stop(self: *Network) void {
-    self.shutdown.store(true, .release);
-    self.wakeupPoll();
-}
-
-fn acceptConnections(self: *Network) void {
-    if (self.shutdown.load(.acquire)) {
-        return;
-    }
-    const listener = self.listener orelse return;
-
-    while (true) {
-        const socket = sys_net.accept(listener.socket, null, null, posix.SOCK.NONBLOCK) catch |err| {
-            switch (err) {
-                error.WouldBlock => break,
-                error.SocketNotListening => {
-                    self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
-                    self.listener = null;
-                    return;
-                },
-                error.ConnectionAborted => {
-                    lp.log.warn(.app, "accept connection aborted", .{});
-                    continue;
-                },
-                else => {
-                    lp.log.err(.app, "accept error", .{ .err = err });
-                    continue;
-                },
-            }
-        };
-
-        listener.onAccept(listener.ctx, socket);
-    }
 }
 
 pub fn getConnection(self: *Network) ?*http.Connection {

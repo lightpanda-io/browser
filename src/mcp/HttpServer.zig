@@ -29,6 +29,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const builtin = @import("builtin");
 
 const App = @import("../App.zig");
 const sys_net = @import("../sys/net.zig");
@@ -126,7 +127,12 @@ app: *App,
 
 queue: Queue = .{},
 
-// Registration happens in onAccept — the same (network) thread deinit runs
+// Blocking listener owned by run(); -1 until bound. stop() unblocks the
+// accept from another thread.
+listener: posix.socket_t = -1,
+shutting_down: std.atomic.Value(bool) = .init(false),
+
+// Registration happens in onAccept — the same (accept) thread deinit runs
 // on — so a connection is always counted and its socket registered before
 // deinit can observe either.
 active_conns: std.atomic.Value(u32) = .init(0),
@@ -180,30 +186,60 @@ pub fn deinit(self: *HttpServer) void {
     self.allocator.destroy(self);
 }
 
-/// Accept MCP-over-HTTP connections until the network loop is stopped
-/// (e.g. by the signal handler). Reuses the shared accept infrastructure;
-/// blocks the calling thread in `Network.run`.
+/// Accept MCP-over-HTTP connections until stop() (e.g. from the signal
+/// handler). Blocks the calling thread; each accepted connection is served
+/// by its own thread doing blocking IO.
 pub fn run(self: *HttpServer, address: sys_net.IpAddress) !void {
-    var bound = address;
-    try self.app.network.bind(&bound, self, onAccept);
-    log.note(.mcp, "mcp http server running", .{ .address = bound });
-    self.app.network.run();
+    const listener = try sys_net.socket(sys_net.family(&address), posix.SOCK.STREAM | posix.SOCK.CLOEXEC, posix.IPPROTO.TCP);
+    errdefer _ = std.c.close(listener);
+
+    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
+
+    const sa = sys_net.sockaddrFromAddress(&address);
+    try sys_net.bind(listener, sa.ptr(), sa.len);
+    try sys_net.listen(listener, self.app.config.maxPendingConnections());
+
+    // --port 0 asks the OS for an ephemeral port; log the one we actually got.
+    var bound: posix.sockaddr.storage = undefined;
+    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+    try sys_net.getsockname(listener, @ptrCast(&bound), &bound_len);
+    log.note(.mcp, "mcp http server running", .{ .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) });
+
+    self.listener = listener;
+    // On non-Linux stop() closes the listener itself to unblock accept.
+    defer if (builtin.os.tag == .linux) {
+        _ = std.c.close(listener);
+    };
+
+    while (!self.shutting_down.load(.acquire)) {
+        const socket = sys_net.accept(listener, null, null, 0) catch |err| {
+            if (self.shutting_down.load(.acquire)) {
+                return;
+            }
+            switch (err) {
+                error.ConnectionAborted => log.warn(.mcp, "accept connection aborted", .{}),
+                else => log.err(.mcp, "accept error", .{ .err = err }),
+            }
+            continue;
+        };
+        self.onAccept(socket);
+    }
 }
 
-/// Network hands us a nonblocking accepted socket; each connection is served
-/// by its own thread doing blocking IO, so we clear O_NONBLOCK first.
-fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
-    const self: *HttpServer = @ptrCast(@alignCast(ctx));
+/// Make run() return. Linux wakes a blocked accept() on shutdown(); BSD/macOS
+/// only on close(), in which case run() must not close it again.
+pub fn stop(self: *HttpServer) void {
+    self.shutting_down.store(true, .release);
+    switch (builtin.os.tag) {
+        .linux => sys_net.shutdown(self.listener, .recv) catch {},
+        else => _ = std.c.close(self.listener),
+    }
+}
 
-    const flags = sys_net.fcntl(socket, posix.F.GETFL, 0) catch {
-        _ = std.c.close(socket);
-        return;
-    };
-    _ = sys_net.fcntl(socket, posix.F.SETFL, flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true }))) catch {
-        _ = std.c.close(socket);
-        return;
-    };
-
+fn onAccept(self: *HttpServer, socket: posix.socket_t) void {
     {
         self.conn_mutex.lockUncancelable(lp.io);
         defer self.conn_mutex.unlock(lp.io);

@@ -81,10 +81,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     return app;
 }
 
-pub fn shutdown(self: *const App) bool {
-    return self.network.shutdown.load(.acquire);
-}
-
 pub fn deinit(self: *App) void {
     const allocator = self.allocator;
     // All browsers are gone by now, so the entry list is empty; this just

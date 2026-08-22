@@ -560,7 +560,9 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
-    test_app.network.stop();
+    if (test_cdp_server) |server| {
+        server.shutdown();
+    }
     if (test_cdp_server_thread) |thread| {
         thread.join();
     }
@@ -605,7 +607,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
     };
     wg.finish();
 
-    test_app.network.run();
+    test_cdp_server.?.run();
 }
 
 // /serve-count/ counters; only ever touched from the test HTTP server thread.
