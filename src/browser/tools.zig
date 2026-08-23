@@ -24,6 +24,7 @@ const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
 const exa = zenai.search.exa;
+const keenable = zenai.search.keenable;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
@@ -350,7 +351,7 @@ pub const Tool = enum {
                 ),
             },
             .search => .{
-                .description = "Run a web search and return results as markdown. When BRAVE_API_KEY, TAVILY_API_KEY or EXA_API_KEY is set, queries that search API (in that preference order) and returns a numbered list of {title, url, snippet}. Otherwise (or on API failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
+                .description = "Run a web search and return results as markdown. When BRAVE_API_KEY, TAVILY_API_KEY, EXA_API_KEY or KEENABLE_API_KEY is set, queries that search API (in that preference order) and returns a numbered list of {title, url, snippet}. Otherwise (or on API failure) tries Keenable's keyless endpoint (no credential, rate-limited per client IP), then falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
                 .summary = "Web search, results as markdown",
                 .input_schema = minify(
                     \\{
@@ -982,7 +983,7 @@ pub const SearchParams = struct {
 /// order (each only when its API key is set), then the DuckDuckGo scrape;
 /// an explicit engine is used alone. Only the agent REPL's `/searchEngine`
 /// mutates this.
-pub const SearchEngine = enum { auto, tavily, brave, exa, duckduckgo };
+pub const SearchEngine = enum { auto, tavily, brave, exa, keenable, duckduckgo };
 pub var search_engine: SearchEngine = .auto;
 
 // Ordered by `.auto` preference; the `search` tool description prose must
@@ -992,6 +993,7 @@ const api_engines = .{
         .tag = SearchEngine.brave,
         .env_var = "BRAVE_API_KEY",
         .Client = brave.Client,
+        .init_options = brave.Client.InitOptions{},
         // text_decorations=false: no <strong> markup in model-read snippets.
         .options = brave.types.SearchOptions{ .count = 10, .text_decorations = false },
         .format = formatBraveMarkdown,
@@ -1000,6 +1002,7 @@ const api_engines = .{
         .tag = SearchEngine.tavily,
         .env_var = "TAVILY_API_KEY",
         .Client = tavily.Client,
+        .init_options = tavily.Client.InitOptions{},
         .options = tavily.types.SearchOptions{ .max_results = 10 },
         .format = formatTavilyMarkdown,
     },
@@ -1007,12 +1010,30 @@ const api_engines = .{
         .tag = SearchEngine.exa,
         .env_var = "EXA_API_KEY",
         .Client = exa.Client,
+        .init_options = exa.Client.InitOptions{},
         // highlights: Exa returns no snippet text unless contents is requested;
         // capped at 3 sentences since the default excerpts run long.
         .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = .{ .numSentences = 3 } } },
         .format = formatExaMarkdown,
     },
+    .{
+        .tag = SearchEngine.keenable,
+        .env_var = "KEENABLE_API_KEY",
+        .Client = keenable.Client,
+        .init_options = keenable.Client.InitOptions{ .app_title = "lightpanda" },
+        // snippet_max_length is a hint the API may round up to a word
+        // boundary; 500 keeps ten results within a few KB of context.
+        .options = keenable.types.SearchOptions{ .max_results = 10, .snippet_max_length = 500 },
+        .format = formatKeenableMarkdown,
+    },
 };
+
+/// Engines that also work with no API key (an empty key routes the client
+/// to the provider's public endpoint). `searchExplicit` and the REPL's
+/// `/searchEngine` warning consult this.
+pub fn searchEngineKeyless(engine: SearchEngine) bool {
+    return engine == .keenable;
+}
 
 pub fn searchEnvVar(engine: SearchEngine) ?[:0]const u8 {
     inline for (api_engines) |e| {
@@ -1035,12 +1056,26 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     switch (search_engine) {
         // Any failure (network, non-2xx, parse) falls through to the next
         // engine so a single outage doesn't kill a whole benchmark run.
-        .auto => inline for (api_engines) |engine| {
-            if (std.c.getenv(engine.env_var)) |api_key_z| {
-                if (apiSearch(engine, arena, std.mem.span(api_key_z), args.query)) |markdown_| {
+        .auto => {
+            inline for (api_engines) |engine| {
+                if (std.c.getenv(engine.env_var)) |api_key_z| {
+                    if (apiSearch(engine, arena, std.mem.span(api_key_z), args.query)) |markdown_| {
+                        return .{ .text = markdown_ };
+                    } else |err| {
+                        log.warn(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
+                    }
+                }
+            }
+            // One rung above the DDG scrape: Keenable also answers keyless
+            // (public endpoint, rate-limited per client IP) with the same
+            // structured results as its keyed form. Skipped when its key is
+            // set — the loop above already tried it keyed.
+            const kn = api_engines[comptime engineIndex(.keenable)];
+            if (std.c.getenv(kn.env_var) == null) {
+                if (apiSearch(kn, arena, "", args.query)) |markdown_| {
                     return .{ .text = markdown_ };
                 } else |err| {
-                    log.warn(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
+                    log.warn(.browser, "keenable keyless fallback", .{ .err = err });
                 }
             }
         },
@@ -1064,11 +1099,11 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 /// comes back as an error result — no DDG fallback.
 fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
-    const api_key_z = std.c.getenv(engine.env_var) orelse return .{
+    const api_key: []const u8 = if (std.c.getenv(engine.env_var)) |z| std.mem.span(z) else if (comptime searchEngineKeyless(engine.tag)) "" else return .{
         .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
-    const markdown_ = apiSearch(engine, arena, std.mem.span(api_key_z), query) catch |err| {
+    const markdown_ = apiSearch(engine, arena, api_key, query) catch |err| {
         const msg = std.fmt.allocPrint(arena, label ++ " search failed: {s}", .{@errorName(err)}) catch
             return ToolError.OutOfMemory;
         return .{ .text = msg, .is_error = true };
@@ -1083,7 +1118,7 @@ fn apiSearch(
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: engine.Client = .init(lp.io, arena, api_key, .{});
+    var client: engine.Client = .init(lp.io, arena, api_key, engine.init_options);
     defer client.deinit();
 
     var response = client.search(query, engine.options) catch |err| {
@@ -1133,6 +1168,18 @@ fn formatExaMarkdown(w: *std.Io.Writer, resp: exa.types.SearchResponse) !void {
         const highlights = r.highlights orelse &[_][]const u8{};
         const snippet = if (highlights.len > 0) highlights[0] else "";
         try writeResultItem(w, i, r.title orelse r.url, r.url, snippet);
+    }
+}
+
+fn formatKeenableMarkdown(w: *std.Io.Writer, resp: keenable.types.SearchResponse) !void {
+    if (resp.results.len == 0) {
+        return w.writeAll("No results.");
+    }
+    for (resp.results, 0..) |r, i| {
+        // snippet carries the page text; description (the meta description)
+        // is empty on essentially every result and is only a fallback.
+        const snippet = if (r.snippet.len > 0) r.snippet else r.description;
+        try writeResultItem(w, i, r.title, r.url, snippet);
     }
 }
 
@@ -2484,6 +2531,37 @@ test "formatBraveMarkdown handles empty results" {
     var empty_web: std.Io.Writer.Allocating = .init(aa);
     try formatBraveMarkdown(&empty_web.writer, .{ .web = .{} });
     try std.testing.expectEqualStrings("No results.", empty_web.written());
+}
+
+test "formatKeenableMarkdown reads snippet, falls back to description" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // Real response shape: description present but empty, text in snippet.
+    const resp: keenable.types.SearchResponse = .{
+        .query = "zig",
+        .results = &.{
+            .{ .title = "Zig (programming language)", .url = "https://en.wikipedia.org/wiki/Zig", .snippet = "Zig is a system programming language.", .description = "" },
+            .{ .title = "Zig guide", .url = "https://example.org/zig", .snippet = "", .description = "Meta description only." },
+        },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(aa);
+    try formatKeenableMarkdown(&aw.writer, resp);
+    const md = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, md, "1. **Zig (programming language)**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Zig is a system programming language.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "2. **Zig guide**") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Meta description only.") != null);
+}
+
+test "formatKeenableMarkdown handles empty results" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var aw: std.Io.Writer.Allocating = .init(arena.allocator());
+    try formatKeenableMarkdown(&aw.writer, .{});
+    try std.testing.expectEqualStrings("No results.", aw.written());
 }
 
 test "formatBraveMarkdown flattens newlines in titles and descriptions" {
