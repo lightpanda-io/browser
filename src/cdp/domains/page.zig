@@ -300,24 +300,23 @@ fn navigate(cmd: *CDP.Command) !void {
 
     const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
-    // Fast path: a freshly-created target whose root frame hasn't navigated
-    // yet has nothing to preserve across the HTTP round-trip. Skip the
-    // pending-Page allocation (which would create a V8 context just to
-    // throw the OLD blank one away at commit) and navigate the active
-    // frame in place.
-    if (frame._load_state == .waiting) {
-        return frame.navigate(encoded_url, .{
-            .reason = .address_bar,
-            .cdp_id = cmd.input.id,
-            .kind = .{ .push = null },
-        });
-    }
-
-    try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
+    const opts: Frame.NavigateOpts = .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
-    });
+    };
+
+    if (canNavigateInPlace(bc, frame)) {
+        return frame.navigate(encoded_url, opts);
+    }
+    try session.initiateRootNavigation(frame._frame_id, encoded_url, opts);
+}
+
+// Fast path that allows using the initial about:blank Frame as-is. Only safe
+// when the frame is still waiting for a navigate AND no JS has been run in the
+// instance (for about:blank, that's only possible via an Runtime.* call)
+fn canNavigateInPlace(bc: *const CDP.BrowserContext, frame: *const Frame) bool {
+    return frame._load_state == .waiting and !bc.main_world_touched;
 }
 
 fn doReload(cmd: *CDP.Command) !void {
@@ -433,7 +432,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
         .kind = .{ .traverse = idx },
     };
 
-    if (frame._load_state == .waiting) {
+    if (canNavigateInPlace(bc, frame)) {
         return frame.navigate(url, opts);
     }
 
@@ -536,6 +535,7 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
 
     if (!in_commit) {
         _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+        bc.main_world_touched = false;
     }
 
     for (bc.isolated_worlds.items) |isolated_world| {
@@ -1635,6 +1635,83 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     defer ls.deinit();
     const v = try ls.local.exec("window.location.href === 'about:blank'", null);
     try testing.expect(v.toBool());
+}
+
+// https://github.com/lightpanda-io/browser/issues/3215
+test "cdp.frame: first navigation replaces the bootstrap about:blank global" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // A fresh, attached target sitting on its bootstrap about:blank document.
+    try ctx.processMessage(.{ .id = 69, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 70, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "about:blank", frame.url);
+    }
+
+    // A client runs JS on the blank page before navigating. This must go
+    // through the CDP Runtime domain: that is what marks the bootstrap main
+    // world as touched and disables the in-place navigation fast path.
+    try ctx.processMessage(.{
+        .id = 71,
+        .method = "Runtime.evaluate",
+        .params = .{ .expression = "window.leak = 'set-on-about-blank'; window.leak" },
+        .sessionId = bc.session_id.?,
+    });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "set-on-about-blank" } }, .{ .id = 71 });
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("window.leak === 'set-on-about-blank'", null);
+        try testing.expect(v.toBool());
+    }
+
+    // First real navigation. It must NOT inherit the about:blank global.
+    try ctx.processMessage(.{
+        .id = 72,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" },
+        .sessionId = bc.session_id.?,
+    });
+    try testing.waitForPage(bc);
+
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/cdp/dom1.html"));
+
+    // The leaked global must be gone: the navigation created a fresh global.
+    var ls2: js.Local.Scope = undefined;
+    frame.js.localScope(&ls2);
+    defer ls2.deinit();
+    const v2 = try ls2.local.exec("window.leak === undefined", null);
+    try testing.expect(v2.toBool());
+}
+
+test "cdp.frame: first navigation of a pristine bootstrap about:blank navigates in place" {
+    // Counterpart of the #3215 test: with no client JS on the bootstrap page,
+    // the first Page.navigate keeps the in-place fast path (no pending Page).
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-PRS", .target_id = "TID-PRS-000000".* });
+    bc.session_id = "SID-PRS";
+    _ = try bc.session.createPage();
+    const before = bc.mainFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "about:blank", before.url);
+
+    try ctx.processMessage(.{
+        .id = 73,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" },
+    });
+    try testing.waitForPage(bc);
+
+    const after = bc.mainFrame() orelse unreachable;
+    try testing.expect(before == after);
+    try testing.expect(std.mem.endsWith(u8, after.url, "/cdp/dom1.html"));
 }
 
 test "cdp.frame: anchor click sends Referer matching the originating page" {

@@ -39,10 +39,10 @@ pub const Type = union(enum) {
 };
 
 pub const Data = struct {
+    height: f64 = 0,
+    width: f64 = 0,
     x: f64 = 0,
     y: f64 = 0,
-    width: f64 = 0,
-    height: f64 = 0,
 };
 
 pub fn init(x_: ?f64, y_: ?f64, width_: ?f64, height_: ?f64, exec: *const js.Execution) !*DOMRectReadOnly {

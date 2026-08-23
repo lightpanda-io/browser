@@ -23,6 +23,7 @@ const zenai = @import("zenai");
 const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
+const exa = zenai.search.exa;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
@@ -349,7 +350,7 @@ pub const Tool = enum {
                 ),
             },
             .search => .{
-                .description = "Run a web search and return results as markdown. When BRAVE_API_KEY or TAVILY_API_KEY is set, queries that search API (Brave preferred) and returns a numbered list of {title, url, snippet}. Otherwise (or on API failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
+                .description = "Run a web search and return results as markdown. When BRAVE_API_KEY, TAVILY_API_KEY or EXA_API_KEY is set, queries that search API (in that preference order) and returns a numbered list of {title, url, snippet}. Otherwise (or on API failure) falls back to scraping the DuckDuckGo HTML endpoint — degraded results, may rate-limit on bursty traffic. Prefer this over goto-ing google.com/search directly (Google blocks the browser on User-Agent/TLS). Browser state after this call is unspecified — to interact with a result, use `goto` with its URL; do not assume the browser DOM matches the results page.",
                 .summary = "Web search, results as markdown",
                 .input_schema = minify(
                     \\{
@@ -977,11 +978,55 @@ pub const SearchParams = struct {
     timeout: ?u32 = null,
 };
 
-/// Search backend for `execSearch`. `.auto` tries Brave then Tavily (each
-/// only when its API key is set), then the DuckDuckGo scrape; an explicit
-/// engine is used alone. Only the agent REPL's `/searchEngine` mutates this.
-pub const SearchEngine = enum { auto, tavily, brave, duckduckgo };
+/// Search backend for `execSearch`. `.auto` tries the `api_engines` in
+/// order (each only when its API key is set), then the DuckDuckGo scrape;
+/// an explicit engine is used alone. Only the agent REPL's `/searchEngine`
+/// mutates this.
+pub const SearchEngine = enum { auto, tavily, brave, exa, duckduckgo };
 pub var search_engine: SearchEngine = .auto;
+
+// Ordered by `.auto` preference; the `search` tool description prose must
+// agree with this table.
+const api_engines = .{
+    .{
+        .tag = SearchEngine.brave,
+        .env_var = "BRAVE_API_KEY",
+        .Client = brave.Client,
+        // text_decorations=false: no <strong> markup in model-read snippets.
+        .options = brave.types.SearchOptions{ .count = 10, .text_decorations = false },
+        .format = formatBraveMarkdown,
+    },
+    .{
+        .tag = SearchEngine.tavily,
+        .env_var = "TAVILY_API_KEY",
+        .Client = tavily.Client,
+        .options = tavily.types.SearchOptions{ .max_results = 10 },
+        .format = formatTavilyMarkdown,
+    },
+    .{
+        .tag = SearchEngine.exa,
+        .env_var = "EXA_API_KEY",
+        .Client = exa.Client,
+        // highlights: Exa returns no snippet text unless contents is requested;
+        // capped at 3 sentences since the default excerpts run long.
+        .options = exa.types.SearchOptions{ .numResults = 10, .contents = .{ .highlights = .{ .numSentences = 3 } } },
+        .format = formatExaMarkdown,
+    },
+};
+
+pub fn searchEnvVar(engine: SearchEngine) ?[:0]const u8 {
+    inline for (api_engines) |e| {
+        if (engine == e.tag) return e.env_var;
+    }
+    return null;
+}
+
+fn engineIndex(comptime tag: SearchEngine) usize {
+    inline for (api_engines, 0..) |e, i| {
+        if (e.tag == tag) return i;
+    }
+    @compileError("engine missing from api_engines: " ++ @tagName(tag));
+}
 
 fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
     const args = try parseArgs(SearchParams, arena, arguments);
@@ -990,25 +1035,17 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     switch (search_engine) {
         // Any failure (network, non-2xx, parse) falls through to the next
         // engine so a single outage doesn't kill a whole benchmark run.
-        .auto => {
-            if (std.c.getenv("BRAVE_API_KEY")) |api_key_z| {
-                if (braveSearch(arena, std.mem.span(api_key_z), args.query)) |markdown_| {
+        .auto => inline for (api_engines) |engine| {
+            if (std.c.getenv(engine.env_var)) |api_key_z| {
+                if (apiSearch(engine, arena, std.mem.span(api_key_z), args.query)) |markdown_| {
                     return .{ .text = markdown_ };
                 } else |err| {
-                    log.warn(.browser, "brave fallback", .{ .err = err });
-                }
-            }
-            if (std.c.getenv("TAVILY_API_KEY")) |api_key_z| {
-                if (tavilySearch(arena, std.mem.span(api_key_z), args.query)) |markdown_| {
-                    return .{ .text = markdown_ };
-                } else |err| {
-                    log.warn(.browser, "tavily fallback", .{ .err = err });
+                    log.warn(.browser, @tagName(engine.tag) ++ " fallback", .{ .err = err });
                 }
             }
         },
-        .tavily => return searchExplicit(arena, "tavily", "TAVILY_API_KEY", tavilySearch, args.query),
-        .brave => return searchExplicit(arena, "brave", "BRAVE_API_KEY", braveSearch, args.query),
         .duckduckgo => {},
+        inline else => |tag| return searchExplicit(arena, api_engines[comptime engineIndex(tag)], args.query),
     }
 
     const encoded = lp.URL.percentEncodeSegment(arena, args.query, .component) catch return ToolError.OutOfMemory;
@@ -1025,18 +1062,13 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 
 /// Search with an explicitly selected engine: a missing key or a failed call
 /// comes back as an error result — no DDG fallback.
-fn searchExplicit(
-    arena: std.mem.Allocator,
-    comptime label: []const u8,
-    comptime env_var: [:0]const u8,
-    searchFn: anytype,
-    query: []const u8,
-) ToolError!ToolResult {
-    const api_key_z = std.c.getenv(env_var) orelse return .{
-        .text = "web search engine is set to " ++ label ++ " but " ++ env_var ++ " is not set in the environment",
+fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []const u8) ToolError!ToolResult {
+    const label = @tagName(engine.tag);
+    const api_key_z = std.c.getenv(engine.env_var) orelse return .{
+        .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
         .is_error = true,
     };
-    const markdown_ = searchFn(arena, std.mem.span(api_key_z), query) catch |err| {
+    const markdown_ = apiSearch(engine, arena, std.mem.span(api_key_z), query) catch |err| {
         const msg = std.fmt.allocPrint(arena, label ++ " search failed: {s}", .{@errorName(err)}) catch
             return ToolError.OutOfMemory;
         return .{ .text = msg, .is_error = true };
@@ -1044,22 +1076,21 @@ fn searchExplicit(
     return .{ .text = markdown_ };
 }
 
-/// Thin wrapper over `zenai.search.tavily.Client` that handles client
-/// lifetime and renders the structured response as markdown for the agent.
-/// `arena` owns the returned slice. `api_key` is the value of TAVILY_API_KEY.
-fn tavilySearch(
+/// `arena` owns the returned slice.
+fn apiSearch(
+    comptime engine: anytype,
     arena: std.mem.Allocator,
     api_key: []const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: tavily.Client = .init(lp.io, arena, api_key, .{});
+    var client: engine.Client = .init(lp.io, arena, api_key, .{});
     defer client.deinit();
 
-    var response = client.search(query, .{ .max_results = 10 }) catch |err| {
-        if (client.last_error_status) |status| {
-            log.warn(.browser, "tavily non-2xx", .{
+    var response = client.search(query, engine.options) catch |err| {
+        if (client.last_error.status) |status| {
+            log.warn(.browser, @tagName(engine.tag) ++ " non-2xx", .{
                 .status = status,
-                .body = client.last_error_body,
+                .body = client.last_error.body,
             });
         }
         return err;
@@ -1067,7 +1098,7 @@ fn tavilySearch(
     defer response.deinit();
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    try formatTavilyMarkdown(&aw.writer, response.value);
+    try engine.format(&aw.writer, response.value);
     return aw.written();
 }
 
@@ -1084,34 +1115,6 @@ fn formatTavilyMarkdown(w: *std.Io.Writer, resp: tavily.types.SearchResponse) !v
     }
 }
 
-/// Thin wrapper over `zenai.search.brave.Client` that handles client
-/// lifetime and renders the structured response as markdown for the agent.
-/// `arena` owns the returned slice. `api_key` is the value of BRAVE_API_KEY.
-fn braveSearch(
-    arena: std.mem.Allocator,
-    api_key: []const u8,
-    query: []const u8,
-) ![]const u8 {
-    var client: brave.Client = .init(lp.io, arena, api_key, .{});
-    defer client.deinit();
-
-    // text_decorations=false: no <strong> markup in model-read snippets.
-    var response = client.search(query, .{ .count = 10, .text_decorations = false }) catch |err| {
-        if (client.last_error_status) |status| {
-            log.warn(.browser, "brave non-2xx", .{
-                .status = status,
-                .body = client.last_error_body,
-            });
-        }
-        return err;
-    };
-    defer response.deinit();
-
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    try formatBraveMarkdown(&aw.writer, response.value);
-    return aw.written();
-}
-
 fn formatBraveMarkdown(w: *std.Io.Writer, resp: brave.types.SearchResponse) !void {
     const results: []const brave.types.Result = if (resp.web) |web| web.results else &.{};
     if (results.len == 0) {
@@ -1119,6 +1122,17 @@ fn formatBraveMarkdown(w: *std.Io.Writer, resp: brave.types.SearchResponse) !voi
     }
     for (results, 0..) |r, i| {
         try writeResultItem(w, i, r.title, r.url, r.description);
+    }
+}
+
+fn formatExaMarkdown(w: *std.Io.Writer, resp: exa.types.SearchResponse) !void {
+    if (resp.results.len == 0) {
+        return w.writeAll("No results.");
+    }
+    for (resp.results, 0..) |r, i| {
+        const highlights = r.highlights orelse &[_][]const u8{};
+        const snippet = if (highlights.len > 0) highlights[0] else "";
+        try writeResultItem(w, i, r.title orelse r.url, r.url, snippet);
     }
 }
 

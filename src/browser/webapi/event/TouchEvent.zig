@@ -40,8 +40,8 @@ _shift_key: bool = false,
 
 pub const TouchEventOptions = struct {
     altKey: bool = false,
-    metaKey: bool = false,
     ctrlKey: bool = false,
+    metaKey: bool = false,
     shiftKey: bool = false,
 };
 

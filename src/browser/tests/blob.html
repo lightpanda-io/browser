@@ -191,25 +191,25 @@
     testing.expectEqual("application/json", blob.type);
   }
 
-  // MIME is parsed and re-serialized: optional whitespace dropped, essence
-  // and parameter names lowercased, but parameter values preserved as-is.
+  // The type is never parsed as a MIME type: it is only lowercased, so
+  // whitespace and parameters survive verbatim.
   {
     const blob = new Blob([], { type: "text/html; charset=UTF-8" });
-    testing.expectEqual("text/html;charset=UTF-8", blob.type);
+    testing.expectEqual("text/html; charset=utf-8", blob.type);
   }
 
-  // A string that fails to parse as a MIME type yields the empty string.
+  // A string that isn't a MIME type at all is still kept.
   {
     const blob = new Blob([], { type: "invalid" });
-    testing.expectEqual("", blob.type);
+    testing.expectEqual("invalid", blob.type);
   }
 
   {
     const blob = new Blob([], { type: "/" });
-    testing.expectEqual("", blob.type);
+    testing.expectEqual("/", blob.type);
   }
 
-  // Non-ASCII characters cause empty string (not HTTP token code points)
+  // Anything outside U+0020..U+007E empties the type
   {
     const blob = new Blob([], { type: "ý/x" });
     testing.expectEqual("", blob.type);
@@ -265,8 +265,7 @@
     testing.expectEqual("lasymphoniedeséclairs", sliceAllText);
 
     testing.expectEqual(2, sliceCustom.size);
-    // "custom" is not a valid MIME type (no "/"), so the type is empty.
-    testing.expectEqual("", sliceCustom.type);
+    testing.expectEqual("custom", sliceCustom.type);
     testing.expectEqual("ai", sliceCustomText);
 
     testing.expectEqual(8, sliceTail.size);

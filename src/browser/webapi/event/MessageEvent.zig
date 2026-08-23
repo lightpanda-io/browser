@@ -46,10 +46,10 @@ pub const Source = union(enum) {
 
 const MessageEventOptions = struct {
     data: ?Data = null,
-    origin: ?[]const u8 = null,
     lastEventId: ?[]const u8 = null,
-    source: ?Source = null,
+    origin: ?[]const u8 = null,
     ports: []const *MessagePort = &.{},
+    source: ?Source = null,
 };
 
 pub const Data = union(enum) {

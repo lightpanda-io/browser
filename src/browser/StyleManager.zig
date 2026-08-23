@@ -1191,8 +1191,14 @@ const CheckVisibilityOptions = struct {
 // its field max, so a real rule can never pack to all-ones.
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
+// `frame` is the StyleManager's frame, which callers guarantee is el's owner
+// frame (el.ownerFrame) — the map where the materialized style lives.
 fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
-    const style = frame._element_styles.get(el) orelse blk: {
+    if (!el._flags.has_inline_style) {
+        // Neither a style object nor a style attribute; skip both lookups.
+        return null;
+    }
+    const style = el.getStyle(frame) orelse blk: {
         // No JS-set style object and no style attribute -> nothing inline to read.
         if (el.getAttributeSafe(comptime .wrap("style")) == null) return null;
         break :blk el.getOrCreateStyle(frame) catch |err| {

@@ -19,70 +19,31 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Network = @import("network/Network.zig");
 const http = @import("network/http.zig");
+const Certificates = @import("network/Certificates.zig");
 const libcurl = @import("sys/libcurl.zig");
-const crypto = @import("sys/libcrypto.zig");
-const Config = @import("Config.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Sole purpose of this client is to do updates; hence, its very minimal.
-const Updater = @This();
-x509_store: *crypto.X509_STORE,
-config: *const Config,
-
-/// Initializes the update client; meant to be used as singleton.
-pub fn init(allocator: Allocator, config: *const Config) !Updater {
-    Network.globalInit(allocator);
-    errdefer Network.globalDeinit();
-    const x509_store = try Network.prepareX509Store(allocator, config);
-
-    return .{
-        .x509_store = x509_store,
-        .config = config,
-    };
-}
-
-pub fn deinit(self: *Updater) void {
-    Network.globalDeinit();
-    crypto.X509_STORE_free(self.x509_store);
-}
-
 /// Sends running Lightpanda version to remote to get update information.
 /// Outputs directly to given `Writer`.
-pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
-    var conn = try http.Connection.init(self.x509_store, self.config, null);
+pub fn inform(allocator: Allocator, config: *const lp.Config, writer: *std.Io.Writer) !void {
+    const certificates = try Certificates.init(allocator, config);
+    defer certificates.deinit();
+
+    libcurl.curl_global_init(.{ .ssl = true }, null) catch |err| {
+        lp.assert(false, "curl global init", .{ .err = err });
+    };
+    defer libcurl.curl_global_cleanup();
+
+    var conn = try http.Connection.init(certificates, config, null);
     defer conn.deinit();
 
-    const url = std.fmt.comptimePrint("https://telemetry.lightpanda.io/v/{s}", .{lp.build_config.version});
-    // Prepare the request.
-    try conn.setURL(url);
+    try conn.setURL("https://telemetry.lightpanda.io/v/" ++ lp.build_config.version);
     try conn.setGetMode();
     try conn.setFollowLocation(true);
 
     // Wraps everything needed to receive bytes.
-    const ReceiverContext = struct {
-        writer: *std.Io.Writer,
-        err: std.Io.Writer.Error!void = {},
-
-        /// curl -> writer.
-        fn drain(
-            buffer: [*]const u8,
-            buf_count: usize,
-            buf_len: usize,
-            raw_ctx: *anyopaque,
-        ) callconv(.c) usize {
-            const ctx: *@This() = @ptrCast(@alignCast(raw_ctx));
-            const chunk = buffer[0 .. buf_count * buf_len];
-            ctx.writer.writeAll(chunk) catch |err| {
-                ctx.err = err;
-                return 0;
-            };
-
-            return chunk.len;
-        }
-    };
 
     // Set receiver context.
     var ctx = ReceiverContext{ .writer = writer };
@@ -97,3 +58,22 @@ pub fn inform(self: *Updater, writer: *std.Io.Writer) !void {
     _ = status_int;
     return writer.flush();
 }
+
+const ReceiverContext = struct {
+    writer: *std.Io.Writer,
+    err: std.Io.Writer.Error!void = {},
+
+    fn drain(buffer: [*]const u8, buf_count: usize, buf_len: usize, ctx: *anyopaque) callconv(.c) usize {
+        // libcurl only ever sends 1 buffer
+        std.debug.assert(buf_count == 1);
+
+        const self: *ReceiverContext = @ptrCast(@alignCast(ctx));
+        const chunk = buffer[0..buf_len];
+        self.writer.writeAll(chunk) catch |err| {
+            self.err = err;
+            return 0;
+        };
+
+        return buf_len;
+    }
+};

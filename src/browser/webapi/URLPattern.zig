@@ -54,15 +54,15 @@ const component_names = [_][]const u8{
 };
 
 pub const Init = struct {
-    protocol: ?[]const u8 = null,
-    username: ?[]const u8 = null,
-    password: ?[]const u8 = null,
-    hostname: ?[]const u8 = null,
-    port: ?[]const u8 = null,
-    pathname: ?[]const u8 = null,
-    search: ?[]const u8 = null,
-    hash: ?[]const u8 = null,
     baseURL: ?[]const u8 = null,
+    hash: ?[]const u8 = null,
+    hostname: ?[]const u8 = null,
+    password: ?[]const u8 = null,
+    pathname: ?[]const u8 = null,
+    port: ?[]const u8 = null,
+    protocol: ?[]const u8 = null,
+    search: ?[]const u8 = null,
+    username: ?[]const u8 = null,
 };
 
 const Input = union(enum) {

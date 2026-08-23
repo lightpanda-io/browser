@@ -67,7 +67,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     try app.watchdog.start();
     errdefer app.watchdog.deinit();
 
-    app.network = try Network.init(allocator, app, config);
+    app.network = try Network.init(app);
     errdefer app.network.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
@@ -79,10 +79,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer app.arena_pool.deinit();
 
     return app;
-}
-
-pub fn shutdown(self: *const App) bool {
-    return self.network.shutdown.load(.acquire);
 }
 
 pub fn deinit(self: *App) void {

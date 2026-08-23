@@ -168,6 +168,83 @@
 }
 </script>
 
+<script id="recycleTickerLoop">
+{
+  // The recycle variant of the marquee idiom (lseo.com): slide the track with
+  // translateX and, whenever the last card has left the shell on one side,
+  // move it to the other end of the track and offset the translation by its
+  // width so the remaining cards stay put. The loop is bounded only because
+  // the translation is honored: ignore it and each rotation pushes the cards
+  // further out of the shell.
+  const shell = document.createElement('div');
+  const track = document.createElement('div');
+  for (let i = 0; i < 4; i++) {
+    track.appendChild(document.createElement('div'));
+  }
+  shell.appendChild(track);
+  document.body.appendChild(shell);
+
+  const sRect = shell.getBoundingClientRect();
+  const recycle = (x, reverse) => {
+    let guard = 0;
+    while (guard < 50) {
+      const el = reverse ? track.lastElementChild : track.firstElementChild;
+      const r = el.getBoundingClientRect();
+      if (reverse ? r.left < sRect.right : r.right > sRect.left) break;
+      const w = el.offsetWidth;
+      if (reverse) {
+        track.insertBefore(el, track.firstElementChild);
+        x -= w;
+      } else {
+        track.appendChild(el);
+        x += w;
+      }
+      track.style.transform = `translateX(${x}px)`;
+      guard++;
+    }
+    return guard;
+  };
+
+  // Right-to-left: the track has slid 60px; every card is out on the right.
+  track.style.transform = 'translateX(60px)';
+  testing.expectTrue(recycle(60, true) < 50);
+  testing.expectTrue(track.firstElementChild.getBoundingClientRect().left < sRect.right);
+
+  // Left-to-right, from the same shifted state.
+  track.style.transform = 'translateX(-60px)';
+  testing.expectTrue(recycle(-60, false) < 50);
+  testing.expectTrue(track.lastElementChild.getBoundingClientRect().right > sRect.left);
+}
+</script>
+
+<script id="translateX">
+{
+  const shell = document.createElement('div');
+  const track = document.createElement('div');
+  const card = document.createElement('div');
+  track.appendChild(card);
+  shell.appendChild(track);
+  document.body.appendChild(shell);
+
+  // A row starts at its parent's left edge.
+  const base = shell.getBoundingClientRect().x;
+  testing.expectEqual(base, card.getBoundingClientRect().x);
+  testing.expectEqual(base, card.offsetLeft);
+
+  // The X translation of the element and of its ancestors moves it.
+  track.style.transform = 'translateX(-12.5px)';
+  testing.expectEqual(base - 12.5, card.getBoundingClientRect().x);
+  testing.expectEqual(base - 12.5, card.offsetLeft);
+  card.style.transform = 'translate3d(2px, 100px, 0) rotate(45deg) matrix(1, 0, 0, 1, 3, 9)';
+  testing.expectEqual(base - 7.5, card.getBoundingClientRect().x);
+  testing.expectEqual(base - 7.5, card.offsetLeft);
+
+  // Percentages and other units are not resolved.
+  track.style.transform = 'translateX(-100%)';
+  testing.expectEqual(base + 5, card.getBoundingClientRect().x);
+}
+</script>
+
 <script id="computedWidthMarqueeLoop">
 {
   // The getComputedStyle variant of the marquee idiom (inchurch.com.br's

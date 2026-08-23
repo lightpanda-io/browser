@@ -1073,7 +1073,9 @@ fn initSvgElement(frame: *Frame, element: *Element, attribute_iterator: anytype)
 fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !void {
     if (@TypeOf(list) == *Element.Attribute.List or @TypeOf(list) == *const Element.Attribute.List) {
         // from cloneNode
-        return element._attributes.cloneFrom(list, frame);
+        try element._attributes.cloneFrom(list, frame);
+        element.noteStyleAttribute();
+        return;
     }
 
     // from the parser
@@ -1090,6 +1092,7 @@ fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !v
         const name = try parserAttributeName(frame, attr.name);
         try attributes.putNew(name, attr.value.slice(), frame);
     }
+    element.noteStyleAttribute();
 }
 
 // Attributes are keyed by qualified name (no namespace model), so a prefixed

@@ -43,11 +43,22 @@
   const canvas = new OffscreenCanvas(64, 64);
   const promise = canvas.convertToBlob();
   testing.expectEqual(true, promise instanceof Promise);
-  // The promise should resolve to a Blob (even if empty)
+  // The same blank PNG as HTMLCanvasElement.toBlob.
   promise.then(blob => {
     testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(blob.size, 0); // Empty since no rendering
+    testing.expectEqual('image/png', blob.type);
+    testing.expectEqual(67, blob.size);
   });
+}
+</script>
+
+<script id=OffscreenCanvas#convertToBlob_zero_size_rejects>
+{
+  const canvas = new OffscreenCanvas(0, 64);
+  canvas.convertToBlob().then(
+    () => testing.expectEqual('rejected', 'resolved'),
+    (err) => testing.expectEqual('IndexSizeError', err.name),
+  );
 }
 </script>
 

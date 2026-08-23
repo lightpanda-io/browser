@@ -35,10 +35,10 @@ _proto: *AbstractRange,
 // All members are required. The fields are non-optional with no default, so the
 // argument decoder rejects a missing or null member with a TypeError.
 pub const StaticRangeInit = struct {
-    startContainer: *Node,
-    startOffset: u32,
     endContainer: *Node,
     endOffset: u32,
+    startContainer: *Node,
+    startOffset: u32,
 };
 
 pub fn init(opts: StaticRangeInit, frame: *Frame) !*StaticRange {

@@ -23,33 +23,27 @@ const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
-const HTMLDocument = @import("HTMLDocument.zig");
+const Node = @import("Node.zig");
 const Document = @import("Document.zig");
+const HTMLDocument = @import("HTMLDocument.zig");
 
 const DOMParser = @This();
 
-// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
-_pad: bool = false,
+_frame: *Frame,
 
-pub fn init() DOMParser {
-    return .{};
+pub fn init(frame: *Frame) !*DOMParser {
+    return frame._factory.create(DOMParser{ ._frame = frame });
 }
 
 pub fn parseFromString(
-    _: *const DOMParser,
+    self: *const DOMParser,
     html: []const u8,
     mime_type: []const u8,
-    frame: *Frame,
 ) !*Document {
-    const target_mime = std.meta.stringToEnum(enum {
-        @"text/html",
-        @"text/xml",
-        @"application/xml",
-        @"application/xhtml+xml",
-        @"image/svg+xml",
-    }, mime_type) orelse return error.NotSupported;
+    const frame = self._frame;
+    const target_mime = std.meta.stringToEnum(SupportedType, mime_type) orelse return error.TypeError;
 
-    return switch (target_mime) {
+    switch (target_mime) {
         .@"text/html" => {
             const arena = try frame.getArena(.medium, "DOMParser.parseFromString");
             defer arena.release();
@@ -69,6 +63,7 @@ pub fn parseFromString(
             const doc = try frame._factory.document(HTMLDocument{
                 ._proto = undefined,
             });
+            doc.asDocument()._url = frame.url;
 
             var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
             if (normalized.len == 0) {
@@ -89,13 +84,35 @@ pub fn parseFromString(
             return doc.asDocument();
         },
         else => {
-            const doc = (try Frame.parse.xmlDocument(frame, html)) orelse blk: {
-                // Return a document with a <parsererror> element per spec.
-                break :blk (try Frame.parse.xmlDocument(frame, "<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>")).?;
-            };
-            return doc.asDocument();
+            const xml_doc = (try Frame.parse.xmlDocument(frame, html)) orelse try parserErrorDocument(frame);
+            const doc = xml_doc.asDocument();
+            doc._url = frame.url;
+            doc._content_type = @tagName(target_mime);
+            return doc;
         },
-    };
+    }
+}
+
+const SupportedType = enum {
+    @"text/html",
+    @"text/xml",
+    @"application/xml",
+    @"application/xhtml+xml",
+    @"image/svg+xml",
+};
+
+const parsererror_ns = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
+
+// Per spec, a well-formedness error yields a document whose only child is
+// <parsererror> in the Mozilla error namespace.
+fn parserErrorDocument(frame: *Frame) !*Document.XMLDocument {
+    const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
+    const root = try Frame.node_factory.createElementNS(frame, .unknown, "parsererror", null);
+    try frame._element_namespace_uris.put(frame.arena, root.as(Node.Element), parsererror_ns);
+    const text = try Frame.node_factory.createTextNode(frame, "error");
+    _ = try root.appendChild(text, frame);
+    _ = try doc.asNode().appendChild(root, frame);
+    return doc;
 }
 
 pub const JsApi = struct {
@@ -105,7 +122,6 @@ pub const JsApi = struct {
         pub const name = "DOMParser";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const constructor = bridge.constructor(DOMParser.init, .{});
