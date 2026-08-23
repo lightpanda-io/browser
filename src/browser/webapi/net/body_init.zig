@@ -90,10 +90,7 @@ pub const BodyInit = union(enum) {
                 @memcpy(boundary[4..], &hex);
 
                 var buf = std.Io.Writer.Allocating.init(arena);
-                try fd.write(.{
-                    .allocator = arena,
-                    .encoding = .{ .formdata = &boundary },
-                }, &buf.writer);
+                try fd.write(arena, .{ .encoding = .{ .formdata = &boundary } }, &buf.writer);
 
                 const ct = try std.fmt.allocPrint(arena, "multipart/form-data; boundary={s}", .{boundary});
                 return .{
