@@ -586,7 +586,7 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
 
 pub fn httpNavDelay(self: *const Config) ?u32 {
     const ms = switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_delay,
+        inline .serve, .fetch, .mcp, .agent, .embed => |opts| opts.http_nav_delay,
         else => unreachable,
     } orelse return null;
     return if (ms == 0) null else ms;
@@ -594,7 +594,7 @@ pub fn httpNavDelay(self: *const Config) ?u32 {
 
 pub fn httpNavBurst(self: *const Config) u32 {
     const burst = switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_burst,
+        inline .serve, .fetch, .mcp, .agent, .embed => |opts| opts.http_nav_burst,
         else => unreachable,
     } orelse 1;
     return @max(burst, 1);
