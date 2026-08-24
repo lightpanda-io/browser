@@ -43,8 +43,7 @@ pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, fr
 // get the height of the PNG if we were to render it.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
     const prepared = try prepare(arena, node, .{ .width = width }, frame);
-    var discard: std.Io.Writer.Discarding = .init(&.{});
-    return prepared.stream(&discard.writer, true);
+    return prepared.stream(null);
 }
 
 // The DOM walk, done up front so it can fail (allocation) before any output
@@ -69,11 +68,12 @@ pub const Prepared = struct {
     blocks: []const raster.Block,
 
     pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
-        return self.stream(writer, false);
+        return self.stream(writer);
     }
 
-    fn stream(self: *const Prepared, writer: *std.Io.Writer, measure_only: bool) std.Io.Writer.Error!u32 {
-        return raster.run(self.arena, self.blocks, self.opts, writer, measure_only) catch |err| switch (err) {
+    // A null writer only measures.
+    fn stream(self: *const Prepared, writer: ?*std.Io.Writer) std.Io.Writer.Error!u32 {
+        return raster.run(self.arena, self.blocks, self.opts, writer) catch |err| switch (err) {
             // The layout pass fails before any output starts, so this can't
             // hand back a truncated PNG. WriteFailed is the only error
             // jsonStringify's signature can carry, hence the log line.
@@ -98,15 +98,6 @@ pub const Prepared = struct {
     }
 };
 
-const SPAN_BOLD = raster.SPAN_BOLD;
-const SPAN_ITALIC = raster.SPAN_ITALIC;
-const SPAN_UNDERLINE = raster.SPAN_UNDERLINE;
-const SPAN_MONO = raster.SPAN_MONO;
-const SPAN_STRIKE = raster.SPAN_STRIKE;
-const SPAN_HAS_COLOR = raster.SPAN_HAS_COLOR;
-
-const BLOCK_TIGHT = raster.BLOCK_TIGHT;
-
 const LINK_COLOR: u32 = 0x1a0dab;
 const MUTED_COLOR: u32 = 0x6b6b6b;
 
@@ -126,7 +117,6 @@ const Builder = struct {
     text: std.ArrayList(u8) = .empty,
     text_flags: u32 = 0,
     text_color: u32 = 0,
-    has_content: bool = false,
     pending_space: bool = false,
     // Nothing appended since an <a> closed. Adjacent links with no whitespace
     // between them (nav bars) would otherwise fuse into one word.
@@ -166,22 +156,22 @@ const Builder = struct {
     fn currentFlags(self: *const Builder) u32 {
         var flags: u32 = 0;
         if (self.bold > 0) {
-            flags |= SPAN_BOLD;
+            flags |= raster.SPAN_BOLD;
         }
         if (self.italic > 0) {
-            flags |= SPAN_ITALIC;
+            flags |= raster.SPAN_ITALIC;
         }
         if (self.underline > 0 or self.link > 0) {
-            flags |= SPAN_UNDERLINE;
+            flags |= raster.SPAN_UNDERLINE;
         }
         if (self.mono > 0) {
-            flags |= SPAN_MONO;
+            flags |= raster.SPAN_MONO;
         }
         if (self.strike > 0) {
-            flags |= SPAN_STRIKE;
+            flags |= raster.SPAN_STRIKE;
         }
         if (self.link > 0 or self.muted > 0) {
-            flags |= SPAN_HAS_COLOR;
+            flags |= raster.SPAN_HAS_COLOR;
         }
         return flags;
     }
@@ -194,6 +184,10 @@ const Builder = struct {
             return MUTED_COLOR;
         }
         return 0;
+    }
+
+    fn hasContent(self: *const Builder) bool {
+        return self.spans.items.len > 0 or self.text.items.len > 0;
     }
 
     fn openBlock(self: *Builder, kind: raster.Block.Kind, level: u8) Error!void {
@@ -234,7 +228,7 @@ const Builder = struct {
                 .level = self.level,
                 .list_depth = self.list_depth,
                 .quote_depth = self.quote_depth,
-                .flags = if (self.tight > 0) BLOCK_TIGHT else 0,
+                .flags = if (self.tight > 0) raster.BLOCK_TIGHT else 0,
             });
         } else if (self.marker.len > 0) {
             // Empty <li>: keep the marker for whatever block comes next.
@@ -243,7 +237,6 @@ const Builder = struct {
         self.block_open = false;
         self.marker = "";
         self.spans.clearRetainingCapacity();
-        self.has_content = false;
         self.pending_space = false;
         self.after_anchor = false;
     }
@@ -259,12 +252,11 @@ const Builder = struct {
         self.text_flags = flags;
         self.text_color = color;
         try self.text.appendSlice(self.arena, text);
-        self.has_content = true;
         self.after_anchor = false;
     }
 
     fn appendWord(self: *Builder, word: []const u8) Error!void {
-        if (self.pending_space and self.has_content) {
+        if (self.pending_space and self.hasContent()) {
             try self.appendSpace();
         }
         self.pending_space = false;
@@ -276,10 +268,10 @@ const Builder = struct {
     fn appendSpace(self: *Builder) Error!void {
         var flags = self.text_flags & self.currentFlags();
         var color = self.text_color;
-        if (flags & SPAN_HAS_COLOR != 0 and color != self.currentColor()) {
-            flags &= ~SPAN_HAS_COLOR;
+        if (flags & raster.SPAN_HAS_COLOR != 0 and color != self.currentColor()) {
+            flags &= ~raster.SPAN_HAS_COLOR;
         }
-        if (flags & SPAN_HAS_COLOR == 0) color = 0;
+        if (flags & raster.SPAN_HAS_COLOR == 0) color = 0;
 
         if (flags != self.text_flags or color != self.text_color) {
             try self.flushSpan();
@@ -391,8 +383,9 @@ const Builder = struct {
             },
             .br => {
                 if (self.pre_node != null) return self.append("\n");
-                if (!self.has_content) return;
-                // A hard break within the block: parley honors '\n'.
+                if (!self.hasContent()) return;
+                // A hard break within the block: the wrap treats '\n' as a
+                // mandatory break.
                 try self.append("\n");
                 self.pending_space = false;
                 return;
@@ -486,7 +479,7 @@ const Builder = struct {
             },
             .slot => return self.renderSlotContent(el.as(Slot)),
             .td, .th => {
-                if (self.has_content) {
+                if (self.hasContent()) {
                     self.pending_space = true;
                     self.muted += 1;
                     try self.appendWord("|");
@@ -542,120 +535,129 @@ const Builder = struct {
 };
 
 const testing = @import("../testing.zig");
+
+// A frame with `html` parsed under a div; the div is the node to render.
+fn testRoot(html: []const u8) !struct { frame: *Frame, node: *Node } {
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+    return .{ .frame = frame, .node = div.asNode() };
+}
+
+fn testBlocks(html: []const u8) ![]const raster.Block {
+    const root = try testRoot(html);
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = root.frame };
+    try builder.render(root.node);
+    try builder.closeBlock();
+    return builder.blocks.items;
+}
+
+fn spanText(block: raster.Block) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (block.spans) |s| try out.appendSlice(testing.arena_allocator, s.text);
+    return out.items;
+}
+
+fn testPng(html: []const u8, width: u32) ![]const u8 {
+    const root = try testRoot(html);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    _ = try png(testing.arena_allocator, root.node, .{ .width = width }, &aw.writer, root.frame);
+    return aw.written();
+}
+
+/// (width, height) from the IHDR chunk.
+fn pngSize(data: []const u8) struct { u32, u32 } {
+    return .{ std.mem.readInt(u32, data[16..20], .big), std.mem.readInt(u32, data[20..24], .big) };
+}
+
 test "browser.screenshot: png signature and dimensions" {
     defer testing.test_session.closeAllPages();
     const out = try testPng("<h1>Title</h1><p>Hello <b>world</b> <a href='/x'>link</a></p>", 640);
 
     try testing.expectEqual(true, out.len > 100);
     try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
-    // IHDR width/height are big-endian at offsets 16 and 20.
-    try testing.expectEqual(640, std.mem.readInt(u32, out[16..20], .big));
-    const height = std.mem.readInt(u32, out[20..24], .big);
+    const width, const height = pngSize(out);
+    try testing.expectEqual(640, width);
     // Two blocks plus margins.
     try testing.expectEqual(true, height > 60 and height < 200);
 }
 
 test "browser.screenshot: fixed height, clip and scale" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p>");
+    const root = try testRoot("<p>one</p><p>two</p><p>three</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const content_height = try png(testing.arena_allocator, div.asNode(), .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
+    const content_height = try png(testing.arena_allocator, root.node, .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, root.frame);
     try testing.expectEqual(true, content_height > 50);
-    try testing.expectEqual(600, std.mem.readInt(u32, aw.written()[16..20], .big));
-    try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[20..24], .big));
+    try testing.expectEqual(.{ 600, 100 }, pngSize(aw.written()));
 
-    try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, frame));
+    try testing.expectEqual(content_height, try contentHeight(root.frame.call_arena, root.node, 300, root.frame));
 
     aw.clearRetainingCapacity();
-    _ = try png(frame.call_arena, div.asNode(), .{
+    _ = try png(root.frame.call_arena, root.node, .{
         .width = 300,
         .clip = .{ .x = 10, .y = 10, .width = 100, .height = 40 },
-    }, &aw.writer, frame);
-    try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[16..20], .big));
-    try testing.expectEqual(40, std.mem.readInt(u32, aw.written()[20..24], .big));
+    }, &aw.writer, root.frame);
+    try testing.expectEqual(.{ 100, 40 }, pngSize(aw.written()));
 }
 
 test "browser.screenshot: a clip past the viewport extends the strip" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
+    const root = try testRoot("<p>one</p><p>two</p><p>three</p><p>four</p><p>five</p><p>six</p>");
 
-    const full = try contentHeight(testing.arena_allocator, div.asNode(), 300, frame);
+    const full = try contentHeight(testing.arena_allocator, root.node, 300, root.frame);
     try testing.expectEqual(true, full > 100);
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    _ = try png(frame.call_arena, div.asNode(), .{
+    _ = try png(root.frame.call_arena, root.node, .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = @floatFromInt(full) },
-    }, &aw.writer, frame);
-    try testing.expectEqual(300, std.mem.readInt(u32, aw.written()[16..20], .big));
-    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+    }, &aw.writer, root.frame);
+    try testing.expectEqual(.{ 300, full }, pngSize(aw.written()));
 
     // Never past the content, so an absurd probe resolves to the full page
     // instead of a 1e8-tall raster.
     aw.clearRetainingCapacity();
-    _ = try png(testing.arena_allocator, div.asNode(), .{
+    _ = try png(testing.arena_allocator, root.node, .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = 1e8 },
-    }, &aw.writer, frame);
-    try testing.expectEqual(full, std.mem.readInt(u32, aw.written()[20..24], .big));
+    }, &aw.writer, root.frame);
+    _, const height = pngSize(aw.written());
+    try testing.expectEqual(full, height);
 }
 
 test "browser.screenshot: raster is bounded" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+    const root = try testRoot("<p>hello</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 300000, .height = 8 }, &aw.writer, frame);
-    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[16..20], .big));
-    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[20..24], .big));
+    _ = try png(testing.arena_allocator, root.node, .{ .width = 300000, .height = 8 }, &aw.writer, root.frame);
+    try testing.expectEqual(.{ 16384, 8 }, pngSize(aw.written()));
 
     aw.clearRetainingCapacity();
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
-    try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
-    try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
+    _ = try png(testing.arena_allocator, root.node, .{ .width = 8, .height = 100000 }, &aw.writer, root.frame);
+    try testing.expectEqual(.{ 8, 16384 }, pngSize(aw.written()));
 }
 
 test "browser.screenshot: a refused write fails the capture" {
     defer testing.test_session.closeAllPages();
     testing.silenceLog(&.{.browser});
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
+    const root = try testRoot("<p>hello</p>");
 
     // Far too small for the PNG, so the sink refuses partway through. That
     // has to surface as an error and not as a truncated image.
     var buf: [64]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, div.asNode(), .{ .width = 300 }, &w, frame));
+    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, root.node, .{ .width = 300 }, &w, root.frame));
 }
 
 test "browser.screenshot: json streams base64" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
-
-    const prepared = try prepare(testing.arena_allocator, div.asNode(), .{ .width = 200 }, frame);
+    const root = try testRoot("<p>hello</p>");
+    const prepared = try prepare(testing.arena_allocator, root.node, .{ .width = 200 }, root.frame);
 
     var raw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer raw.deinit();
@@ -676,11 +678,7 @@ test "browser.screenshot: json streams base64" {
 
 test "browser.screenshot: block extraction" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+    const blocks = try testBlocks(
         \\<h2> Head  ing </h2>
         \\<p>Some <b>bold <i>both</i></b> text <a href="/l">a link</a><span> tail</span></p>
         \\<ul><li>one</li><li><p>two</p><ol><li>nested</li></ol></li></ul>
@@ -692,110 +690,75 @@ test "browser.screenshot: block extraction" {
         \\<table><tr><th>A</th><td>B</td></tr><tr><td>C</td></tr></table>
         \\<div>   </div>
     );
-
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
-    try builder.render(div.asNode());
-    try builder.closeBlock();
-
-    const blocks = builder.blocks.items;
     try testing.expectEqual(11, blocks.len);
-
-    const S = struct {
-        fn text(b: raster.Block, arena: Allocator) ![]const u8 {
-            var out: std.ArrayList(u8) = .empty;
-            for (b.spans) |s| try out.appendSlice(arena, s.text);
-            return out.items;
-        }
-    };
-    const arena = testing.arena_allocator;
 
     try testing.expectEqual(.heading, blocks[0].kind);
     try testing.expectEqual(2, blocks[0].level);
-    try testing.expectEqual("Head ing", try S.text(blocks[0], arena));
+    try testing.expectEqual("Head ing", try spanText(blocks[0]));
 
     try testing.expectEqual(.paragraph, blocks[1].kind);
-    try testing.expectEqual("Some bold both text a link tail", try S.text(blocks[1], arena));
+    try testing.expectEqual("Some bold both text a link tail", try spanText(blocks[1]));
     try testing.expectEqual(6, blocks[1].spans.len);
     try testing.expectEqual("Some ", blocks[1].spans[0].text);
-    try testing.expectEqual(SPAN_BOLD, blocks[1].spans[1].flags);
+    try testing.expectEqual(raster.SPAN_BOLD, blocks[1].spans[1].flags);
     try testing.expectEqual("bold ", blocks[1].spans[1].text);
-    try testing.expectEqual(SPAN_BOLD | SPAN_ITALIC, blocks[1].spans[2].flags);
+    try testing.expectEqual(raster.SPAN_BOLD | raster.SPAN_ITALIC, blocks[1].spans[2].flags);
     try testing.expectEqual("both", blocks[1].spans[2].text);
     try testing.expectEqual(0, blocks[1].spans[3].flags);
     try testing.expectEqual(" text ", blocks[1].spans[3].text);
-    try testing.expectEqual(SPAN_UNDERLINE | SPAN_HAS_COLOR, blocks[1].spans[4].flags);
+    try testing.expectEqual(raster.SPAN_UNDERLINE | raster.SPAN_HAS_COLOR, blocks[1].spans[4].flags);
     try testing.expectEqual(LINK_COLOR, blocks[1].spans[4].color);
     try testing.expectEqual("a link", blocks[1].spans[4].text);
     try testing.expectEqual(" tail", blocks[1].spans[5].text);
 
-    try testing.expectEqual("one", try S.text(blocks[2], arena));
+    try testing.expectEqual("one", try spanText(blocks[2]));
     try testing.expectEqual(1, blocks[2].list_depth);
     try testing.expectEqual("•", blocks[2].marker);
-    try testing.expectEqual("two", try S.text(blocks[3], arena));
+    try testing.expectEqual("two", try spanText(blocks[3]));
     try testing.expectEqual("•", blocks[3].marker);
-    try testing.expectEqual("nested", try S.text(blocks[4], arena));
+    try testing.expectEqual("nested", try spanText(blocks[4]));
     try testing.expectEqual(2, blocks[4].list_depth);
     try testing.expectEqual("1.", blocks[4].marker);
 
-    try testing.expectEqual("quote", try S.text(blocks[5], arena));
+    try testing.expectEqual("quote", try spanText(blocks[5]));
     try testing.expectEqual(1, blocks[5].quote_depth);
     try testing.expectEqual(0, blocks[5].list_depth);
 
     try testing.expectEqual(.pre, blocks[6].kind);
-    try testing.expectEqual("  keep\n   this", try S.text(blocks[6], arena));
+    try testing.expectEqual("  keep\n   this", try spanText(blocks[6]));
     try testing.expectEqual(.rule, blocks[7].kind);
-    try testing.expectEqual("a picture", try S.text(blocks[8], arena));
-    try testing.expectEqual(SPAN_ITALIC | SPAN_HAS_COLOR, blocks[8].spans[0].flags);
-    try testing.expectEqual("A | B", try S.text(blocks[9], arena));
-    try testing.expectEqual(SPAN_BOLD, blocks[9].spans[0].flags);
-    try testing.expectEqual("C", try S.text(blocks[10], arena));
+    try testing.expectEqual("a picture", try spanText(blocks[8]));
+    try testing.expectEqual(raster.SPAN_ITALIC | raster.SPAN_HAS_COLOR, blocks[8].spans[0].flags);
+    try testing.expectEqual("A | B", try spanText(blocks[9]));
+    try testing.expectEqual(raster.SPAN_BOLD, blocks[9].spans[0].flags);
+    try testing.expectEqual("C", try spanText(blocks[10]));
 }
 
 test "browser.screenshot: adjacent anchors" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
     // Inside <p> (not a layout block) so markdown's standalone rule doesn't
     // apply and the anchors flow inline.
-    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+    const blocks = try testBlocks(
         \\<p><a href="/a">Log In</a><a href="/b">Sign Up</a><b>!</b> see <a href="/c">this</a>.</p>
     );
-
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
-    try builder.render(div.asNode());
-    try builder.closeBlock();
-    const blocks = builder.blocks.items;
     try testing.expectEqual(1, blocks.len);
-    var out: std.ArrayList(u8) = .empty;
-    for (blocks[0].spans) |sp| try out.appendSlice(testing.arena_allocator, sp.text);
-    try testing.expectString("Log In Sign Up! see this.", out.items);
+    try testing.expectString("Log In Sign Up! see this.", try spanText(blocks[0]));
 }
 
 test "browser.screenshot: standalone anchors get their own block" {
     defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+    const blocks = try testBlocks(
         \\<nav><a href="/a">bsky</a><a href="/b">rss</a></nav>
         \\<div><a href="/p"><h3>Post title</h3><span>Aug 04</span></a></div>
         \\<p>inline <a href="/x">link</a> here</p>
     );
-
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame };
-    try builder.render(div.asNode());
-    try builder.closeBlock();
-    const blocks = builder.blocks.items;
     try testing.expectEqual(5, blocks.len);
     try testing.expectString("bsky", blocks[0].spans[0].text);
-    try testing.expectEqual(BLOCK_TIGHT, blocks[0].flags);
+    try testing.expectEqual(raster.BLOCK_TIGHT, blocks[0].flags);
     try testing.expectString("rss", blocks[1].spans[0].text);
     try testing.expectEqual(.heading, blocks[2].kind);
     try testing.expectString("Post title", blocks[2].spans[0].text);
-    try testing.expectEqual(SPAN_UNDERLINE | SPAN_HAS_COLOR, blocks[2].spans[0].flags);
+    try testing.expectEqual(raster.SPAN_UNDERLINE | raster.SPAN_HAS_COLOR, blocks[2].spans[0].flags);
     try testing.expectString("Aug 04", blocks[3].spans[0].text);
     try testing.expectEqual(3, blocks[4].spans.len);
     try testing.expectEqual(0, blocks[4].flags);
@@ -805,8 +768,7 @@ test "browser.screenshot: shadow dom and slots" {
     defer testing.test_session.closeAllPages();
     const frame = try testing.createFrame();
     frame.url = "http://localhost/";
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
+    const div = try frame.window._document.createElement("div", null, frame);
     try div.setHTMLUnsafe(
         \\<x-host><template shadowrootmode="open"><p>shadow <slot></slot></p></template>light</x-host>
     , frame);
@@ -826,17 +788,4 @@ test "browser.screenshot: stacked marks on a later line" {
     // chain is line-relative and used to index with the absolute unit.
     const out = try testPng("<p>first line<br>\xd8\xb4\xd9\x8e\xd8\xaf\xd9\x91\xd9\x8e\xd8\xa9 caf\xc3\xa9 e\xcc\x81</p>", 400);
     try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
-}
-
-fn testPng(html: []const u8, width: u32) ![]const u8 {
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-
-    const doc = frame.window._document;
-    const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = width }, &aw.writer, frame);
-    return aw.written();
 }

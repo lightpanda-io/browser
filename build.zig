@@ -105,11 +105,10 @@ pub fn build(b: *Build) !void {
     lightpanda_module.addImport("lightpanda", lightpanda_module); // allow circular "lightpanda" import
     lightpanda_module.addImport("build_config", opts.createModule());
 
-    // Rasterization is hot in screenshot/raster.zig; keep z2d optimized in
-    // dev builds, like the Rust workspace does for its dependencies.
+    // Rasterization is hot in screenshot/raster.zig.
     const z2d_dep = b.dependency("z2d", .{
         .target = target,
-        .optimize = if (optimize == .Debug) .ReleaseFast else optimize,
+        .optimize = depOptimize(optimize),
     });
     lightpanda_module.addImport("z2d", z2d_dep.module("z2d"));
 
@@ -443,9 +442,15 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) void {
     mod.addImport("curl", translate_c.createModule());
 
     // Deflate is on the screenshot hot path; -O0 zlib is ~10x slower.
-    const zlib_optimize: std.builtin.OptimizeMode = if (mod.optimize.? == .Debug) .ReleaseFast else mod.optimize.?;
-    const zlib = buildZlib(b, target, zlib_optimize, is_tsan);
+    const zlib = buildZlib(b, target, depOptimize(mod.optimize.?), is_tsan);
     curl.root_module.linkLibrary(zlib);
+    mod.linkLibrary(zlib);
+    const zlib_c = b.addTranslateC(.{
+        .root_source_file = b.dependency("zlib", .{}).path("zlib.h"),
+        .target = target,
+        .optimize = mod.optimize.?,
+    });
+    mod.addImport("zlib", zlib_c.createModule());
 
     const brotli = buildBrotli(b, target, mod.optimize.?, is_tsan);
     for (brotli) |lib| curl.root_module.linkLibrary(lib);
@@ -471,6 +476,12 @@ fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opt
         .link_libc = true,
         .sanitize_thread = is_tsan,
     });
+}
+
+/// Dependencies on hot paths stay optimized in dev builds; their own debug
+/// checks are not what a Debug build of lightpanda is for.
+fn depOptimize(optimize: std.builtin.OptimizeMode) std.builtin.OptimizeMode {
+    return if (optimize == .Debug) .ReleaseFast else optimize;
 }
 
 fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {

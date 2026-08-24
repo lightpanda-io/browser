@@ -340,16 +340,16 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
             }
 
             const frame = page.frame();
-            if (opts.dump_mode == .png and frame != null) {
+            if (opts.dump_mode == .png) if (frame) |f| {
                 const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
                 defer arena.release();
 
-                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
-                    .width = frame.?._page.getViewport().width,
-                }, frame.?);
+                const shot = try screenshot.prepare(arena.allocator(), f.window._document.asNode(), .{
+                    .width = f._page.getViewport().width,
+                }, f);
                 try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
                 continue;
-            }
+            };
 
             var aw: std.Io.Writer.Allocating = .init(app.allocator);
             defer aw.deinit();
@@ -382,8 +382,8 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
         .html => try dump.root(frame.window._document, dump_opts, writer, frame),
         .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
         .png => {
-            var arena: std.heap.ArenaAllocator = .init(app.allocator);
-            defer arena.deinit();
+            const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
+            defer arena.release();
             _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
                 .width = frame._page.getViewport().width,
             }, writer, frame);

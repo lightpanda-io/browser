@@ -19,9 +19,9 @@
 //! Text-only page rasterizer behind `Page.captureScreenshot` and
 //! `--dump png`. Lightpanda has no layout engine, so a "screenshot" is the
 //! page's text content flowed into blocks — the same content the markdown
-//! dump produces — word-wrapped here and rasterized by z2d (glyph outlines,
-//! kerning, antialiased fills, PNG encode). Fonts are bundled so output
-//! doesn't depend on the host.
+//! dump produces — word-wrapped here and rasterized with z2d (glyph outlines,
+//! kerning, antialiased fills). Fonts are bundled so output doesn't depend on
+//! the host.
 //!
 //! z2d does no shaping, bidi or line breaking; those come from the ICU that
 //! ships inside V8: Arabic is shaped to presentation forms, lines break at
@@ -30,7 +30,9 @@
 
 const std = @import("std");
 const z2d = @import("z2d");
+const zlib = @import("zlib");
 
+const icu = @import("../../sys/icu.zig");
 const Gpos = @import("gpos.zig");
 
 const Allocator = std.mem.Allocator;
@@ -76,15 +78,16 @@ pub const Block = struct {
 
 pub const Opts = struct {
     width: u32,
+    /// Output height in CSS px; 0 renders the full content height.
     height: u32 = 0,
     clip: ?Clip = null,
     scale: f32 = 1.0,
 
     pub const Clip = struct {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
     };
 };
 
@@ -106,16 +109,7 @@ const MAX_RASTER_DIM: u64 = 16384;
 /// viewport captured full-page at 2x still fits.
 const MAX_RASTER_PIXELS: u64 = 64 << 20;
 
-// DejaVu Sans metrics per 2048 units; ascent and descent are shared by all
-// four bundled faces.
-const ASCENT: f64 = 1901.0 / 2048.0;
-const DESCENT: f64 = 483.0 / 2048.0;
-const UNDERLINE_OFFSET: f64 = -40.0 / 2048.0;
-const UNDERLINE_SIZE: f64 = 90.0 / 2048.0;
-const STRIKE_OFFSET: f64 = 530.0 / 2048.0;
-const STRIKE_SIZE: f64 = 102.0 / 2048.0;
-
-// tan(14°), parley's synthesized-oblique angle for fonts with no italic face.
+// tan(14°): the usual synthesized-oblique angle for fonts with no italic face.
 const ITALIC_SHEAR: f64 = 0.2493;
 
 const FontId = enum(u2) { sans, bold, mono, mono_bold };
@@ -127,49 +121,20 @@ const font_data = [_][]const u8{
     @embedFile("fonts/DejaVuSansMono-Bold.ttf"),
 };
 
-// ICU from V8's archive; symbols carry its major version.
-const icu_version = "77";
-fn icu(comptime name: []const u8, comptime T: type) *const T {
-    return @extern(*const T, .{ .name = name ++ "_" ++ icu_version });
-}
-const UBiDi = opaque {};
-const UBreakIterator = opaque {};
-const ubidi_open = icu("ubidi_open", fn () callconv(.c) ?*UBiDi);
-const ubidi_close = icu("ubidi_close", fn (*UBiDi) callconv(.c) void);
-const ubidi_setPara = icu("ubidi_setPara", fn (*UBiDi, [*]const u16, i32, u8, ?[*]u8, *c_int) callconv(.c) void);
-const ubidi_getParaLevel = icu("ubidi_getParaLevel", fn (*const UBiDi) callconv(.c) u8);
-const ubidi_getLevels = icu("ubidi_getLevels", fn (*UBiDi, *c_int) callconv(.c) ?[*]const u8);
-const ubidi_reorderVisual = icu("ubidi_reorderVisual", fn ([*]const u8, i32, [*]i32) callconv(.c) void);
-const u_shapeArabic = icu("u_shapeArabic", fn ([*]const u16, i32, [*]u16, i32, u32, *c_int) callconv(.c) i32);
-const u_charMirror = icu("u_charMirror", fn (i32) callconv(.c) i32);
-const ubrk_open = icu("ubrk_open", fn (c_int, ?[*:0]const u8, ?[*]const u16, i32, *c_int) callconv(.c) ?*UBreakIterator);
-const ubrk_close = icu("ubrk_close", fn (*UBreakIterator) callconv(.c) void);
-const ubrk_next = icu("ubrk_next", fn (*UBreakIterator) callconv(.c) i32);
-const ubrk_getRuleStatus = icu("ubrk_getRuleStatus", fn (*UBreakIterator) callconv(.c) i32);
-
-const UBIDI_DEFAULT_LTR: u8 = 0xfe;
-const UBRK_LINE: c_int = 2;
-const UBRK_DONE: i32 = -1;
-const UBRK_LINE_HARD: i32 = 100;
-const U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED: u32 = 0x18;
-
 /// Renders `blocks` to a PNG streamed into `writer` and returns the full-page
-/// content height in CSS px. With `measure_only` nothing is rasterized or
-/// written; only the height comes back.
-pub fn run(arena: Allocator, blocks: []const Block, opts: Opts, writer: *std.Io.Writer, measure_only: bool) Error!u32 {
-    var r: Renderer = .{ .arena = arena };
-    for (font_data, 0..) |data, i| {
-        r.fonts[i] = z2d.Font.loadBuffer(data) catch return error.RenderFailed;
-        r.gpos[i] = Gpos.init(arena, data) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.MalformedFont => return error.RenderFailed,
-        };
-    }
-    return r.render(blocks, opts, writer, measure_only) catch |err| switch (err) {
+/// content height in CSS px. With a null writer only the layout runs and the
+/// height comes back.
+pub fn run(arena: Allocator, blocks: []const Block, opts: Opts, writer: ?*std.Io.Writer) Error!u32 {
+    return render(arena, blocks, opts, writer) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.WriteFailed => error.WriteFailed,
         else => error.RenderFailed,
     };
+}
+
+fn render(arena: Allocator, blocks: []const Block, opts: Opts, writer: ?*std.Io.Writer) !u32 {
+    var r: Renderer = try .init(arena);
+    return r.render(blocks, opts, writer);
 }
 
 const Style = struct {
@@ -199,30 +164,86 @@ const Seg = struct {
     width: f64,
 };
 
-const Line = struct {
-    segs: []const Seg,
-};
-
 const PlacedBlock = struct {
-    kind: Block.Kind,
+    block: *const Block,
     /// Content origin in CSS px.
     x: f64,
     y: f64,
     /// Line box height in CSS px.
-    line_box: f64,
+    line_box: f64 = 0,
     /// Ascent offset of the baseline within a line box.
-    baseline: f64,
-    lines: []const Line,
-    text_height: f64,
-    marker: ?Seg,
-    quote_bars: u8,
-    quote_x: f64,
+    baseline: f64 = 0,
+    lines: []const []const Seg = &.{},
+    marker: ?Seg = null,
+
+    fn textHeight(p: *const PlacedBlock) f64 {
+        return @as(f64, @floatFromInt(p.lines.len)) * p.line_box;
+    }
+};
+
+// A bundled face with the metrics the layout needs, as fractions of an em.
+const Face = struct {
+    font: z2d.Font,
+    gpos: Gpos,
+    ascent: f64,
+    descent: f64,
+    underline_position: f64,
+    underline_thickness: f64,
+    strikeout_position: f64,
+    strikeout_size: f64,
+
+    fn init(arena: Allocator, data: []const u8) !Face {
+        const gpos: Gpos = try .init(arena, data);
+        const m = try gpos.readMetrics();
+        const upm: f64 = @floatFromInt(m.units_per_em);
+        return .{
+            .font = try z2d.Font.loadBuffer(data),
+            .gpos = gpos,
+            .ascent = @as(f64, @floatFromInt(m.ascent)) / upm,
+            .descent = @as(f64, @floatFromInt(-m.descent)) / upm,
+            .underline_position = @as(f64, @floatFromInt(m.underline_position)) / upm,
+            .underline_thickness = @as(f64, @floatFromInt(m.underline_thickness)) / upm,
+            .strikeout_position = @as(f64, @floatFromInt(m.strikeout_position)) / upm,
+            .strikeout_size = @as(f64, @floatFromInt(m.strikeout_size)) / upm,
+        };
+    }
+
+    /// Device px per font unit at `size` px.
+    fn unitScale(f: *const Face, size: f64) f64 {
+        return size / @as(f64, @floatFromInt(f.font.meta.units_per_em));
+    }
+};
+
+// A mark's GPOS anchor offset (font units) to its parent: the cluster's
+// base, or the previous attached mark when stacking.
+const Attach = struct {
+    parent: usize,
+    root: usize,
+    dx: i16,
+    dy: i16,
+};
+
+// One block's text in logical order, as UTF-16 units with a style index each,
+// plus everything the per-line pass needs.
+const Para = struct {
+    text: []const u16,
+    style_of: []const u16,
+    styles: []const Style,
+    levels: []const u8 = &.{},
+    attach: []const ?Attach = &.{},
+    /// For a base unit, the index after the last mark that follows it.
+    cluster_end: []const usize = &.{},
+    rtl: bool = false,
+    /// Scratch for visualLine, sized to the text: visual order of a line,
+    /// and resolved offsets of emitted marks for stacking.
+    index_map: []i32 = &.{},
+    mark_dx: []f64 = &.{},
+    mark_dy: []f64 = &.{},
 };
 
 const Renderer = struct {
     arena: Allocator,
-    fonts: [4]z2d.Font = undefined,
-    gpos: [4]Gpos = undefined,
+    faces: [font_data.len]Face,
     // Glyph metrics, outlines and kern pairs are all backed by seek-and-read
     // parses of the font tables; page-lifetime caches keep the cost at one
     // parse per unique glyph instead of one per occurrence.
@@ -230,75 +251,82 @@ const Renderer = struct {
     outlines: std.AutoHashMapUnmanaged(u32, z2d.Glyph.Outline) = .empty,
     kerns: std.AutoHashMapUnmanaged(u64, i16) = .empty,
     masks: std.AutoHashMapUnmanaged(MaskKey, ?GlyphMask) = .empty,
-    // Rasterization scratch: an alpha8 surface sized to the glyph, and the
-    // call-scoped allocations painter.fill makes.
+    // Rasterization scratch: an alpha8 surface sized to the glyph.
     mask_scratch: []z2d.pixel.Alpha8 = &.{},
-    fill_scratch: []u8 = &.{},
 
-    fn glyph(self: *Renderer, font: FontId, cp: u21) !z2d.Glyph {
-        const key = (@as(u32, @intFromEnum(font)) << 21) | cp;
+    fn init(arena: Allocator) !Renderer {
+        var r: Renderer = .{ .arena = arena, .faces = undefined };
+        for (font_data, 0..) |data, i| {
+            r.faces[i] = try Face.init(arena, data);
+        }
+        return r;
+    }
+
+    fn face(self: *Renderer, id: FontId) *Face {
+        return &self.faces[@intFromEnum(id)];
+    }
+
+    fn glyph(self: *Renderer, id: FontId, cp: u21) !z2d.Glyph {
+        const key = (@as(u32, @intFromEnum(id)) << 21) | cp;
         if (self.glyphs.get(key)) |g| return g;
-        const g = try z2d.Glyph.init(&self.fonts[@intFromEnum(font)], cp);
+        const g = try z2d.Glyph.init(&self.face(id).font, cp);
         try self.glyphs.put(self.arena, key, g);
         return g;
     }
 
-    fn outline(self: *Renderer, font: FontId, g: z2d.Glyph) !*z2d.Glyph.Outline {
-        const key = (@as(u32, @intFromEnum(font)) << 24) | g.index;
+    fn outline(self: *Renderer, id: FontId, g: z2d.Glyph) !*z2d.Glyph.Outline {
+        const key = (@as(u32, @intFromEnum(id)) << 24) | g.index;
         const gop = try self.outlines.getOrPut(self.arena, key);
         if (!gop.found_existing) {
-            gop.value_ptr.* = try z2d.Glyph.Outline.init(self.arena, &self.fonts[@intFromEnum(font)], g);
+            gop.value_ptr.* = try z2d.Glyph.Outline.init(self.arena, &self.face(id).font, g);
         }
         return gop.value_ptr;
     }
 
-    fn kern(self: *Renderer, font: FontId, prev_index: u32, index: u32) !i16 {
-        const key = (@as(u64, @intFromEnum(font)) << 62) | (@as(u64, prev_index) << 31) | index;
+    /// Kern between `prev` and `g` in font units; 0 without a previous glyph.
+    fn kern(self: *Renderer, id: FontId, prev: ?z2d.Glyph, g: z2d.Glyph) !f64 {
+        const p = prev orelse return 0.0;
+        const key = (@as(u64, @intFromEnum(id)) << 62) | (@as(u64, p.index) << 31) | g.index;
         const gop = try self.kerns.getOrPut(self.arena, key);
         if (!gop.found_existing) {
-            gop.value_ptr.* = try z2d.Glyph.getKernAdvance(&self.fonts[@intFromEnum(font)], prev_index, index);
+            gop.value_ptr.* = try z2d.Glyph.getKernAdvance(&self.face(id).font, p.index, g.index);
         }
-        return gop.value_ptr.*;
+        return @floatFromInt(gop.value_ptr.*);
     }
 
-    // Mirrors the advance accumulation of the glyph pass in drawSeg so wrap
-    // decisions and drawn runs agree on widths.
-    fn cpsWidth(self: *Renderer, font: FontId, size: f64, glyphs: []const Placed) !f64 {
-        const f = &self.fonts[@intFromEnum(font)];
-        const scale = size / @as(f64, @floatFromInt(f.meta.units_per_em));
+    /// Advance in font units.
+    fn advance(self: *Renderer, id: FontId, g: z2d.Glyph) f64 {
+        return @floatFromInt(if (g.advance > 0) g.advance else self.face(id).font.meta.advance_width_max);
+    }
+
+    // Widths here mirror the pen movement in drawSeg so wrap decisions and
+    // drawn runs agree.
+    fn cpsWidth(self: *Renderer, id: FontId, size: f64, glyphs: []const Placed) !f64 {
+        const scale = self.face(id).unitScale(size);
         var width: f64 = 0.0;
         var prev: ?z2d.Glyph = null;
         for (glyphs) |pl| {
             if (pl.attached) continue;
-            const g = try self.glyph(font, pl.cp);
-            if (prev) |p| {
-                width += @as(f64, @floatFromInt(try self.kern(font, p.index, g.index))) * scale;
-            }
-            width += @as(f64, @floatFromInt(if (g.advance > 0) g.advance else f.meta.advance_width_max)) * scale;
+            const g = try self.glyph(id, pl.cp);
+            width += (try self.kern(id, prev, g) + self.advance(id, g)) * scale;
             prev = g;
         }
         return width;
     }
 
-    // Width of logical UTF-16 units [a, b), each styled by index.
-    fn unitsWidth(self: *Renderer, text: []const u16, style_of: []const u16, styles: []const Style, a: usize, b: usize) !f64 {
+    // Width of logical units [a, b); kerning applies within a style run.
+    fn unitsWidth(self: *Renderer, p: *const Para, a: usize, b: usize) !f64 {
         var width: f64 = 0.0;
         var i = a;
         var prev: ?z2d.Glyph = null;
         var prev_style: ?u16 = null;
         while (i < b) {
-            const cp, const n = decodeUtf16(text[i..b]);
-            const si = style_of[i];
-            const st = styles[si];
-            const f = &self.fonts[@intFromEnum(st.font)];
-            const scale = st.size / @as(f64, @floatFromInt(f.meta.units_per_em));
+            const cp, const n = decodeUtf16(p.text[i..b]);
+            const si = p.style_of[i];
+            const st = p.styles[si];
             const g = try self.glyph(st.font, cp);
-            if (prev) |p| {
-                if (prev_style == si) {
-                    width += @as(f64, @floatFromInt(try self.kern(st.font, p.index, g.index))) * scale;
-                }
-            }
-            width += @as(f64, @floatFromInt(if (g.advance > 0) g.advance else f.meta.advance_width_max)) * scale;
+            const k = if (prev_style == si) try self.kern(st.font, prev, g) else 0.0;
+            width += (k + self.advance(st.font, g)) * self.face(st.font).unitScale(st.size);
             prev = g;
             prev_style = si;
             i += n;
@@ -344,13 +372,12 @@ const Renderer = struct {
         }
     }
 
-    fn render(self: *Renderer, blocks: []const Block, opts: Opts, writer: *std.Io.Writer, measure_only: bool) !u32 {
+    fn render(self: *Renderer, blocks: []const Block, opts: Opts, writer: ?*std.Io.Writer) !u32 {
         const arena = self.arena;
         const scale: f64 = opts.scale;
-        const bidi = ubidi_open() orelse return error.IcuFailed;
-        defer ubidi_close(bidi);
         const width: f64 = @floatFromInt(opts.width);
         const content_w = @max(width - 2.0 * PAGE_MARGIN, 1.0);
+        const measure_only = writer == null;
 
         var placed: std.ArrayList(PlacedBlock) = .empty;
         var y: f64 = PAGE_MARGIN;
@@ -363,36 +390,25 @@ const Renderer = struct {
 
             const indent = @as(f64, @floatFromInt(block.list_depth)) * LIST_INDENT +
                 @as(f64, @floatFromInt(block.quote_depth)) * QUOTE_INDENT;
-            const quote_x = PAGE_MARGIN + @as(f64, @floatFromInt(block.list_depth)) * LIST_INDENT;
 
             if (block.kind == .rule) {
-                try placed.append(arena, .{
-                    .kind = .rule,
-                    .x = PAGE_MARGIN + indent,
-                    .y = y,
-                    .line_box = 0,
-                    .baseline = 0,
-                    .lines = &.{},
-                    .text_height = 0,
-                    .marker = null,
-                    .quote_bars = 0,
-                    .quote_x = quote_x,
-                });
+                try placed.append(arena, .{ .block = block, .x = PAGE_MARGIN + indent, .y = y });
                 y += 1.0;
                 continue;
             }
 
             const pad: f64 = if (block.kind == .pre) PRE_PAD else 0.0;
             const avail = @max(content_w - indent - 2.0 * pad, 1.0);
-            const lines = try self.layoutLines(bidi, block, size, avail);
+            const lines = try self.layoutLines(block, size, avail, measure_only);
 
+            // CSS-style half-leading; the block's font carries the metrics
+            // (mono for pre, sans otherwise) and all faces share them.
+            const f = self.face(if (block.kind == .pre) .mono else .sans);
             const line_box = size * line_h;
-            // CSS-style half-leading around the shared DejaVu ascent/descent.
-            const baseline = (line_box - (ASCENT + DESCENT) * size) / 2.0 + ASCENT * size;
-            const text_height = @as(f64, @floatFromInt(lines.len)) * line_box;
+            const baseline = (line_box - (f.ascent + f.descent) * size) / 2.0 + f.ascent * size;
 
             var marker: ?Seg = null;
-            if (block.marker.len > 0) {
+            if (block.marker.len > 0 and !measure_only) {
                 const glyphs = try utf8ToPlaced(arena, block.marker);
                 const mw = try self.cpsWidth(.sans, BASE_SIZE, glyphs);
                 marker = .{
@@ -405,32 +421,26 @@ const Renderer = struct {
             }
 
             try placed.append(arena, .{
-                .kind = block.kind,
+                .block = block,
                 .x = PAGE_MARGIN + indent + pad,
                 .y = y + pad,
                 .line_box = line_box,
                 .baseline = baseline,
                 .lines = lines,
-                .text_height = text_height,
                 .marker = marker,
-                .quote_bars = block.quote_depth,
-                .quote_x = quote_x,
             });
-            y += text_height + 2.0 * pad;
+            y += @as(f64, @floatFromInt(lines.len)) * line_box + 2.0 * pad;
         }
         y += PAGE_MARGIN;
         const content_h: u32 = @intFromFloat(@max(@ceil(y), 1.0));
-        if (measure_only) {
-            return content_h;
-        }
+        const out = writer orelse return content_h;
 
         // Rasterize the requested strip (viewport or full page), then crop.
         // A clip reaching past the strip extends it, but never past the
         // content.
         var out_h: u32 = if (opts.height == 0) content_h else opts.height;
-        const clip = opts.clip orelse Opts.Clip{ .x = 0, .y = 0, .width = 0, .height = 0 };
-        if (clip.width > 0) {
-            var reach = @ceil(@as(f64, clip.y) + @as(f64, clip.height));
+        if (opts.clip) |clip| {
+            var reach = @ceil(clip.y + clip.height);
             if (std.math.isNan(reach)) reach = 0.0;
             out_h = @max(out_h, @as(u32, @intFromFloat(std.math.clamp(reach, 0.0, @as(f64, @floatFromInt(content_h))))));
         }
@@ -442,27 +452,18 @@ const Renderer = struct {
         const pw: i32 = @intCast(pw_u);
         const ph: i32 = @intCast(ph_u);
 
-        // White is all-ones in every byte, padding included: fill in vector
-        // stores rather than z2d's per-pixel init (a byte loop in Debug).
-        const dst_px = @as(usize, @intCast(pw)) * @as(usize, @intCast(ph));
-        const Lane = @Vector(64, u8);
-        const dst_bytes = try arena.alignedAlloc(u8, .fromByteUnits(64), std.mem.alignForward(usize, dst_px * 4, 64));
-        @memset(std.mem.bytesAsSlice(Lane, dst_bytes), @as(Lane, @splat(0xff)));
-        const dst_buf = std.mem.bytesAsSlice(z2d.pixel.RGB, dst_bytes[0 .. dst_px * 4]);
-        // Not initBuffer: that memsets the buffer again.
-        var sfc: z2d.Surface = .{ .image_surface_rgb = .{ .width = pw, .height = ph, .buf = @alignCast(dst_buf) } };
+        var sfc = try z2d.Surface.initPixel(pixel(0xffffff), arena, pw, ph);
+        const dst = sfc.image_surface_rgb;
 
-        // Per block, everything is accumulated into one path per color —
-        // backgrounds beneath, glyphs and decorations on top — so the
-        // rasterizer runs a few block-sized fills instead of one per text
-        // run. (One path per color for the whole page is worse: fill cost
-        // grows with edge count times covered scanlines.)
+        // Rects (rules, pre backgrounds, quote bars, underlines) go through
+        // z2d, batched per block and color; glyphs are blitted directly.
         for (placed.items) |*p| {
             const oy = p.y * scale;
             if (oy > @as(f64, @floatFromInt(ph))) break;
+            const text_h = p.textHeight();
             var bg: ColorPaths = .{ .arena = arena };
             var fg: ColorPaths = .{ .arena = arena };
-            switch (p.kind) {
+            switch (p.block.kind) {
                 .rule => {
                     const x = p.x * scale;
                     try bg.addRect(RULE_COLOR, x, oy, (width - PAGE_MARGIN) * scale - x, 1.0 * scale);
@@ -471,54 +472,51 @@ const Renderer = struct {
                 },
                 .pre => {
                     const x0 = (p.x - PRE_PAD) * scale;
-                    try bg.addRect(PRE_BG, x0, oy - PRE_PAD * scale, (width - PAGE_MARGIN) * scale - x0, (p.text_height + 2.0 * PRE_PAD) * scale);
+                    try bg.addRect(PRE_BG, x0, oy - PRE_PAD * scale, (width - PAGE_MARGIN) * scale - x0, (text_h + 2.0 * PRE_PAD) * scale);
                 },
                 else => {},
             }
-            for (0..p.quote_bars) |i| {
-                const bx = (p.quote_x + @as(f64, @floatFromInt(i)) * QUOTE_INDENT) * scale;
-                try bg.addRect(RULE_COLOR, bx, oy, 3.0 * scale, p.text_height * scale);
+            const quote_x = PAGE_MARGIN + @as(f64, @floatFromInt(p.block.list_depth)) * LIST_INDENT;
+            for (0..p.block.quote_depth) |i| {
+                const bx = (quote_x + @as(f64, @floatFromInt(i)) * QUOTE_INDENT) * scale;
+                try bg.addRect(RULE_COLOR, bx, oy, 3.0 * scale, text_h * scale);
             }
             try bg.fillAll(arena, &sfc);
             if (p.marker) |*m| {
-                try self.drawSeg(&sfc, &fg, m, m.x * scale, (p.y + p.baseline) * scale, scale);
+                try self.drawSeg(dst, &fg, m, m.x * scale, (p.y + p.baseline) * scale, scale);
             }
-            for (p.lines, 0..) |line, i| {
+            for (p.lines, 0..) |segs, i| {
                 const baseline_y = (p.y + @as(f64, @floatFromInt(i)) * p.line_box + p.baseline) * scale;
-                for (line.segs) |*seg| {
-                    try self.drawSeg(&sfc, &fg, seg, (p.x + seg.x) * scale, baseline_y, scale);
+                for (segs) |*seg| {
+                    try self.drawSeg(dst, &fg, seg, (p.x + seg.x) * scale, baseline_y, scale);
                 }
             }
             try fg.fillAll(arena, &sfc);
         }
 
-        var view = &sfc;
-        var cropped: z2d.Surface = undefined;
-        if (clip.width > 0) {
-            const cx: i32 = @intFromFloat(std.math.clamp(@floor(@as(f64, clip.x) * scale), 0, @as(f64, @floatFromInt(pw - 1))));
-            const cy: i32 = @intFromFloat(std.math.clamp(@floor(@as(f64, clip.y) * scale), 0, @as(f64, @floatFromInt(ph - 1))));
-            const cw: i32 = @min(@as(i32, @intFromFloat(@max(@ceil(@as(f64, clip.width) * scale), 1.0))), pw - cx);
-            const chh: i32 = @min(@as(i32, @intFromFloat(@max(@ceil(@as(f64, clip.height) * scale), 1.0))), ph - cy);
-            cropped = try z2d.Surface.init(.image_surface_rgb, arena, cw, chh);
-            var row: i32 = 0;
-            while (row < chh) : (row += 1) {
-                var col: i32 = 0;
-                while (col < cw) : (col += 1) {
-                    cropped.putPixel(col, row, sfc.getPixel(cx + col, cy + row) orelse rgb(0xffffff));
-                }
-            }
-            view = &cropped;
+        var window: Window = .{ .buf = dst.buf, .stride = pw_u, .x = 0, .y = 0, .w = pw_u, .h = ph_u };
+        if (opts.clip) |clip| {
+            const cx: u64 = @intFromFloat(std.math.clamp(@floor(clip.x * scale), 0, @as(f64, @floatFromInt(pw - 1))));
+            const cy: u64 = @intFromFloat(std.math.clamp(@floor(clip.y * scale), 0, @as(f64, @floatFromInt(ph - 1))));
+            window = .{
+                .buf = dst.buf,
+                .stride = pw_u,
+                .x = cx,
+                .y = cy,
+                .w = @min(@as(u64, @intFromFloat(@max(@ceil(clip.width * scale), 1.0))), pw_u - cx),
+                .h = @min(@as(u64, @intFromFloat(@max(@ceil(clip.height * scale), 1.0))), ph_u - cy),
+            };
         }
-
-        try writePng(arena, view, writer);
+        try writePng(arena, window, out);
         return content_h;
     }
 
     // One block: spans concatenate into logical UTF-16 (Arabic shaped per
     // span), lines are filled greedily at UAX #14 opportunities ('\n' is a
     // hard break; a word wider than the line breaks anywhere), then each line
-    // is reordered to visual order from the paragraph's bidi levels.
-    fn layoutLines(self: *Renderer, bidi: *UBiDi, block: *const Block, size: f64, avail: f64) ![]const Line {
+    // is reordered to visual order from the paragraph's bidi levels. Measuring
+    // stops at the line count.
+    fn layoutLines(self: *Renderer, block: *const Block, size: f64, avail: f64, measure_only: bool) ![]const []const Seg {
         const arena = self.arena;
         const is_pre = block.kind == .pre;
 
@@ -529,116 +527,68 @@ const Renderer = struct {
         for (block.spans) |*span| {
             try styles.append(arena, spanStyle(block, span, size));
             const si: u16 = @intCast(styles.items.len - 1);
-            scratch.clearRetainingCapacity();
-            try appendUtf16(arena, &scratch, span.text);
+            // UTF-16 never needs more units than UTF-8 bytes.
+            try scratch.resize(arena, span.text.len);
+            scratch.items.len = std.unicode.utf8ToUtf16Le(scratch.items, span.text) catch return error.InvalidText;
             var units: []const u16 = scratch.items;
             if (hasArabic(units)) {
                 const shaped = try arena.alloc(u16, units.len * 2);
                 var err: c_int = 0;
-                const n = u_shapeArabic(units.ptr, @intCast(units.len), shaped.ptr, @intCast(shaped.len), U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED, &err);
-                if (err <= 0) {
+                const n = icu.u_shapeArabic(units.ptr, @intCast(units.len), shaped.ptr, @intCast(shaped.len), icu.U_SHAPE_LETTERS_SHAPE_TASHKEEL_ISOLATED, &err);
+                if (!icu.failed(err)) {
                     units = shaped[0..@intCast(n)];
                     // Tashkeel come back as FE70-block presentation forms,
-                    // which are not GDEF marks and carry no anchors.
+                    // which are not GDEF marks and carry no anchors. ICU has
+                    // no option that leaves them bare.
                     for (shaped[0..@intCast(n)]) |*u| u.* = bareTashkeel(u.*);
                 }
             }
             try text.appendSlice(arena, units);
             try style_of.appendNTimes(arena, si, units.len);
         }
-        const n: i32 = @intCast(text.items.len);
-        if (n == 0) return &.{};
+        const len = text.items.len;
+        if (len == 0) return &.{};
+        const n: i32 = @intCast(len);
 
-        // GPOS mark attachment, in logical order: a mark anchors to the
-        // preceding base of the same style, or to the previous attached
-        // mark of its cluster (stacking).
-        const attach = try arena.alloc(?Attach, text.items.len);
-        @memset(attach, null);
-        {
-            var i: usize = 0;
-            var base: ?usize = null;
-            var last_mark: ?usize = null;
-            while (i < text.items.len) {
-                const cp, const cn = decodeUtf16(text.items[i..]);
-                const si = style_of.items[i];
-                const st = styles.items[si];
-                const gp = &self.gpos[@intFromEnum(st.font)];
-                const g = try self.glyph(st.font, cp);
-                if (g.index <= std.math.maxInt(u16) and gp.isMark(@intCast(g.index))) {
-                    if (base) |b| if (style_of.items[b] == si) {
-                        const gid: u16 = @intCast(g.index);
-                        if (last_mark) |m| {
-                            const mcp, _ = decodeUtf16(text.items[m..]);
-                            const mg = try self.glyph(st.font, mcp);
-                            if (gp.attachToMark(@intCast(mg.index), gid)) |o| {
-                                attach[i] = .{ .parent = m, .root = b, .dx = o.dx, .dy = o.dy };
-                            }
-                        }
-                        if (attach[i] == null) {
-                            const bcp, _ = decodeUtf16(text.items[b..]);
-                            const bg = try self.glyph(st.font, bcp);
-                            if (gp.attachToBase(@intCast(bg.index), gid)) |o| {
-                                attach[i] = .{ .parent = b, .root = b, .dx = o.dx, .dy = o.dy };
-                            }
-                        }
-                        if (attach[i] != null) last_mark = i;
-                    };
-                } else {
-                    base = i;
-                    last_mark = null;
-                }
-                i += cn;
-            }
+        var para: Para = .{ .text = text.items, .style_of = style_of.items, .styles = styles.items };
+        if (!measure_only) {
+            try self.attachMarks(&para);
+
+            const bidi = icu.ubidi_open() orelse return error.IcuFailed;
+            defer icu.ubidi_close(bidi);
+            var err: c_int = 0;
+            icu.ubidi_setPara(bidi, para.text.ptr, n, icu.UBIDI_DEFAULT_LTR, null, &err);
+            if (icu.failed(err)) return error.IcuFailed;
+            para.levels = try arena.dupe(u8, (icu.ubidi_getLevels(bidi, &err) orelse return error.IcuFailed)[0..len]);
+            if (icu.failed(err)) return error.IcuFailed;
+            para.rtl = icu.ubidi_getParaLevel(bidi) & 1 == 1;
+            para.index_map = try arena.alloc(i32, len);
+            para.mark_dx = try arena.alloc(f64, len);
+            para.mark_dy = try arena.alloc(f64, len);
         }
 
         var err: c_int = 0;
-        ubidi_setPara(bidi, text.items.ptr, n, UBIDI_DEFAULT_LTR, null, &err);
-        if (err > 0) return error.IcuFailed;
-        const levels = try arena.dupe(u8, (ubidi_getLevels(bidi, &err) orelse return error.IcuFailed)[0..text.items.len]);
-        if (err > 0) return error.IcuFailed;
-        const rtl = ubidi_getParaLevel(bidi) & 1 == 1;
+        const brk = icu.ubrk_open(icu.UBRK_LINE, null, para.text.ptr, n, &err) orelse return error.IcuFailed;
+        if (icu.failed(err)) return error.IcuFailed;
+        defer icu.ubrk_close(brk);
 
-        const brk = ubrk_open(UBRK_LINE, null, text.items.ptr, n, &err) orelse return error.IcuFailed;
-        if (err > 0) return error.IcuFailed;
-        defer ubrk_close(brk);
-
-        const L = struct {
-            r: *Renderer,
-            text: []const u16,
-            style_of: []const u16,
-            styles: []const Style,
-            levels: []const u8,
-            attach: []const ?Attach,
-            rtl: bool,
-            avail: f64,
-            lines: std.ArrayList(Line) = .empty,
-
-            fn width(l: *@This(), a: usize, b: usize) !f64 {
-                return l.r.unitsWidth(l.text, l.style_of, l.styles, a, b);
-            }
-
-            fn emit(l: *@This(), a: usize, b: usize) !void {
-                try l.lines.append(l.r.arena, try l.r.visualLine(l.text, l.style_of, l.styles, l.levels, l.attach, a, b, l.rtl, l.avail));
-            }
-        };
-        var l: L = .{ .r = self, .text = text.items, .style_of = style_of.items, .styles = styles.items, .levels = levels, .attach = attach, .rtl = rtl, .avail = avail };
-
+        var lines: std.ArrayList([]const Seg) = .empty;
         var line_start: usize = 0;
         var cur_w: f64 = 0.0;
         var tok_start: usize = 0;
         while (true) {
-            const b = ubrk_next(brk);
-            if (b == UBRK_DONE) break;
+            const b = icu.ubrk_next(brk);
+            if (b == icu.UBRK_DONE) break;
             const tok_end: usize = @intCast(b);
-            const hard = ubrk_getRuleStatus(brk) >= UBRK_LINE_HARD;
-            if (is_pre and !hard and tok_end != text.items.len) continue;
+            const hard = icu.ubrk_getRuleStatus(brk) >= icu.UBRK_LINE_HARD;
+            if (is_pre and !hard and tok_end != len) continue;
 
             var content_end = tok_end;
-            while (content_end > tok_start and isBreakSpace(text.items[content_end - 1])) content_end -= 1;
-            const w_trim = try l.width(tok_start, content_end);
+            while (content_end > tok_start and isBreakSpace(para.text[content_end - 1])) content_end -= 1;
+            const w_trim = try self.unitsWidth(&para, tok_start, content_end);
 
             if (line_start < tok_start and cur_w + w_trim > avail) {
-                try l.emit(line_start, tok_start);
+                try lines.append(arena, try self.visualLine(&para, line_start, tok_start, avail, measure_only));
                 line_start = tok_start;
                 cur_w = 0.0;
             }
@@ -650,8 +600,8 @@ const Renderer = struct {
                     var fit_w: f64 = 0.0;
                     while (fit_end < content_end) {
                         var next = fit_end + 1;
-                        if (isHighSurrogate(text.items[fit_end]) and next < content_end) next += 1;
-                        const uw = try l.width(fit_end, next);
+                        if (std.unicode.utf16IsHighSurrogate(para.text[fit_end]) and next < content_end) next += 1;
+                        const uw = try self.unitsWidth(&para, fit_end, next);
                         if (fit_end > pos and cur_w + fit_w + uw > avail) break;
                         fit_w += uw;
                         fit_end = next;
@@ -660,26 +610,77 @@ const Renderer = struct {
                         cur_w += fit_w;
                         break;
                     }
-                    try l.emit(line_start, fit_end);
+                    try lines.append(arena, try self.visualLine(&para, line_start, fit_end, avail, measure_only));
                     line_start = fit_end;
                     pos = fit_end;
                     cur_w = 0.0;
                 }
-                cur_w += try l.width(content_end, tok_end);
             } else {
-                cur_w += try l.width(tok_start, tok_end);
+                cur_w += w_trim;
             }
+            cur_w += try self.unitsWidth(&para, content_end, tok_end);
             if (hard) {
-                try l.emit(line_start, tok_end);
+                try lines.append(arena, try self.visualLine(&para, line_start, tok_end, avail, measure_only));
                 line_start = tok_end;
                 cur_w = 0.0;
             }
             tok_start = tok_end;
         }
-        if (line_start < text.items.len) {
-            try l.emit(line_start, text.items.len);
+        if (line_start < len) {
+            try lines.append(arena, try self.visualLine(&para, line_start, len, avail, measure_only));
         }
-        return l.lines.items;
+        return lines.items;
+    }
+
+    // GPOS mark attachment, in logical order: a mark anchors to the preceding
+    // base of the same style, or to the previous attached mark of its cluster
+    // (stacking). Also records where each base's cluster of marks ends.
+    fn attachMarks(self: *Renderer, p: *Para) !void {
+        const len = p.text.len;
+        const attach = try self.arena.alloc(?Attach, len);
+        @memset(attach, null);
+        const cluster_end = try self.arena.alloc(usize, len);
+
+        var i: usize = 0;
+        var base: ?usize = null;
+        var last_mark: ?usize = null;
+        while (i < len) {
+            const cp, const cn = decodeUtf16(p.text[i..]);
+            const si = p.style_of[i];
+            const st = p.styles[si];
+            const gp = &self.face(st.font).gpos;
+            const g = try self.glyph(st.font, cp);
+            if (g.index <= std.math.maxInt(u16) and gp.isMark(@intCast(g.index))) {
+                if (base) |b| {
+                    cluster_end[b] = i + cn;
+                    if (p.style_of[b] == si) {
+                        const gid: u16 = @intCast(g.index);
+                        if (last_mark) |m| {
+                            const mcp, _ = decodeUtf16(p.text[m..]);
+                            const mg = try self.glyph(st.font, mcp);
+                            if (gp.attachToMark(@intCast(mg.index), gid)) |o| {
+                                attach[i] = .{ .parent = m, .root = b, .dx = o.dx, .dy = o.dy };
+                            }
+                        }
+                        if (attach[i] == null) {
+                            const bcp, _ = decodeUtf16(p.text[b..]);
+                            const bg = try self.glyph(st.font, bcp);
+                            if (gp.attachToBase(@intCast(bg.index), gid)) |o| {
+                                attach[i] = .{ .parent = b, .root = b, .dx = o.dx, .dy = o.dy };
+                            }
+                        }
+                        if (attach[i] != null) last_mark = i;
+                    }
+                }
+            } else {
+                base = i;
+                last_mark = null;
+                cluster_end[i] = i + cn;
+            }
+            i += cn;
+        }
+        p.attach = attach;
+        p.cluster_end = cluster_end;
     }
 
     // Logical units [a, b) of one line into visual-order segs. Trailing
@@ -687,159 +688,138 @@ const Renderer = struct {
     // emitted right after their cluster's base whatever the run direction
     // (ubidi reverses them to precede it in RTL runs), positioned relative
     // to the pen after the base.
-    fn visualLine(self: *Renderer, text: []const u16, style_of: []const u16, styles: []const Style, levels: []const u8, attach: []const ?Attach, a: usize, b_: usize, rtl: bool, avail: f64) !Line {
+    fn visualLine(self: *Renderer, p: *const Para, a: usize, b_: usize, avail: f64, measure_only: bool) ![]const Seg {
+        if (measure_only) return &.{};
         const arena = self.arena;
         var b = b_;
-        while (b > a and isBreakSpace(text[b - 1])) b -= 1;
+        while (b > a and isBreakSpace(p.text[b - 1])) b -= 1;
         const len = b - a;
-        if (len == 0) return .{ .segs = &.{} };
+        if (len == 0) return &.{};
 
-        const index_map = try arena.alloc(i32, len);
-        ubidi_reorderVisual(levels[a..].ptr, @intCast(len), index_map.ptr);
-
-        // Per cluster root, its attached marks in logical order.
-        const first_mark = try arena.alloc(?usize, len);
-        const next_mark = try arena.alloc(?usize, len);
-        const last_mark = try arena.alloc(?usize, len);
-        @memset(first_mark, null);
-        @memset(next_mark, null);
-        @memset(last_mark, null);
-        for (a..b) |j| {
-            const at = attach[j] orelse continue;
-            if (at.root < a) continue;
-            const r = at.root - a;
-            if (last_mark[r]) |lm| next_mark[lm - a] = j else first_mark[r] = j;
-            last_mark[r] = j;
-        }
-        // Resolved offsets of emitted marks, for stacking.
-        const mark_dx = try arena.alloc(f64, len);
-        const mark_dy = try arena.alloc(f64, len);
+        const index_map = p.index_map[0..len];
+        icu.ubidi_reorderVisual(p.levels[a..].ptr, @intCast(len), index_map.ptr);
 
         var segs: std.ArrayList(Seg) = .empty;
         var glyphs: std.ArrayList(Placed) = .empty;
         var cur_style: u16 = 0;
         var cur_odd: bool = false;
         var x: f64 = 0.0;
+
+        const Flush = struct {
+            fn run(r: *Renderer, s: *std.ArrayList(Seg), gl: *std.ArrayList(Placed), st: Style, pen_x: *f64) !void {
+                if (gl.items.len == 0) return;
+                const visual = try r.arena.dupe(Placed, gl.items);
+                const w = try r.cpsWidth(st.font, st.size, visual);
+                try s.append(r.arena, .{ .glyphs = visual, .style = st, .x = pen_x.*, .width = w });
+                pen_x.* += w;
+                gl.clearRetainingCapacity();
+            }
+        };
+
         var i: usize = 0;
         while (i < len) {
             const j = a + @as(usize, @intCast(index_map[i]));
-            if (attach[j] != null and attach[j].?.root >= a) {
+            if (p.attach[j]) |at| if (at.root >= a) {
                 // Drawn with its root.
                 i += 1;
                 continue;
-            }
-            var cp: u21 = text[j];
+            };
+            var cp: u21 = p.text[j];
             var consumed: usize = 1;
             if (i + 1 < len) {
                 const j2 = a + @as(usize, @intCast(index_map[i + 1]));
                 // An RTL run reverses a surrogate pair's halves along with
                 // everything else.
-                if (isHighSurrogate(text[j]) and isLowSurrogate(text[j2])) {
-                    cp = combineSurrogates(text[j], text[j2]);
+                if (std.unicode.utf16IsHighSurrogate(p.text[j]) and std.unicode.utf16IsLowSurrogate(p.text[j2])) {
+                    cp = std.unicode.utf16DecodeSurrogatePair(&.{ p.text[j], p.text[j2] }) catch unreachable;
                     consumed = 2;
-                } else if (isLowSurrogate(text[j]) and isHighSurrogate(text[j2])) {
-                    cp = combineSurrogates(text[j2], text[j]);
+                } else if (std.unicode.utf16IsLowSurrogate(p.text[j]) and std.unicode.utf16IsHighSurrogate(p.text[j2])) {
+                    cp = std.unicode.utf16DecodeSurrogatePair(&.{ p.text[j2], p.text[j] }) catch unreachable;
                     consumed = 2;
                 }
             }
-            const odd = levels[j] & 1 == 1;
-            if (odd) cp = @intCast(u_charMirror(cp));
-            const si = style_of[j];
-            if (glyphs.items.len > 0 and (si != cur_style or odd != cur_odd)) {
-                const st = styles[cur_style];
-                const visual = try arena.dupe(Placed, glyphs.items);
-                const w = try self.cpsWidth(st.font, st.size, visual);
-                try segs.append(arena, .{ .glyphs = visual, .style = st, .x = x, .width = w });
-                x += w;
-                glyphs.clearRetainingCapacity();
+            const odd = p.levels[j] & 1 == 1;
+            if (odd) cp = @intCast(icu.u_charMirror(cp));
+            const si = p.style_of[j];
+            if (si != cur_style or odd != cur_odd) {
+                try Flush.run(self, &segs, &glyphs, p.styles[cur_style], &x);
             }
             cur_style = si;
             cur_odd = odd;
             try glyphs.append(arena, .{ .cp = cp });
 
-            var m = first_mark[j - a];
-            if (m != null) {
-                const st = styles[si];
-                const f = &self.fonts[@intFromEnum(st.font)];
-                const gscale = st.size / @as(f64, @floatFromInt(f.meta.units_per_em));
-                const bg = try self.glyph(st.font, cp);
-                const base_advance = @as(f64, @floatFromInt(if (bg.advance > 0) bg.advance else f.meta.advance_width_max)) * gscale;
-                while (m) |mj| : (m = next_mark[mj - a]) {
-                    const at = attach[mj].?;
-                    const mcp, _ = decodeUtf16(text[mj..]);
-                    var dx = @as(f64, @floatFromInt(at.dx)) * gscale;
-                    var dy = @as(f64, @floatFromInt(at.dy)) * gscale;
-                    if (at.parent == at.root) {
-                        dx -= base_advance;
-                    } else {
-                        dx += mark_dx[at.parent - a];
-                        dy += mark_dy[at.parent - a];
-                    }
-                    mark_dx[mj - a] = dx;
-                    mark_dy[mj - a] = dy;
-                    try glyphs.append(arena, .{ .cp = mcp, .dx = dx, .dy = dy, .attached = true });
+            // The cluster's marks, in logical order.
+            const st = p.styles[si];
+            const f = self.face(st.font);
+            const gscale = f.unitScale(st.size);
+            const base_advance = self.advance(st.font, try self.glyph(st.font, cp)) * gscale;
+            var k = j + consumed;
+            const end = @min(p.cluster_end[j], b);
+            while (k < end) {
+                const mcp, const mn = decodeUtf16(p.text[k..]);
+                defer k += mn;
+                const at = p.attach[k] orelse continue;
+                if (at.root != j) continue;
+                var dx = @as(f64, @floatFromInt(at.dx)) * gscale;
+                var dy = @as(f64, @floatFromInt(at.dy)) * gscale;
+                if (at.parent == at.root) {
+                    dx -= base_advance;
+                } else {
+                    dx += p.mark_dx[at.parent];
+                    dy += p.mark_dy[at.parent];
                 }
+                p.mark_dx[k] = dx;
+                p.mark_dy[k] = dy;
+                try glyphs.append(arena, .{ .cp = mcp, .dx = dx, .dy = dy, .attached = true });
             }
             i += consumed;
         }
-        if (glyphs.items.len > 0) {
-            const st = styles[cur_style];
-            const visual = try arena.dupe(Placed, glyphs.items);
-            const w = try self.cpsWidth(st.font, st.size, visual);
-            try segs.append(arena, .{ .glyphs = visual, .style = st, .x = x, .width = w });
-            x += w;
-        }
-        if (rtl and x < avail) {
+        try Flush.run(self, &segs, &glyphs, p.styles[cur_style], &x);
+        if (p.rtl and x < avail) {
             for (segs.items) |*seg| seg.x += avail - x;
         }
-        return .{ .segs = segs.items };
+        return segs.items;
     }
 
-    // The manual glyph pass z2d's text.show would otherwise do per call.
-    // Each unique styled glyph is rasterized once into a small RGBA mask and
-    // composited per occurrence; rasterizing glyphs in place made fill cost
+    // Each unique styled glyph is rasterized once into a coverage mask and
+    // blitted per occurrence; rasterizing glyphs in place made fill cost
     // grow with whole line boxes instead of inked pixels.
-    fn drawSeg(self: *Renderer, sfc: *z2d.Surface, paths: *ColorPaths, seg: *const Seg, x: f64, baseline_y: f64, scale: f64) !void {
+    fn drawSeg(self: *Renderer, dst: z2d.surface.ImageSurface(z2d.pixel.RGB), paths: *ColorPaths, seg: *const Seg, x: f64, baseline_y: f64, scale: f64) !void {
         const st = seg.style;
         const size = st.size * scale;
-        const f = &self.fonts[@intFromEnum(st.font)];
-        const gscale = size / @as(f64, @floatFromInt(f.meta.units_per_em));
-        var advance: f64 = 0.0;
+        const f = self.face(st.font);
+        const gscale = f.unitScale(size);
+        const color = rgb(st.color);
+        var pen: f64 = 0.0;
         var prev: ?z2d.Glyph = null;
         for (seg.glyphs) |pl| {
             const g = try self.glyph(st.font, pl.cp);
-            if (!pl.attached) {
-                if (prev) |p| {
-                    advance += @as(f64, @floatFromInt(try self.kern(st.font, p.index, g.index))) * gscale;
-                }
-            }
+            if (!pl.attached) pen += try self.kern(st.font, prev, g) * gscale;
             if (g.outline != .none) {
                 var dev_st = st;
                 dev_st.size = size;
                 // Masks are cached per quarter-pixel phase so letter spacing
                 // keeps its fractional advances.
-                const exact = x + advance + pl.dx * scale;
+                const exact = x + pen + pl.dx * scale;
                 const gx = @floor(exact);
                 const phase: u2 = @intFromFloat(@min((exact - gx) * 4.0, 3.0));
                 if (try self.mask(dev_st, pl.cp, g, phase)) |m| {
                     const gy: i32 = @intFromFloat(@round(baseline_y - pl.dy * scale));
-                    blit(sfc.image_surface_rgb, m, @as(i32, @intFromFloat(gx)) + m.dx, gy + m.dy, st.color);
+                    blit(dst, m, @as(i32, @intFromFloat(gx)) + m.dx, gy + m.dy, color);
                 }
             }
             if (!pl.attached) {
-                advance += @as(f64, @floatFromInt(if (g.advance > 0) g.advance else f.meta.advance_width_max)) * gscale;
+                pen += self.advance(st.font, g) * gscale;
                 prev = g;
             }
         }
 
         const w = seg.width * scale;
         if (st.underline) {
-            const off = UNDERLINE_OFFSET * size;
-            try paths.addRect(st.color, x, @round(baseline_y - off), w, @max(@round(UNDERLINE_SIZE * size), 1.0));
+            try paths.addRect(st.color, x, @round(baseline_y - f.underline_position * size), w, @max(@round(f.underline_thickness * size), 1.0));
         }
         if (st.strike) {
-            const off = STRIKE_OFFSET * size;
-            try paths.addRect(st.color, x, @round(baseline_y - off), w, @max(@round(STRIKE_SIZE * size), 1.0));
+            try paths.addRect(st.color, x, @round(baseline_y - f.strikeout_position * size), w, @max(@round(f.strikeout_size * size), 1.0));
         }
     }
 
@@ -865,10 +845,10 @@ const Renderer = struct {
     // its own bbox, then trimmed to the inked box.
     fn renderMask(self: *Renderer, st: Style, g: z2d.Glyph, phase: u2) !?GlyphMask {
         const size = st.size;
-        const f = &self.fonts[@intFromEnum(st.font)];
-        const gscale = size / @as(f64, @floatFromInt(f.meta.units_per_em));
+        const f = self.face(st.font);
+        const gscale = f.unitScale(size);
         const o = try self.outline(st.font, g);
-        const pp1: f64 = if (!f.meta.lsb_is_at_x_zero) @floatFromInt(o.x_min - g.lsb) else 0.0;
+        const pp1: f64 = if (!f.font.meta.lsb_is_at_x_zero) @floatFromInt(o.x_min - g.lsb) else 0.0;
 
         // Device-space bbox relative to the pen at the baseline, y down.
         var x_lo = @as(f64, @floatFromInt(o.x_min)) * gscale + pp1;
@@ -895,7 +875,8 @@ const Renderer = struct {
         if (self.mask_scratch.len < bw * bh) {
             self.mask_scratch = try self.arena.alloc(z2d.pixel.Alpha8, @max(bw * bh, 4096));
         }
-        var msfc = z2d.Surface.initBuffer(.image_surface_alpha8, null, self.mask_scratch[0 .. bw * bh], box_w, box_h);
+        const buf = self.mask_scratch[0 .. bw * bh];
+        var msfc = z2d.Surface.initBuffer(.image_surface_alpha8, null, buf, box_w, box_h);
 
         // Shear around the local baseline so the glyph origin stays put.
         const base: z2d.Transformation = if (st.italic)
@@ -903,26 +884,17 @@ const Renderer = struct {
         else
             .identity;
         var path: z2d.Path = .empty;
-        defer path.deinit(self.arena);
         // z2d outlines are pre-flipped by translating -units_per_em, so the
         // draw origin is the top of the em box, one em above the baseline.
         path.transformation = base.translate(ox + pp1, oy - size).scale(gscale, gscale);
         try o.appendToPath(self.arena, &path);
 
         // An opaque source lets the fill write coverage straight into the
-        // mask. painter.fill's allocations are call-scoped, so a fixed
-        // buffer serves them; the arena only backs a glyph too big for it.
+        // mask. painter.fill's allocations are call-scoped.
         const pattern: z2d.Pattern = .{ .opaque_pattern = .{ .pixel = .{ .alpha8 = .{ .a = 255 } } } };
-        if (self.fill_scratch.len == 0) {
-            self.fill_scratch = try self.arena.alloc(u8, 64 * 1024);
-        }
-        var fba: std.heap.FixedBufferAllocator = .init(self.fill_scratch);
-        z2d.painter.fill(fba.allocator(), &msfc, &pattern, path.nodes.items, .default) catch |err| switch (err) {
-            error.OutOfMemory => try z2d.painter.fill(self.arena, &msfc, &pattern, path.nodes.items, .default),
-            else => return err,
-        };
+        var sfa = std.heap.stackFallback(64 * 1024, self.arena);
+        try z2d.painter.fill(sfa.get(), &msfc, &pattern, path.nodes.items, .default);
 
-        const buf = self.mask_scratch[0 .. bw * bh];
         var min_x: usize = bw;
         var min_y: usize = bh;
         var max_x: usize = 0;
@@ -957,11 +929,7 @@ const Renderer = struct {
 
 // Source-over of a coverage mask in one color onto the RGB destination.
 // Fully transparent and fully covered pixels skip the blend.
-fn blit(dst: z2d.surface.ImageSurface(z2d.pixel.RGB), m: *const GlyphMask, x: i32, y: i32, color: u32) void {
-    const cr: u32 = (color >> 16) & 0xff;
-    const cg: u32 = (color >> 8) & 0xff;
-    const cb: u32 = color & 0xff;
-    const solid: z2d.pixel.RGB = .{ .r = @intCast(cr), .g = @intCast(cg), .b = @intCast(cb) };
+fn blit(dst: z2d.surface.ImageSurface(z2d.pixel.RGB), m: *const GlyphMask, x: i32, y: i32, color: z2d.pixel.RGB) void {
     const dst_w: usize = @intCast(dst.width);
     for (0..m.h) |r| {
         const yy = y + @as(i32, @intCast(r));
@@ -973,13 +941,13 @@ fn blit(dst: z2d.surface.ImageSurface(z2d.pixel.RGB), m: *const GlyphMask, x: i3
             if (xx < 0 or xx >= dst.width) continue;
             const px = &row[@intCast(xx)];
             if (a == 255) {
-                px.* = solid;
+                px.* = color;
                 continue;
             }
             const inv: u32 = 255 - a;
-            px.r = @intCast((cr * a + @as(u32, px.r) * inv + 127) / 255);
-            px.g = @intCast((cg * a + @as(u32, px.g) * inv + 127) / 255);
-            px.b = @intCast((cb * a + @as(u32, px.b) * inv + 127) / 255);
+            px.r = @intCast((@as(u32, color.r) * a + @as(u32, px.r) * inv + 127) / 255);
+            px.g = @intCast((@as(u32, color.g) * a + @as(u32, px.g) * inv + 127) / 255);
+            px.b = @intCast((@as(u32, color.b) * a + @as(u32, px.b) * inv + 127) / 255);
         }
     }
 }
@@ -1008,18 +976,13 @@ const ColorPaths = struct {
     arena: Allocator,
     map: std.AutoArrayHashMapUnmanaged(u32, z2d.Path) = .empty,
 
-    fn get(self: *ColorPaths, color: u32) !*z2d.Path {
+    fn addRect(self: *ColorPaths, color: u32, x: f64, y: f64, w: f64, h: f64) !void {
+        if (w <= 0 or h <= 0) return;
         const gop = try self.map.getOrPut(self.arena, color);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
         }
-        return gop.value_ptr;
-    }
-
-    fn addRect(self: *ColorPaths, color: u32, x: f64, y: f64, w: f64, h: f64) !void {
-        if (w <= 0 or h <= 0) return;
-        const path = try self.get(color);
-        path.transformation = .identity;
+        const path = gop.value_ptr;
         try path.moveTo(self.arena, x, y);
         try path.lineTo(self.arena, x + w, y);
         try path.lineTo(self.arena, x + w, y + h);
@@ -1031,53 +994,34 @@ const ColorPaths = struct {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.nodes.items.len == 0) continue;
-            const pattern: z2d.Pattern = .{ .opaque_pattern = .{ .pixel = rgb(entry.key_ptr.*) } };
+            const pattern: z2d.Pattern = .{ .opaque_pattern = .{ .pixel = pixel(entry.key_ptr.*) } };
             try z2d.painter.fill(arena, sfc, &pattern, entry.value_ptr.nodes.items, .default);
         }
     }
 };
 
-// z2d's own PNG export converts pixel-by-pixel through the Surface
-// interface and compresses with std.flate; encoding straight off the raw RGB
-// buffer through the zlib the binary already links (a curl dependency) is an
-// order of magnitude faster. Level mirrors the size tradeoff the Rust
-// renderer measured: output is mostly base64'd over CDP so size matters, but
-// higher levels are severalfold slower for a few percent smaller.
-const ZStream = extern struct {
-    next_in: ?[*]const u8 = null,
-    avail_in: c_uint = 0,
-    total_in: c_ulong = 0,
-    next_out: ?[*]u8 = null,
-    avail_out: c_uint = 0,
-    total_out: c_ulong = 0,
-    msg: ?[*:0]const u8 = null,
-    state: ?*anyopaque = null,
-    zalloc: ?*const fn (?*anyopaque, c_uint, c_uint) callconv(.c) ?*anyopaque = null,
-    zfree: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void = null,
-    @"opaque": ?*anyopaque = null,
-    data_type: c_int = 0,
-    adler: c_ulong = 0,
-    reserved: c_ulong = 0,
+/// A rectangle of an RGB raster to encode.
+const Window = struct {
+    buf: []const z2d.pixel.RGB,
+    stride: u64,
+    x: u64,
+    y: u64,
+    w: u64,
+    h: u64,
 };
 
-const Z_OK: c_int = 0;
-const Z_STREAM_END: c_int = 1;
-const Z_NO_FLUSH: c_int = 0;
-const Z_FINISH: c_int = 4;
-
-extern fn deflateInit_(strm: *ZStream, level: c_int, version: [*:0]const u8, stream_size: c_int) c_int;
-extern fn deflate(strm: *ZStream, flush: c_int) c_int;
-extern fn deflateEnd(strm: *ZStream) c_int;
-
-fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !void {
-    const w: usize = @intCast(sfc.getWidth());
-    const h: usize = @intCast(sfc.getHeight());
-    const buf = sfc.image_surface_rgb.buf;
+// z2d's own PNG export converts pixel-by-pixel through the Surface
+// interface and compresses with std.flate; encoding straight off the raw RGB
+// buffer through the zlib the binary already links is an order of magnitude
+// faster. Level 2: output is mostly base64'd over CDP so size matters, but
+// higher levels are severalfold slower for a few percent smaller.
+fn writePng(arena: Allocator, win: Window, writer: *std.Io.Writer) !void {
+    const w: usize = @intCast(win.w);
 
     try writer.writeAll("\x89PNG\r\n\x1a\n");
     var ihdr: [13]u8 = undefined;
-    std.mem.writeInt(u32, ihdr[0..4], @intCast(w), .big);
-    std.mem.writeInt(u32, ihdr[4..8], @intCast(h), .big);
+    std.mem.writeInt(u32, ihdr[0..4], @intCast(win.w), .big);
+    std.mem.writeInt(u32, ihdr[4..8], @intCast(win.h), .big);
     ihdr[8] = 8; // bit depth
     ihdr[9] = 2; // truecolor
     ihdr[10] = 0; // deflate
@@ -1088,11 +1032,11 @@ fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !
     // Streamed one scanline in, one IDAT chunk out per 64KB of deflate
     // output, so a capped-height capture never holds a second copy of the
     // raster.
-    var zs: ZStream = .{};
-    if (deflateInit_(&zs, 2, "1", @sizeOf(ZStream)) != Z_OK) {
+    var zs: zlib.z_stream = std.mem.zeroes(zlib.z_stream);
+    if (zlib.deflateInit_(&zs, 2, zlib.ZLIB_VERSION, @sizeOf(zlib.z_stream)) != zlib.Z_OK) {
         return error.EncodeFailed;
     }
-    defer _ = deflateEnd(&zs);
+    defer _ = zlib.deflateEnd(&zs);
 
     // Leading no-filter byte per scanline. Text pages are dominated by long
     // solid runs, which deflate handles well without filtering.
@@ -1102,8 +1046,9 @@ fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !
     zs.next_out = out.ptr;
     zs.avail_out = @intCast(out.len);
 
-    for (0..h) |y| {
-        for (buf[y * w ..][0..w], 0..) |px, x| {
+    for (0..@intCast(win.h)) |y| {
+        const src = win.buf[@intCast((win.y + y) * win.stride + win.x)..][0..w];
+        for (src, 0..) |px, x| {
             row[1 + x * 3] = px.r;
             row[2 + x * 3] = px.g;
             row[3 + x * 3] = px.b;
@@ -1111,7 +1056,7 @@ fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !
         zs.next_in = row.ptr;
         zs.avail_in = @intCast(row.len);
         while (zs.avail_in > 0) {
-            if (deflate(&zs, Z_NO_FLUSH) != Z_OK) {
+            if (zlib.deflate(&zs, zlib.Z_NO_FLUSH) != zlib.Z_OK) {
                 return error.EncodeFailed;
             }
             if (zs.avail_out == 0) {
@@ -1122,8 +1067,8 @@ fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !
         }
     }
     while (true) {
-        const rc = deflate(&zs, Z_FINISH);
-        if (rc != Z_OK and rc != Z_STREAM_END) {
+        const rc = zlib.deflate(&zs, zlib.Z_FINISH);
+        if (rc != zlib.Z_OK and rc != zlib.Z_STREAM_END) {
             return error.EncodeFailed;
         }
         const produced = out.len - zs.avail_out;
@@ -1132,7 +1077,7 @@ fn writePng(arena: Allocator, sfc: *const z2d.Surface, writer: *std.Io.Writer) !
             zs.next_out = out.ptr;
             zs.avail_out = @intCast(out.len);
         }
-        if (rc == Z_STREAM_END) break;
+        if (rc == zlib.Z_STREAM_END) break;
     }
     try writeChunk(writer, "IEND", "");
 }
@@ -1150,28 +1095,6 @@ fn writeChunk(writer: *std.Io.Writer, tag: *const [4]u8, data: []const u8) !void
     try writer.writeAll(&int_buf);
 }
 
-fn appendUtf16(arena: Allocator, out: *std.ArrayList(u16), utf8: []const u8) !void {
-    var it = std.unicode.Utf8View.initUnchecked(utf8).iterator();
-    while (it.nextCodepoint()) |cp| {
-        if (cp < 0x10000) {
-            try out.append(arena, @intCast(cp));
-        } else {
-            const v = cp - 0x10000;
-            try out.append(arena, @intCast(0xD800 + (v >> 10)));
-            try out.append(arena, @intCast(0xDC00 + (v & 0x3FF)));
-        }
-    }
-}
-
-// A mark's GPOS anchor offset (font units) to its parent: the cluster's
-// base, or the previous attached mark when stacking.
-const Attach = struct {
-    parent: usize,
-    root: usize,
-    dx: i16,
-    dy: i16,
-};
-
 fn utf8ToPlaced(arena: Allocator, utf8: []const u8) ![]const Placed {
     var out: std.ArrayList(Placed) = .empty;
     var it = std.unicode.Utf8View.initUnchecked(utf8).iterator();
@@ -1179,22 +1102,11 @@ fn utf8ToPlaced(arena: Allocator, utf8: []const u8) ![]const Placed {
     return out.items;
 }
 
-fn isHighSurrogate(u: u16) bool {
-    return u >= 0xD800 and u <= 0xDBFF;
-}
-
-fn isLowSurrogate(u: u16) bool {
-    return u >= 0xDC00 and u <= 0xDFFF;
-}
-
-fn combineSurrogates(hi: u16, lo: u16) u21 {
-    return 0x10000 + ((@as(u21, hi) - 0xD800) << 10) + (@as(u21, lo) - 0xDC00);
-}
-
-// (codepoint, units consumed) at the start of `units`.
+// (codepoint, units consumed) at the start of `units`; a lone surrogate
+// half decodes as itself.
 fn decodeUtf16(units: []const u16) struct { u21, usize } {
-    if (units.len >= 2 and isHighSurrogate(units[0]) and isLowSurrogate(units[1])) {
-        return .{ combineSurrogates(units[0], units[1]), 2 };
+    if (units.len >= 2 and std.unicode.utf16IsHighSurrogate(units[0]) and std.unicode.utf16IsLowSurrogate(units[1])) {
+        return .{ std.unicode.utf16DecodeSurrogatePair(units[0..2]) catch unreachable, 2 };
     }
     return .{ units[0], 1 };
 }
@@ -1224,10 +1136,14 @@ fn hasArabic(units: []const u16) bool {
     return false;
 }
 
-fn rgb(color: u32) z2d.Pixel {
-    return .{ .rgb = .{
+fn rgb(color: u32) z2d.pixel.RGB {
+    return .{
         .r = @intCast((color >> 16) & 0xff),
         .g = @intCast((color >> 8) & 0xff),
         .b = @intCast(color & 0xff),
-    } };
+    };
+}
+
+fn pixel(color: u32) z2d.Pixel {
+    return .{ .rgb = rgb(color) };
 }

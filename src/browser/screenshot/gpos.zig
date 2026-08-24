@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Reader for the OpenType GPOS mark-attachment lookups (mark-to-base,
-//! mark-to-ligature, mark-to-mark) and GDEF glyph classes, straight off the
-//! font bytes. Lookups are gathered from the mark/mkmk features of every
-//! script and applied in lookup-index order; the first covering subtable
-//! wins. LookupFlag filtering is not applied.
+//! mark-to-ligature, mark-to-mark), GDEF glyph classes and the vertical
+//! metrics tables, straight off the font bytes. Lookups are gathered from
+//! the mark/mkmk features of every script and applied in lookup-index order;
+//! the first covering subtable wins. LookupFlag filtering is not applied.
 
 const std = @import("std");
 
@@ -46,6 +46,33 @@ pub const Offset = struct {
 };
 
 pub const Error = error{ MalformedFont, OutOfMemory };
+
+/// Font units, as the tables store them (descent is negative).
+pub const Metrics = struct {
+    units_per_em: u16,
+    ascent: i16,
+    descent: i16,
+    underline_position: i16,
+    underline_thickness: i16,
+    strikeout_position: i16,
+    strikeout_size: i16,
+};
+
+pub fn readMetrics(self: *const Gpos) Error!Metrics {
+    const head = try self.findTable("head") orelse return error.MalformedFont;
+    const hhea = try self.findTable("hhea") orelse return error.MalformedFont;
+    const post = try self.findTable("post") orelse return error.MalformedFont;
+    const os2 = try self.findTable("OS/2") orelse return error.MalformedFont;
+    return .{
+        .units_per_em = try self.intAt(u16, head + 18),
+        .ascent = try self.intAt(i16, hhea + 4),
+        .descent = try self.intAt(i16, hhea + 6),
+        .underline_position = try self.intAt(i16, post + 8),
+        .underline_thickness = try self.intAt(i16, post + 10),
+        .strikeout_size = try self.intAt(i16, os2 + 26),
+        .strikeout_position = try self.intAt(i16, os2 + 28),
+    };
+}
 
 const MARK_CLASS: u16 = 3;
 
@@ -150,25 +177,24 @@ fn attach(self: *const Gpos, parent: u16, mark: u16, parent_is_mark: bool) Error
             if (class >= class_count) return error.MalformedFont;
             const mark_anchor = mark_array + try self.u16At(mark_record + 2);
 
+            // Anchor offsets are relative to the array holding them: the
+            // BaseArray/Mark2Array, or the ligature's own attach table.
             const record_size = @as(usize, class_count) * 2;
-            const parent_anchor_off = switch (lookup.kind) {
-                .mark_base, .mark_mark => try self.u16At(parent_array + 2 + @as(usize, pi) * record_size + class * 2),
+            const anchors_base, const anchor_off = switch (lookup.kind) {
+                .mark_base, .mark_mark => .{ parent_array, try self.u16At(parent_array + 2 + @as(usize, pi) * record_size + class * 2) },
                 .mark_lig => blk: {
                     const lig_attach = parent_array + try self.u16At(parent_array + 2 + @as(usize, pi) * 2);
                     const component_count = try self.u16At(lig_attach);
-                    if (component_count == 0) break :blk 0;
-                    break :blk try self.u16At(lig_attach + 2 + (component_count - 1) * record_size + class * 2);
+                    if (component_count == 0) break :blk .{ lig_attach, 0 };
+                    break :blk .{ lig_attach, try self.u16At(lig_attach + 2 + (component_count - 1) * record_size + class * 2) };
                 },
             };
-            if (parent_anchor_off == 0) continue;
-            const parent_anchor = if (lookup.kind == .mark_lig)
-                parent_array + try self.u16At(parent_array + 2 + @as(usize, pi) * 2) + parent_anchor_off
-            else
-                parent_array + parent_anchor_off;
+            if (anchor_off == 0) continue;
+            const parent_anchor = anchors_base + anchor_off;
 
             return .{
-                .dx = try self.i16At(parent_anchor + 2) - try self.i16At(mark_anchor + 2),
-                .dy = try self.i16At(parent_anchor + 4) - try self.i16At(mark_anchor + 4),
+                .dx = try self.intAt(i16, parent_anchor + 2) - try self.intAt(i16, mark_anchor + 2),
+                .dy = try self.intAt(i16, parent_anchor + 4) - try self.intAt(i16, mark_anchor + 4),
             };
         }
     }
@@ -190,18 +216,23 @@ fn coverage(self: *const Gpos, off: usize, gid: u16) Error!?u16 {
             return null;
         },
         2 => {
-            const count = try self.u16At(off + 2);
-            for (0..count) |i| {
-                const record = off + 4 + i * 6;
-                const start = try self.u16At(record);
-                const end = try self.u16At(record + 2);
-                if (gid < start) return null;
-                if (gid <= end) return try self.u16At(record + 4) + (gid - start);
-            }
-            return null;
+            const record = try self.rangeRecord(off, gid) orelse return null;
+            return try self.u16At(record + 4) + (gid - try self.u16At(record));
         },
         else => return error.MalformedFont,
     }
+}
+
+// Coverage and ClassDef format 2 share the sorted (start, end, value)
+// record layout; returns the record holding `gid`.
+fn rangeRecord(self: *const Gpos, off: usize, gid: u16) Error!?usize {
+    const count = try self.u16At(off + 2);
+    for (0..count) |i| {
+        const record = off + 4 + i * 6;
+        if (gid < try self.u16At(record)) return null;
+        if (gid <= try self.u16At(record + 2)) return record;
+    }
+    return null;
 }
 
 fn classOf(self: *const Gpos, off: usize, gid: u16) Error!u16 {
@@ -213,15 +244,8 @@ fn classOf(self: *const Gpos, off: usize, gid: u16) Error!u16 {
             return try self.u16At(off + 6 + (gid - start) * 2);
         },
         2 => {
-            const count = try self.u16At(off + 2);
-            for (0..count) |i| {
-                const record = off + 4 + i * 6;
-                const start = try self.u16At(record);
-                const end = try self.u16At(record + 2);
-                if (gid < start) return 0;
-                if (gid <= end) return try self.u16At(record + 4);
-            }
-            return 0;
+            const record = try self.rangeRecord(off, gid) orelse return 0;
+            return try self.u16At(record + 4);
         },
         else => return error.MalformedFont,
     }
@@ -245,16 +269,17 @@ fn bytesAt(self: *const Gpos, off: usize, len: usize) Error![]const u8 {
     return self.data[off..][0..len];
 }
 
-fn u16At(self: *const Gpos, off: usize) Error!u16 {
-    return std.mem.readInt(u16, (try self.bytesAt(off, 2))[0..2], .big);
+fn intAt(self: *const Gpos, comptime T: type, off: usize) Error!T {
+    const n = @sizeOf(T);
+    return std.mem.readInt(T, (try self.bytesAt(off, n))[0..n], .big);
 }
 
-fn i16At(self: *const Gpos, off: usize) Error!i16 {
-    return std.mem.readInt(i16, (try self.bytesAt(off, 2))[0..2], .big);
+fn u16At(self: *const Gpos, off: usize) Error!u16 {
+    return self.intAt(u16, off);
 }
 
 fn u32At(self: *const Gpos, off: usize) Error!u32 {
-    return std.mem.readInt(u32, (try self.bytesAt(off, 4))[0..4], .big);
+    return self.intAt(u32, off);
 }
 
 const testing = @import("../../testing.zig");
@@ -304,10 +329,23 @@ test "browser.screenshot.gpos: DejaVu Sans mark attachment" {
     try testing.expectEqual(null, g.attachToMark(68, 690));
 }
 
+test "browser.screenshot.gpos: DejaVu Sans metrics" {
+    const g = try Gpos.init(testing.arena_allocator, @embedFile("fonts/DejaVuSans.ttf"));
+    const m = try g.readMetrics();
+    try testing.expectEqual(2048, m.units_per_em);
+    try testing.expectEqual(1901, m.ascent);
+    try testing.expectEqual(-483, m.descent);
+    try testing.expectEqual(-40, m.underline_position);
+    try testing.expectEqual(90, m.underline_thickness);
+    try testing.expectEqual(530, m.strikeout_position);
+    try testing.expectEqual(102, m.strikeout_size);
+}
+
 test "browser.screenshot.gpos: all bundled faces parse" {
     inline for (.{ "DejaVuSans-Bold.ttf", "DejaVuSansMono.ttf", "DejaVuSansMono-Bold.ttf" }) |name| {
         const g = try Gpos.init(testing.arena_allocator, @embedFile("fonts/" ++ name));
         try testing.expectEqual(true, g.lookups.len > 0);
         try testing.expectEqual(true, g.glyph_class_def != null);
+        try testing.expectEqual(2048, (try g.readMetrics()).units_per_em);
     }
 }
