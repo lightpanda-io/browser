@@ -409,12 +409,11 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     flags.click_in_progress = true;
     defer flags.click_in_progress = false;
 
-    const event = (try @import("../event/MouseEvent.zig").init("click", .{
+    const event = (try @import("../event/PointerEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = 0,
-        .clientY = 0,
+        .pointerId = -1,
     }, frame)).asEvent();
 
     // Keep the event alive past dispatch (which runs handlers/microtasks) so we
