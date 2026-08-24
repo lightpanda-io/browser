@@ -386,34 +386,134 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
     if (!actions_val.isArray()) return;
     const actions = actions_val.toArray();
 
-    // Key actions have no explicit target; they go to the focused element, or
-    // the document if nothing is focused.
-    const target = if (frame.document._active_element) |el|
-        el.asEventTarget()
-    else
-        frame.document.asNode().asEventTarget();
-
     for (0..actions.len()) |i| {
         const action_val = try actions.get(@intCast(i));
         if (!action_val.isObject()) continue;
         const action = action_val.toObject();
         const action_type = (try action.get("type")).toSSO(false) catch continue;
 
-        const key = (try action.get("value")).toStringSlice() catch "";
-        if (action_type.eql(comptime .wrap("keyDown"))) {
-            dispatchKey(target, comptime .wrap("keydown"), key, frame);
-        } else if (action_type.eql(comptime .wrap("keyUp"))) {
-            dispatchKey(target, comptime .wrap("keyup"), key, frame);
+        const is_down = action_type.eql(comptime .wrap("keyDown"));
+        if (!is_down and action_type.eql(comptime .wrap("keyUp")) == false) {
+            continue;
         }
+
+        const key = webdriverKey((try action.get("value")).toStringSlice() catch "");
+
+        // A modifier's own keydown already carries its flag; its keyup no
+        // longer does.
+        setModifier(&frame._page.input_modifiers, key, is_down);
+
+        // Key actions have no explicit target; they go to the focused element,
+        // or the document if nothing is focused. Resolved per action since a
+        // key's default action can move focus.
+        const target = if (frame.document._active_element) |el|
+            el.asEventTarget()
+        else
+            frame.document.asNode().asEventTarget();
+
+        dispatchKey(target, if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup"), key, frame);
+    }
+}
+
+// WebDriver's normalized-key PUA codepoints to KeyboardEvent.key values
+// (https://w3c.github.io/webdriver/#keyboard-actions). Any other value is the
+// key itself. The U+E050-U+E053 right-hand variants map to the same key name,
+// only the (untracked) location differs.
+fn webdriverKey(value: []const u8) []const u8 {
+    // The U+E000-U+E05D PUA range always encodes as three UTF-8 bytes.
+    if (value.len != 3) {
+        return value;
+    }
+    const cp = std.unicode.utf8Decode(value) catch return value;
+    return switch (cp) {
+        0xE000 => "Unidentified",
+        0xE001 => "Cancel",
+        0xE002 => "Help",
+        0xE003 => "Backspace",
+        0xE004 => "Tab",
+        0xE005 => "Clear",
+        0xE006, 0xE007 => "Enter",
+        0xE008, 0xE050 => "Shift",
+        0xE009, 0xE051 => "Control",
+        0xE00A, 0xE052 => "Alt",
+        0xE00B => "Pause",
+        0xE00C => "Escape",
+        0xE00D => " ",
+        0xE00E => "PageUp",
+        0xE00F => "PageDown",
+        0xE010 => "End",
+        0xE011 => "Home",
+        0xE012 => "ArrowLeft",
+        0xE013 => "ArrowUp",
+        0xE014 => "ArrowRight",
+        0xE015 => "ArrowDown",
+        0xE016 => "Insert",
+        0xE017 => "Delete",
+        0xE018 => ";",
+        0xE019 => "=",
+        0xE01A => "0",
+        0xE01B => "1",
+        0xE01C => "2",
+        0xE01D => "3",
+        0xE01E => "4",
+        0xE01F => "5",
+        0xE020 => "6",
+        0xE021 => "7",
+        0xE022 => "8",
+        0xE023 => "9",
+        0xE024 => "*",
+        0xE025 => "+",
+        0xE026 => ",",
+        0xE027 => "-",
+        0xE028 => ".",
+        0xE029 => "/",
+        0xE031 => "F1",
+        0xE032 => "F2",
+        0xE033 => "F3",
+        0xE034 => "F4",
+        0xE035 => "F5",
+        0xE036 => "F6",
+        0xE037 => "F7",
+        0xE038 => "F8",
+        0xE039 => "F9",
+        0xE03A => "F10",
+        0xE03B => "F11",
+        0xE03C => "F12",
+        0xE03D, 0xE053 => "Meta",
+        else => value,
+    };
+}
+
+pub const Modifiers = struct {
+    ctrl: bool = false,
+    shift: bool = false,
+    alt: bool = false,
+    meta: bool = false,
+};
+
+fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
+    if (std.mem.eql(u8, key, "Shift")) {
+        modifiers.shift = pressed;
+    } else if (std.mem.eql(u8, key, "Control")) {
+        modifiers.ctrl = pressed;
+    } else if (std.mem.eql(u8, key, "Alt")) {
+        modifiers.alt = pressed;
+    } else if (std.mem.eql(u8, key, "Meta")) {
+        modifiers.meta = pressed;
     }
 }
 
 fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Frame) void {
+    const modifiers = frame._page.input_modifiers;
     const event = KeyboardEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .key = key,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
     }, frame) catch |err| {
         log.warn(.app, "webdriver key event", .{ .err = err });
         return;
@@ -430,6 +530,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
 }
 
 fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
+    const modifiers = frame._page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -439,6 +540,10 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
         .pointerId = 1,
         .pointerType = "mouse",
         .isPrimary = true,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
     }, frame) catch |err| {
         log.warn(.app, "webdriver pointer event", .{ .err = err, .type = typ });
         return;
@@ -447,6 +552,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
 }
 
 fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, detail: u32, frame: *Frame) void {
+    const modifiers = frame._page.input_modifiers;
     const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
@@ -454,6 +560,10 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
         .button = button,
         .buttons = buttons,
         .detail = detail,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
     }, frame) catch |err| {
         log.warn(.app, "webdriver mouse event", .{ .err = err, .type = typ });
         return;
