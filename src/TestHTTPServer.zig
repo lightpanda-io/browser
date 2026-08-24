@@ -98,7 +98,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
 
         self.handler(&req) catch |err| {
             switch (err) {
-                error.BrokenPipe => {},
+                error.BrokenPipe, error.WriteFailed => {},
                 else => {
                     std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
                     req.respond("server error", .{ .status = .internal_server_error }) catch {};
