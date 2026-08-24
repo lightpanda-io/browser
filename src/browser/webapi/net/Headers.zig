@@ -67,7 +67,7 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
 
 pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool {
     const normalized_name = normalizeHeaderName(name, exec.buf);
-    return self._list.has(normalized_name);
+    return self._list.has(normalized_name, null);
 }
 
 pub fn set(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {

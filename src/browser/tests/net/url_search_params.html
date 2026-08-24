@@ -571,3 +571,67 @@
   testing.expectEqual(original, usp2.get('test'));
 }
 </script>
+
+<script id=deletePreservesOrder>
+{
+  const usp = new URLSearchParams('a=b&c=d');
+  usp.delete('a');
+  testing.expectEqual('c=d', usp.toString());
+
+  const usp2 = new URLSearchParams('a=a&b=b&a=a&c=c');
+  usp2.delete('a');
+  testing.expectEqual('b=b&c=c', usp2.toString());
+}
+</script>
+
+<script id=setPreservesPosition>
+{
+  const usp = new URLSearchParams('a=1&b=2&a=3&c=4');
+  usp.set('a', 'B');
+  testing.expectEqual('a=B&b=2&c=4', usp.toString());
+
+  // no existing entry appends
+  usp.set('d', '5');
+  testing.expectEqual('a=B&b=2&c=4&d=5', usp.toString());
+}
+</script>
+
+<script id=hasWithValue>
+{
+  const usp = new URLSearchParams('a=b&a=d&c&e&');
+  testing.expectEqual(true, usp.has('a', 'b'));
+  testing.expectEqual(false, usp.has('a', 'c'));
+  testing.expectEqual(true, usp.has('a', 'd'));
+  testing.expectEqual(true, usp.has('e', ''));
+  // undefined second arg behaves like the one-argument form
+  testing.expectEqual(true, usp.has('a', undefined));
+  usp.delete('a', 'b');
+  testing.expectEqual(false, usp.has('a', 'b'));
+  testing.expectEqual(true, usp.has('a', 'd'));
+}
+</script>
+
+<script id=sortUtf16CodeUnits>
+{
+  // 🌈 (U+1F308) is a higher code *point* than ﬃ (U+FB03), but sorts first
+  // by UTF-16 code units (lead surrogate 0xD83C < 0xFB03).
+  const usp = new URLSearchParams('ﬃ&\u{1F308}');
+  usp.sort();
+  testing.expectEqual(['\u{1F308}', 'ﬃ'], Array.from(usp.keys()));
+}
+</script>
+
+<script id=deleteDuringIteration>
+{
+  const usp = new URLSearchParams('param0=0&param1=1&param2=2');
+  const seen = [];
+  for (const param of usp) {
+    seen.push(param[0]);
+    usp.delete(param[0]);
+  }
+  // deleting the current entry shifts the next one into its slot, so the
+  // live iterator skips param1 - matching WPT urlsearchparams-foreach
+  testing.expectEqual(['param0', 'param2'], seen);
+  testing.expectEqual('param1=1', usp.toString());
+}
+</script>

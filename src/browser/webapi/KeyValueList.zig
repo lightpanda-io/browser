@@ -122,10 +122,12 @@ pub fn getAll(self: *const KeyValueList, allocator: Allocator, name: []const u8)
     return arr.items;
 }
 
-pub fn has(self: *const KeyValueList, name: []const u8) bool {
+pub fn has(self: *const KeyValueList, name: []const u8, value: ?[]const u8) bool {
     for (self._entries.items) |*entry| {
         if (entry.name.eqlSlice(name)) {
-            return true;
+            if (value == null or entry.value.eqlSlice(value.?)) {
+                return true;
+            }
         }
     }
     return false;
@@ -145,22 +147,47 @@ pub fn appendAssumeCapacity(self: *KeyValueList, allocator: Allocator, name: []c
     });
 }
 
+// Preserve the relative order
 pub fn delete(self: *KeyValueList, name: []const u8, value: ?[]const u8) void {
+    const entries = self._entries.items;
     var i: usize = 0;
-    while (i < self._entries.items.len) {
-        const entry = self._entries.items[i];
+    for (entries) |entry| {
         if (entry.name.eqlSlice(name)) {
             if (value == null or entry.value.eqlSlice(value.?)) {
-                _ = self._entries.swapRemove(i);
                 continue;
             }
         }
+        entries[i] = entry;
         i += 1;
     }
+    self._entries.items.len = i;
 }
 
+// Update the first match, remove all the others
 pub fn set(self: *KeyValueList, allocator: Allocator, name: []const u8, value: []const u8) !void {
-    self.delete(name, null);
+    const entries = self._entries.items;
+    for (entries, 0..) |*entry, i| {
+        if (entry.name.eqlSlice(name) == false) {
+            continue;
+        }
+
+        // this is our first matching entry, update its value
+        entry.value = try String.init(allocator, value, .{});
+
+        // and now delete all other matching entreis
+        var w: usize = i + 1;
+        for (entries[i + 1 ..]) |later| {
+            if (later.name.eqlSlice(name)) {
+                continue;
+            }
+            entries[w] = later;
+            w += 1;
+        }
+        self._entries.items.len = w;
+        return;
+    }
+
+    // wasn't found, append
     try self.append(allocator, name, value);
 }
 
