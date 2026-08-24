@@ -980,9 +980,9 @@ pub const SearchParams = struct {
 };
 
 /// Search backend for `execSearch`. `.auto` tries the `api_engines` in
-/// order (each only when its API key is set), then the DuckDuckGo scrape;
-/// an explicit engine is used alone. Only the agent REPL's `/searchEngine`
-/// mutates this.
+/// order (each only when its API key is set), then Keenable's keyless
+/// public endpoint, then the DuckDuckGo scrape; an explicit engine is
+/// used alone. Only the agent REPL's `/searchEngine` mutates this.
 pub const SearchEngine = enum { auto, tavily, brave, exa, keenable, duckduckgo };
 pub var search_engine: SearchEngine = .auto;
 
@@ -1020,7 +1020,10 @@ const api_engines = .{
         .tag = SearchEngine.keenable,
         .env_var = "KEENABLE_API_KEY",
         .Client = keenable.Client,
-        .init_options = keenable.Client.InitOptions{ .app_title = "lightpanda" },
+        // Retries off: the fallback cascade is the retry mechanism, and
+        // honoring the public endpoint's Retry-After (60s per sleep) would
+        // stall the search tool instead of routing to the next rung.
+        .init_options = keenable.Client.InitOptions{ .app_title = "lightpanda", .retry_policy = .disabled },
         // snippet_max_length is a hint the API may round up to a word
         // boundary; 500 keeps ten results within a few KB of context.
         .options = keenable.types.SearchOptions{ .max_results = 10, .snippet_max_length = 500 },
@@ -1066,17 +1069,14 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
                     }
                 }
             }
-            // One rung above the DDG scrape: Keenable also answers keyless
-            // (public endpoint, rate-limited per client IP) with the same
-            // structured results as its keyed form. Skipped when its key is
-            // set — the loop above already tried it keyed.
+            // One rung above the DDG scrape: the keyless public endpoint
+            // returns the same structured results under its own rate-limit
+            // regime — worth trying even after a failed keyed attempt.
             const kn = api_engines[comptime engineIndex(.keenable)];
-            if (std.c.getenv(kn.env_var) == null) {
-                if (apiSearch(kn, arena, null, args.query)) |markdown_| {
-                    return .{ .text = markdown_ };
-                } else |err| {
-                    log.warn(.browser, "keenable keyless fallback", .{ .err = err });
-                }
+            if (apiSearch(kn, arena, null, args.query)) |markdown_| {
+                return .{ .text = markdown_ };
+            } else |err| {
+                log.warn(.browser, "keenable keyless fallback", .{ .err = err });
             }
         },
         .duckduckgo => {},
@@ -1095,8 +1095,9 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
     return .{ .text = try renderFrameMarkdown(arena, ddg_frame) };
 }
 
-/// Search with an explicitly selected engine: a missing key or a failed call
-/// comes back as an error result — no DDG fallback.
+/// Search with an explicitly selected engine — no DDG fallback. A failed
+/// call comes back as an error result, as does a missing key unless the
+/// engine is keyless-capable (it then uses its public endpoint).
 fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const markdown_ = blk: {
