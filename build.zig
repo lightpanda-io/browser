@@ -105,6 +105,14 @@ pub fn build(b: *Build) !void {
     lightpanda_module.addImport("lightpanda", lightpanda_module); // allow circular "lightpanda" import
     lightpanda_module.addImport("build_config", opts.createModule());
 
+    // Rasterization is hot in screenshot/raster.zig; keep z2d optimized in
+    // dev builds, like the Rust workspace does for its dependencies.
+    const z2d_dep = b.dependency("z2d", .{
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseFast else optimize,
+    });
+    lightpanda_module.addImport("z2d", z2d_dep.module("z2d"));
+
     const fmt_step = b.step("fmt", "Check code formatting");
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "build.zig", "build.zig.zon" },

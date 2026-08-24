@@ -39,6 +39,10 @@
             .url = "git+https://github.com/lightpanda-io/zenai.git#5c208f61c5b6b0bc46ceaf2670d0d267b1eef87e",
             .hash = "zenai-0.0.0-iOY_VKQ9BgC0_zD9nj_EedEkNioEJnGqoKsHWcq27D74",
         },
+        .z2d = .{
+            .url = "git+https://github.com/arrufat/z2d?ref=lightpanda#0cb4284b4e6bb697a1c1ae9baa138969ecb32577",
+            .hash = "z2d-0.12.2-pre-j5P_HgE9EQBji5eF89ddAHaihfzMifj6c-uocwjCTpTy",
+        },
         .isocline = .{
             .url = "git+https://github.com/arrufat/isocline?ref=lightpanda#832a9fe25f5f4458fcc47b5acc7c21db669c2f47",
             .hash = "N-V-__8AANtqEwD-jr5LWeksHDYkaQSpLbu6MRHFvlPURIik",
