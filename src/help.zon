@@ -409,7 +409,9 @@
     \\          Defaults to 1.
     \\  --http-nav-delay <INT>
     \\          Minimum time in ms between two top-level navigations to the same
-    \\          host (see --http-nav-burst). Disable by setting to 0.
+    \\          host (see --http-nav-burst). The spacing grows with the number
+    \\          of navigations sent to the host, and comes back down when the
+    \\          host is left alone. Disable by setting to 0.
     \\          Defaults to 0.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
