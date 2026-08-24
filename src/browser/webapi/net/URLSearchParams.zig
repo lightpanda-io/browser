@@ -315,16 +315,11 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     var in_i: usize = 0;
     while (in_i < value.len) {
         const b = value[in_i];
-        if (b == '%') {
-            if (in_i + 2 >= value.len or !std.ascii.isHex(value[in_i + 1]) or !std.ascii.isHex(value[in_i + 2])) {
-                return error.InvalidEscapeSequence;
-            }
+        if (b == '%' and isEscapeTriplet(value, in_i)) {
             in_i += 3;
             unescaped_len -= 2;
-        } else if (b == '+') {
-            has_plus = true;
-            in_i += 1;
         } else {
+            has_plus = has_plus or b == '+';
             in_i += 1;
         }
     }
@@ -344,7 +339,7 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     in_i = 0;
     for (0..unescaped_len) |i| {
         const b = value[in_i];
-        if (b == '%') {
+        if (b == '%' and isEscapeTriplet(value, in_i)) {
             out[i] = decodeHex(value[in_i + 1]) << 4 | decodeHex(value[in_i + 2]);
             in_i += 3;
         } else if (b == '+') {
@@ -397,6 +392,11 @@ pub const Iterator = struct {
         return .{ e.name.str(), e.value.str() };
     }
 };
+
+// True when value[i] starts a valid %XX escape
+fn isEscapeTriplet(value: []const u8, i: usize) bool {
+    return i + 2 < value.len and std.ascii.isHex(value[i + 1]) and std.ascii.isHex(value[i + 2]);
+}
 
 const GenericIterator = @import("../collections/iterator.zig").Entry;
 pub const KeyIterator = GenericIterator(Iterator, "0");
