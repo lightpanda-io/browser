@@ -176,6 +176,52 @@ pub fn Once(comptime f: fn () void) type {
     };
 }
 
+/// Everything a tool-driving embedder owns per isolated browsing context.
+/// Used by the C API. `self` must not move after `init` — Browser registers
+/// self-pointers.
+pub const ToolSession = struct {
+    browser: Browser,
+    session: *Session,
+    notification: *Notification,
+    registry: CDPNode.Registry,
+
+    /// Leaves the browser's isolate entered, like `Browser.init`; callers
+    /// sharing one thread between several isolates park it with
+    /// `exitIsolate` afterwards.
+    pub fn init(self: *ToolSession, app: *App) !void {
+        self.notification = try Notification.init(app.allocator);
+        errdefer self.notification.deinit();
+
+        self.registry = .init(app.allocator);
+        errdefer self.registry.deinit();
+
+        try self.browser.init(app, .{}, null);
+        errdefer self.browser.deinit();
+
+        self.session = try self.browser.newSession(self.notification);
+        try self.session.enableConsoleCapture();
+    }
+
+    /// The isolate must be current (`enterIsolate` if parked): Browser.deinit's
+    /// Env.deinit exit has to balance against this context's isolate.
+    pub fn deinit(self: *ToolSession) void {
+        self.registry.deinit();
+        self.browser.deinit();
+        self.notification.deinit();
+    }
+
+    /// V8's "current isolate" is a per-thread stack: when several contexts
+    /// share a thread, bracket any use of the Browser/Session with
+    /// enterIsolate/exitIsolate and leave it un-entered otherwise.
+    pub fn enterIsolate(self: *ToolSession) void {
+        self.browser.env.isolate.enter();
+    }
+
+    pub fn exitIsolate(self: *ToolSession) void {
+        self.browser.env.isolate.exit();
+    }
+};
+
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     wait_until: ?Config.WaitUntil = null,
