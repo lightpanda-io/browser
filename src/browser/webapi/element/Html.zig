@@ -471,6 +471,30 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
 }
 
+// The draggable IDL attribute reflects the enumerated content attribute:
+// "true" => true, "false" => false, anything else (or no attribute) is the
+// auto state, which defaults to true only for <img> and <a> with an href.
+// https://html.spec.whatwg.org/multipage/dnd.html#the-draggable-attribute
+pub fn getDraggable(self: *HtmlElement) bool {
+    if (self.asElement().getAttributeSafe(comptime .wrap("draggable"))) |value| {
+        if (std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return switch (self._type) {
+        .img => true,
+        .anchor => self.asElement().getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
+}
+
+pub fn setDraggable(self: *HtmlElement, draggable: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("draggable"), .wrap(if (draggable) "true" else "false"), frame);
+}
+
 // accessKeyLabel: the UA-assigned shortcut for a valid (single character)
 // accesskey, or the empty string. We report an Alt+ chord like Chromium.
 pub fn getAccessKeyLabel(self: *HtmlElement, frame: *Frame) ![]const u8 {
@@ -1808,6 +1832,7 @@ pub const JsApi = struct {
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
     pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
+    pub const draggable = bridge.accessor(HtmlElement.getDraggable, HtmlElement.setDraggable, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});
