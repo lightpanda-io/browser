@@ -2055,6 +2055,9 @@ pub const Transfer = struct {
 
     _notified_fail: bool = false,
 
+    // guard to ensure only one of done/error/shutdown is ever called
+    _outcome_delivered: bool = false,
+
     // Set when conn is temporarily detached from transfer during redirect
     // reconfiguration. Used by processMessages to release the orphaned conn
     // if reconfiguration fails. Transient inside the redirect path only.
@@ -2150,9 +2153,9 @@ pub const Transfer = struct {
         // responsible for resuming or terminating it.
         parked: ParkedBy,
 
-        // detachInDelivery ran; user callbacks are noop'd, owner link is
-        // cleared, deliver() will deinit when its loop exits. `_conn`
-        // (if any) is what `deinit` will release.
+        // detachInDelivery ran; delivery callbacks are noop'd, owner link
+        // is cleared, deliver() will finishDelivery when its loop exits.
+        // `_conn` (if any) is what `deinit` will release.
         aborted,
     };
 
@@ -2379,8 +2382,14 @@ pub const Transfer = struct {
                 .err = error.Shutdown,
             });
         }
-        self.req.shutdown_callback(self.req.ctx);
-        self.detachOrDeinit();
+        switch (self.state) {
+            .delivering => self.detachInDelivery(),
+            .aborted => {}, // already detached
+            else => {
+                self.req.shutdown_callback(self.req.ctx);
+                self.deinit();
+            },
+        }
     }
 
     // Decide whether to tear down now or defer.
@@ -2409,8 +2418,9 @@ pub const Transfer = struct {
     //     the next event (and, for a streaming transfer whose conn is
     //     still in the multi, so a nested pump's completion path
     //     short-circuits),
-    //   - noop every user callback so a nested pump draining the still-
-    //     inflight response can't re-enter user code,
+    //   - noop every delivery callback so a nested pump draining the still-
+    //     inflight response can't re-enter user code. shutdown_callback is
+    //     kept: only kill() calls it.
     //   - unlink from owner.transfers and clear `owner` so the owning
     //     Frame/WGS can be freed while this transfer is still draining.
     //     transfer.deinit (called by deliver() on exit) sees
@@ -2421,7 +2431,6 @@ pub const Transfer = struct {
         // releases it once libcurl is done.
         self.state = .aborted;
         self.req.start_callback = null;
-        self.req.shutdown_callback = noopShutdown;
         self.req.header_callback = Noop.headerCallback;
         self.req.data_callback = Noop.dataCallback;
         self.req.done_callback = Noop.doneCallback;
@@ -2439,6 +2448,10 @@ pub const Transfer = struct {
         if (self._notified_fail) {
             return;
         }
+
+        if (self.state == .aborted) {
+            return;
+        }
         self._notified_fail = true;
 
         if (!self.req.internal) {
@@ -2453,6 +2466,7 @@ pub const Transfer = struct {
             });
         }
 
+        self._outcome_delivered = true;
         self.req.error_callback(self.req.ctx, err);
     }
 
@@ -2461,7 +2475,7 @@ pub const Transfer = struct {
     fn failDelivery(self: *Transfer, err: anyerror) void {
         log.err(.http, "delivery callback", .{ .err = err, .req = self });
         self.requestFailed(err);
-        self.deinit();
+        self.finishDelivery();
     }
 
     // Fail the transfer asynchronously: the error is buffered and
@@ -3272,6 +3286,7 @@ pub const Transfer = struct {
                             .content_length = transfer._content_length,
                         });
                     }
+                    transfer._outcome_delivered = true;
                     req.done_callback(req.ctx) catch |err| {
                         return transfer.failDelivery(err);
                     };
@@ -3285,13 +3300,22 @@ pub const Transfer = struct {
         }
 
         if (transfer.state == .aborted or terminal) {
-            transfer.deinit();
+            transfer.finishDelivery();
             return;
         }
 
         // Mid-stream batch fully delivered; the conn is still receiving.
         transfer._events.clearRetainingCapacity();
         transfer.state = .inflight;
+    }
+
+    fn finishDelivery(self: *Transfer) void {
+        if (self.state == .aborted and self._outcome_delivered == false) {
+            // the transfer is aborted and hasn't had a done/error/shutdown
+            // callback called yet.
+            self.req.shutdown_callback(self.req.ctx);
+        }
+        self.deinit();
     }
 };
 
@@ -3882,6 +3906,171 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     // `intercepted` (or tripped the leaveIntercept assert).
     try testing.expectEqual(0, client.intercepted);
     try testing.expectEqual(0, client.dispatch_count);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: kill during done_callback does not also fire shutdown_callback" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner: Owner = .init(undefined, undefined);
+
+    const Ctx = struct {
+        client: *Client,
+        owner: *Owner,
+        in_done: bool = false,
+        done_called: bool = false,
+        shutdown_called: bool = false,
+        shutdown_during_done: bool = false,
+
+        fn doneCallback(ctx: *anyopaque) !void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.done_called = true;
+            self.in_done = true;
+            defer self.in_done = false;
+            // Navigation / page-close kicked off by JS inside done_callback.
+            self.client.abortOwner(self.owner);
+        }
+
+        fn shutdownCallback(ctx: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.shutdown_called = true;
+            self.shutdown_during_done = self.in_done;
+        }
+    };
+    var ctx = Ctx{ .client = &client, .owner = &owner };
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .xhr,
+            .notification = undefined,
+            .shutdown_callback = Ctx.shutdownCallback,
+            .ctx = &ctx,
+            .done_callback = Ctx.doneCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{}, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expect(ctx.done_called);
+    try testing.expectEqual(false, ctx.shutdown_during_done);
+    try testing.expectEqual(false, ctx.shutdown_called);
+
+    // Freed exactly once regardless.
+    try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: kill during a non-terminal callback defers shutdown_callback" {
+    // Same re-entrant kill, but from header_callback: the consumer has had no
+    // outcome yet, so it must still get shutdown — once, and only after its
+    // callback has returned. done_callback must not run on top of it.
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner: Owner = .init(undefined, undefined);
+
+    const Ctx = struct {
+        client: *Client,
+        owner: *Owner,
+        in_header: bool = false,
+        done_called: bool = false,
+        shutdown_calls: u8 = 0,
+        shutdown_during_header: bool = false,
+
+        fn headerCallback(transfer: *Transfer) !Transfer.HeaderResult {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            self.in_header = true;
+            defer self.in_header = false;
+            self.client.abortOwner(self.owner);
+            return .proceed;
+        }
+
+        fn doneCallback(ctx: *anyopaque) !void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.done_called = true;
+        }
+
+        fn shutdownCallback(ctx: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.shutdown_calls += 1;
+            self.shutdown_during_header = self.in_header;
+        }
+    };
+    var ctx = Ctx{ .client = &client, .owner = &owner };
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .frame_id = 0,
+            .loader_id = 0,
+            .method = .GET,
+            .url = "http://example.com/",
+            .cookie_jar = null,
+            .cookie_origin = "",
+            .resource_type = .xhr,
+            .notification = undefined,
+            .shutdown_callback = Ctx.shutdownCallback,
+            .ctx = &ctx,
+            .header_callback = Ctx.headerCallback,
+            .done_callback = Ctx.doneCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{}, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expectEqual(1, ctx.shutdown_calls);
+    try testing.expectEqual(false, ctx.shutdown_during_header);
+    try testing.expectEqual(false, ctx.done_called);
+
+    try testing.expectEqual(0, client.intercepted);
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
 }
