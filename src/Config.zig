@@ -663,7 +663,10 @@ fn stderrIsTty() bool {
 
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.log_format,
+        // The MCP host captures stderr into a log file, where pretty's ANSI
+        // escapes and multi-line entries are noise.
+        .mcp => |opts| opts.log_format orelse .logfmt,
+        inline .serve, .fetch, .agent => |opts| opts.log_format,
         else => unreachable,
     };
 }
