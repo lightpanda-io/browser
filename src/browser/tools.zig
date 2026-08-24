@@ -1028,7 +1028,7 @@ const api_engines = .{
     },
 };
 
-/// Engines that also work with no API key (an empty key routes the client
+/// Engines that also work with no API key (a `null` key routes the client
 /// to the provider's public endpoint). `searchExplicit` and the REPL's
 /// `/searchEngine` warning consult this.
 pub fn searchEngineKeyless(engine: SearchEngine) bool {
@@ -1072,7 +1072,7 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
             // set — the loop above already tried it keyed.
             const kn = api_engines[comptime engineIndex(.keenable)];
             if (std.c.getenv(kn.env_var) == null) {
-                if (apiSearch(kn, arena, "", args.query)) |markdown_| {
+                if (apiSearch(kn, arena, null, args.query)) |markdown_| {
                     return .{ .text = markdown_ };
                 } else |err| {
                     log.warn(.browser, "keenable keyless fallback", .{ .err = err });
@@ -1099,11 +1099,18 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
 /// comes back as an error result — no DDG fallback.
 fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
-    const api_key: []const u8 = if (std.c.getenv(engine.env_var)) |z| std.mem.span(z) else if (comptime searchEngineKeyless(engine.tag)) "" else return .{
-        .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
-        .is_error = true,
-    };
-    const markdown_ = apiSearch(engine, arena, api_key, query) catch |err| {
+    const markdown_ = blk: {
+        if (std.c.getenv(engine.env_var)) |z|
+            break :blk apiSearch(engine, arena, std.mem.span(z), query);
+        // Comptime-gated so the null-key call is only instantiated for
+        // clients whose `init` takes an optional key.
+        if (comptime searchEngineKeyless(engine.tag))
+            break :blk apiSearch(engine, arena, null, query);
+        return .{
+            .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
+            .is_error = true,
+        };
+    } catch |err| {
         const msg = std.fmt.allocPrint(arena, label ++ " search failed: {s}", .{@errorName(err)}) catch
             return ToolError.OutOfMemory;
         return .{ .text = msg, .is_error = true };
@@ -1111,11 +1118,13 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []c
     return .{ .text = markdown_ };
 }
 
-/// `arena` owns the returned slice.
+/// `arena` owns the returned slice. `api_key` is the environment value, or
+/// `null` for an engine that supports keyless calls (its client's `init`
+/// takes a `?[]const u8` key — see `searchEngineKeyless`).
 fn apiSearch(
     comptime engine: anytype,
     arena: std.mem.Allocator,
-    api_key: []const u8,
+    api_key: anytype,
     query: []const u8,
 ) ![]const u8 {
     var client: engine.Client = .init(lp.io, arena, api_key, engine.init_options);
@@ -1176,10 +1185,9 @@ fn formatKeenableMarkdown(w: *std.Io.Writer, resp: keenable.types.SearchResponse
         return w.writeAll("No results.");
     }
     for (resp.results, 0..) |r, i| {
-        // snippet carries the page text; description (the meta description)
-        // is empty on essentially every result and is only a fallback.
-        const snippet = if (r.snippet.len > 0) r.snippet else r.description;
-        try writeResultItem(w, i, r.title, r.url, snippet);
+        // snippet carries the page text (the wire format's always-empty
+        // `description` is deliberately not even mapped by the client).
+        try writeResultItem(w, i, r.title, r.url, r.snippet);
     }
 }
 
@@ -2533,17 +2541,16 @@ test "formatBraveMarkdown handles empty results" {
     try std.testing.expectEqualStrings("No results.", empty_web.written());
 }
 
-test "formatKeenableMarkdown reads snippet, falls back to description" {
+test "formatKeenableMarkdown reads snippet" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    // Real response shape: description present but empty, text in snippet.
     const resp: keenable.types.SearchResponse = .{
         .query = "zig",
         .results = &.{
-            .{ .title = "Zig (programming language)", .url = "https://en.wikipedia.org/wiki/Zig", .snippet = "Zig is a system programming language.", .description = "" },
-            .{ .title = "Zig guide", .url = "https://example.org/zig", .snippet = "", .description = "Meta description only." },
+            .{ .title = "Zig (programming language)", .url = "https://en.wikipedia.org/wiki/Zig", .snippet = "Zig is a system programming language." },
+            .{ .title = "Zig guide", .url = "https://example.org/zig", .snippet = "Compile-time execution." },
         },
     };
 
@@ -2553,7 +2560,7 @@ test "formatKeenableMarkdown reads snippet, falls back to description" {
     try std.testing.expect(std.mem.indexOf(u8, md, "1. **Zig (programming language)**") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "Zig is a system programming language.") != null);
     try std.testing.expect(std.mem.indexOf(u8, md, "2. **Zig guide**") != null);
-    try std.testing.expect(std.mem.indexOf(u8, md, "Meta description only.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, "Compile-time execution.") != null);
 }
 
 test "formatKeenableMarkdown handles empty results" {
