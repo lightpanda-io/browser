@@ -979,19 +979,23 @@ pub const SearchParams = struct {
     timeout: ?u32 = null,
 };
 
-/// Search backend for `execSearch`. `.auto` tries the `api_engines` in
-/// order (each only when its API key is set), then Keenable's keyless
-/// public endpoint, then the DuckDuckGo scrape; an explicit engine is
-/// used alone. Only the agent REPL's `/searchEngine` mutates this.
-pub const SearchEngine = enum { auto, tavily, brave, exa, keenable, duckduckgo };
+/// Search backend for `execSearch`. `.auto` tries the API engines in
+/// declaration order (each only when its API key is set), then the keyless
+/// public endpoint of `.keyless` engines (keenable), then the DuckDuckGo
+/// scrape; an explicit engine is used alone. Declaration order after `auto`
+/// is the `.auto` preference order (asserted against `api_engines` below);
+/// `duckduckgo` (the scrape fallback, no table entry) is last. Only the
+/// agent REPL's `/searchEngine` mutates this.
+pub const SearchEngine = enum { auto, brave, tavily, exa, keenable, duckduckgo };
 pub var search_engine: SearchEngine = .auto;
 
-// Ordered by `.auto` preference; the `search` tool description prose must
-// agree with this table.
+// One entry per API engine, in `SearchEngine` declaration order (asserted
+// below); the `search` tool description prose must agree with this table.
 const api_engines = .{
     .{
         .tag = SearchEngine.brave,
         .env_var = "BRAVE_API_KEY",
+        .keyless = false,
         .Client = brave.Client,
         .init_options = brave.Client.InitOptions{},
         // text_decorations=false: no <strong> markup in model-read snippets.
@@ -1001,6 +1005,7 @@ const api_engines = .{
     .{
         .tag = SearchEngine.tavily,
         .env_var = "TAVILY_API_KEY",
+        .keyless = false,
         .Client = tavily.Client,
         .init_options = tavily.Client.InitOptions{},
         .options = tavily.types.SearchOptions{ .max_results = 10 },
@@ -1009,6 +1014,7 @@ const api_engines = .{
     .{
         .tag = SearchEngine.exa,
         .env_var = "EXA_API_KEY",
+        .keyless = false,
         .Client = exa.Client,
         .init_options = exa.Client.InitOptions{},
         // highlights: Exa returns no snippet text unless contents is requested;
@@ -1019,6 +1025,9 @@ const api_engines = .{
     .{
         .tag = SearchEngine.keenable,
         .env_var = "KEENABLE_API_KEY",
+        // Also works with no API key: a `null` key routes the client to the
+        // keyless public endpoint (rate-limited per client IP).
+        .keyless = true,
         .Client = keenable.Client,
         // Retries off: the fallback cascade is the retry mechanism, and
         // honoring the public endpoint's Retry-After (60s per sleep) would
@@ -1031,11 +1040,27 @@ const api_engines = .{
     },
 };
 
+// `SearchEngine` declaration order is the single source of truth: tags must
+// appear in `api_engines` in declaration order, with `auto` first and
+// `duckduckgo` (scrape fallback, no table entry) last.
+comptime {
+    std.debug.assert(@intFromEnum(SearchEngine.auto) == 0);
+    std.debug.assert(api_engines.len == std.enums.values(SearchEngine).len - 2);
+    std.debug.assert(@intFromEnum(SearchEngine.duckduckgo) == api_engines.len + 1);
+    for (api_engines, 0..) |e, i| {
+        if (@intFromEnum(e.tag) != i + 1)
+            @compileError("api_engines order must match SearchEngine declaration order: " ++ @tagName(e.tag));
+    }
+}
+
 /// Engines that also work with no API key (a `null` key routes the client
 /// to the provider's public endpoint). `searchExplicit` and the REPL's
 /// `/searchEngine` warning consult this.
 pub fn searchEngineKeyless(engine: SearchEngine) bool {
-    return engine == .keenable;
+    inline for (api_engines) |e| {
+        if (engine == e.tag) return e.keyless;
+    }
+    return false;
 }
 
 pub fn searchEnvVar(engine: SearchEngine) ?[:0]const u8 {
@@ -1045,11 +1070,9 @@ pub fn searchEnvVar(engine: SearchEngine) ?[:0]const u8 {
     return null;
 }
 
+/// Valid for any API engine tag; the comptime block above pins tag order.
 fn engineIndex(comptime tag: SearchEngine) usize {
-    inline for (api_engines, 0..) |e, i| {
-        if (e.tag == tag) return i;
-    }
-    @compileError("engine missing from api_engines: " ++ @tagName(tag));
+    return @intFromEnum(tag) - 1;
 }
 
 fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
@@ -1069,14 +1092,17 @@ fn execSearch(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode
                     }
                 }
             }
-            // One rung above the DDG scrape: the keyless public endpoint
-            // returns the same structured results under its own rate-limit
-            // regime — worth trying even after a failed keyed attempt.
-            const kn = api_engines[comptime engineIndex(.keenable)];
-            if (apiSearch(kn, arena, null, args.query)) |markdown_| {
-                return .{ .text = markdown_ };
-            } else |err| {
-                log.warn(.browser, "keenable keyless fallback", .{ .err = err });
+            // One rung above the DDG scrape: keyless public endpoints return
+            // the same structured results under their own rate-limit regime
+            // — worth trying even after a failed keyed attempt.
+            inline for (api_engines) |engine| {
+                if (comptime engine.keyless) {
+                    if (apiSearch(engine, arena, null, args.query)) |markdown_| {
+                        return .{ .text = markdown_ };
+                    } else |err| {
+                        log.warn(.browser, @tagName(engine.tag) ++ " keyless fallback", .{ .err = err });
+                    }
+                }
             }
         },
         .duckduckgo => {},
@@ -1105,7 +1131,7 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []c
             break :blk apiSearch(engine, arena, std.mem.span(z), query);
         // Comptime-gated so the null-key call is only instantiated for
         // clients whose `init` takes an optional key.
-        if (comptime searchEngineKeyless(engine.tag))
+        if (comptime engine.keyless)
             break :blk apiSearch(engine, arena, null, query);
         return .{
             .text = "web search engine is set to " ++ label ++ " but " ++ engine.env_var ++ " is not set in the environment",
@@ -1120,15 +1146,20 @@ fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, query: []c
 }
 
 /// `arena` owns the returned slice. `api_key` is the environment value, or
-/// `null` for an engine that supports keyless calls (its client's `init`
-/// takes a `?[]const u8` key — see `searchEngineKeyless`).
+/// `null` for a `.keyless` engine's public endpoint (its client's `init`
+/// takes a `?[]const u8` key; keyed clients get the unwrapped slice).
 fn apiSearch(
     comptime engine: anytype,
     arena: std.mem.Allocator,
-    api_key: anytype,
+    api_key: ?[]const u8,
     query: []const u8,
 ) ![]const u8 {
-    var client: engine.Client = .init(lp.io, arena, api_key, engine.init_options);
+    var client: engine.Client = .init(
+        lp.io,
+        arena,
+        if (comptime engine.keyless) api_key else api_key.?,
+        engine.init_options,
+    );
     defer client.deinit();
 
     var response = client.search(query, engine.options) catch |err| {
