@@ -213,7 +213,13 @@ fn caPathValidator(
 
 /// Common CLI args.
 const CommonOptions = .{
-    .{ .name = "obey_robots", .type = bool },
+    .{
+        .name = "no_obey_robots",
+        .field_name = "obey_robots",
+        .type = bool,
+        .default = true,
+        .variants = .{.{ .name = "obey_robots" }},
+    },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },

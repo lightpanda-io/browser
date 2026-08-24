@@ -102,8 +102,11 @@ docker run -d --name lightpanda -p 127.0.0.1:9222:9222 lightpanda/browser:nightl
 ### Dump a URL
 
 ```console
-./lightpanda fetch --obey-robots --dump html --log-format pretty  --log-level info https://demo-browser.lightpanda.io/campfire-commerce/
+./lightpanda fetch --dump html --log-format pretty  --log-level info https://demo-browser.lightpanda.io/campfire-commerce/
 ```
+
+Lightpanda fetches and obeys each site's `robots.txt` by default. Pass
+`--no-obey-robots` to opt out.
 
 You can use `--dump markdown` to convert directly into markdown.
 `--wait-until`, `--wait-ms`, `--wait-selector` and `--wait-script` are
@@ -112,7 +115,7 @@ available to adjust waiting time before dump.
 ### Start a CDP server
 
 ```console
-./lightpanda serve --obey-robots --log-format pretty  --log-level info --host 127.0.0.1 --port 9222
+./lightpanda serve --log-format pretty  --log-level info --host 127.0.0.1 --port 9222
 ```
 Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.
@@ -258,7 +261,7 @@ Here are the key features we have implemented:
 - [x] Custom HTTP headers
 - [x] Proxy support
 - [x] Network interception
-- [x] Respect `robots.txt` with option `--obey-robots`
+- [x] Respect `robots.txt` by default (opt out with `--no-obey-robots`)
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
