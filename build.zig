@@ -442,7 +442,9 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) void {
     translate_c.addIncludePath(dep.path("include"));
     mod.addImport("curl", translate_c.createModule());
 
-    const zlib = buildZlib(b, target, mod.optimize.?, is_tsan);
+    // Deflate is on the screenshot hot path; -O0 zlib is ~10x slower.
+    const zlib_optimize: std.builtin.OptimizeMode = if (mod.optimize.? == .Debug) .ReleaseFast else mod.optimize.?;
+    const zlib = buildZlib(b, target, zlib_optimize, is_tsan);
     curl.root_module.linkLibrary(zlib);
 
     const brotli = buildBrotli(b, target, mod.optimize.?, is_tsan);
