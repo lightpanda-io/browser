@@ -70,10 +70,10 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     }
 
     dispatchPointer(element, "pointerdown", 0, 1, frame);
-    dispatchMouse(element, "mousedown", 0, 1, frame);
+    dispatchMouse(element, "mousedown", 0, 1, 1, frame);
     dispatchPointer(element, "pointerup", 0, 0, frame);
-    dispatchMouse(element, "mouseup", 0, 0, frame);
-    dispatchMouse(element, "click", 0, 0, frame);
+    dispatchMouse(element, "mouseup", 0, 0, 1, frame);
+    dispatchMouse(element, "click", 0, 0, 1, frame);
 }
 
 const WebDriverCookie = struct {
@@ -234,6 +234,12 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // whose origin resolved to an element.
     var target: ?*Element = null;
     var pressed = false;
+    // Where the last pointerDown landed: the click fires at the nearest common
+    // inclusive ancestor of the down and up targets when they differ.
+    var down_target: ?*Element = null;
+    var click_count: u32 = 0;
+    var last_click_button: i32 = 0;
+    var last_click_target: ?*Element = null;
 
     for (0..actions.len()) |i| {
         const action_val = try actions.get(@intCast(i));
@@ -255,17 +261,23 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     dispatchTouch(el, "touchmove", frame);
                 }
             } else {
-                dispatchMouse(el, "mousemove", 0, 0, frame);
+                dispatchMouse(el, "mousemove", 0, 0, 0, frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = true;
-            dispatchPointer(el, "pointerdown", button, 1, frame);
+            down_target = el;
+            if (last_click_target == el and last_click_button == button) {
+                click_count += 1;
+            } else {
+                click_count = 1;
+            }
+            dispatchPointer(el, "pointerdown", button, buttonsMask(button), frame);
             if (is_touch) {
                 dispatchTouch(el, "touchstart", frame);
             } else {
-                dispatchMouse(el, "mousedown", button, 1, frame);
+                dispatchMouse(el, "mousedown", button, buttonsMask(button), click_count, frame);
                 Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
                     log.warn(.app, "webdriver editable focus", .{ .err = err });
                 };
@@ -278,13 +290,55 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             if (is_touch) {
                 dispatchTouch(el, "touchend", frame);
             } else {
-                dispatchMouse(el, "mouseup", button, 0, frame);
-                dispatchMouse(el, "click", button, 0, frame);
+                dispatchMouse(el, "mouseup", button, 0, click_count, frame);
+                const click_target = commonClickTarget(down_target orelse el, el);
+                last_click_button = button;
+                last_click_target = click_target;
+                if (button == 0) {
+                    dispatchMouse(click_target, "click", button, 0, click_count, frame);
+                    if (click_count % 2 == 0) {
+                        dispatchMouse(click_target, "dblclick", button, 0, click_count, frame);
+                    }
+                } else {
+                    if (button == 2) {
+                        dispatchMouse(click_target, "contextmenu", button, 0, click_count, frame);
+                    }
+                    dispatchMouse(click_target, "auxclick", button, 0, click_count, frame);
+                }
             }
+            down_target = null;
         }
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
     }
+}
+
+// The `buttons` bitmask bit for a WebDriver button number: the flag order does
+// not follow the button numbering (left=1, right=2, middle=4).
+fn buttonsMask(button: i32) u16 {
+    return switch (button) {
+        0 => 1,
+        1 => 4,
+        2 => 2,
+        3 => 8,
+        4 => 16,
+        else => 0,
+    };
+}
+
+// A click whose mousedown and mouseup landed on different elements fires at
+// their nearest common inclusive ancestor element.
+fn commonClickTarget(down: *Element, up: *Element) *Element {
+    if (down == up) {
+        return up;
+    }
+    var current: ?*@import("Node.zig") = down.asNode();
+    while (current) |node| : (current = node.parentNode()) {
+        if (node.contains(up.asNode())) {
+            return node.is(Element) orelse break;
+        }
+    }
+    return up;
 }
 
 fn performWheelSource(source: js.Object, frame: *Frame) !void {
@@ -392,13 +446,14 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
     dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
 }
 
-fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
+fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, detail: u32, frame: *Frame) void {
     const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .button = button,
         .buttons = buttons,
+        .detail = detail,
     }, frame) catch |err| {
         log.warn(.app, "webdriver mouse event", .{ .err = err, .type = typ });
         return;
