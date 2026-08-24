@@ -61,20 +61,12 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
             .query_string => |qs| break :blk try paramsFromString(arena.allocator(), qs, exec.buf),
             .form_data => |fd| break :blk try fd.toKeyValueList(arena.allocator()),
             .value => |js_val| {
-                // Order matters here; Array is also an Object.
-                if (js_val.isArray()) {
-                    break :blk try paramsFromArray(arena.allocator(), js_val.toArray());
-                }
                 if (js_val.isObject()) {
-                    // Per the URL spec, an iterable init (URLSearchParams,
-                    // Map, ...) should be walked via its @@iterator. We
-                    // don't have a generic iterable path yet; cover the
-                    // common case of `new URLSearchParams(otherUSP)` so
-                    // the prototype-method-leak doesn't just turn into a
-                    // silent empty querystring.
-                    if (js_val.toZig(*URLSearchParams)) |other| {
-                        break :blk try KeyValueList.copy(arena.allocator(), other._params);
-                    } else |_| {}
+                    if (try js_val.iterator()) |it| {
+                        // value satisfies the @@iterator protocol, so we're
+                        // expecting [name, value] tuples
+                        break :blk try paramsFromIterator(arena.allocator(), it);
+                    }
                     // normalizer is null, so frame won't be used
                     break :blk try KeyValueList.fromJsObject(arena.allocator(), js_val.toObject(), null, exec.buf);
                 }
@@ -229,29 +221,34 @@ fn nextUtf16Unit(s: []const u8, i: *usize, pending: *?u16) ?u16 {
     return @intCast(0xD800 + (c >> 10));
 }
 
-fn paramsFromArray(allocator: Allocator, array: js.Array) !KeyValueList {
-    const array_len = array.len();
-    if (array_len == 0) {
-        return .empty;
-    }
-
+fn paramsFromIterator(allocator: Allocator, it: js.Value.Iterator) !KeyValueList {
     var params = KeyValueList.init();
-    try params.ensureTotalCapacity(allocator, array_len);
-    // TODO: Release `params` on error.
 
-    var i: u32 = 0;
-    while (i < array_len) : (i += 1) {
-        const item = try array.get(i);
-        if (!item.isArray()) return error.InvalidArgument;
+    var iter = it;
+    while (try iter.next()) |item| {
+        var name_val: js.Value = undefined;
+        var value_val: js.Value = undefined;
 
-        const as_array = item.toArray();
-        // Need 2 items for KV.
-        if (as_array.len() != 2) return error.InvalidArgument;
+        if (item.isArray()) {
+            const as_array = item.toArray();
+            if (as_array.len() != 2) {
+                // we should be getting [name, value]
+                return error.TypeError;
+            }
+            name_val = try as_array.get(0);
+            value_val = try as_array.get(1);
+        } else {
+            // Not an array, but it could itself be an iterator
+            var pair_it = (try item.iterator()) orelse return error.TypeError;
+            name_val = (try pair_it.next()) orelse return error.TypeError;
+            value_val = (try pair_it.next()) orelse return error.TypeError;
+            if (try pair_it.next() != null) {
+                // should only have a name and a value, anything else is wrong
+                return error.TypeError;
+            }
+        }
 
-        const name_val = try as_array.get(0);
-        const value_val = try as_array.get(1);
-
-        params._entries.appendAssumeCapacity(.{
+        try params._entries.append(allocator, .{
             .name = try name_val.toSSOWithAlloc(allocator),
             .value = try value_val.toSSOWithAlloc(allocator),
         });

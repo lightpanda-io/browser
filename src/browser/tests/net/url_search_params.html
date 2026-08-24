@@ -652,3 +652,43 @@
   testing.expectEqual('b=%25*', new URLSearchParams('b=%%2a').toString());
 }
 </script>
+
+<script id=iterableInit>
+{
+  // Map
+  const m = new Map([['a', '1'], ['b', '2']]);
+  testing.expectEqual('a=1&b=2', new URLSearchParams(m).toString());
+
+  // generator
+  function* gen() {
+    yield ['x', '1'];
+    yield ['y', '2'];
+  }
+  testing.expectEqual('x=1&y=2', new URLSearchParams(gen()).toString());
+
+  // a patched @@iterator must be honored (WPT: Custom [Symbol.iterator])
+  const usp = new URLSearchParams();
+  usp[Symbol.iterator] = function*() { yield ['a', 'b']; };
+  testing.expectEqual('b', new URLSearchParams(usp).get('a'));
+
+  // pairs must have exactly 2 items
+  let caught = null;
+  try { new URLSearchParams([[1]]); } catch (e) { caught = e; }
+  testing.expectEqual(true, caught instanceof TypeError);
+  caught = null;
+  try { new URLSearchParams([[1, 2, 3]]); } catch (e) { caught = e; }
+  testing.expectEqual(true, caught instanceof TypeError);
+}
+</script>
+
+<script id=recordInitDuplicateKeys>
+{
+  // Web IDL record conversion: two JS keys that map to the same USVString
+  // (lone surrogates become U+FFFD) update the entry in place, and the
+  // value lookup must use the original key, not the lossy round-trip.
+  const usp = new URLSearchParams({"\uD835x": "1", "xx": "2", "\uD83Dx": "3"});
+  testing.expectEqual(2, usp.size);
+  testing.expectEqual('3', usp.get('�x'));
+  testing.expectEqual('2', usp.get('xx'));
+}
+</script>
