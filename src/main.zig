@@ -202,8 +202,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         .mcp => |opts| {
             log.info(.mcp, "starting server", .{});
 
-            log.opts.format = .logfmt;
-
             // --port serves MCP over HTTP instead of stdio. It and --cdp-port
             // each run their accept loop on this thread, so they can't combine.
             if (opts.port) |port| {
