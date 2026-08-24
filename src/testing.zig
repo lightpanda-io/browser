@@ -539,6 +539,8 @@ test "tests:beforeAll" {
             .ws_max_concurrent = 50,
             .load_resources = .{ .worker = true, .iframe = true },
             .watchdog_ms = 0,
+            // no navigation rate limit in tests: they hammer 127.0.0.1
+            .http_nav_delay = 0,
         },
     });
 
