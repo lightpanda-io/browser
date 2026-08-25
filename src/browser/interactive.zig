@@ -179,6 +179,7 @@ fn walkInteractive(
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
     var css_cache: Element.PointerEventsCache = .empty;
+    var visibility_cache: Element.VisibilityCache = .empty;
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
@@ -191,6 +192,11 @@ fn walkInteractive(
         switch (el.getTag()) {
             .script, .style, .link, .meta, .head, .noscript, .template => continue,
             else => {},
+        }
+
+        if (!el.checkVisibilityCached(&visibility_cache, frame)) {
+            tw.skipChildren();
+            continue;
         }
 
         const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
@@ -662,4 +668,18 @@ test "browser.interactive: mixed elements" {
     );
     defer testing.test_session.closeAllPages();
     try testing.expectEqual(4, elements.len);
+}
+
+test "browser.interactive: hidden elements are skipped" {
+    const elements = try testInteractive(
+        \\<button style="display:none">Inline</button>
+        \\<button hidden>Attribute</button>
+        \\<div style="display:none"><a href="/x">Ancestor</a><input type="text"></div>
+        \\<div hidden><button>Ancestor attribute</button></div>
+        \\<button>Visible</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("button", elements[0].tag_name);
+    try testing.expectEqual("Visible", elements[0].name.?);
 }
