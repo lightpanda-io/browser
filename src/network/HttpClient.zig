@@ -2858,6 +2858,14 @@ pub const Transfer = struct {
             break :blk resolved;
         };
 
+        // When the redirect target is not same-origin with the current URL,
+        // the Authorization header must not follow the request to the new
+        // origin.
+        // _auth_challenge is always cleared thanks to detectAuthChallenge.
+        if (!URL.isSameOrigin(url, req.url)) {
+            transfer.removeHeader("Authorization");
+        }
+
         try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
