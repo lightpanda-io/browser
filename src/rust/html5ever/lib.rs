@@ -21,10 +21,6 @@ mod sink;
 mod types;
 mod url;
 
-#[cfg(feature = "memstats")]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
 use std::cell::Cell;
 use std::os::raw::{c_uchar, c_void};
 use types::*;
@@ -545,7 +541,10 @@ pub extern "C" fn html5ever_parse_fragment(
         qname: context_qname.clone(),
         mathml_annotation_xml_integration_point: false,
     });
-    let mut context_attrs = CAttributeIterator { vec: vec![], pos: 0 };
+    let mut context_attrs = CAttributeIterator {
+        vec: vec![],
+        pos: 0,
+    };
     let context_elem = unsafe {
         (create_context_element_callback)(
             ctx,
@@ -592,27 +591,6 @@ pub extern "C" fn html5ever_attribute_iterator_next(
 pub extern "C" fn html5ever_attribute_iterator_count(c_iter: *const c_void) -> usize {
     let iter: &mut CAttributeIterator = unsafe { &mut *(c_iter as *mut CAttributeIterator) };
     return iter.vec.len();
-}
-
-#[cfg(feature = "memstats")]
-#[repr(C)]
-pub struct Memory {
-    pub resident: usize,
-    pub allocated: usize,
-}
-
-#[cfg(feature = "memstats")]
-#[no_mangle]
-pub extern "C" fn html5ever_get_memory_usage() -> Memory {
-    use tikv_jemalloc_ctl::{epoch, stats};
-
-    // many statistics are cached and only updated when the epoch is advanced.
-    let _ = epoch::advance();
-
-    Memory {
-        resident: stats::resident::read().unwrap_or(0),
-        allocated: stats::allocated::read().unwrap_or(0),
-    }
 }
 
 // Streaming parser API
@@ -810,7 +788,10 @@ pub extern "C" fn xml5ever_parse_document(
     let bytes = strip_doctype_internal_subset(bytes);
     let tb = xml5ever::tree_builder::XmlTreeBuilder::new(sink, Default::default());
     let tokenizer = xml5ever::tokenizer::XmlTokenizer::new(
-        UnclosedTagSink { tb, depth: Cell::new(0) },
+        UnclosedTagSink {
+            tb,
+            depth: Cell::new(0),
+        },
         Default::default(),
     );
     html5ever::tendril::stream::Utf8LossyDecoder::new(XmlDocumentParser {
@@ -840,7 +821,7 @@ fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
                 if c == q {
                     quote = None
                 }
-            },
+            }
             None => match c {
                 b'"' | b'\'' => quote = Some(c),
                 b'>' if open.is_none() => return std::borrow::Cow::Borrowed(bytes),
@@ -850,8 +831,8 @@ fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
                     out.extend_from_slice(&bytes[..open.unwrap()]);
                     out.extend_from_slice(&bytes[i + 1..]);
                     return std::borrow::Cow::Owned(out);
-                },
-                _ => {},
+                }
+                _ => {}
             },
         }
         i += 1;
@@ -882,16 +863,18 @@ impl<'arena> xml5ever::tokenizer::TokenSink for UnclosedTagSink<'arena> {
                 TagKind::StartTag => self.depth.set(self.depth.get() + 1),
                 TagKind::EndTag | TagKind::ShortTag => {
                     self.depth.set(self.depth.get().saturating_sub(1))
-                },
-                TagKind::EmptyTag => {},
+                }
+                TagKind::EmptyTag => {}
             },
             Token::EndOfFile => {
                 if self.depth.get() > 0 {
                     use xml5ever::tree_builder::TreeSink;
-                    self.tb.sink.parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
+                    self.tb
+                        .sink
+                        .parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
         self.tb.process_token(token)
     }

@@ -83,13 +83,6 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
 
     // Not-yet-emulated parameters: accept them but warn so the caller knows
     // they are ignored.
-    if (params.deviceScaleFactor) |v| {
-        if (v != 0 and v != 1) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "deviceScaleFactor",
-            .value = v,
-        });
-    }
     if (params.mobile) |v| {
         if (v) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
             .cdp_cmd = "Emulation.setDeviceMetricsOverride",
@@ -126,9 +119,12 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     // CDP convention: a 0 width/height means "don't override that dimension",
     // so keep the current value for any dimension passed as 0.
     const current = browser.getViewport();
+    // Same convention for deviceScaleFactor: 0 means "don't override".
+    const dsf: f32 = if (params.deviceScaleFactor) |v| @floatCast(v) else 0;
     browser.viewport_override = .{
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
+        .scale = if (dsf > 0) dsf else current.scale,
     };
 
     return cmd.sendResult(null, .{});

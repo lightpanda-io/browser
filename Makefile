@@ -144,7 +144,7 @@ test-agent:
 ## Remove build artifacts (keeps .lp-cache/ and zig-pkg/ — slow to re-fetch)
 clean:
 	rm -rf zig-out .zig-cache src/snapshot.bin
-	cd src/html5ever && cargo clean
+	cd src/rust && cargo clean
 
 # Install and build required dependencies commands
 # ------------

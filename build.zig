@@ -115,7 +115,7 @@ pub fn build(b: *Build) !void {
 
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
     linkCurl(b, lightpanda_module, enable_tsan);
-    linkHtml5Ever(b, lightpanda_module);
+    linkRust(b, lightpanda_module);
     linkZenai(b, lightpanda_module);
     linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, enable_csan, enable_tsan);
@@ -323,42 +323,56 @@ fn linkV8(
     mod.addImport("v8", dep.module("v8"));
 }
 
-fn linkHtml5Ever(b: *Build, mod: *Build.Module) void {
+fn linkRust(b: *Build, mod: *Build.Module) void {
     const is_debug = mod.optimize.? == .Debug;
 
+    // One cargo workspace, one staticlib (src/rust/Cargo.toml explains why).
     const exec_cargo = b.addSystemCommand(&.{
         "cargo",           "build",
         "--profile",       if (is_debug) "dev" else "release",
         "--features",      if (is_debug) "memstats" else "",
-        "--manifest-path", "src/html5ever/Cargo.toml",
+        "--manifest-path", "src/rust/ffi/Cargo.toml",
     });
 
-    // Track Rust sources so edits invalidate the cargo step's cache.
-    // Without this, Zig keys the step on argv only and won't re-run cargo
-    // when lib.rs/Cargo.toml change.
-    for ([_][]const u8{
-        "src/html5ever/Cargo.toml",
-        "src/html5ever/Cargo.lock",
-        "src/html5ever/lib.rs",
-        "src/html5ever/sink.rs",
-        "src/html5ever/types.rs",
-        "src/html5ever/url.rs",
-    }) |path| {
-        exec_cargo.addFileInput(b.path(path));
-    }
+    addDirInputs(b, exec_cargo, "src/rust", "target") catch |err| {
+        std.debug.panic("walk src/rust: {t}", .{err});
+    };
+
+    // Cargo reports progress on stderr; left uncaptured, Zig prints it as a
+    // "failed command: ..." diagnostic on a successful build. A non-zero exit
+    // still surfaces the captured output.
+    _ = exec_cargo.captureStdErr(.{});
 
     // don't let cargo's progress report (sent to stderr) cause Zig's build to
     // print a 'failed command: ...' message. (non-zero status still outputs the error)
     _ = exec_cargo.captureStdErr(.{});
 
     // TODO: We can prefer `--artifact-dir` once it become stable.
-    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
+    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "rust");
 
-    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
-    html5ever_step.dependOn(&exec_cargo.step);
+    const rust_step = b.step("rust", "Build the Rust staticlib (requires cargo)");
+    rust_step.dependOn(&exec_cargo.step);
 
-    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
+    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblightpanda_ffi.a");
     mod.addObjectFile(obj);
+}
+
+/// Registers every file under `root` (relative to the build root) as an
+/// input of `run`, skipping the `skip_dir` subtree at any depth.
+fn addDirInputs(b: *Build, run: *Build.Step.Run, root: []const u8, skip_dir: []const u8) !void {
+    const io = b.graph.io;
+    var dir = try b.build_root.handle.openDir(io, root, .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(b.allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        switch (entry.kind) {
+            .directory => if (std.mem.eql(u8, entry.basename, skip_dir)) walker.leave(io),
+            .file => run.addFileInput(b.path(b.pathJoin(&.{ root, entry.path }))),
+            else => {},
+        }
+    }
 }
 
 fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool) void {

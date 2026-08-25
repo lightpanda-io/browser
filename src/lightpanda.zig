@@ -38,6 +38,8 @@ pub const Session = @import("browser/Session.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const screenshot = @import("browser/screenshot.zig");
+pub const Base64Writer = @import("Base64Writer.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const CDPNode = @import("cdp/Node.zig");
 pub const interactive = @import("browser/interactive.zig");
@@ -338,15 +340,25 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 try writer.writeByte(',');
             }
 
+            const frame = page.frame();
+            if (opts.dump_mode == .png and frame != null) {
+                const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
+                defer arena.release();
+
+                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
+                    .width = frame.?._page.getViewport().width,
+                }, frame.?);
+                try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
+                continue;
+            }
+
             var aw: std.Io.Writer.Allocating = .init(app.allocator);
             defer aw.deinit();
 
-            if (opts.dump_mode) |mode| blk: {
-                const frame = page.frame() orelse break :blk;
-                try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+            if (opts.dump_mode) |mode| {
+                if (frame) |f| try dumpContent(app, mode, opts.dump, f, &aw.writer);
             }
-
-            try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
         }
         if (wrap) {
             try writer.writeAll("]}");
@@ -370,6 +382,13 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     switch (mode) {
         .html => try dump.root(frame.window._document, dump_opts, writer, frame),
         .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .png => {
+            var arena: std.heap.ArenaAllocator = .init(app.allocator);
+            defer arena.deinit();
+            _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
+                .width = frame._page.getViewport().width,
+            }, writer, frame);
+        },
         .semantic_tree, .semantic_tree_text => {
             var registry = CDPNode.Registry.init(app.allocator);
             defer registry.deinit();
@@ -401,7 +420,7 @@ pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
 
 // Writes a single page's result object. Framing (the enclosing array and any
 // separators / trailing newline) is the caller's responsibility.
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
         .url = if (meta) |m| m.url else "",

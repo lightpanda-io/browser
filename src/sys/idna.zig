@@ -17,7 +17,7 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-// WHATWG "domain to ASCII" lives in the rust-url FFI (src/html5ever/url.rs),
+// WHATWG "domain to ASCII" lives in the rust-url FFI (src/rust/html5ever/url.rs),
 // which uses the UTS#46-conformant `idna` crate — the same engine rust-url
 // itself uses.
 extern "c" fn lpurl_domain_to_ascii(
