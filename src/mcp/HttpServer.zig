@@ -379,7 +379,7 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
         _ = arena.reset(.retain_capacity);
         out.clearRetainingCapacity();
         self.serve(&out.writer, arena.allocator(), &request) catch return;
-        if (!request.head.keep_alive) return;
+        if (!request.head.keep_alive or http_server.reader.state == .closing) return;
     }
 }
 
