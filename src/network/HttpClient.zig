@@ -1031,9 +1031,6 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 log.info(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
             }
-            if (try self.cacheLookup(transfer)) {
-                return;
-            }
 
             if (!isCrossOriginModeAllowed(transfer) and !transfer.req.internal) {
                 log.warn(.http, "blocked by mode", .{
@@ -1052,6 +1049,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             continue :sw SubmitFrom.after_cors;
         },
         .after_cors => {
+            if (try self.cacheLookup(transfer)) {
+                return;
+            }
+
             if (self.obey_robots and !transfer.req.internal) {
                 switch (try self.robots.check(transfer)) {
                     .allowed => {
