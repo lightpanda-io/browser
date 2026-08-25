@@ -73,6 +73,13 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
     }
 }
 
+fn isSafelistedMethod(value: http.Method) bool {
+    return switch (value) {
+        .GET, .HEAD, .POST => true,
+        else => false,
+    };
+}
+
 fn isSafelistedContentType(value: []const u8) bool {
     const semi = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
     const mime = std.mem.trim(u8, value[0..semi], &std.ascii.whitespace);
@@ -97,9 +104,8 @@ fn isSafelistedHeader(name: []const u8, value: []const u8) bool {
 fn requiresPreflight(transfer: *const Transfer) bool {
     const req = &transfer.req;
 
-    switch (req.method) {
-        .GET, .HEAD, .POST => {},
-        else => return true,
+    if (!isSafelistedMethod(req.method)) {
+        return true;
     }
 
     for (transfer.req_headers.items) |hdr| {
@@ -211,21 +217,23 @@ const CorsPreflightContext = struct {
             }
         }
 
-        // Access-Control-Allow-Methods
-        const allow_methods = acam orelse {
-            log.debug(.cors, "preflight blocked", .{ .url = self.url, .reason = "missing acam" });
-            return false;
-        };
+        if (!isSafelistedMethod(self.method)) {
+            // Access-Control-Allow-Methods
+            const allow_methods = acam orelse {
+                log.debug(.cors, "preflight blocked", .{ .url = self.url, .reason = "missing acam" });
+                return false;
+            };
 
-        const methods_wildcard = std.mem.eql(u8, allow_methods, "*") and !self.wants_credentials;
-        if (!methods_wildcard and !methodAllowed(allow_methods, self.method)) {
-            log.debug(.cors, "preflight blocked", .{
-                .url = self.url,
-                .reason = "method not allowed",
-                .allow_methods = allow_methods,
-                .method = @tagName(self.method),
-            });
-            return false;
+            const methods_wildcard = std.mem.eql(u8, allow_methods, "*") and !self.wants_credentials;
+            if (!methods_wildcard and !methodAllowed(allow_methods, self.method)) {
+                log.debug(.cors, "preflight blocked", .{
+                    .url = self.url,
+                    .reason = "method not allowed",
+                    .allow_methods = allow_methods,
+                    .method = @tagName(self.method),
+                });
+                return false;
+            }
         }
 
         // Access-Control-Allow-Headers
