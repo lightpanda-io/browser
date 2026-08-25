@@ -241,6 +241,7 @@ const CommonOptions = .{
     .{ .name = "cookie", .type = ?[]const u8 },
     .{ .name = "cookie_jar", .type = ?[]const u8 },
     .{ .name = "disable_subframes", .type = bool },
+    .{ .name = "enable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
@@ -495,7 +496,8 @@ pub fn obeyRobots(self: *const Config) bool {
 
 pub fn disableSubframes(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp, .agent => |opts| opts.disable_subframes,
+        .serve => |opts| opts.disable_subframes,
+        inline .fetch, .mcp, .agent => |opts| !opts.enable_subframes,
         else => unreachable,
     };
 }
@@ -1188,6 +1190,36 @@ test "Config: parseArgs collects --http-header" {
     // Name and value are trimmed; an empty value is legal.
     try std.testing.expectEqualStrings("X-Empty", headers[1].name);
     try std.testing.expectEqualStrings("", headers[1].value);
+}
+
+test "Config: subframe loading defaults are mode-aware" {
+    var serve = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+    defer serve.deinit(std.testing.allocator);
+    try std.testing.expect(!serve.disableSubframes());
+
+    var serve_disabled = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+        .disable_subframes = true,
+    } });
+    defer serve_disabled.deinit(std.testing.allocator);
+    try std.testing.expect(serve_disabled.disableSubframes());
+
+    var fetch = try Config.init(std.testing.allocator, "test", .{ .fetch = .{} });
+    defer fetch.deinit(std.testing.allocator);
+    try std.testing.expect(fetch.disableSubframes());
+
+    var fetch_enabled = try Config.init(std.testing.allocator, "test", .{ .fetch = .{
+        .enable_subframes = true,
+    } });
+    defer fetch_enabled.deinit(std.testing.allocator);
+    try std.testing.expect(!fetch_enabled.disableSubframes());
+
+    var agent = try Config.init(std.testing.allocator, "test", .{ .agent = .{} });
+    defer agent.deinit(std.testing.allocator);
+    try std.testing.expect(agent.disableSubframes());
+
+    var mcp = try Config.init(std.testing.allocator, "test", .{ .mcp = .{} });
+    defer mcp.deinit(std.testing.allocator);
+    try std.testing.expect(mcp.disableSubframes());
 }
 
 test "Config: httpHeaders accessor" {

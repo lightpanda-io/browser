@@ -335,7 +335,10 @@
     \\  --disable-subframes
     \\          Skip loading <iframe> elements. The parser still registers them in the
     \\          DOM, but no child frame or Page.frameAttached events are produced.
-    \\          Defaults to false.
+    \\          Kept for compatibility; fetch, agent, and mcp already default to off.
+    \\  --enable-subframes
+    \\          Enable loading <iframe> elements in fetch, agent, and mcp modes.
+    \\          Serve mode loads subframes by default.
     \\  --disable-workers
     \\          Skip loading dedicated Web Workers. The Worker constructor still
     \\          returns a Worker object, but no script fetch is initiated and its scope

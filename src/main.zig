@@ -103,6 +103,11 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
 
     app.telemetry.record(.{ .run = {} });
 
+    log.info(.app, "fidelity", .{
+        .mode = @tagName(std.meta.activeTag(app.config.mode)),
+        .subframes = if (app.config.disableSubframes()) "off" else "on",
+    });
+
     defer if (app.config.dumpMetricsOnExit()) {
         var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
         lp.metrics.write(&writer.interface);
