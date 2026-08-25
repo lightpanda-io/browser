@@ -495,20 +495,27 @@ pub fn upgrade(self: *Connection, request: []u8) !void {
         } else if (std.ascii.eqlIgnoreCase(key, "host")) {
             const host = value;
             const is_allowed = blk: {
+                // allow literal localhost
+                if (std.mem.startsWith(u8, host, "localhost:")) {
+                    break :blk true;
+                }
+
                 _ = std.Io.net.IpAddress.parseLiteral(host) catch break :blk false;
                 break :blk true;
             };
 
             // Defense in depth against DNS rebinding: an IP literal is the only
             // thing that can legitimately reach us, because no name has to be
-            // resolved to produce one. Any name at all - "localhost" included -
-            // means something answered a DNS lookup with our address, which is
-            // exactly what a rebinding attack looks like. A request without a
-            // Host header isn't from a browser, so it can't be the vector.
+            // resolved to produce one. The one name we accept is
+            // `localhost:<port>`, which browsers hardwire to loopback without
+            // any DNS lookup. Any other name means something answered a DNS
+            // lookup with our address, which is exactly what a rebinding
+            // attack looks like. A request without a Host header isn't from a
+            // browser, so it can't be the vector.
             if (!is_allowed) {
                 log.warn(.cdp, "rejected websocket host", .{
                     .host = host[0..@min(host.len, 64)],
-                    .hint = "connect to the CDP endpoint by IP address",
+                    .hint = "connect to the CDP endpoint by IP address or localhost",
                 });
                 return error.ForbiddenHost;
             }

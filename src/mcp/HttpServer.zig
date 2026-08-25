@@ -403,7 +403,7 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     // the head's string memory.
     const session_id = checkHeaders(arena, request) catch |err| switch (err) {
         error.ForbiddenOrigin => return request.respond("Origin not allowed\n", .{ .status = .forbidden, .keep_alive = false }),
-        error.ForbiddenHost => return request.respond("Host not allowed, connect to the MCP endpoint by IP address\n", .{ .status = .forbidden, .keep_alive = false }),
+        error.ForbiddenHost => return request.respond("Host not allowed, connect to the MCP endpoint by IP address or localhost\n", .{ .status = .forbidden, .keep_alive = false }),
         else => return err,
     };
     const keep_alive = request.head.keep_alive;
@@ -457,6 +457,11 @@ fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[
             return error.ForbiddenOrigin;
         } else if (std.ascii.eqlIgnoreCase(key, "host")) {
             const is_allowed = blk: {
+                // allow literal localhost
+                if (std.mem.startsWith(u8, value, "localhost:")) {
+                    break :blk true;
+                }
+
                 _ = std.Io.net.IpAddress.parseLiteral(value) catch break :blk false;
                 break :blk true;
             };
@@ -464,7 +469,7 @@ fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[
             if (!is_allowed) {
                 log.warn(.mcp, "rejected request host", .{
                     .host = value[0..@min(value.len, 64)],
-                    .hint = "connect to the MCP endpoint by IP address",
+                    .hint = "connect to the MCP endpoint by IP address or localhost",
                 });
                 return error.ForbiddenHost;
             }
