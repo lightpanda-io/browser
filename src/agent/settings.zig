@@ -461,7 +461,7 @@ test "parseRemembered: search_engine field round-trips" {
 test "resolveSearchEngine: default auto, remembered wins" {
     try testing.expect(resolveSearchEngine(null) == .auto);
     try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = null }) == .auto);
-    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .duckduckgo }) == .duckduckgo);
+    try testing.expect(resolveSearchEngine(.{ .model = "m", .search_engine = .keenable }) == .keenable);
 }
 
 test "resolveStream: default on, remembered wins" {
