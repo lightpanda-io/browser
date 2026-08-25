@@ -77,9 +77,11 @@ pub fn build(b: *Build) !void {
     const prebuilt_v8_path = prebuilt_v8_path_option orelse if (enable_tsan or enable_asan) null else findPrebuiltV8(b, target, dev_fast);
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
-    const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse
-        (dev_fast or (prebuilt_v8_path != null and std.mem.endsWith(u8, prebuilt_v8_path.?, ".so")));
+    const shared_v8 = b.option(bool, "shared_v8", "Link V8 as a shared library") orelse (dev_fast or (prebuilt_v8_path != null and std.mem.endsWith(u8, prebuilt_v8_path.?, ".so")));
     const use_llvm = b.option(bool, "use_llvm", "Use the LLVM backend") orelse !dev_fast;
+    // Hot-code layout for the Linux release artifacts, see orderfile/README.md.
+    // Opt-in (CI passes it): it needs LLD and costs link time on every build.
+    const orderfile = b.option([]const u8, "orderfile", "Linker script packing hot sections, e.g. orderfile/lightpanda.ld (Linux/LLD release builds)");
 
     const version = resolveVersion(b);
     std.debug.print("Lightpanda {f}\n", .{version});
@@ -140,6 +142,7 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = optimize,
         .use_llvm = use_llvm,
+        .orderfile = orderfile,
         .sanitize_c = enable_csan,
         .sanitize_thread = enable_tsan,
     };
@@ -209,6 +212,7 @@ const ExeConfig = struct {
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     use_llvm: bool,
+    orderfile: ?[]const u8,
     sanitize_c: ?std.zig.SanitizeC,
     sanitize_thread: bool,
 };
@@ -228,6 +232,10 @@ fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8
             },
         }),
     });
+
+    exe.link_function_sections = true;
+    exe.link_data_sections = true;
+    if (config.orderfile) |path| exe.linker_script = .{ .cwd_relative = path };
 
     const exe_check = b.addLibrary(.{
         .name = check_name,
@@ -299,6 +307,14 @@ fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Per-function/per-datum sections let the -Dorderfile linker script place
+/// individual hot functions; gc-sections already relies on them for pruning.
+fn sectionize(lib: *Build.Step.Compile) *Build.Step.Compile {
+    lib.link_function_sections = true;
+    lib.link_data_sections = true;
+    return lib;
+}
+
 fn linkV8(
     b: *Build,
     mod: *Build.Module,
@@ -367,7 +383,7 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
         .optimize = mod.optimize.?,
     });
 
-    const lib = dep.artifact("sqlite3");
+    const lib = sectionize(dep.artifact("sqlite3"));
     lib.root_module.sanitize_c = enable_csan;
     lib.root_module.sanitize_thread = is_tsan;
 
@@ -467,7 +483,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     const dep = b.dependency("zlib", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
-    const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
+    const lib = sectionize(b.addLibrary(.{ .name = "z", .root_module = mod }));
     lib.installHeadersDirectory(dep.path(""), "", .{});
     mod.addCSourceFiles(.{
         .root = dep.path(""),
@@ -495,9 +511,9 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("c/include"));
 
-    const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = mod });
-    const brotlidec = b.addLibrary(.{ .name = "brotlidec", .root_module = mod });
-    const brotlienc = b.addLibrary(.{ .name = "brotlienc", .root_module = mod });
+    const brotlicmn = sectionize(b.addLibrary(.{ .name = "brotlicommon", .root_module = mod }));
+    const brotlidec = sectionize(b.addLibrary(.{ .name = "brotlidec", .root_module = mod }));
+    const brotlienc = sectionize(b.addLibrary(.{ .name = "brotlienc", .root_module = mod }));
 
     brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
@@ -538,10 +554,10 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
         .force_pic = true,
     });
 
-    const ssl = dep.artifact("ssl");
+    const ssl = sectionize(dep.artifact("ssl"));
     ssl.bundle_ubsan_rt = false;
 
-    const crypto = dep.artifact("crypto");
+    const crypto = sectionize(dep.artifact("crypto"));
     crypto.bundle_ubsan_rt = false;
 
     return .{ ssl, crypto };
@@ -562,7 +578,7 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     });
     mod.addConfigHeader(config);
 
-    const lib = b.addLibrary(.{ .name = "nghttp2", .root_module = mod });
+    const lib = sectionize(b.addLibrary(.{ .name = "nghttp2", .root_module = mod }));
 
     lib.installConfigHeader(config);
     lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
@@ -841,7 +857,7 @@ fn buildCurl(
     });
     curl_config.addValues(config);
 
-    const lib = b.addLibrary(.{ .name = "curl", .root_module = mod });
+    const lib = sectionize(b.addLibrary(.{ .name = "curl", .root_module = mod }));
     mod.addConfigHeader(curl_config);
     lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
     mod.addCSourceFiles(.{
