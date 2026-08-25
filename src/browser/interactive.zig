@@ -606,6 +606,12 @@ test "browser.interactive: pointer-events none" {
     try testing.expectEqual(0, elements.len);
 }
 
+test "browser.interactive: pointer-events none is case-insensitive" {
+    const elements = try testInteractive("<button style=\"pointer-events: NONE;\">Click me</button>");
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(0, elements.len);
+}
+
 test "browser.interactive: non-interactive div" {
     const elements = try testInteractive("<div>Just text</div>");
     defer testing.test_session.closeAllPages();
