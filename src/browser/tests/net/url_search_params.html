@@ -635,3 +635,20 @@
   testing.expectEqual('param1=1', usp.toString());
 }
 </script>
+
+<script id=invalidPercentEscapes>
+{
+  // An invalid %XX escape is not an error; the bytes pass through literally.
+  testing.expectEqual('%', new URLSearchParams('id=0&value=%').get('value'));
+  testing.expectEqual('%2sf*', new URLSearchParams('b=%2sf%2a').get('b'));
+  testing.expectEqual('%2*f*', new URLSearchParams('b=%2%2af%2a').get('b'));
+  testing.expectEqual('%*', new URLSearchParams('b=%%2a').get('b'));
+  testing.expectEqual('a', new URLSearchParams('%=a').get('%'));
+  testing.expectEqual('a', new URLSearchParams('%a=a').get('%a'));
+
+  // ... and they re-serialize with the '%' escaped.
+  testing.expectEqual('id=0&value=%25', new URLSearchParams('id=0&value=%').toString());
+  testing.expectEqual('b=%252sf*', new URLSearchParams('b=%2sf%2a').toString());
+  testing.expectEqual('b=%25*', new URLSearchParams('b=%%2a').toString());
+}
+</script>
