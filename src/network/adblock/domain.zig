@@ -74,7 +74,7 @@ fn matchEntry(e: Entry, hostname: []const u8, ent: []const u8) bool {
 }
 
 /// Whether `hostname` is `suffix` or one of its subdomains.
-pub fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
+fn isSubdomainOf(hostname: []const u8, suffix: []const u8) bool {
     if (hostname.len == suffix.len) return std.mem.eql(u8, hostname, suffix);
     if (hostname.len < suffix.len + 1) return false;
     const at = hostname.len - suffix.len;
@@ -136,7 +136,7 @@ pub fn parse(
     };
 }
 
-pub fn registrable(host: []const u8) []const u8 {
+fn registrable(host: []const u8) []const u8 {
     if (isIpLiteral(host)) return host;
     var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
     while (true) {
@@ -148,7 +148,7 @@ pub fn registrable(host: []const u8) []const u8 {
     }
 }
 
-pub fn entity(host: []const u8) []const u8 {
+fn entity(host: []const u8) []const u8 {
     if (isIpLiteral(host)) return "";
     const reg = registrable(host);
     const dot = std.mem.indexOfScalar(u8, reg, '.') orelse return "";

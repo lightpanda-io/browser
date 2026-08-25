@@ -118,7 +118,7 @@ fn matchIn(self: *const Engine, bucket: []const u32, request: Request) ?*const N
 
 /// Cheapest constraint first: the type and party bits are two comparisons,
 /// the pattern walk is the expensive one.
-pub fn matchesFilter(filter: *const NetworkFilter, request: Request) bool {
+fn matchesFilter(filter: *const NetworkFilter, request: Request) bool {
     if (filter.types.bits() & request.kind.bits() == 0) return false;
     if (request.third_party) {
         if (!filter.third_party) return false;
