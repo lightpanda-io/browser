@@ -38,8 +38,9 @@ const Selector = @import("webapi/selector/Selector.zig");
 /// correctly" — most importantly the selector rule that keeps sessions
 /// recordable as JavaScript agent scripts.
 pub const driver_guidance =
-    \\You are driving Lightpanda — a text-only headless browser. You reason
-    \\over pages through tools; there is no rendering, no images, no PDFs.
+    \\You are driving Lightpanda, a headless browser, through text tools:
+    \\no screenshots, no images, no PDFs — you reason over pages as a
+    \\semantic tree, markdown or HTML.
     \\
     \\Reading pages (cheap → expensive — prefer cheaper):
     \\- `tree` → semantic overview (role, name, value, backendNodeId per
