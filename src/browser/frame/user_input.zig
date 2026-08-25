@@ -34,6 +34,7 @@ const Element = @import("../webapi/Element.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
+const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
 
 const log = lp.log;
@@ -482,6 +483,25 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
+    if (event.getIsTrusted()) {
+        if ((key.isPrintable() or key == .Enter) and keyboard_event.getCtrlKey() == false and keyboard_event.getMetaKey() == false) {
+            // Fire a keypress for a printable (or Enter) keydown when ctrl/meta
+            // aren't pressed
+            if (try dispatchKeypress(frame, target, keyboard_event)) {
+                return;
+            }
+        }
+
+        if (key == .Enter) {
+            if (target.is(Element)) |element| {
+                if (enterActivates(element)) {
+                    // Enter generates a button-like "click" for  some elements
+                    return dispatchKeyboardClick(frame, element);
+                }
+            }
+        }
+    }
+
     if (target.is(Element.Html.Input)) |input| {
         if (key == .Enter) {
             return frame.submitForm(input.asElement(), input.getForm(frame), .{});
@@ -510,6 +530,91 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         // zig fmt: on
         return textarea.innerInsert(append, frame);
     }
+}
+
+pub fn handleKeyup(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
+    const keyboard_event = event.is(KeyboardEvent) orelse return;
+    const key = keyboard_event.getKey();
+
+    if (key.isPrintable() == false or std.mem.eql(u8, key.asString(), " ") == false) {
+        return;
+    }
+    const element = target.is(Element) orelse return;
+    if (spaceActivates(element)) {
+        // on keyup, for a trusted event and on specific element types, space
+        // triggers a click-like event
+        return dispatchKeyboardClick(frame, element);
+    }
+}
+
+// Dispatch keypress mirroring `keydown`'s key and modifiers; returns true when
+// a listener canceled it.
+fn dispatchKeypress(frame: *Frame, target: *Node, keydown: *KeyboardEvent) !bool {
+    const event = (try KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .key = keydown.getKey().asString(),
+        .ctrlKey = keydown.getCtrlKey(),
+        .shiftKey = keydown.getShiftKey(),
+        .altKey = keydown.getAltKey(),
+        .metaKey = keydown.getMetaKey(),
+    }, frame)).asEvent();
+
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
+
+    try frame._event_manager.dispatch(target.asEventTarget(), event);
+    return event._prevent_default;
+}
+
+// keydown+enter or keyup+space trigger this syntthetic pointer event (under
+// specific conditions, see handleKeydown and handleKeyup).
+fn dispatchKeyboardClick(frame: *Frame, element: *Element) !void {
+    const event = try PointerEvent.initTrusted("click", .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .pointerId = -1,
+    }, frame);
+    try frame._event_manager.dispatch(element.asEventTarget(), event.asEvent());
+}
+
+// elements where enter on a keydown should dispatch a click-click event
+fn enterActivates(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    if (html_element._type == .button) {
+        return true;
+    }
+    if (html_element._type == .anchor) {
+        return element.getAttributeSafe(comptime .wrap("href")) != null;
+    }
+    if (element.is(Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .button, .submit, .reset, .image => true,
+            else => false,
+        };
+    }
+    return false;
+}
+
+// elements where space on a keyup should dispatch a click-click event
+fn spaceActivates(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    if (html_element._type == .button) {
+        return true;
+    }
+    if (element.is(Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .button, .submit, .reset, .image, .checkbox, .radio => true,
+            else => false,
+        };
+    }
+    return false;
 }
 
 // Sequential focus navigation: move `document.activeElement` to the next (Tab)

@@ -231,6 +231,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             Frame.user_input.handleKeydown(frame, target, event) catch |err| {
                 log.warn(.event, "frame.keydown", .{ .err = err });
             };
+        } else if (event._type_string.eql(comptime .wrap("keyup"))) {
+            Frame.user_input.handleKeyup(frame, target, event) catch |err| {
+                log.warn(.event, "frame.keyup", .{ .err = err });
+            };
         }
     }
 
