@@ -788,7 +788,10 @@ pub extern "C" fn xml5ever_parse_document(
     let bytes = strip_doctype_internal_subset(bytes);
     let tb = xml5ever::tree_builder::XmlTreeBuilder::new(sink, Default::default());
     let tokenizer = xml5ever::tokenizer::XmlTokenizer::new(
-        UnclosedTagSink { tb, depth: Cell::new(0) },
+        UnclosedTagSink {
+            tb,
+            depth: Cell::new(0),
+        },
         Default::default(),
     );
     html5ever::tendril::stream::Utf8LossyDecoder::new(XmlDocumentParser {
@@ -818,7 +821,7 @@ fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
                 if c == q {
                     quote = None
                 }
-            },
+            }
             None => match c {
                 b'"' | b'\'' => quote = Some(c),
                 b'>' if open.is_none() => return std::borrow::Cow::Borrowed(bytes),
@@ -828,8 +831,8 @@ fn strip_doctype_internal_subset(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
                     out.extend_from_slice(&bytes[..open.unwrap()]);
                     out.extend_from_slice(&bytes[i + 1..]);
                     return std::borrow::Cow::Owned(out);
-                },
-                _ => {},
+                }
+                _ => {}
             },
         }
         i += 1;
@@ -860,16 +863,18 @@ impl<'arena> xml5ever::tokenizer::TokenSink for UnclosedTagSink<'arena> {
                 TagKind::StartTag => self.depth.set(self.depth.get() + 1),
                 TagKind::EndTag | TagKind::ShortTag => {
                     self.depth.set(self.depth.get().saturating_sub(1))
-                },
-                TagKind::EmptyTag => {},
+                }
+                TagKind::EmptyTag => {}
             },
             Token::EndOfFile => {
                 if self.depth.get() > 0 {
                     use xml5ever::tree_builder::TreeSink;
-                    self.tb.sink.parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
+                    self.tb
+                        .sink
+                        .parse_error(std::borrow::Cow::Borrowed("Unclosed element at EOF"));
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
         self.tb.process_token(token)
     }

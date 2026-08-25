@@ -37,7 +37,7 @@ use parley::{
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{GlyphId, MetadataProvider};
-use tiny_skia::{Color, FillRule, IntRect, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{Color, FillRule, IntRect, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 // ---------------------------------------------------------------------------
 // C ABI — mirrored by src/browser/screenshot.zig.
@@ -308,6 +308,10 @@ impl Renderer {
         let sans = Self::register(&mut collection, include_bytes!("fonts/DejaVuSans.ttf"));
         Self::register(&mut collection, include_bytes!("fonts/DejaVuSans-Bold.ttf"));
         let mono = Self::register(&mut collection, include_bytes!("fonts/DejaVuSansMono.ttf"));
+        Self::register(
+            &mut collection,
+            include_bytes!("fonts/DejaVuSansMono-Bold.ttf"),
+        );
         for generic in [
             GenericFamily::SansSerif,
             GenericFamily::Serif,
@@ -610,14 +614,8 @@ impl Renderer {
         let mut x = ox + gr.offset();
         let skew = synth
             .skew()
-            .map(|deg| (-deg.to_radians()).tan())
+            .map(|deg| deg.to_radians().tan())
             .unwrap_or(0.0);
-        // Stroking happens in path space, which is now font units, so the
-        // width is upem/24 to still land at font_size/24 device px.
-        let stroke = synth.embolden().then(|| Stroke {
-            width: upem / 24.0,
-            ..Default::default()
-        });
         for glyph in gr.glyphs() {
             let gx = x + glyph.x;
             let gy = baseline - glyph.y;
@@ -640,9 +638,6 @@ impl Renderer {
                 // onto the pixmap.
                 let t = Transform::from_row(scale, 0.0, skew * scale, -scale, gx, gy);
                 pixmap.fill_path(path, &paint, FillRule::Winding, t, None);
-                if let Some(stroke) = &stroke {
-                    pixmap.stroke_path(path, &paint, stroke, t, None);
-                }
             }
         }
 
