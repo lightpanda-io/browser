@@ -68,8 +68,8 @@ pub fn build(b: *Build) !void {
         .cpu_arch = .x86_64,
         .os_tag = .linux,
         .abi = .gnu,
-        // https://codeberg.org/ziglang/zig/issues/31272
-        .glibc_version = .{ .major = 2, .minor = 43, .patch = 0 },
+        // Explicit version => bundled CRT, https://codeberg.org/ziglang/zig/issues/31272
+        .glibc_version = b.graph.host.result.os.version_range.linux.glibc,
     }) else requested_target;
 
     // Without an explicit -Dprebuilt_v8_path, pick up whatever `make
