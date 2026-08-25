@@ -80,6 +80,34 @@ fn isSafelistedMethod(value: http.Method) bool {
     };
 }
 
+fn isCorsUnsafeByte(c: u8) bool {
+    return switch (c) {
+        0...0x08,
+        0x0A...0x1F,
+        '"',
+        '(',
+        ')',
+        ':',
+        '<',
+        '>',
+        '?',
+        '@',
+        '[',
+        '\\',
+        ']',
+        '{',
+        '}',
+        => true,
+        0x7F => true,
+        else => false,
+    };
+}
+
+fn hasNoCorsUnsafeBytes(value: []const u8) bool {
+    for (value) |c| if (isCorsUnsafeByte(c)) return false;
+    return true;
+}
+
 fn isSafelistedContentType(value: []const u8) bool {
     const semi = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
     const mime = std.mem.trim(u8, value[0..semi], &std.ascii.whitespace);
@@ -88,16 +116,46 @@ fn isSafelistedContentType(value: []const u8) bool {
         std.ascii.eqlIgnoreCase(mime, "text/plain");
 }
 
+fn isSafelistedLanguageValue(value: []const u8) bool {
+    for (value) |c| {
+        const ok = switch (c) {
+            '0'...'9',
+            'A'...'Z',
+            'a'...'z',
+            ' ',
+            '*',
+            ',',
+            '-',
+            '.',
+            ';',
+            '=',
+            => true,
+            else => false,
+        };
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// https://fetch.spec.whatwg.org/#cors-safelisted-request-header
 fn isSafelistedHeader(name: []const u8, value: []const u8) bool {
-    if (std.ascii.eqlIgnoreCase(name, "accept") or
-        std.ascii.eqlIgnoreCase(name, "accept-language") or
+    if (value.len > 128) return false;
+
+    if (std.ascii.eqlIgnoreCase(name, "accept")) {
+        return hasNoCorsUnsafeBytes(value);
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "accept-language") or
         std.ascii.eqlIgnoreCase(name, "content-language"))
     {
-        return true;
+        return isSafelistedLanguageValue(value);
     }
+
     if (std.ascii.eqlIgnoreCase(name, "content-type")) {
-        return isSafelistedContentType(value);
+        return isSafelistedContentType(value) and
+            hasNoCorsUnsafeBytes(value);
     }
+
     return false;
 }
 
@@ -370,7 +428,10 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     for (transfer.req_headers.items) |hdr| {
         if (hdr.source != .author) continue;
         if (isSafelistedHeader(hdr.name, hdr.value)) continue;
-        try header_names.append(arena.allocator(), try arena.dupe(u8, hdr.name));
+        try header_names.append(
+            arena.allocator(),
+            try std.ascii.allocLowerString(arena.allocator(), hdr.name),
+        );
     }
 
     const ctx = try arena.create(CorsPreflightContext);
