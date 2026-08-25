@@ -214,7 +214,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
     const id = req.id orelse return;
     try self.sendResult(id, protocol.InitializeResult{
-        .protocolVersion = @tagName(protocol.Version.default),
+        .protocolVersion = @tagName(protocol.Version.negotiate(req.params)),
         .capabilities = .{
             .resources = .{},
             .tools = .{},
@@ -265,4 +265,34 @@ test "MCP.Server - Integration: synchronous smoke test" {
     try router.processRequests(server, &in_reader, null);
 
     try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2024-11-05" } }, out_alloc.writer.buffered());
+}
+
+test "MCP.Server - initialize negotiates the protocol version" {
+    var out_alloc: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Self.init(testing.allocator, testing.test_app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+
+    // A supported version is echoed back.
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}
+    );
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 1, .result = .{ .protocolVersion = "2025-06-18" } }, out_alloc.writer.buffered());
+    out_alloc.writer.end = 0;
+
+    // An unknown one gets the latest supported.
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2099-01-01","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}
+    );
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 2, .result = .{ .protocolVersion = "2025-11-25" } }, out_alloc.writer.buffered());
+    out_alloc.writer.end = 0;
+
+    // So does a request with no version at all.
+    try router.handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"c","version":"1"}}}
+    );
+    try testing.expectJson(.{ .jsonrpc = "2.0", .id = 3, .result = .{ .protocolVersion = "2025-11-25" } }, out_alloc.writer.buffered());
 }
