@@ -69,7 +69,7 @@ pub fn build(b: *Build) !void {
         .os_tag = .linux,
         .abi = .gnu,
         // Explicit version => bundled CRT, https://codeberg.org/ziglang/zig/issues/31272
-        .glibc_version = b.graph.host.result.os.version_range.linux.glibc,
+        .glibc_version = devFastGlibcVersion(b),
     }) else requested_target;
 
     // Without an explicit -Dprebuilt_v8_path, pick up whatever `make
@@ -236,6 +236,12 @@ fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8
     config.check.dependOn(&exe_check.step);
 
     return exe;
+}
+
+fn devFastGlibcVersion(b: *Build) std.SemanticVersion {
+    const host = b.graph.host.result.os.version_range.linux.glibc;
+    const newest_known: std.SemanticVersion = .{ .major = 2, .minor = 43, .patch = 0 };
+    return if (host.order(newest_known) == .gt) newest_known else host;
 }
 
 /// Looks for the prebuilt V8 that `make download-v8` caches. The cache
