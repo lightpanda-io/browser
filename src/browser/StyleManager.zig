@@ -644,6 +644,9 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
         }
     }
 
+    // dialog:not([open]) { display: none }
+    if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
+
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
         if (el.parentElement()) |parent| {
