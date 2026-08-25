@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+<body></body>
+
+<!--
+  These run with load_resources = .{ .image = true } (see Image.zig's test
+  decl). Every route here has a real body, so a `load` event is only
+  reachable if the transfer really did stop after the headers and still
+  complete successfully — that's what makes these a test of the fetch path
+  and not just of the event plumbing.
+
+  /images/ok.png is over the headers-only drain threshold (abort branch),
+  /images/small.png is under it (drain branch).
+-->
+
+<script id="img-200-fires-load" type=module>
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/ok.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+  });
+</script>
+
+<script id="img-404-fires-error" type=module>
+  // The whole point of the flag: without a request there is no status to
+  // branch on, and this fired `load` like everything else.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/404.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("error", evt);
+  });
+</script>
+
+<script id="img-small-body-drains-and-loads" type=module>
+  // Under the drain threshold: the body is read and discarded rather than
+  // aborted, so the connection stays poolable. Observably identical to the
+  // abort branch above.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/small.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+    // Drained, not decoded: still no dimensions.
+    testing.expectEqual(0, img.naturalWidth);
+  });
+</script>
+
+<script id="img-many-share-one-connection" type=module>
+  // A page's worth of small images. Each drained body returns its
+  // connection to the pool, so this must settle without stalling.
+  const state = await testing.async();
+  const results = await Promise.all(
+    Array.from({ length: 12 }, (_, i) => new Promise(resolve => {
+      const img = document.createElement("img");
+      img.addEventListener("load", () => resolve("load"));
+      img.addEventListener("error", () => resolve("error"));
+      img.src = "/images/small.png?n=" + i;
+    }))
+  );
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(12, results.length);
+    testing.expectEqual(true, results.every(r => r === "load"));
+  });
+</script>
+
+<script id="img-chunked-body-loads" type=module>
+  // No Content-Length, so the drain/abort decision can't be made up front.
+  // Small enough to drain; either way it must report the real status.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/chunked.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+  });
+</script>
+
+<script id="img-500-fires-error" type=module>
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/500.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("error", evt);
+  });
+</script>
+
+<script id="img-redirect-fires-load" type=module>
+  // Redirect hops never reach the header callback, so the status the
+  // load/error decision is made from is the final 200, not the 302.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "/images/redirect.png";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("load", evt);
+  });
+</script>
+
+<script id="img-complete-tracks-the-fetch" type=module>
+  // complete is false only while a request is in flight. naturalWidth stays
+  // 0 either way: we fetch images, we don't decode them.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  testing.expectEqual(true, img.complete);
+  img.src = "/images/ok.png";
+  const during = img.complete;
+
+  await new Promise(resolve => {
+    img.addEventListener("load", resolve);
+    img.addEventListener("error", resolve);
+  });
+  const after = img.complete;
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(false, during);
+    testing.expectEqual(true, after);
+    testing.expectEqual(0, img.naturalWidth);
+    testing.expectEqual(0, img.naturalHeight);
+  });
+</script>
+
+<script id="img-unresolvable-src-fires-error" type=module>
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const evt = await new Promise(resolve => {
+    img.addEventListener("load", () => resolve("load"));
+    img.addEventListener("error", () => resolve("error"));
+    img.src = "http://";
+  });
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("error", evt);
+  });
+</script>
+
+<script id="img-empty-src-does-nothing" type=module>
+  // No src, no request, no event — in any mode.
+  const state = await testing.async();
+  const img = document.createElement("img");
+  let fired = null;
+  img.addEventListener("load", () => fired = "load");
+  img.addEventListener("error", () => fired = "error");
+  img.src = "";
+  document.body.appendChild(img);
+
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(null, fired);
+  });
+</script>
+
+<script id="img-src-reassignment-supersedes" type=module>
+  // Reassigning src while a fetch is in flight: the element must end up
+  // reflecting the LAST src, not whichever response happens to land first.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const events = [];
+  img.addEventListener("load", () => events.push("load"));
+  img.addEventListener("error", () => events.push("error"));
+
+  img.src = "/images/404.png";
+  img.src = "/images/ok.png";
+
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  state.resolve();
+  await state.done(() => {
+    // The superseded 404 is dropped; only the winning fetch reports.
+    testing.expectEqual(1, events.length);
+    testing.expectEqual("load", events[0]);
+  });
+</script>
+
+<script id="img-removing-src-supersedes" type=module>
+  // removeAttribute has to invalidate the in-flight fetch the same way a
+  // reassignment does, and leave the element complete.
+  const state = await testing.async();
+  const img = document.createElement("img");
+
+  const events = [];
+  img.addEventListener("load", () => events.push("load"));
+  img.addEventListener("error", () => events.push("error"));
+
+  img.src = "/images/ok.png";
+  img.removeAttribute("src");
+
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(0, events.length);
+    testing.expectEqual(true, img.complete);
+  });
+</script>
+
+<script id="img-fragment-parse-does-not-fetch">
+{
+  // Images parsed via innerHTML / DOMParser must not hit the network, for
+  // the same reason stylesheet links in a fragment don't: the subtree may
+  // never be attached, or belongs to another Document.
+  const div = document.createElement('div');
+  div.innerHTML = '<img src="/images/404.png">';
+  const img = div.querySelector('img');
+  // No fetch was issued, so it never entered the in-flight state.
+  testing.expectEqual(true, img.complete);
+}
+</script>

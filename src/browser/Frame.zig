@@ -79,6 +79,7 @@ const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lo
 
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
+pub const resource_load = @import("frame/resource_load.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
@@ -1198,7 +1199,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
     }
 }
 
-fn pendingLoadCompleted(self: *Frame) void {
+pub fn pendingLoadCompleted(self: *Frame) void {
     const pending_loads = self._pending_loads;
     if (pending_loads == 1) {
         self._pending_loads = 0;

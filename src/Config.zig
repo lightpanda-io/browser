@@ -211,6 +211,10 @@ fn caPathValidator(
     }
 }
 
+pub const LoadResources = packed struct(u1) {
+    image: bool = false,
+};
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -245,6 +249,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
@@ -522,6 +527,13 @@ pub fn watchdogMs(self: *const Config) ?u32 {
 pub fn enableExternalStylesheets(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.enable_external_stylesheets,
+        else => unreachable,
+    };
+}
+
+pub fn loadResources(self: *const Config) LoadResources {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.load_resources,
         else => unreachable,
     };
 }

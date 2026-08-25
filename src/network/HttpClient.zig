@@ -1006,19 +1006,24 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         return false;
     }
 
+    const arena = transfer.arena;
+
     // Redirects rewrite req.url; the entry must be stored/renewed under the
     // URL this lookup ran against, not the final hop. req.url is arena-owned,
     // so the captured slice outlives any redirect rewrite.
-    transfer._cache_key = req.url;
+    const key: [:0]const u8 = if (req.headers_only)
+        try std.fmt.allocPrintSentinel(arena.allocator(), "headers-only:{s}", .{req.url}, 0)
+    else
+        req.url;
+    transfer._cache_key = key;
 
-    const arena = transfer.arena;
     const req_headers = try arena.alloc(http.Header, transfer.req_headers.items.len);
     for (transfer.req_headers.items, req_headers) |hdr, *out| {
         out.* = .{ .name = hdr.name, .value = hdr.value };
     }
 
     const cache_result = cache.get(arena.allocator(), .{
-        .url = req.url,
+        .url = key,
         .timestamp = lp.datetime.timestamp(.real),
         .request_headers = req_headers,
     }) catch |e| blk: {
@@ -1034,7 +1039,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         },
         .revalidate => |cached| {
             log.debug(.cache, "revalidate cache entry", .{
-                .url = req.url,
+                .url = key,
                 .etag = cached.etag,
                 .last_modified = cached.last_modified,
             });
@@ -1054,7 +1059,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         },
         .stale => {
             lp.metrics.http_cache.incr(.miss);
-            cache.evict(req.url);
+            cache.evict(key);
             transfer._cache_intent = .store;
             return false;
         },
@@ -1505,6 +1510,11 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // we match that behavior: when CURLE_WRITE_ERROR arrives but our callback
     // never errored and bytes were received, treat it as success.
     const effective_err: ?anyerror = if (msg.err) |err| blk: {
+        // Our own headers_only abort, not a failure: fall through so the
+        // response is materialized and delivered with an empty body.
+        if (err == error.WriteError and transfer.res.headers_only_abort) {
+            break :blk null;
+        }
         if (err == error.WriteError and transfer.res.callback_error == null and transfer.res.bytes_received > 0) {
             log.debug(.http, "WriteError downgraded", .{ .url = transfer.req.url, .bytes = transfer.res.bytes_received });
             break :blk null;
@@ -1751,6 +1761,7 @@ pub const Request = struct {
         fetch,
         stylesheet,
         eventsource,
+        image,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1764,6 +1775,7 @@ pub const Request = struct {
                 .fetch => "Fetch",
                 .stylesheet => "Stylesheet",
                 .eventsource => "EventSource",
+                .image => "Image",
             };
         }
     };
@@ -1771,6 +1783,12 @@ pub const Request = struct {
     // Fetch request redirect mode. `.follow` keeps navigations, XHR and
     // internal requests transparently following redirects.
     pub const RedirectMode = enum { follow, manual, @"error" };
+
+    // How much of a headers_only body we'll read rather than abort. Draining
+    // costs bandwidth but keeps the connection poolable; aborting saves
+    // bandwidth but forces a reconnect. 16 KiB is the rough break-even: about
+    // ten segments, versus a TCP handshake plus a TLS one.
+    const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
 
     frame_id: u32,
     loader_id: u32,
@@ -1786,6 +1804,15 @@ pub const Request = struct {
     notification: *Notification,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
+
+    // The caller wants the status and the response headers, not the body.
+    // Unlike a HEAD, the request itself is byte-for-byte a normal GET, so
+    // origins and CDNs see (and answer) exactly what a real browser sends;
+    // the body is then discarded, and torn off the wire if it doesn't fit in
+    // HEADERS_ONLY_DRAIN_MAX. The consumer still gets the usual
+    // start/header/done sequence, with an empty body; `data_callback` never
+    // fires.
+    headers_only: bool = false,
 
     // The document frame this request belongs to, for CDP attribution.
     // This will be different than frame_id for Workers.
@@ -2643,7 +2670,11 @@ pub const Transfer = struct {
             }
         }
 
-        if (opts.check_content_length) {
+        // headers_only is exempt: the cap exists to bound how much body we
+        // buffer, and this transfer buffers none of it. Failing a 4 MB image
+        // we were never going to read would turn the size limit into a
+        // spurious `error` event on a perfectly good response.
+        if (opts.check_content_length and !self.req.headers_only) {
             if (self.getContentLength()) |cl| {
                 if (cl > self.client.max_response_size) {
                     return error.ResponseTooLarge;
@@ -3056,13 +3087,14 @@ pub const Transfer = struct {
                 return @intCast(chunk_len);
             }
 
-            // Pre-size buffer from Content-Length.
-            if (transfer.getContentLength()) |cl| {
-                if (cl > transfer.client.max_response_size) {
-                    res.callback_error = error.ResponseTooLarge;
-                    return http.writefunc_error;
+            if (transfer.req.headers_only == false) {
+                if (transfer.getContentLength()) |cl| {
+                    if (cl > transfer.client.max_response_size) {
+                        res.callback_error = error.ResponseTooLarge;
+                        return http.writefunc_error;
+                    }
+                    res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
                 }
-                res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
             }
         }
 
@@ -3071,6 +3103,21 @@ pub const Transfer = struct {
         }
 
         res.bytes_received += chunk_len;
+
+        if (transfer.req.headers_only) {
+            // Plenty of images have no Content-Length to decide this up front, so
+            // decide it as the body arrives.
+            if (res.bytes_received <= Request.HEADERS_ONLY_DRAIN_MAX) {
+                return @intCast(chunk_len);
+            }
+
+            // Returning writefunc_error is the only way to end a transfer
+            // early from a write callback; processOneMessage recognises the
+            // flag and treats the resulting CURLE_WRITE_ERROR as a completed
+            // response with an empty body.
+            res.headers_only_abort = true;
+            return http.writefunc_error;
+        }
 
         const chunk = buffer[0..chunk_len];
 
@@ -3337,6 +3384,12 @@ const Response = struct {
 
     skip_body: bool = false,
     first_data_received: bool = false,
+
+    // Set when dataCallback deliberately killed the transfer to satisfy
+    // `Request.headers_only`. processOneMessage uses it to tell our own
+    // abort apart from a real CURLE_WRITE_ERROR and deliver the response
+    // (headers, status, empty body) as a success.
+    headers_only_abort: bool = false,
 
     // Response body. Filled by dataCallback, consumed in processMessages.
     // See Stream.spare to see how this works in streaming mode
