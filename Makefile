@@ -3,6 +3,8 @@
 
 ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+# tikv-jemalloc-sys's nested make can't parse inherited "-- F=..." overrides
+MAKEOVERRIDES =
 # option test filter make test F="server"
 F=
 
@@ -126,7 +128,7 @@ run-debug: build-dev
 	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
 
 test:
-	TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace
+	TEST_FILTER="$(or $(F),$(TEST_FILTER))" $(ZIG) build $(ZIGFLAGS) test -freference-trace
 
 ## Run demo/runner end to end tests
 end2end:
@@ -138,7 +140,7 @@ end2end:
 ## without one only the deterministic layer runs. See ../demo/agent/README.md.
 test-agent:
 	@test -d ../demo
-	@test -x zig-out/bin/lightpanda || $(MAKE) build
+	@test -x zig-out/bin/lightpanda || $(MAKE) build ZIGFLAGS="$(ZIGFLAGS)"
 	@cd ../demo && ./agent/run.sh $(LAYER)
 
 ## Remove build artifacts (keeps .lp-cache/ and zig-pkg/ — slow to re-fetch)
