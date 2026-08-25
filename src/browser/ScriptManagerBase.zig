@@ -1153,3 +1153,48 @@ test "ScriptManagerBase: waitForImport stops when teardown is pending" {
 
     try testing.expectError(error.SyncWaitInterrupted, sm.waitForImport(url));
 }
+
+test "ScriptManagerBase: evaluate drops a ready async module when termination is pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const sm = &frame._script_manager.base;
+    const element = try frame.document.createElement("script", null, frame);
+
+    // A fetched <script type=module async> sitting in ready_scripts:
+    // doneCallback moved it there and this tick's drain is about to evaluate
+    // it. Classic scripts are already refused by js.Script.run; modules go
+    // through Module.evaluate, which has no gate of its own.
+    const arena = try sm.acquireArena(.small, "test.terminated_async");
+    const script = try arena.create(Script);
+    script.* = .{
+        .arena = arena,
+        .url = "http://127.0.0.1:9582/late-async.js",
+        .node = .{},
+        .manager = sm,
+        .complete = true,
+        .status = 200,
+        .source = .{ .@"inline" = "globalThis.__late_async_ran = true" },
+        .extra = .{ .frame = .{
+            .kind = .module,
+            .mode = .async,
+            .frame = frame,
+            .script_element = element.as(Element.Html.Script),
+        } },
+    };
+    sm.ready_scripts.append(&script.node);
+
+    // The sticky terminate is set but V8's own state was consumed by the
+    // JSEntry unwind of whatever the terminate landed in.
+    const env = frame.js.env;
+    env.terminate();
+    js.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+
+    sm.evaluate();
+    env.cancelTerminate();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(false, (try ls.local.exec("globalThis.__late_async_ran === true", null)).toBool());
+}

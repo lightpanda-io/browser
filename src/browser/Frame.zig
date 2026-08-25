@@ -1809,12 +1809,17 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
         return;
     };
 }
+
 pub fn isGoingAway(self: *const Frame) bool {
+    return self.js.env.terminatePending() or self.hasQueuedNavigation();
+}
+
+fn hasQueuedNavigation(self: *const Frame) bool {
     if (self._queued_navigation != null) {
         return true;
     }
     const parent = self.parent orelse return false;
-    return parent.isGoingAway();
+    return parent.hasQueuedNavigation();
 }
 
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
@@ -3754,4 +3759,56 @@ test "Frame: 401" {
     defer buf.deinit();
     try @import("dump.zig").root(frame.document, .{}, &buf.writer, frame);
     try testing.expectEqual("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><pre>No</pre></body></html>", buf.written());
+}
+
+test "Frame: scriptAddedCallback does not run a module when termination is pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // An inline module: classic scripts are already refused by js.Script.run,
+    // modules go through Module.evaluate which has no gate of its own.
+    const element = try frame.document.createElement("script", null, frame);
+    try element.setAttribute(comptime .wrap("type"), comptime .wrap("module"), frame);
+    try element.asNode().setTextContent("globalThis.__terminated_inline_ran = true", frame);
+
+    // Parsing is over, so the inline module is evaluated on insertion rather
+    // than queued behind the static scripts.
+    frame._script_manager.base.static_scripts_done = true;
+
+    // The sticky terminate is set but V8's own state was consumed by the
+    // JSEntry unwind of whatever the terminate landed in.
+    const env = frame.js.env;
+    env.terminate();
+    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+
+    try frame.scriptAddedCallback(false, element.as(HtmlElement.Script));
+    env.cancelTerminate();
+
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(false, (try ls.local.exec("globalThis.__terminated_inline_ran === true", null)).toBool());
+}
+
+test "Frame: iframeAddedCallback does not create a frame when termination is pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const session = frame._session;
+    const subframe_loading_enabled = session.subframe_loading_enabled;
+    session.subframe_loading_enabled = true;
+    defer session.subframe_loading_enabled = subframe_loading_enabled;
+
+    const element = try frame.document.createElement("iframe", null, frame);
+    const iframe = element.as(HtmlElement.IFrame);
+
+    const env = frame.js.env;
+    const contexts_before = env.contexts.items.len;
+    env.terminate();
+    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    defer env.cancelTerminate();
+
+    try frame.iframeAddedCallback(iframe);
+    try testing.expectEqual(contexts_before, env.contexts.items.len);
+    try testing.expectEqual(false, iframe._executed);
 }
