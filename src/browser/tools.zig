@@ -979,15 +979,15 @@ pub const SearchParams = struct {
     timeout: ?u32 = null,
 };
 
-/// Bounds one search request once its connection is up (the search clients
-/// have no connect timeout); the `search` schema advertises this default.
+/// Advertised by the `search` schema. The search clients have no connect
+/// timeout, so this only starts once connected.
 const default_search_timeout_ms: u32 = 10_000;
 
 pub const SearchEngine = enum { auto, brave, tavily, exa, keenable };
 /// Only the agent REPL's `/searchEngine` mutates this.
 pub var search_engine: SearchEngine = .auto;
 
-// One entry per API engine, in `.auto` preference order.
+// In `.auto` preference order.
 const api_engines = .{
     .{
         .tag = SearchEngine.brave,
@@ -1028,8 +1028,7 @@ const api_engines = .{
     },
 };
 
-/// A client whose `api_key` is optional also works with no API key: a
-/// `null` key routes it to the provider's public endpoint.
+/// A `null` key routes an optional-key client to its public endpoint.
 fn isKeyless(comptime Client: type) bool {
     return @typeInfo(@FieldType(Client, "api_key")) == .optional;
 }
@@ -1057,13 +1056,12 @@ fn joinEngines(comptime field: enum { tag, env_var }, comptime last_sep: []const
     }
 }
 
-/// The `.auto` cascade in one sentence, shared by the `search` tool
-/// description and the `/searchEngine` help. Engine order and env vars come
-/// from the table; the keyless clause is the one hand-written part.
+/// Shared by the `search` tool description and the `/searchEngine` help;
+/// the keyless clause is the one part not generated from the table.
 pub const search_cascade_prose = "tries " ++ joinEngines(.tag, ", then ") ++ " in order, each when its API key (" ++ joinEngines(.env_var, " or ") ++ ") is set; keenable also works without a key through its public endpoint (rate-limited per client IP)";
 
-/// The key `engine` uses right now: the exported value, `null` for a keyless
-/// engine's public endpoint, or `MissingApiKey`.
+/// The key `engine` uses right now; `null` selects a keyless engine's
+/// public endpoint.
 fn engineKey(comptime engine: anytype) error{MissingApiKey}!?[]const u8 {
     if (lp.environ().getPosix(engine.env_var)) |key| return key;
     return if (comptime isKeyless(engine.Client)) null else error.MissingApiKey;
@@ -1095,9 +1093,8 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
             var last_err: ?anyerror = null;
             inline for (api_engines) |engine| {
                 if (engineKey(engine)) |api_key| {
-                    // Any failure (network, non-2xx, parse) falls through to
-                    // the next engine so a single outage doesn't kill a whole
-                    // benchmark run.
+                    // Fall through on any failure so one outage doesn't kill
+                    // a whole benchmark run.
                     if (apiSearch(engine, arena, api_key, timeout_ms, args.query)) |markdown_| {
                         return .{ .text = markdown_ };
                     } else |err| {
@@ -1117,9 +1114,7 @@ fn execSearch(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError!To
     }
 }
 
-/// Search with an explicitly selected engine — no fallback. A failed call
-/// comes back as an error result, as does a missing key unless the engine
-/// is keyless (it then uses its public endpoint).
+/// No fallback: a failed call or a missing key is an error result.
 fn searchExplicit(arena: std.mem.Allocator, comptime engine: anytype, timeout_ms: u32, query: []const u8) ToolError!ToolResult {
     const label = @tagName(engine.tag);
     const api_key = engineKey(engine) catch return .{
@@ -1138,9 +1133,7 @@ fn searchFailed(arena: std.mem.Allocator, comptime label: []const u8, err: anyer
     };
 }
 
-/// `arena` owns the returned slice. `api_key` is `null` only for a keyless
-/// engine's public endpoint. `timeout_ms` bounds the single attempt once the
-/// connection is up.
+/// `arena` owns the returned slice.
 fn apiSearch(
     comptime engine: anytype,
     arena: std.mem.Allocator,
@@ -1149,9 +1142,8 @@ fn apiSearch(
     query: []const u8,
 ) ![]const u8 {
     var init_options = engine.init_options;
-    // No HTTP-level retries: in `.auto` the next rung is the retry, and
-    // honoring a public endpoint's Retry-After (up to 60 s per sleep) would
-    // stall the tool on the shared browser thread instead.
+    // The cascade (or the model) is the retry; honoring a Retry-After (60 s
+    // per sleep on the public endpoint) would stall the shared browser thread.
     init_options.retry_policy = .disabled;
     init_options.request_timeout_ms = timeout_ms;
     var client: engine.Client = .init(
@@ -1223,8 +1215,7 @@ fn formatKeenableMarkdown(w: *std.Io.Writer, resp: keenable.types.SearchResponse
     }
 }
 
-/// Providers default a missing title to ""; the URL stands in rather than
-/// rendering an empty bold run.
+/// An empty title (providers default it to "") would render as `****`.
 fn writeResultItem(w: *std.Io.Writer, i: usize, title: []const u8, url: []const u8, snippet: []const u8) !void {
     try w.print("{d}. **", .{i + 1});
     try writeSingleLine(w, if (title.len == 0) url else title);
