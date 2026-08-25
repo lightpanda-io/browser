@@ -18,12 +18,28 @@ const browser_tool_list = blk: {
     for (browser_tools.tool_defs, fields, 0..) |td, f, i| {
         tools[i] = .{
             .name = f.name,
+            .title = td.summary,
             .description = td.description,
             .inputSchema = td.input_schema,
+            .annotations = annotations(@field(BrowserTool, f.name)),
         };
     }
     break :blk tools;
 };
+
+const read_only: protocol.ToolAnnotations = .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true, .openWorldHint = false };
+
+/// Exhaustive so a new tool must classify itself. Navigation is an HTTP GET,
+/// so tools that only navigate and read stay read-only; they are open-world.
+fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
+    return switch (tool) {
+        .nodeDetails, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .extract, .waitForSelector, .waitForScript, .waitForState => read_only,
+        .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true },
+        .evaluate, .click, .press => .{},
+        .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
+        .scroll => .{ .destructiveHint = false, .openWorldHint = false },
+    };
+}
 
 const save_schema = browser_tools.minify(
     \\{
@@ -58,21 +74,29 @@ const session_id_schema = browser_tools.minify(
 const extra_tools = [_]McpTool{
     .{
         .name = "save",
+        .title = "Save the session as an agent script",
+        .annotations = .{ .idempotentHint = true, .openWorldHint = false },
         .description = "Save the session as a reusable Lightpanda agent script. You hold the conversation, so synthesize the `script` yourself — `const page = new Page(); await page.goto(url);` then call the builtins you used as tools (extract, click, fill, …) as methods on `page` with the same object arguments. Keep `$LP_*` placeholders; never inline a resolved secret.\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = save_schema,
     },
     .{
         .name = "session_new",
+        .title = "Create an isolated browser session",
+        .annotations = .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .description = "Create a new isolated browser session (its own page, cookies and memory) and return its id. Use it to give a separate agent its own browsing context, or to obtain an id to share. Pass that id back as the `Mcp-Session-Id` header to route calls to it.",
         .inputSchema = session_new_schema,
     },
     .{
         .name = "session_list",
+        .title = "List browser sessions",
+        .annotations = read_only,
         .description = "List the active browser sessions with their id and current URL. The `default` session always exists.",
         .inputSchema = browser_tools.minify("{ \"type\": \"object\", \"properties\": {} }"),
     },
     .{
         .name = "session_close",
+        .title = "Close a browser session",
+        .annotations = .{ .openWorldHint = false },
         .description = "Close a browser session, freeing its page and memory. The `default` session cannot be closed.",
         .inputSchema = session_id_schema,
     },
@@ -269,6 +293,36 @@ fn sendToolResultFmt(server: *Server, arena: std.mem.Allocator, id: std.json.Val
 
 const router = @import("router.zig");
 const testing = @import("../testing.zig");
+
+test "MCP - tools/list carries titles and annotations" {
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, all_tools, .{});
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const Expect = struct { name: []const u8, title: []const u8, read_only: bool, destructive: bool };
+    const expected = [_]Expect{
+        .{ .name = "getUrl", .title = "Show the current page URL", .read_only = true, .destructive = false },
+        .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = true, .destructive = false },
+        .{ .name = "click", .title = "Click an element", .read_only = false, .destructive = true },
+        .{ .name = "save", .title = "Save the session as an agent script", .read_only = false, .destructive = true },
+        .{ .name = "session_list", .title = "List browser sessions", .read_only = true, .destructive = false },
+    };
+
+    var found: usize = 0;
+    for (parsed.value.array.items) |tool| {
+        const name = tool.object.get("name").?.string;
+        for (expected) |e| {
+            if (!std.mem.eql(u8, name, e.name)) continue;
+            found += 1;
+            try testing.expectEqual(e.title, tool.object.get("title").?.string);
+            const a = tool.object.get("annotations").?.object;
+            try testing.expectEqual(e.read_only, a.get("readOnlyHint").?.bool);
+            try testing.expectEqual(e.destructive, a.get("destructiveHint").?.bool);
+        }
+    }
+    try testing.expectEqual(expected.len, found);
+}
 
 test "MCP - evaluate error reporting" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
