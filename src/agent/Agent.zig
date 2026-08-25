@@ -1456,7 +1456,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries " ++ browser_tools.search_engine_order ++ " (each when its API key is set; keenable's public endpoint otherwise); an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
                 .{ @tagName(browser_tools.search_engine), settings.remembered_path },
             ),
         }
