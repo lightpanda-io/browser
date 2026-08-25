@@ -223,7 +223,7 @@ fn matchSegmentAtEnd(segment: []const u8, url: []const u8, from: usize) bool {
 }
 
 /// uBO's separator class: everything that cannot appear in a hostname or an unescaped path word.
-pub fn isSeparator(c: u8) bool {
+fn isSeparator(c: u8) bool {
     if (std.ascii.isAlphanumeric(c)) return false;
     return switch (c) {
         '_', '%', '.', '-' => false,
