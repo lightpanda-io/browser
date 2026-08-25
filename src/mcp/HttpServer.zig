@@ -402,9 +402,8 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     // Read the headers and keep_alive before the body reader invalidates
     // the head's string memory.
     const session_id = checkHeaders(arena, request) catch |err| switch (err) {
-        error.ForbiddenOrigin, error.ForbiddenHost => {
-            return request.respond("", .{ .status = .forbidden, .keep_alive = false });
-        },
+        error.ForbiddenOrigin => return request.respond("Origin not allowed\n", .{ .status = .forbidden, .keep_alive = false }),
+        error.ForbiddenHost => return request.respond("Host not allowed, connect to the MCP endpoint by IP address\n", .{ .status = .forbidden, .keep_alive = false }),
         else => return err,
     };
     const keep_alive = request.head.keep_alive;
