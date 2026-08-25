@@ -162,7 +162,14 @@ pub fn getButtons(self: *const MouseEvent) u16 {
 // https://drafts.csswg.org/cssom-view/#extensions-to-the-mouseevent-interface
 fn compatCoordinate(self: *const MouseEvent, value: f64) f64 {
     return switch (self._type) {
-        .pointer_event => value,
+        .pointer_event => {
+            const ty = self._proto._proto._type_string;
+            if (ty.eql(comptime .wrap("click")) or ty.eql(comptime .wrap("auxclick")) or ty.eql(comptime .wrap("contextmenu"))) {
+                // these "click-like" event types also floor
+                return @floor(value);
+            }
+            return value;
+        },
         else => @floor(value),
     };
 }
