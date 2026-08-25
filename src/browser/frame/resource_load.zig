@@ -79,6 +79,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         .ctx = load,
         .url = resolved,
         .method = .GET,
+        .origin = frame.origin,
         .resource_type = .image,
         .headers_only = true,
         .header_callback = ImageLoad.headerCallback,
