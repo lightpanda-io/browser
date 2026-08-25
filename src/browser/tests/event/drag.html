@@ -18,6 +18,11 @@
 {
   const event = new DragEvent('dragover', { clientX: 5, clientY: 9, button: 0 });
   testing.expectEqual(5, event.clientX);
+
+  // DragEvent floors fractional coordinates like MouseEvent (Chrome parity).
+  const fractional = new DragEvent('dragover', { clientX: 47.5, clientY: 312.5 });
+  testing.expectEqual(47, fractional.clientX);
+  testing.expectEqual(312, fractional.clientY);
   testing.expectEqual(9, event.clientY);
 }
 </script>
