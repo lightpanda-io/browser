@@ -689,7 +689,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
         if (getInlineStyleProperty(el, comptime .wrap("display"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("none"))) {
+            if (property._value.eqlSliceIgnoreCase("none")) {
                 return true; // Early exit for hiding value
             }
             display_none = false;
@@ -702,7 +702,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     if (options.check_visibility) {
         if (getInlineStyleProperty(el, comptime .wrap("visibility"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("hidden")) or property._value.eql(comptime .wrap("collapse"))) {
+            if (property._value.eqlSliceIgnoreCase("hidden") or property._value.eqlSliceIgnoreCase("collapse")) {
                 return true;
             }
             visibility_hidden = false;
@@ -717,7 +717,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     if (options.check_opacity) {
         if (getInlineStyleProperty(el, comptime .wrap("opacity"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("0"))) {
+            if (property._value.eqlSliceIgnoreCase("0")) {
                 return true;
             }
             opacity_zero = false;
@@ -872,7 +872,7 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
 
     // Check inline style first
     if (getInlineStyleProperty(el, .wrap("pointer-events"), frame)) |property| {
-        if (property._value.eql(comptime .wrap("none"))) {
+        if (property._value.eqlSliceIgnoreCase("none")) {
             return true;
         }
         return false;
@@ -1046,19 +1046,19 @@ fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties 
     const decl = style.asCSSStyleDeclaration();
 
     if (decl.findProperty(comptime .wrap("display"))) |property| {
-        props.display_none = property._value.eql(comptime .wrap("none"));
+        props.display_none = property._value.eqlSliceIgnoreCase("none");
     }
 
     if (decl.findProperty(comptime .wrap("visibility"))) |property| {
-        props.visibility_hidden = property._value.eql(comptime .wrap("hidden")) or property._value.eql(comptime .wrap("collapse"));
+        props.visibility_hidden = property._value.eqlSliceIgnoreCase("hidden") or property._value.eqlSliceIgnoreCase("collapse");
     }
 
     if (decl.findProperty(comptime .wrap("opacity"))) |property| {
-        props.opacity_zero = property._value.eql(comptime .wrap("0"));
+        props.opacity_zero = property._value.eqlSliceIgnoreCase("0");
     }
 
     if (decl.findProperty(.wrap("pointer-events"))) |property| {
-        props.pointer_events_none = property._value.eql(comptime .wrap("none"));
+        props.pointer_events_none = property._value.eqlSliceIgnoreCase("none");
     }
 
     return props;

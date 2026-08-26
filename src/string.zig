@@ -224,6 +224,10 @@ pub const String = extern struct {
         };
     }
 
+    pub fn eqlSliceIgnoreCase(a: String, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a.str(), b);
+    }
+
     const EqualOrDeleted = union(enum) {
         deleted,
         equal: bool,

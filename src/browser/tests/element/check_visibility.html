@@ -443,3 +443,32 @@
     elements[0].remove();
   }
 </script>
+
+<style id="style-keyword-case">
+  .hidden-upper { DISPLAY: NONE; }
+  .invisible-upper { Visibility: Hidden; }
+</style>
+<script id="keyword_values_are_case_insensitive">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    el.setAttribute("style", "display: NONE");
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(el).display);
+
+    el.setAttribute("style", "visibility: HIDDEN");
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.removeAttribute("style");
+    el.className = "hidden-upper";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.className = "invisible-upper";
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.remove();
+  }
+</script>
