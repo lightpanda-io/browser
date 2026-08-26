@@ -3151,6 +3151,12 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
+    } else if (node.is(Element.Html.Meta)) |meta| {
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        meta.processRefresh(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
+            return err;
+        };
     } else if (node.is(Element.Html.Link)) |link| {
         const frame = if (comptime from_parser) self else node.ownerFrame(self);
         link.linkAddedCallback(frame) catch |err| {
@@ -3726,6 +3732,30 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: static immediate meta refresh navigates" {
+    const page = try testing.pageTest("fixtures/meta_refresh.html", .{});
+    defer page.close();
+
+    try testing.expect(std.mem.endsWith(u8, page.frame().?.url, "/fixtures/meta_refresh_target.html"));
+}
+
+test "Frame: dynamic immediate meta refresh schedules navigation" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "https://example.com/source";
+
+    const html = try frame.document.createElement("html", null, frame);
+    _ = try frame.document.asNode().appendChild(html.asNode(), frame);
+    const head = try frame.document.createElement("head", null, frame);
+    _ = try html.asNode().appendChild(head.asNode(), frame);
+    const meta = try frame.document.createElement("meta", null, frame);
+    try meta.setAttribute(comptime .wrap("http-equiv"), comptime .wrap("refresh"), frame);
+    try meta.setAttribute(comptime .wrap("content"), comptime .wrap("0; /target"), frame);
+    _ = try head.asNode().appendChild(meta.asNode(), frame);
+
+    try testing.expectString("https://example.com/target", frame._queued_navigation.?.url);
 }
 
 test "Frame: httpMetadata after navigation" {

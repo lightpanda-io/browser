@@ -27,6 +27,7 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const referrer = @import("../../../referrer.zig");
 
+const String = lp.String;
 const Meta = @This();
 
 pub const Proto = HtmlElement;
@@ -84,18 +85,63 @@ pub fn setScheme(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("scheme"), .wrap(value), frame);
 }
 
+pub fn processRefresh(self: *Meta, frame: *Frame) !void {
+    if (!self.asNode().isConnected()) return;
+    try self.scheduleRefresh(frame);
+}
+
+fn scheduleRefresh(self: *Meta, frame: *Frame) !void {
+    if (!std.ascii.eqlIgnoreCase(self.getHttpEquiv(), "refresh")) return;
+
+    const target = immediateRefreshTarget(self.getContent()) orelse return;
+    try frame.scheduleNavigation(target, .{
+        .reason = .script,
+        .kind = .{ .replace = null },
+    }, .{ .script = frame });
+}
+
+fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, content, &std.ascii.whitespace);
+    const separator = std.mem.indexOfAny(u8, trimmed, ";,") orelse return null;
+    const delay = std.mem.trim(u8, trimmed[0..separator], &std.ascii.whitespace);
+    const seconds = std.fmt.parseFloat(f64, delay) catch return null;
+    if (!std.math.isFinite(seconds) or seconds != 0) return null;
+
+    var target = std.mem.trim(u8, trimmed[separator + 1 ..], &std.ascii.whitespace);
+    if (target.len >= 3 and std.ascii.eqlIgnoreCase(target[0..3], "url")) {
+        target = std.mem.trimStart(u8, target[3..], &std.ascii.whitespace);
+        if (target.len == 0 or target[0] != '=') return null;
+        target = std.mem.trim(u8, target[1..], &std.ascii.whitespace);
+    }
+    if (target.len >= 2 and ((target[0] == '"' and target[target.len - 1] == '"') or (target[0] == '\'' and target[target.len - 1] == '\''))) {
+        target = std.mem.trim(u8, target[1 .. target.len - 1], &std.ascii.whitespace);
+    }
+    return if (target.len == 0) null else target;
+}
+
 pub const Build = struct {
     // <meta name=referrer> sets the document's referrer policy.
     pub fn created(node: *Node, frame: *Frame) !void {
-        const el = node.as(Element);
-        const name = el.getAttributeSafe(comptime .wrap("name")) orelse return;
-        if (std.ascii.eqlIgnoreCase(name, "referrer") == false) {
-            return;
+        const self = node.as(Meta);
+        const el = self.asElement();
+        if (el.getAttributeSafe(comptime .wrap("name"))) |name| {
+            if (std.ascii.eqlIgnoreCase(name, "referrer")) {
+                if (el.getAttributeSafe(comptime .wrap("content"))) |content| {
+                    if (referrer.parseMeta(content)) |rp| {
+                        frame.referrer_policy = rp;
+                    }
+                }
+            }
         }
-        const content = el.getAttributeSafe(comptime .wrap("content")) orelse return;
-        if (referrer.parseMeta(content)) |rp| {
-            frame.referrer_policy = rp;
+
+        if (frame._parse_mode != .fragment) {
+            try self.scheduleRefresh(frame);
         }
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("http-equiv")) and !name.eql(comptime .wrap("content"))) return;
+        try element.as(Meta).processRefresh(frame);
     }
 };
 
@@ -114,3 +160,12 @@ pub const JsApi = struct {
     pub const media = bridge.accessor(MetaElement.getMedia, MetaElement.setMedia, .{ .ce_reactions = true });
     pub const scheme = bridge.accessor(MetaElement.getScheme, MetaElement.setScheme, .{ .ce_reactions = true });
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: Meta immediate refresh target" {
+    try testing.expectString("/target", immediateRefreshTarget("0; /target").?);
+    try testing.expectString("/target", immediateRefreshTarget("0, URL = '/target'").?);
+    try testing.expectString("https://example.com/", immediateRefreshTarget("0.0; https://example.com/").?);
+    try testing.expectEqual(null, immediateRefreshTarget("1; /target"));
+    try testing.expectEqual(null, immediateRefreshTarget("invalid; /target"));
+}
