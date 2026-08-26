@@ -84,12 +84,21 @@
     \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
     \\          one object per URL. When used with --dump <MODE> the dumped
     \\          content is wrapped within each object.
+    \\  --max-bytes <INT>
+    \\          Soft cap on the dumped html or markdown, in bytes. Output is cut
+    \\          at a UTF-8 boundary and a '[truncated]' marker is appended.
+    \\          Defaults to no cap.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
     \\          Defaults to false.
+    \\  --selector <QUERY>
+    \\          Dump only the first element matching the CSS selector instead
+    \\          of the whole document. Fails if nothing matches.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
+    \\          Markdown never contains scripts, styles or hidden elements, so
+    \\          only 'ui' (images) applies to it.
     \\          Defaults to no-strip.
     \\          Allowed values:
     \\              js        Script and link[as=script, rel=preload].

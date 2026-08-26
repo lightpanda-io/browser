@@ -40,6 +40,9 @@ pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const screenshot = @import("browser/screenshot.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
+const LimitedWriter = @import("LimitedWriter.zig");
+const Selector = @import("browser/webapi/selector/Selector.zig");
+const Node = @import("browser/webapi/Node.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const CDPNode = @import("cdp/Node.zig");
 pub const interactive = @import("browser/interactive.zig");
@@ -186,6 +189,10 @@ pub const FetchOpts = struct {
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
+    /// Dump only the first match instead of the document.
+    selector: ?[:0]const u8 = null,
+    /// html and markdown only.
+    max_bytes: ?u32 = null,
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
@@ -345,7 +352,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
                 defer arena.release();
 
-                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
+                const shot = try screenshot.prepare(arena.allocator(), try dumpRoot(frame.?, opts.selector), .{
                     .width = frame.?._page.getViewport().width,
                 }, frame.?);
                 try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
@@ -356,7 +363,7 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
             defer aw.deinit();
 
             if (opts.dump_mode) |mode| {
-                if (frame) |f| try dumpContent(app, mode, opts.dump, f, &aw.writer);
+                if (frame) |f| try dumpContent(app, mode, opts, f, &aw.writer);
             }
             try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
         }
@@ -372,20 +379,38 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
                 break :blk;
             };
-            try dumpContent(app, mode, opts.dump, frame, writer);
+            try dumpContent(app, mode, opts, frame, writer);
         }
     }
     try writer.flush();
 }
 
-fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: *Frame, writer: *std.Io.Writer) !void {
+fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
+    const document = frame.window._document.asNode();
+    const sel = selector orelse return document;
+    const element = try Selector.querySelector(document, sel, frame);
+    return (element orelse return error.SelectorNotFound).asNode();
+}
+
+fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
+    const root = try dumpRoot(frame, opts.selector);
     switch (mode) {
-        .html => try dump.root(frame.window._document, dump_opts, writer, frame),
-        .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .html => {
+            var lw: LimitedWriter = .init(writer, opts.max_bytes);
+            const result = if (opts.selector == null)
+                dump.root(frame.window._document, opts.dump, &lw.writer, frame)
+            else
+                dump.deep(root, opts.dump, &lw.writer, frame);
+            result catch |err| {
+                if (!lw.truncated) return err;
+                try writer.writeAll(LimitedWriter.truncation_marker);
+            };
+        },
+        .markdown => try markdown.dump(root, .{ .max_bytes = opts.max_bytes, .strip = opts.dump.strip }, writer, frame),
         .png => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
-            _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
+            _ = try screenshot.png(arena.allocator(), root, .{
                 .width = frame._page.getViewport().width,
             }, writer, frame);
         },
@@ -394,7 +419,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
             defer registry.deinit();
 
             const st: SemanticTree = .{
-                .dom_node = frame.window._document.asNode(),
+                .dom_node = root,
                 .registry = &registry,
                 .frame = frame,
                 .arena = frame.call_arena,
