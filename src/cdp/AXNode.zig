@@ -1305,7 +1305,7 @@ fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.Visibi
 
     // CSS display:none and visibility:hidden (both inherited from ancestors via
     // style computation). Matches Chromium's AX tree which prunes both.
-    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true })) {
+    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true }, .scan)) {
         return true;
     }
 

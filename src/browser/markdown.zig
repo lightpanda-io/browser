@@ -150,7 +150,7 @@ fn isSignificantText(node: *Node) bool {
 fn isVisibleElement(el: *Element, frame: *Frame) bool {
     const tag = el.getTag();
     if (tag.isMetadata() or tag == .svg) return false;
-    if (frame._style_manager.hasDisplayNone(el)) return false;
+    if (frame._style_manager.hasDisplayNone(el, .scan)) return false;
     if (el.getAttributeSafe(comptime .wrap("aria-hidden"))) |v| {
         if (std.ascii.eqlIgnoreCase(v, "true")) return false;
     }
