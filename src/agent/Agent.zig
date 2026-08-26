@@ -769,13 +769,11 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
     self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
     const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const env_var = browser_tools.searchEnvVar(selected) orelse return;
-    if (std.c.getenv(env_var) == null) {
-        if (browser_tools.searchEngineKeyless(selected)) {
-            self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{env_var});
-        } else {
-            self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{env_var});
-        }
+    const key = browser_tools.searchKeyStatus(selected) orelse return;
+    switch (key.state) {
+        .set => {},
+        .keyless => self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{key.env_var}),
+        .missing => self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{key.env_var}),
     }
 }
 
@@ -1458,7 +1456,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave, Tavily, Exa, then Keenable (each when its API key is set), then Keenable's keyless endpoint, and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
                 .{ @tagName(browser_tools.search_engine), settings.remembered_path },
             ),
         }
