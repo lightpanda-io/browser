@@ -164,6 +164,14 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 });
             }
 
+            if (opts.dump == null and opts.dump_selector != null) {
+                log.fatal(.app, "--dump-selector needs --dump", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.dump == null and opts.dump_max_bytes != null) {
+                log.fatal(.app, "--dump-max-bytes needs --dump", .{});
+                return error.InvalidArgument;
+            }
             if (opts.dump_max_bytes != null and opts.dump != .html and opts.dump != .markdown) {
                 log.fatal(.app, "--dump-max-bytes needs text", .{ .dump = opts.dump, .allowed = "html, markdown" });
                 return error.InvalidArgument;
