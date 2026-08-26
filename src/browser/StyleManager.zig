@@ -690,7 +690,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
-        if (inlineValue(el, comptime .wrap("display"), self.frame, access)) |value| {
+    if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "none")) {
                 return true; // Early exit for hiding value
             }
@@ -703,7 +703,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_visibility) {
-        if (inlineValue(el, comptime .wrap("visibility"), self.frame, access)) |value| {
+    if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse")) {
                 return true;
             }
@@ -718,7 +718,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_opacity) {
-        if (inlineValue(el, comptime .wrap("opacity"), self.frame, access)) |value| {
+    if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "0")) {
                 return true;
             }
@@ -873,7 +873,7 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     const frame = self.frame;
 
     // Check inline style first
-    if (inlineValue(el, .wrap("pointer-events"), frame, .materialize)) |value| {
+    if (inlineValue(el, .wrap("pointer-events"), .materialize, frame)) |value| {
         if (std.ascii.eqlIgnoreCase(value, "none")) {
             return true;
         }
@@ -1261,7 +1261,7 @@ fn scanInlineValue(attr: []const u8, property_name: []const u8) ?[]const u8 {
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
-    return inlineValue(el, property_name, self.frame, .materialize);
+    return inlineValue(el, property_name, .materialize, self.frame);
 }
 
 /// Bounds computedFontSize's ancestor recursion (the parent walk and
@@ -1504,10 +1504,10 @@ test "StyleManager: inlineValue: scan matches materialize" {
     var child = div.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
-        const scanned = inlineValue(el, comptime .wrap("display"), frame, .scan);
+        const scanned = inlineValue(el, comptime .wrap("display"), .scan, frame);
         // scanning never creates the style object
         try testing.expectEqual(null, el.getStyle(frame));
-        const materialized = inlineValue(el, comptime .wrap("display"), frame, .materialize);
+        const materialized = inlineValue(el, comptime .wrap("display"), .materialize, frame);
         if (expected[i]) |value| {
             try testing.expectEqual(value, scanned);
             try testing.expectEqual(value, materialized);
