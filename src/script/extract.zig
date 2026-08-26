@@ -42,6 +42,15 @@ pub const ExtractStat = struct {
     nonempty: u32,
 };
 
+/// Null for anything but valid JSON — extract output is best-effort telemetry
+/// for every consumer; only OOM is an error.
+pub fn parseJsonLenient(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}!?std.json.Value {
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+}
+
 pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) error{OutOfMemory}![]const ExtractField {
     switch (result) {
         .array => {

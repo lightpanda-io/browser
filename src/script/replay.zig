@@ -60,9 +60,6 @@ pub const Classified = union(enum) {
     script_error: ScriptError,
 };
 
-/// Read bound for script files on both replay surfaces.
-pub const max_script_bytes = 10 * 1024 * 1024;
-
 /// Map a run's raw result to facts or a `threw` finding. The error text and
 /// stats are duped into `arena` — they live in the runtime's per-call arena —
 /// but `source` is stored as given: the caller owns it and it must outlive
@@ -157,7 +154,20 @@ fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []con
 /// Bound for script source echoed into reports and LLM turns — a script is
 /// human-scale, but a synthesized one with an embedded blob shouldn't balloon
 /// them.
-pub const source_max_bytes = 64 * 1024;
+const source_max_bytes = 64 * 1024;
+
+/// `source` bounded for a report or an LLM turn; the input itself when it
+/// fits.
+pub fn cappedSource(arena: std.mem.Allocator, source: []const u8) []const u8 {
+    return string.capBytes(arena, source, source_max_bytes);
+}
+
+const max_script_bytes = 10 * 1024 * 1024;
+
+/// The script at `path`, bounded. Shared by both replay surfaces.
+pub fn readScriptFile(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
+    return std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(max_script_bytes));
+}
 
 /// Overwrite `path` with `content`, newline-terminated. Shared by the MCP
 /// `save` tool and heal's commit.
@@ -214,7 +224,7 @@ pub const RunReport = struct {
 
 const testing = @import("../testing.zig");
 
-fn testFacts(returned: Returned, stats: []const extract.ExtractStat) RunFacts {
+pub fn testFacts(returned: Returned, stats: []const extract.ExtractStat) RunFacts {
     return .{ .returned = returned, .extract_stats = stats, .source = "" };
 }
 

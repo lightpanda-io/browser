@@ -422,7 +422,7 @@ fn isEmptyValue(self: *Runtime, value: *const v8.Value, text: []const u8) bool {
         // must not sit in the call arena until the next run.
         var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
         defer arena_state.deinit();
-        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena_state.allocator(), text, .{}) catch return false;
+        const parsed = (extract.parseJsonLenient(arena_state.allocator(), text) catch return false) orelse return false;
         return extract.jsonIsEmpty(parsed);
     }
     return text.len == 0;
@@ -527,7 +527,7 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     switch (result) {
         .ok => |text| switch (tool) {
             .extract => {
-                const parsed = parseJsonLenient(arena, text) catch |err| switch (err) {
+                const parsed = extract.parseJsonLenient(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return self.throwError("out of memory"),
                 };
                 // Recording happens after `callTool` returns, so a re-entrant
@@ -938,14 +938,6 @@ fn objectWith(arena: std.mem.Allocator, key: []const u8, value: std.json.Value) 
     var obj: std.json.ObjectMap = .empty;
     try obj.put(arena, key, value);
     return .{ .object = obj };
-}
-
-fn parseJsonLenient(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}!?std.json.Value {
-    if (text.len == 0) return null;
-    return std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return null,
-    };
 }
 
 fn setReturnString(self: *Runtime, info: *const v8.FunctionCallbackInfo, value: []const u8) void {

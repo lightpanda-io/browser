@@ -213,9 +213,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return server.sendError(id, .InvalidParams, "expected { path: string, script: string }");
     };
 
-    if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
-    }
+    if (!try guardPathSafe(server, id, args.path)) return;
 
     // The client never sees resolved secrets, but scrub any literal LP_* value
     // back to its `$LP_*` placeholder as a safety net before persisting.
@@ -241,11 +239,10 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 /// report.
 const ConsoleCollector = struct {
     arena: std.mem.Allocator,
+    env_pairs: []const browser_tools.EnvPair,
     lines: std.ArrayList(lp.replay.ConsoleLine) = .empty,
     bytes: usize = 0,
     truncated: bool = false,
-    /// Lazy — a silent script never pays for the environment scan.
-    env_pairs: ?[]const browser_tools.EnvPair = null,
 
     const max_bytes = 16 * 1024;
 
@@ -255,35 +252,25 @@ const ConsoleCollector = struct {
 
     fn write(context: *anyopaque, method: ScriptRuntime.ConsoleMethod, line: []const u8) void {
         const self: *ConsoleCollector = @ptrCast(@alignCast(context));
+        // A line dropped on OOM reads the same as one dropped by the cap.
+        self.append(method, line) catch {
+            self.truncated = true;
+        };
+    }
+
+    fn append(self: *ConsoleCollector, method: ScriptRuntime.ConsoleMethod, line: []const u8) error{OutOfMemory}!void {
         const remaining = max_bytes -| self.bytes;
         if (remaining == 0) {
             self.truncated = true;
             return;
         }
-        const pairs = self.env_pairs orelse pairs: {
-            const p = browser_tools.lpEnvPairs(self.arena) catch {
-                self.truncated = true;
-                return;
-            };
-            self.env_pairs = p;
-            break :pairs p;
-        };
         // Scrub any resolved LP_* secret a script may have printed.
-        const scrubbed = browser_tools.reverseSubstituteWithPairs(self.arena, line, pairs) catch {
-            self.truncated = true;
-            return;
-        };
+        const scrubbed = try browser_tools.reverseSubstituteWithPairs(self.arena, line, self.env_pairs);
         if (scrubbed.len > remaining) self.truncated = true;
         // `line` lives in the runtime's per-call arena, which dies before the
         // report is sent.
-        const text = string.capBytesOwned(self.arena, scrubbed, remaining) catch {
-            self.truncated = true;
-            return;
-        };
-        self.lines.append(self.arena, .{ .level = @tagName(method), .text = text }) catch {
-            self.truncated = true;
-            return;
-        };
+        const text = try string.capBytesOwned(self.arena, scrubbed, remaining);
+        try self.lines.append(self.arena, .{ .level = @tagName(method), .text = text });
         self.bytes += text.len;
     }
 };
@@ -297,28 +284,13 @@ fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, so
     return lp.replay.classifyRun(arena, result, source);
 }
 
-/// `runClassified` with its bring-up failures reported to the client; null
-/// after reporting.
-fn runClassifiedOrReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, collector: *ConsoleCollector) !?lp.replay.Classified {
-    return runClassified(server, arena, path, source, collector) catch |err| {
-        try sendErrorContent(server, id, switch (err) {
-            error.OutOfMemory => "out of memory",
-            error.RuntimeInitFailed, error.TooManyContexts => "could not initialize the script runtime",
-        });
-        return null;
-    };
-}
-
-// `validation` (heal_commit) skips the guidance and the source scrub: the
-// client supplied the script already scrubbed and drives the flow itself.
-const ReportMode = enum { replay, validation };
-
+/// `guidance` is the caller's: `replay` attaches the heal flow, `heal_commit`
+/// (whose client already drives it) leaves it null.
 fn buildRunReport(
     arena: std.mem.Allocator,
     path: []const u8,
     classified: lp.replay.Classified,
     collector: *const ConsoleCollector,
-    mode: ReportMode,
 ) error{OutOfMemory}!lp.replay.RunReport {
     var report: lp.replay.RunReport = .{
         .status = .ok,
@@ -330,8 +302,7 @@ fn buildRunReport(
         .script_error => |script_error| {
             report.status = .failed;
             report.failure = script_error.failure;
-            report.source = try reportSource(arena, script_error.source, mode);
-            if (mode == .replay) report.guidance = lp.heal.replay_failed_guidance;
+            report.source = try reportSource(arena, script_error.source, collector.env_pairs);
         },
         .facts => |facts| {
             report.returned = facts.returned;
@@ -339,20 +310,16 @@ fn buildRunReport(
             if (lp.replay.suspicionOf(arena, facts)) |suspicion| {
                 report.status = .suspicious;
                 report.failure = suspicion.failure;
-                report.source = try reportSource(arena, facts.source, mode);
-                if (mode == .replay) report.guidance = lp.heal.replay_suspicious_guidance;
+                report.source = try reportSource(arena, facts.source, collector.env_pairs);
             }
         },
     }
     return report;
 }
 
-fn reportSource(arena: std.mem.Allocator, source: []const u8, mode: ReportMode) error{OutOfMemory}![]const u8 {
-    const scrubbed = switch (mode) {
-        .replay => try browser_tools.reverseSubstituteEnvVars(arena, source),
-        .validation => source,
-    };
-    return string.capBytes(arena, scrubbed, lp.replay.source_max_bytes);
+fn reportSource(arena: std.mem.Allocator, source: []const u8, env_pairs: []const browser_tools.EnvPair) error{OutOfMemory}![]const u8 {
+    const scrubbed = try browser_tools.reverseSubstituteWithPairs(arena, source, env_pairs);
+    return lp.replay.cappedSource(arena, scrubbed);
 }
 
 /// True when the path passed the guard; the rejection is already sent
@@ -365,10 +332,22 @@ fn guardPathSafe(server: *Server, id: std.json.Value, path: []const u8) !bool {
 
 /// One classified run with its report: the shared middle of `replay` and
 /// `heal_commit`. Null after a bring-up failure or OOM has been reported.
-fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, mode: ReportMode) !?struct { classified: lp.replay.Classified, report: lp.replay.RunReport } {
-    var collector: ConsoleCollector = .{ .arena = arena };
-    const classified = (try runClassifiedOrReport(server, arena, id, path, source, &collector)) orelse return null;
-    const report = buildRunReport(arena, path, classified, &collector, mode) catch {
+fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8) !?struct { classified: lp.replay.Classified, report: lp.replay.RunReport } {
+    var collector: ConsoleCollector = .{
+        .arena = arena,
+        .env_pairs = browser_tools.lpEnvPairs(arena) catch {
+            try sendErrorContent(server, id, "out of memory");
+            return null;
+        },
+    };
+    const classified = runClassified(server, arena, path, source, &collector) catch |err| {
+        try sendErrorContent(server, id, switch (err) {
+            error.OutOfMemory => "out of memory",
+            error.RuntimeInitFailed, error.TooManyContexts => "could not initialize the script runtime",
+        });
+        return null;
+    };
+    const report = buildRunReport(arena, path, classified, &collector) catch {
         try sendErrorContent(server, id, "out of memory");
         return null;
     };
@@ -387,14 +366,19 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         return server.sendError(id, .InvalidParams, "expected { path: string, script?: string }");
     };
     if (!try guardPathSafe(server, id, args.path)) return;
-    const source = args.script orelse std.Io.Dir.cwd().readFileAlloc(lp.io, args.path, arena, .limited(lp.replay.max_script_bytes)) catch |err| {
+    const source = args.script orelse lp.replay.readScriptFile(arena, args.path) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not read {s}: {s}", .{ args.path, @errorName(err) }) catch "could not read script";
         return sendErrorContent(server, id, msg);
     };
 
     // A failed script is still a successful replay: report it in-band, never
     // as a tool error — the report is the answer.
-    const run = (try runAndReport(server, arena, id, args.path, source, .replay)) orelse return;
+    var run = (try runAndReport(server, arena, id, args.path, source)) orelse return;
+    run.report.guidance = switch (run.report.status) {
+        .ok => null,
+        .failed => lp.heal.replay_failed_guidance,
+        .suspicious => lp.heal.replay_suspicious_guidance,
+    };
     return sendReport(server, arena, id, run.report);
 }
 
@@ -416,7 +400,7 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
-    const run = (try runAndReport(server, arena, id, args.path, script, .validation)) orelse return;
+    const run = (try runAndReport(server, arena, id, args.path, script)) orelse return;
 
     var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run.report };
     switch (lp.heal.validationOutcome(arena, args.path, script, args.failure, run.classified) catch

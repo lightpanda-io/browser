@@ -28,7 +28,6 @@ const lp = @import("lightpanda");
 const Baseline = lp.Baseline;
 const extract = @import("extract.zig");
 const replay = @import("replay.zig");
-const string = @import("../string.zig");
 
 const RunFacts = replay.RunFacts;
 const WireFailure = replay.WireFailure;
@@ -90,7 +89,7 @@ pub const tmp_suffix = ".heal.js";
 /// revision; after a failed rename the revision is deliberately kept on disk.
 fn commitValidated(arena: std.mem.Allocator, path: []const u8, script: []const u8, stats: []const extract.ExtractStat) error{OutOfMemory}!?[]const u8 {
     const line = try Baseline.serializeStats(arena, stats);
-    const final = Baseline.withBaseline(arena, script, line) catch return error.OutOfMemory;
+    const final = try Baseline.withBaseline(arena, script, line);
     const tmp_path = try std.mem.concat(arena, u8, &.{ path, tmp_suffix });
     replay.writeScriptFile(tmp_path, final) catch |err| {
         std.Io.Dir.cwd().deleteFile(lp.io, tmp_path) catch {};
@@ -136,7 +135,7 @@ pub fn buildDiagnoseMessage(arena: std.mem.Allocator, path: []const u8, source: 
         \\{s}
         \\
         \\
-    ++ diagnose_instructions, .{ path, string.capBytes(arena, source, replay.source_max_bytes), error_detail });
+    ++ diagnose_instructions, .{ path, replay.cappedSource(arena, source), error_detail });
 }
 
 /// Heal synthesis instruction; rides on the regular save revision system prompt.
@@ -203,9 +202,7 @@ pub const HealReport = struct {
     run: replay.RunReport,
 };
 
-fn testFacts(returned: replay.Returned, stats: []const extract.ExtractStat) RunFacts {
-    return .{ .returned = returned, .extract_stats = stats, .source = "" };
-}
+const testFacts = replay.testFacts;
 
 test "validationOutcome: failed run and uncured facts never reach the commit" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);

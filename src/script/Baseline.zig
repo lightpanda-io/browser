@@ -57,10 +57,7 @@ pub fn reset(self: *Baseline) void {
 /// only holds the parse — tallies land in the baseline's own arena. Malformed
 /// output records nothing — this is best-effort telemetry.
 pub fn noteExtractResult(self: *Baseline, scratch: std.mem.Allocator, result_text: []const u8) error{OutOfMemory}!void {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, scratch, result_text, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return,
-    };
+    const parsed = (try extract.parseJsonLenient(scratch, result_text)) orelse return;
     for (try extract.classifyExtractFields(scratch, parsed)) |fc| {
         try self.bump(fc.field, !fc.empty);
     }
@@ -108,27 +105,25 @@ fn fieldsToLine(arena: std.mem.Allocator, fields: Fields) error{OutOfMemory}!?[]
 /// `script` with any existing baseline lines dropped and `line` (a full
 /// baseline line, or null) appended — synthesis may have copied a stale
 /// baseline from the previous script verbatim.
-pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const u8) ![]const u8 {
+pub fn withBaseline(arena: std.mem.Allocator, script: []const u8, line: ?[]const u8) error{OutOfMemory}![]const u8 {
     if (line == null and std.mem.indexOf(u8, script, marker) == null) return script;
-    var aw: std.Io.Writer.Allocating = .init(arena);
+    var out: std.ArrayList(u8) = .empty;
     var lines = std.mem.splitScalar(u8, script, '\n');
     var pending_newline = false;
     while (lines.next()) |script_line| {
         if (std.mem.startsWith(u8, std.mem.trim(u8, script_line, " \t\r"), marker)) continue;
-        if (pending_newline) try aw.writer.writeByte('\n');
-        try aw.writer.writeAll(script_line);
+        if (pending_newline) try out.append(arena, '\n');
+        try out.appendSlice(arena, script_line);
         pending_newline = true;
     }
     if (line) |l| {
-        // A split of "a\nb\n" ends with an empty segment, so the writer is
+        // A split of "a\nb\n" ends with an empty segment, so the buffer is
         // already newline-terminated in the common case.
-        if (aw.written().len != 0 and aw.written()[aw.written().len - 1] != '\n') {
-            try aw.writer.writeByte('\n');
-        }
-        try aw.writer.writeAll(l);
-        try aw.writer.writeByte('\n');
+        if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') try out.append(arena, '\n');
+        try out.appendSlice(arena, l);
+        try out.append(arena, '\n');
     }
-    return aw.written();
+    return out.items;
 }
 
 test "baseline: note and serialize tally per-field data presence" {
