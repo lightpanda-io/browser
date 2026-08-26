@@ -28,9 +28,58 @@ pub const Session = struct {
     session: *lp.Session,
     notification: *lp.Notification,
     node_registry: CDPNode.Registry,
+    /// Owns `heal_target`'s strings; freed on every overwrite.
+    heal_arena: std.heap.ArenaAllocator,
+    /// The cure target `heal_commit` validates against: the finding of the
+    /// last failed/suspicious file `replay`, minus the detail the cure check
+    /// never reads. Server-held so a client cannot widen or retarget it — an
+    /// echoed `threw` would let a fix-by-deletion commit; `heal_commit`'s
+    /// `fields` may only narrow it.
+    heal_target: ?HealTarget = null,
+
+    const HealTarget = struct {
+        path: []const u8,
+        kind: lp.replay.WireFailure.Kind,
+        dry_fields: []const []const u8,
+    };
 
     fn isDefault(self: *const Session) bool {
         return std.mem.eql(u8, self.id, default_session_id);
+    }
+
+    /// A file replay speaks for its file: failed or suspicious arms the cure
+    /// target, clean retires it. A `script` trial is neither — don't note it.
+    pub fn noteFileReplay(self: *Session, report: lp.replay.RunReport) error{OutOfMemory}!void {
+        switch (report.status) {
+            .ok => return self.retireHealTarget(report.path),
+            .failed, .suspicious => {},
+        }
+        const failure = report.failure.?;
+        // Drop first: an OOM mid-copy must not leave a target pointing into
+        // the freed arena.
+        self.dropHealTarget();
+        const arena = self.heal_arena.allocator();
+        const dry_fields = try arena.alloc([]const u8, failure.dry_fields.len);
+        for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try arena.dupe(u8, field);
+        self.heal_target = .{ .path = try arena.dupe(u8, report.path), .kind = failure.kind, .dry_fields = dry_fields };
+    }
+
+    /// Forget `path`'s target — a clean replay or a committed cure. No-op for
+    /// any other path.
+    pub fn retireHealTarget(self: *Session, path: []const u8) void {
+        if (self.cureTarget(path) == null) return;
+        self.dropHealTarget();
+    }
+
+    pub fn cureTarget(self: *const Session, path: []const u8) ?lp.replay.WireFailure {
+        const target = self.heal_target orelse return null;
+        if (!std.mem.eql(u8, target.path, path)) return null;
+        return .{ .kind = target.kind, .dry_fields = target.dry_fields };
+    }
+
+    fn dropHealTarget(self: *Session) void {
+        self.heal_target = null;
+        _ = self.heal_arena.reset(.free_all);
     }
 };
 
@@ -97,8 +146,10 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
         .session = undefined,
         .notification = notification,
         .node_registry = CDPNode.Registry.init(self.allocator),
+        .heal_arena = .init(self.allocator),
     };
     errdefer entry.node_registry.deinit();
+    errdefer entry.heal_arena.deinit();
 
     try entry.browser.init(self.app, .{}, null);
     errdefer entry.browser.deinit();
@@ -164,6 +215,7 @@ fn destroySession(self: *Self, entry: *Session) void {
     // Re-enter so `Browser.deinit`'s `Env.deinit` exit stays balanced against
     // a parked isolate (and operates on the current one).
     self.enterIsolate(entry);
+    entry.heal_arena.deinit();
     entry.node_registry.deinit();
     entry.browser.deinit();
     entry.notification.deinit();

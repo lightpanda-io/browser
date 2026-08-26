@@ -28,27 +28,47 @@ const lp = @import("lightpanda");
 const Baseline = lp.Baseline;
 const extract = @import("extract.zig");
 const replay = @import("replay.zig");
+const string = @import("../string.zig");
 
 const RunFacts = replay.RunFacts;
 const WireFailure = replay.WireFailure;
 
 /// Outcome of one heal validation run against the original failure.
 pub const ValidationOutcome = union(enum) {
-    /// The validation run itself threw.
-    failed_run: []const u8,
-    /// Ran clean but did not cure the original finding.
-    not_cured: []const u8,
+    /// The validation run itself threw; its finding verbatim.
+    failed_run: WireFailure,
+    /// Ran clean but did not cure `first`: `.empty` for a still-empty return,
+    /// `.dry_extracts` naming every field still dry (or gone).
+    not_cured: WireFailure,
     /// Cured, but swapping the file failed; the message names the leftover
     /// `.heal.js` path.
     cured_uncommitted: []const u8,
     committed,
 };
 
+/// `first` narrowed to the dry fields a verdict judged broken — the fields a
+/// model or client omits are accepted as legitimately empty. Never widens or
+/// retargets: the kind is fixed, names outside `first.dry_fields` are dropped
+/// (a hallucinated name could never be cured), and an empty or all-unknown
+/// `judged` leaves `first` unchanged.
+pub fn narrowTarget(arena: std.mem.Allocator, first: WireFailure, judged: []const []const u8) error{OutOfMemory}!WireFailure {
+    if (first.kind != .dry_extracts or judged.len == 0) return first;
+    var kept: std.ArrayList([]const u8) = .empty;
+    for (first.dry_fields) |dry| {
+        if (string.isOneOf(dry, judged)) try kept.append(arena, dry);
+    }
+    if (kept.items.len == 0) return first;
+    return .{ .kind = first.kind, .detail = first.detail, .dry_fields = kept.items };
+}
+
 /// Judge a validation run of `script` against the `first` failure it was
 /// meant to cure, and commit it into `path` when — and only when — it cured.
+/// Callers pass the same (possibly `narrowTarget`ed) finding on every attempt,
+/// never a residual — attempt two could otherwise delete a field attempt one
+/// fixed.
 pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []const u8, first: WireFailure, classified: replay.Classified) error{OutOfMemory}!ValidationOutcome {
     switch (classified) {
-        .script_error => |script_error| return .{ .failed_run = script_error.failure.detail },
+        .script_error => |script_error| return .{ .failed_run = script_error.failure },
         .facts => |facts| {
             if (try cureFailure(arena, first, facts)) |residual| return .{ .not_cured = residual };
             if (try commitValidated(arena, path, script, facts.extract_stats)) |failure| return .{ .cured_uncommitted = failure };
@@ -58,24 +78,42 @@ pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []c
 }
 
 /// Null when the validation run cured the original finding; otherwise the
-/// message fed to the next heal attempt. Running clean is not a cure on its
+/// residual fed to the next heal attempt. Running clean is not a cure on its
 /// own — a revision that deletes the failing extract (or the `return`) also
 /// runs clean.
-fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
+fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?WireFailure {
     switch (first.kind) {
         .threw => return null,
-        .empty => return if ((try replay.returned(arena, facts)) == .data)
-            null
-        else
-            "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
+        .empty => {
+            if ((try replay.returned(arena, facts)) == .data) return null;
+            return .{
+                .kind = .empty,
+                .detail = "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
+            };
+        },
         .dry_extracts => {
+            var out: std.ArrayList(u8) = .empty;
+            var fields: std.ArrayList([]const u8) = .empty;
             for (first.dry_fields) |dry| {
+                var seen = false;
                 const cured = for (facts.extract_stats) |stat| {
-                    if (std.mem.eql(u8, stat.field, dry) and stat.nonempty > 0) break true;
+                    if (!std.mem.eql(u8, stat.field, dry)) continue;
+                    seen = true;
+                    if (stat.nonempty > 0) break true;
                 } else false;
-                if (!cured) return try std.fmt.allocPrint(arena, "The revised script ran, but the \"{s}\" extract still came back empty on every call (or was removed) — keep it and fix its selector.", .{if (dry.len == 0) "<whole result>" else dry});
+                if (cured) continue;
+                if (fields.items.len == 0) try out.appendSlice(arena, "The revised script ran, but did not cure it — keep every listed extract and fix its selector:\n");
+                try fields.append(arena, dry);
+                if (!seen) {
+                    try out.print(arena, "- the \"{s}\" extract is gone from the revised script\n", .{if (dry.len == 0) "<whole result>" else dry});
+                    continue;
+                }
+                for (facts.extract_stats) |stat| {
+                    if (std.mem.eql(u8, stat.field, dry)) try replay.writeDryExtractLine(arena, &out, stat);
+                }
             }
-            return null;
+            if (fields.items.len == 0) return null;
+            return .{ .kind = .dry_extracts, .detail = out.items, .dry_fields = fields.items };
         },
     }
 }
@@ -158,8 +196,8 @@ pub const replay_failed_guidance =
     \\
 ++ diagnose_instructions ++
     \\ Then call
-    \\heal_commit with the revised script and this report's `failure` object
-    \\echoed back verbatim.
+    \\heal_commit with the revised script; it is validated against this
+    \\report's `failure` before the file is replaced.
 ;
 
 /// Shared by the CLI verdict prompt and the MCP suspicious-replay guidance.
@@ -189,17 +227,29 @@ pub const replay_suspicious_guidance =
     \\If legitimate, stop: the empty answer is the answer. If broken,
     \\diagnose against the live session (tree, findElement, markdown), prove
     \\the corrected step(s) with tools, then call heal_commit with the
-    \\revised script and this report's `failure` object echoed back verbatim.
+    \\revised script; it is validated against this report's `failure` before
+    \\the file is replaced.
 ;
 
-/// One `heal_commit` validation, serializable. `failure` is the residual cure
-/// failure (or the validation run's own error); null when cured. The script's
-/// path rides in `run.path`.
+/// One `heal_commit` validation, serializable. The script's path rides in
+/// `run.path`.
 pub const HealReport = struct {
-    cured: bool,
-    committed: bool,
-    failure: ?[]const u8 = null,
+    cured: bool = false,
+    committed: bool = false,
+    /// The residual finding — or the validation run's own `threw`; null when
+    /// cured.
+    failure: ?WireFailure = null,
+    /// Cured, but the file swap failed; names the leftover `.heal.js`.
+    commit_error: ?[]const u8 = null,
     run: replay.RunReport,
+
+    pub fn init(outcome: ValidationOutcome, run: replay.RunReport) HealReport {
+        return switch (outcome) {
+            .failed_run, .not_cured => |failure| .{ .failure = failure, .run = run },
+            .cured_uncommitted => |message| .{ .cured = true, .commit_error = message, .run = run },
+            .committed => .{ .cured = true, .committed = true, .run = run },
+        };
+    }
 };
 
 const testFacts = replay.testFacts;
@@ -215,13 +265,43 @@ test "validationOutcome: failed run and uncured facts never reach the commit" {
         .failure = .{ .kind = .threw, .detail = "boom at line 2" },
         .source = "return 1;",
     } });
-    try std.testing.expectEqualStrings("boom at line 2", failed.failed_run);
+    try std.testing.expectEqual(WireFailure.Kind.threw, failed.failed_run.kind);
+    try std.testing.expectEqualStrings("boom at line 2", failed.failed_run.detail);
 
     const still_dry: replay.Classified = .{ .facts = testFacts("[1]", &.{
         .{ .schema = "{}", .field = "comments", .calls = 3, .nonempty = 0 },
     }) };
     const uncured = try validationOutcome(aa, "s.js", "return 1;", dry, still_dry);
-    try std.testing.expect(std.mem.indexOf(u8, uncured.not_cured, "\"comments\"") != null);
+    try std.testing.expectEqual(WireFailure.Kind.dry_extracts, uncured.not_cured.kind);
+    try std.testing.expectEqual(1, uncured.not_cured.dry_fields.len);
+    try std.testing.expectEqualStrings("comments", uncured.not_cured.dry_fields[0]);
+    try std.testing.expect(std.mem.indexOf(u8, uncured.not_cured.detail, "\"comments\"") != null);
+}
+
+test "narrowTarget: keeps the judged subset, never widens or retargets" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const first: WireFailure = .{ .kind = .dry_extracts, .detail = "dry", .dry_fields = &.{ "comments", "score", "" } };
+
+    const narrowed = try narrowTarget(aa, first, &.{"comments"});
+    try std.testing.expectEqual(1, narrowed.dry_fields.len);
+    try std.testing.expectEqualStrings("comments", narrowed.dry_fields[0]);
+    try std.testing.expectEqualStrings("dry", narrowed.detail);
+
+    // Unknown names are dropped; the order is the target's, not the verdict's.
+    const mixed = try narrowTarget(aa, first, &.{ "", "nonexistent", "comments" });
+    try std.testing.expectEqual(2, mixed.dry_fields.len);
+    try std.testing.expectEqualStrings("comments", mixed.dry_fields[0]);
+    try std.testing.expectEqualStrings("", mixed.dry_fields[1]);
+
+    // All unknown, or nothing judged: the full target, not an empty one.
+    try std.testing.expectEqual(3, (try narrowTarget(aa, first, &.{"bogus"})).dry_fields.len);
+    try std.testing.expectEqual(first.dry_fields.ptr, (try narrowTarget(aa, first, &.{})).dry_fields.ptr);
+
+    const threw: WireFailure = .{ .kind = .threw };
+    try std.testing.expectEqual(WireFailure.Kind.threw, (try narrowTarget(aa, threw, &.{"comments"})).kind);
 }
 
 test "cureFailure: running clean is not a cure" {
@@ -241,19 +321,26 @@ test "cureFailure: running clean is not a cure" {
 
     // Fix-by-deletion: the dry field is simply gone from the revised run.
     const deleted = (try cureFailure(aa, dry, testFacts("[1]", cured_stats[1..]))).?;
-    try std.testing.expect(std.mem.indexOf(u8, deleted, "\"comments\"") != null);
+    try std.testing.expectEqual(WireFailure.Kind.dry_extracts, deleted.kind);
+    try std.testing.expectEqual(1, deleted.dry_fields.len);
+    try std.testing.expectEqualStrings("comments", deleted.dry_fields[0]);
+    try std.testing.expect(std.mem.indexOf(u8, deleted.detail, "\"comments\" extract is gone") != null);
 
-    // Still dry counts as uncured.
+    // Still dry counts as uncured, and every dry field is reported, not the first.
     const still_dry_stats: []const extract.ExtractStat = &.{
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 0 },
-        cured_stats[1],
+        .{ .schema = "[]", .field = "", .calls = 2, .nonempty = 0 },
     };
-    try std.testing.expect((try cureFailure(aa, dry, testFacts("[1]", still_dry_stats))) != null);
+    const still_dry = (try cureFailure(aa, dry, testFacts("[1]", still_dry_stats))).?;
+    try std.testing.expectEqual(2, still_dry.dry_fields.len);
+    try std.testing.expectEqualStrings("", still_dry.dry_fields[1]);
+    try std.testing.expect(std.mem.indexOf(u8, still_dry.detail, "in all 5 calls") != null);
+    try std.testing.expect(std.mem.indexOf(u8, still_dry.detail, "extract([]) returned no data in all 2 calls") != null);
 
     // .empty is cured only by a data-carrying return.
     const empty: WireFailure = .{ .kind = .empty };
     try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts("[1]", &.{})));
-    try std.testing.expect((try cureFailure(aa, empty, testFacts(null, &.{}))) != null);
+    try std.testing.expectEqual(WireFailure.Kind.empty, (try cureFailure(aa, empty, testFacts(null, &.{}))).?.kind);
 
     // .threw needs nothing beyond running clean.
     const threw: WireFailure = .{ .kind = .threw };

@@ -135,27 +135,31 @@ pub fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
 /// A `dry_extracts` finding with one detail line per extract field that came
 /// back empty on every call, plus the field names for the cure check. Null when
 /// no field was dry.
-fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []const extract.ExtractStat) !?ScriptError {
-    var aw: std.Io.Writer.Allocating = .init(arena);
+fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []const extract.ExtractStat) error{OutOfMemory}!?ScriptError {
+    var out: std.ArrayList(u8) = .empty;
     var fields: std.ArrayList([]const u8) = .empty;
     for (stats) |stat| {
         if (stat.nonempty != 0) continue;
-        if (fields.items.len == 0) {
-            try aw.writer.writeAll("some extracts came back empty on every call:\n");
-        }
+        if (fields.items.len == 0) try out.appendSlice(arena, "some extracts came back empty on every call:\n");
         // `stat.field` already lives in `arena` (facts were duped into it).
         try fields.append(arena, stat.field);
-        const schema = capDetail(arena, stat.schema);
-        if (stat.field.len != 0) {
-            try aw.writer.print("- the \"{s}\" field in extract({s}) came back empty", .{ stat.field, schema });
-        } else {
-            try aw.writer.print("- extract({s}) returned no data", .{schema});
-        }
-        if (stat.calls != 1) try aw.writer.print(" in all {d} calls", .{stat.calls});
-        try aw.writer.writeAll("\n");
+        try writeDryExtractLine(arena, &out, stat);
     }
     if (fields.items.len == 0) return null;
-    return .{ .failure = .{ .kind = .dry_extracts, .detail = aw.written(), .dry_fields = fields.items }, .source = source };
+    return .{ .failure = .{ .kind = .dry_extracts, .detail = out.items, .dry_fields = fields.items }, .source = source };
+}
+
+/// One detail line for an extract field that came back empty on every call.
+/// Shared with heal's cure check, which reports the fields still dry.
+pub fn writeDryExtractLine(arena: std.mem.Allocator, out: *std.ArrayList(u8), stat: extract.ExtractStat) error{OutOfMemory}!void {
+    const schema = capDetail(arena, stat.schema);
+    if (stat.field.len != 0) {
+        try out.print(arena, "- the \"{s}\" field in extract({s}) came back empty", .{ stat.field, schema });
+    } else {
+        try out.print(arena, "- extract({s}) returned no data", .{schema});
+    }
+    if (stat.calls != 1) try out.print(arena, " in all {d} calls", .{stat.calls});
+    try out.append(arena, '\n');
 }
 
 /// Bound for script source echoed into reports and LLM turns — a script is
@@ -185,9 +189,8 @@ pub fn writeScriptFile(path: []const u8, content: []const u8) !void {
     if (content.len > 0 and content[content.len - 1] != '\n') try file.writeStreamingAll(lp.io, "\n");
 }
 
-/// `failure` as it rides in reports and back through `heal_commit` — the
-/// wire-serializable core of `ScriptError`, whose `source` reports echo
-/// separately.
+/// `failure` as it rides in reports — the wire-serializable core of
+/// `ScriptError`, whose `source` reports echo separately.
 pub const WireFailure = struct {
     kind: Kind,
     /// Formatted error (line, stack) — or, for `empty`, what came back.

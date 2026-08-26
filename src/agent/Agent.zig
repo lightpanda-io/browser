@@ -1837,10 +1837,10 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
         const outcome = lp.heal.validationOutcome(arena, path, revised, first.failure, classified) catch return self.healFail("out of memory", .{});
         switch (outcome) {
             // runSourceOutcome already printed a failed run's own error.
-            .failed_run, .not_cured => |detail| {
-                if (outcome == .not_cured) self.terminal.printWarning("{s}", .{detail});
+            .failed_run, .not_cured => |residual| {
+                if (outcome == .not_cured) self.terminal.printWarning("{s}", .{residual.detail});
                 source = revised;
-                error_detail = detail;
+                error_detail = residual.detail;
             },
             .cured_uncommitted => |failure| return self.healFail("{s}", .{failure}),
             .committed => {
@@ -1926,28 +1926,17 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
             return null;
         }
         self.terminal.printInfo("The model judged the run broken: {s}", .{verdict.reason});
+        const target = lp.heal.narrowTarget(arena, suspicion.failure, verdict.fields) catch return null;
         return .{
             .failure = .{
-                .kind = suspicion.failure.kind,
-                .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ suspicion.failure.detail, verdict.reason }) catch return null,
-                .dry_fields = confirmedDryFields(arena, verdict.fields, suspicion.failure.dry_fields) catch return null,
+                .kind = target.kind,
+                .detail = std.fmt.allocPrint(arena, "{s}\nVerdict: {s}", .{ target.detail, verdict.reason }) catch return null,
+                .dry_fields = target.dry_fields,
             },
             .source = suspicion.source,
         };
     }
     return suspicion;
-}
-
-/// Verdict field names minus any that weren't actually dry — a hallucinated
-/// name never matches an extract stat, so the cure check could never clear it.
-/// Falls back to every dry field when none match.
-fn confirmedDryFields(arena: std.mem.Allocator, judged: []const []const u8, actual: []const []const u8) error{OutOfMemory}![]const []const u8 {
-    if (judged.len == 0) return actual;
-    var kept: std.ArrayList([]const u8) = .empty;
-    for (judged) |f| {
-        if (string.isOneOf(f, actual)) try kept.append(arena, f);
-    }
-    return if (kept.items.len == 0) actual else kept.items;
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the
@@ -2405,28 +2394,6 @@ test {
     _ = settings;
     _ = Baseline;
     _ = picker;
-}
-
-test "confirmedDryFields drops hallucinated names, keeps the narrowing" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const actual: []const []const u8 = &.{ "comments", "score", "" };
-
-    const narrowed = try confirmedDryFields(aa, &.{"comments"}, actual);
-    try std.testing.expectEqual(1, narrowed.len);
-    try std.testing.expectEqualStrings("comments", narrowed[0]);
-
-    const mixed = try confirmedDryFields(aa, &.{ "nonexistent", "score" }, actual);
-    try std.testing.expectEqual(1, mixed.len);
-    try std.testing.expectEqualStrings("score", mixed[0]);
-
-    // All hallucinated → the full dry set, not an empty one.
-    const fallback = try confirmedDryFields(aa, &.{"bogus"}, actual);
-    try std.testing.expectEqual(3, fallback.len);
-
-    try std.testing.expectEqual(actual.ptr, (try confirmedDryFields(aa, &.{}, actual)).ptr);
 }
 
 test "Verdict parses from tool-call arguments" {

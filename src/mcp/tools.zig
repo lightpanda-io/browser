@@ -74,18 +74,9 @@ const heal_commit_schema = browser_tools.minify(
     \\  "properties": {
     \\    "path": { "type": "string", "description": "Relative path (no '..' segments) of the broken script; replaced atomically only on cure." },
     \\    "script": { "type": "string", "description": "The full revised script. Keep $LP_* placeholders; never inline a resolved secret." },
-    \\    "failure": {
-    \\      "type": "object",
-    \\      "description": "The `failure` object from the replay report you are healing, echoed back verbatim.",
-    \\      "properties": {
-    \\        "kind": { "type": "string", "enum": ["threw", "empty", "dry_extracts"] },
-    \\        "detail": { "type": "string" },
-    \\        "dry_fields": { "type": "array", "items": { "type": "string" }, "description": "For dry_extracts: the fields that must come back with data (\"\" = a whole-array extract). Deleting an extract is not a cure." }
-    \\      },
-    \\      "required": ["kind"]
-    \\    }
+    \\    "fields": { "type": "array", "items": { "type": "string" }, "description": "Optional, for a dry_extracts target: the subset of its dry_fields you judged broken (\"\" = a whole-array extract). Fields you omit count as legitimately empty. Names outside the target are ignored - the target can be narrowed, never widened." }
     \\  },
-    \\  "required": ["path", "script", "failure"]
+    \\  "required": ["path", "script"]
     \\}
 );
 
@@ -102,12 +93,12 @@ pub const script_lifecycle_note =
 const extra_tools = [_]McpTool{
     .{
         .name = "replay",
-        .description = "Replay a saved Lightpanda agent script (see `save`) and return a JSON run report. `status` is \"ok\" (ran, output carries data), \"suspicious\" (ran clean but the output looks dry — judge whether that is breakage or the page genuinely has no such data right now, weighing any `// lp:baseline` comment in `source` as evidence of what the fields held at save time), or \"failed\" (the script threw). The script's `console.*` output and returned value arrive in `console` (the returned value is the final line). On suspicious/failed the report carries the script `source`, a `failure` object and `guidance` for the heal flow: diagnose against the live session, then call `heal_commit`. Pass `script` to trial a candidate revision without writing it. The replay drives this session — the current page, cookies and node ids are replaced; re-inspect (tree) before reusing node ids.",
+        .description = "Replay a saved Lightpanda agent script (see `save`) and return a JSON run report. `status` is \"ok\" (ran, output carries data), \"suspicious\" (ran clean but the output looks dry — judge whether that is breakage or the page genuinely has no such data right now, weighing any `// lp:baseline` comment in `source` as evidence of what the fields held at save time), or \"failed\" (the script threw). The script's `console.*` output and returned value arrive in `console` (the returned value is the final line). On suspicious/failed the report carries the script `source`, a `failure` object and `guidance` for the heal flow: diagnose against the live session, then call `heal_commit`. Pass `script` to trial a candidate revision without writing it. A failed or suspicious file replay arms `heal_commit` for that path (the server keeps the finding as the cure target); a clean file replay disarms it; a `script` trial does neither. The replay drives this session — the current page, cookies and node ids are replaced; re-inspect (tree) before reusing node ids.",
         .inputSchema = replay_schema,
     },
     .{
         .name = "heal_commit",
-        .description = "Commit a healed script: the revised `script` is validated by replaying it in a fresh session, and only a validated cure replaces the file at `path` — the original is untouched otherwise. Echo back the `failure` object from the replay report you are healing; the cure check is deterministic: `threw` needs a clean run, `empty` needs the return value to carry data, `dry_extracts` needs every listed field to come back with data (deleting the extract is not a cure). The response is a JSON heal report; on `cured: false` its `failure` says what is still wrong — diagnose further and try again. Afterwards the session is the fresh validation session at the script's end state (all prior node ids are stale).\n\n" ++ lp.heal.heal_revision_prompt ++ "\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
+        .description = "Commit a healed script: the revised `script` is validated by replaying it in a fresh session, and only a validated cure replaces the file at `path` — the original is untouched otherwise. The cure target is the finding of your last file `replay` of `path`; for a `dry_extracts` target, pass `fields` to name the subset you judged broken (omitted fields count as legitimately empty — a target can be narrowed, never widened). The cure check is deterministic: `threw` needs a clean run, `empty` needs the return value to carry data, `dry_extracts` needs every listed field to come back with data (deleting the extract is not a cure). The response is a JSON heal report; on `cured: false` its `failure` is a finding like replay's — `threw` means the revision itself threw (see `detail`), `empty`/`dry_extracts` mean it ran clean but did not cure, with `dry_fields` listing every field still dry or removed. The target is unchanged: fix the revision and call `heal_commit` again. `commit_error` is set when the cure validated but the file swap failed. Afterwards the session is the fresh validation session at the script's end state (all prior node ids are stale).\n\n" ++ lp.heal.heal_revision_prompt ++ "\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = heal_commit_schema,
     },
     .{
@@ -379,15 +370,26 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         .failed => lp.heal.replay_failed_guidance,
         .suspicious => lp.heal.replay_suspicious_guidance,
     };
+    if (args.script == null) {
+        server.active_session.noteFileReplay(run.report) catch
+            return sendErrorContent(server, id, "out of memory");
+    }
     return sendReport(server, arena, id, run.report);
 }
 
 fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const Args = struct { path: []const u8, script: []const u8, failure: lp.replay.WireFailure };
+    const Args = struct { path: []const u8, script: []const u8, fields: ?[]const []const u8 = null };
     const args = browser_tools.parseArgs(Args, arena, arguments) catch {
-        return server.sendError(id, .InvalidParams, "expected { path: string, script: string, failure: { kind, detail?, dry_fields? } }");
+        return server.sendError(id, .InvalidParams, "expected { path: string, script: string, fields?: string[] }");
     };
     if (!try guardPathSafe(server, id, args.path)) return;
+    const entry = server.active_session;
+    const stored = entry.cureTarget(args.path) orelse {
+        const msg = std.fmt.allocPrint(arena, "no failing replay of {s} to heal: replay the file first", .{args.path}) catch "no failing replay to heal: replay the file first";
+        return sendErrorContent(server, id, msg);
+    };
+    const target = lp.heal.narrowTarget(arena, stored, args.fields orelse &.{}) catch
+        return sendErrorContent(server, id, "out of memory");
     // The client never sees resolved secrets, but scrub as a safety net
     // before running or persisting the candidate.
     const script = browser_tools.reverseSubstituteEnvVars(arena, args.script) catch
@@ -395,26 +397,17 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
 
     // Validate in a fresh session so failure-state cookies and pages can't
     // mask a still-broken script.
-    server.restartSession(server.active_session) catch |err| {
+    server.restartSession(entry) catch |err| {
         const msg = std.fmt.allocPrint(arena, "could not start a fresh session: {s}", .{@errorName(err)}) catch "could not start a fresh session";
         return sendErrorContent(server, id, msg);
     };
 
     const run = (try runAndReport(server, arena, id, args.path, script)) orelse return;
 
-    var report: lp.heal.HealReport = .{ .cured = false, .committed = false, .run = run.report };
-    switch (lp.heal.validationOutcome(arena, args.path, script, args.failure, run.classified) catch
-        return sendErrorContent(server, id, "out of memory")) {
-        .failed_run, .not_cured => |failure| report.failure = failure,
-        .cured_uncommitted => |failure| {
-            report.cured = true;
-            report.failure = failure;
-        },
-        .committed => {
-            report.cured = true;
-            report.committed = true;
-        },
-    }
+    const outcome = lp.heal.validationOutcome(arena, args.path, script, target, run.classified) catch
+        return sendErrorContent(server, id, "out of memory");
+    if (outcome == .committed) entry.retireHealTarget(args.path);
+    const report: lp.heal.HealReport = .init(outcome, run.report);
     return sendReport(server, arena, id, report);
 }
 
@@ -1171,6 +1164,7 @@ fn testCallReport(server: *Server, out: *std.Io.Writer.Allocating, name: []const
 }
 
 const test_fixture_url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+const fixture_script_prelude = "const page = new Page();\nawait page.goto(\"" ++ test_fixture_url ++ "\");\n";
 
 test "MCP - replay rejects unsafe path" {
     defer testing.reset();
@@ -1272,17 +1266,109 @@ test "MCP - heal_commit: uncured candidate leaves the file untouched" {
     defer server.deinit();
 
     const path = "mcp-heal-uncured-test.js";
-    std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "return [];\n" });
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
-    const report = try testCallReport(server, &out, "heal_commit", .{
-        .path = path,
-        .script = "return [];",
-        .failure = .{ .kind = "empty" },
-    });
+    const run = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("suspicious", run.object.get("status").?.string);
+
+    const report = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = "return [];" });
     try testing.expectEqual(false, report.object.get("cured").?.bool);
     try testing.expectEqual(false, report.object.get("committed").?.bool);
-    try testing.expect(std.mem.indexOf(u8, report.object.get("failure").?.string, "no data") != null);
+    const failure = report.object.get("failure").?.object;
+    try testing.expectString("empty", failure.get("kind").?.string);
+    try testing.expect(std.mem.indexOf(u8, failure.get("detail").?.string, "no data") != null);
+
+    const written = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.arena_allocator, .limited(4096));
+    try testing.expectString("return [];\n", written);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path ++ lp.heal.tmp_suffix, .{}));
+}
+
+test "MCP - heal_commit: rejected without a failing replay of the path" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("about:blank", &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-heal-noreplay-test.js";
+    const text = try testCall(server, &out, "heal_commit", .{ .path = path, .script = "return [1];" });
+    try testing.expect(std.mem.indexOf(u8, text, "replay the file first") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, path, .{}));
+}
+
+test "MCP - heal_commit: fix-by-deletion does not cure a dry_extracts target" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(test_fixture_url, &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-heal-deletion-test.js";
+    const broken = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"], missing: [\".no-such-thing\"] });\n";
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = broken });
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+
+    const run = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("suspicious", run.object.get("status").?.string);
+    try testing.expectString("missing", run.object.get("failure").?.object.get("dry_fields").?.array.items[0].string);
+
+    // A clean trial of a candidate does not disarm the file's target.
+    const trial = try testCallReport(server, &out, "replay", .{ .path = path, .script = "return [1];" });
+    try testing.expectString("ok", trial.object.get("status").?.string);
+
+    const dropped = try testCallReport(server, &out, "heal_commit", .{
+        .path = path,
+        .script = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"] });",
+    });
+    try testing.expectEqual(false, dropped.object.get("cured").?.bool);
+    const residual = dropped.object.get("failure").?.object;
+    try testing.expectString("dry_extracts", residual.get("kind").?.string);
+    try testing.expectString("missing", residual.get("dry_fields").?.array.items[0].string);
+    try testing.expect(std.mem.indexOf(u8, residual.get("detail").?.string, "is gone") != null);
+    const untouched = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.arena_allocator, .limited(4096));
+    try testing.expect(std.mem.indexOf(u8, untouched, ".no-such-thing") != null);
+
+    // The target survived the fresh validation session the failed commit ran in.
+    const fixed = try testCallReport(server, &out, "heal_commit", .{
+        .path = path,
+        .script = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"], missing: [\"#btn\"] });",
+    });
+    try testing.expectEqual(true, fixed.object.get("cured").?.bool);
+    try testing.expectEqual(true, fixed.object.get("committed").?.bool);
+
+    // A committed cure disarms the target.
+    const again = try testCall(server, &out, "heal_commit", .{ .path = path, .script = "return [1];" });
+    try testing.expect(std.mem.indexOf(u8, again, "replay the file first") != null);
+}
+
+test "MCP - heal_commit: `fields` narrows a dry_extracts target, never widens it" {
+    defer testing.reset();
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage(test_fixture_url, &out.writer);
+    defer server.deinit();
+
+    const path = "mcp-heal-narrow-test.js";
+    const broken = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"], missing: [\".no-such-thing\"], other: [\".also-missing\"] });\n";
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = broken });
+    defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
+
+    const run = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("suspicious", run.object.get("status").?.string);
+    try testing.expectEqual(2, run.object.get("failure").?.object.get("dry_fields").?.array.items.len);
+
+    // Fixes `other` only; `missing` stays dry.
+    const partial = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"], missing: [\".no-such-thing\"], other: [\"#btn\"] });";
+
+    // Names outside the target can't widen or retarget it: the full target applies.
+    const widened = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = partial, .fields = .{ "btn", "bogus" } });
+    try testing.expectEqual(false, widened.object.get("cured").?.bool);
+    const residual = widened.object.get("failure").?.object.get("dry_fields").?.array.items;
+    try testing.expectEqual(1, residual.len);
+    try testing.expectString("missing", residual[0].string);
+
+    const narrowed = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = partial, .fields = .{"other"} });
+    try testing.expectEqual(true, narrowed.object.get("cured").?.bool);
+    try testing.expectEqual(true, narrowed.object.get("committed").?.bool);
 }
 
 test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
@@ -1295,16 +1381,11 @@ test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
     try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "return [];\n" });
     defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
-    const revised =
-        \\const page = new Page();
-        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\return page.extract({ btn: ["#btn"] });
-    ;
-    const report = try testCallReport(server, &out, "heal_commit", .{
-        .path = path,
-        .script = revised,
-        .failure = .{ .kind = "empty" },
-    });
+    const run = try testCallReport(server, &out, "replay", .{ .path = path });
+    try testing.expectString("suspicious", run.object.get("status").?.string);
+
+    const revised = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"] });";
+    const report = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = revised });
     try testing.expectEqual(true, report.object.get("cured").?.bool);
     try testing.expectEqual(true, report.object.get("committed").?.bool);
     try testing.expectString("ok", report.object.get("run").?.object.get("status").?.string);
@@ -1326,29 +1407,15 @@ test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {
     std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
     defer std.Io.Dir.cwd().deleteFile(testing.io, path) catch {};
 
-    const broken =
-        \\const page = new Page();
-        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\return page.extract({ btn: [".no-such-btn"] });
-    ;
+    const broken = fixture_script_prelude ++ "return page.extract({ btn: [\".no-such-btn\"] });";
     const saved = try testCall(server, &out, "save", .{ .path = path, .script = broken });
     try testing.expect(std.mem.indexOf(u8, saved, "saved") != null);
 
     const run = try testCallReport(server, &out, "replay", .{ .path = path });
     try testing.expectString("suspicious", run.object.get("status").?.string);
-    const failure = run.object.get("failure").?;
 
-    // The test plays the client model: fix the selector, echo the failure back.
-    const revised =
-        \\const page = new Page();
-        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\return page.extract({ btn: ["#btn"] });
-    ;
-    const healed = try testCallReport(server, &out, "heal_commit", .{
-        .path = path,
-        .script = revised,
-        .failure = failure,
-    });
+    const revised = fixture_script_prelude ++ "return page.extract({ btn: [\"#btn\"] });";
+    const healed = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = revised });
     try testing.expectEqual(true, healed.object.get("cured").?.bool);
     try testing.expectEqual(true, healed.object.get("committed").?.bool);
 
