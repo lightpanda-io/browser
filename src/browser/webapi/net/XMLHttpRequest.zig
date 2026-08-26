@@ -31,6 +31,7 @@ const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+const Blob = @import("../Blob.zig");
 
 const Headers = @import("Headers.zig");
 const BodyInit = @import("body_init.zig").BodyInit;
@@ -91,6 +92,7 @@ const Response = union(enum) {
     json: js.Value.Global,
     document: *Node.Document,
     arraybuffer: js.ArrayBuffer,
+    blob: *Blob,
 };
 
 const ResponseType = enum {
@@ -99,6 +101,7 @@ const ResponseType = enum {
     json,
     document,
     arraybuffer,
+    blob,
 
     pub fn toString(self: ResponseType) []const u8 {
         return switch (self) {
@@ -526,6 +529,12 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
             }
         },
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
+        .blob => blk: {
+            const mime = self._override_mime orelse self._response_mime;
+            const content_type = if (mime) |m| m.contentTypeString() else "";
+            const blob = try Blob.initFromBytes(data, content_type, exec);
+            break :blk .{ .blob = blob };
+        },
     };
 
     self._response = res;
