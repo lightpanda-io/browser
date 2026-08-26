@@ -1121,6 +1121,27 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/redirect_same_echo_headers")) {
+        // Same-origin 302 to /echo_headers: Authorization must survive the hop.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_headers" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_cross_echo_headers")) {
+        // 302 to /echo_headers on the localhost alias — a cross-origin hop, so
+        // Authorization must be stripped before the request is re-sent.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/echo_headers" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect_same_echo_referer")) {
         // Same-origin 302 to /echo_referer: the full Referer must survive the hop.
         return req.respond("", .{
