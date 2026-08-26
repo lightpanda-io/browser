@@ -28,6 +28,7 @@ const keenable = zenai.search.keenable;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
+const LimitedWriter = @import("../LimitedWriter.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
@@ -390,6 +391,8 @@ pub const Tool = enum {
                     \\  "properties": {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
+                    \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -1271,27 +1274,45 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     return aw.written();
 }
 
+const HtmlParams = struct {
+    selector: ?[]const u8 = null,
+    backendNodeId: ?CDPNode.Id = null,
+    maxBytes: ?u32 = null,
+    strip: lp.dump.Opts.Strip = .{},
+    url: ?[:0]const u8 = null,
+    timeout: ?u32 = null,
+};
+
 fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const Params = struct {
-        selector: ?[]const u8 = null,
-        backendNodeId: ?CDPNode.Id = null,
-        url: ?[:0]const u8 = null,
-        timeout: ?u32 = null,
-    };
-    const args = try parseArgsOrDefault(Params, arena, arguments);
+    const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        lp.dump.deep(resolved.node, .{}, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        lp.dump.deep(resolved.node, .{}, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else {
-        lp.dump.root(page.document, .{}, &aw.writer, page) catch return ToolError.InternalError;
+    var lw: LimitedWriter = .init(&aw.writer, args.maxBytes);
+    dumpHtml(session, registry, page, args, &lw.writer) catch |err| switch (err) {
+        error.WriteFailed => if (!lw.truncated) return ToolError.InternalError,
+        else => |e| return e,
+    };
+    if (lw.truncated) {
+        aw.writer.writeAll(LimitedWriter.truncation_marker) catch return ToolError.InternalError;
     }
     return aw.written();
+}
+
+fn dumpHtml(session: *lp.Session, registry: *CDPNode.Registry, page: *lp.Frame, args: HtmlParams, writer: *std.Io.Writer) (ToolError || error{WriteFailed})!void {
+    const opts: lp.dump.Opts = .{ .strip = args.strip };
+    if (args.selector) |sel| {
+        const resolved = try resolveBySelector(session, sel);
+        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
+    }
+    if (args.backendNodeId) |nid| {
+        const resolved = try resolveNodeAndPage(session, registry, nid);
+        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
+    }
+    return lp.dump.root(page.document, opts, writer, page) catch |err| switch (err) {
+        error.WriteFailed => error.WriteFailed,
+        else => ToolError.InternalError,
+    };
 }
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {

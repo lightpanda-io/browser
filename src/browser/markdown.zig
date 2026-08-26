@@ -27,62 +27,13 @@ const TreeWalker = @import("webapi/TreeWalker.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
-const truncateUtf8 = @import("../string.zig").truncateUtf8;
+const LimitedWriter = @import("../LimitedWriter.zig");
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
 };
 
-const truncation_marker = "\n\n[truncated]\n";
-
-const LimitedWriter = struct {
-    inner: *std.Io.Writer,
-    remaining: usize,
-    truncated: bool = false,
-    writer: std.Io.Writer,
-
-    fn init(inner: *std.Io.Writer, max_bytes: u32) LimitedWriter {
-        return .{
-            .inner = inner,
-            .remaining = max_bytes,
-            .writer = .{
-                .vtable = &vtable,
-                .buffer = &.{},
-            },
-        };
-    }
-
-    const vtable = std.Io.Writer.VTable{ .drain = drain };
-
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        const self: *LimitedWriter = @alignCast(@fieldParentPtr("writer", w));
-        var total: usize = 0;
-        for (data[0 .. data.len - 1]) |slice| {
-            try self.consume(slice);
-            total += slice.len;
-        }
-        const pattern = data[data.len - 1];
-        for (0..splat) |_| {
-            try self.consume(pattern);
-            total += pattern.len;
-        }
-        return total;
-    }
-
-    fn consume(self: *LimitedWriter, bytes: []const u8) std.Io.Writer.Error!void {
-        if (bytes.len <= self.remaining) {
-            try self.inner.writeAll(bytes);
-            self.remaining -= bytes.len;
-            return;
-        }
-        if (self.remaining > 0) {
-            try self.inner.writeAll(truncateUtf8(bytes, self.remaining));
-            self.remaining = 0;
-        }
-        self.truncated = true;
-        return error.WriteFailed;
-    }
-};
+const truncation_marker = LimitedWriter.truncation_marker;
 
 const State = struct {
     const ListType = enum { ordered, unordered };

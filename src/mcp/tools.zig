@@ -1353,6 +1353,38 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "<form") == null);
 }
 
+test "MCP - html: maxBytes truncation and strip" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/dump.html", &out.writer);
+    defer server.deinit();
+
+    const full =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, full);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") == null);
+
+    out.clearRetainingCapacity();
+    const stripped =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"strip":{"js":true,"css":true}}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, stripped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>Title</h1>") != null);
+
+    out.clearRetainingCapacity();
+    const capped =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"html","arguments":{"maxBytes":20}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, capped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+}
+
 test "MCP - waitForScript: truthy returns, falsy times out" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);
