@@ -337,10 +337,14 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     var resp = transfer.submitSync() catch |err| {
+        log.err(.http, "sync request failed", .{
+            .source = "xhr",
+            .url = self._url,
+            .err = err,
+        });
         self._send_flag = false;
-        self.handleError(err);
         self.releaseSelfRef();
-        return;
+        return error.NetworkError;
     };
     defer resp.deinit();
 
