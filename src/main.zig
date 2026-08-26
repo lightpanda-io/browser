@@ -163,8 +163,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 });
             }
 
-            if (opts.max_bytes != null and opts.dump != .html and opts.dump != .markdown) {
-                log.fatal(.app, "--max-bytes needs a text dump", .{ .dump = opts.dump, .allowed = "html, markdown" });
+            if (opts.dump_max_bytes != null and opts.dump != .html and opts.dump != .markdown) {
+                log.fatal(.app, "--dump-max-bytes needs text", .{ .dump = opts.dump, .allowed = "html, markdown" });
                 return error.InvalidArgument;
             }
 
@@ -175,8 +175,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .inject_script = opts.inject_script,
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
-                .selector = opts.selector,
-                .max_bytes = opts.max_bytes,
+                .selector = opts.dump_selector,
+                .max_bytes = opts.dump_max_bytes,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,

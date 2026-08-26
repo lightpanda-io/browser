@@ -72,6 +72,13 @@
     \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
+    \\  --dump-max-bytes <INT>
+    \\          Soft cap on the dumped html or markdown, in bytes. Output is cut
+    \\          at a UTF-8 boundary and a '[truncated]' marker is appended.
+    \\          Defaults to no cap.
+    \\  --dump-selector <QUERY>
+    \\          Dump only the first element matching the CSS selector instead
+    \\          of the whole document. Fails if nothing matches.
     \\  --inject-script <EXPR>
     \\          JavaScript to execute as the document's <head> is parsed, before any
     \\          other scripts in the page run. Can be passed multiple times; scripts
@@ -84,17 +91,10 @@
     \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
     \\          one object per URL. When used with --dump <MODE> the dumped
     \\          content is wrapped within each object.
-    \\  --dump-max-bytes <INT>
-    \\          Soft cap on the dumped html or markdown, in bytes. Output is cut
-    \\          at a UTF-8 boundary and a '[truncated]' marker is appended.
-    \\          Defaults to no cap.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
     \\          Defaults to false.
-    \\  --dump-duselector <QUERY>
-    \\          Dump only the first element matching the CSS selector instead
-    \\          of the whole document. Fails if nothing matches.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
     \\          In markdown only 'ui' changes the output: scripts, styles and

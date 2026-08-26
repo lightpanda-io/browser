@@ -374,8 +374,8 @@ const Commands = cli.Builder(.{
             .{ .name = "with_base", .type = bool },
             .{ .name = "with_frames", .type = bool },
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
-            .{ .name = "selector", .type = ?[:0]const u8 },
-            .{ .name = "max_bytes", .type = ?u32 },
+            .{ .name = "dump_selector", .type = ?[:0]const u8 },
+            .{ .name = "dump_max_bytes", .type = ?u32 },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
             .{
