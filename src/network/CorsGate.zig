@@ -220,10 +220,37 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     return .pending;
 }
 
+const CorsKey = struct {
+    url: []const u8,
+    origin: []const u8,
+    method: http.Method,
+    // lowercased and sorted.
+    authored_headers: []const []const u8,
+
+    fn build(self: CorsKey, arena: std.mem.Allocator) ![]const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+
+        try buf.appendSlice(arena, self.url);
+        try buf.append(arena, 0);
+        try buf.appendSlice(arena, self.origin);
+        try buf.append(arena, 0);
+        try buf.appendSlice(arena, @tagName(self.method));
+        try buf.append(arena, 0);
+
+        for (self.authored_headers) |h| {
+            try buf.appendSlice(arena, h);
+            try buf.append(arena, 0);
+        }
+
+        return buf.items;
+    }
+};
+
 const CorsPreflightContext = struct {
     gate: *CorsGate,
     arena: *lp.Arena,
 
+    key: []const u8,
     url: [:0]const u8,
     origin: []const u8,
     method: http.Method,
@@ -396,25 +423,49 @@ const CorsPreflightContext = struct {
 
         const gate = self.gate;
         const arena = self.arena;
-        gate.single_flight.discard(self.url);
+        gate.single_flight.discard(self.key);
         arena.release();
     }
 
     fn resolve(self: *CorsPreflightContext, allowed: bool) void {
         const gate = self.gate;
         const arena = self.arena;
-        gate.flushPending(self.url, allowed);
+        gate.flushPending(self.key, allowed);
         arena.release();
     }
 };
 
 fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     const url = transfer.req.url;
+    const origin = transfer.req.origin orelse "null";
 
-    const result = try self.single_flight.enter(url, transfer, .cors);
+    var header_names: std.ArrayList([]const u8) = .empty;
+    for (transfer.req_headers.items) |hdr| {
+        if (hdr.source != .author) continue;
+        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
+        try header_names.append(
+            transfer.arena.allocator(),
+            try std.ascii.allocLowerString(transfer.arena.allocator(), hdr.name),
+        );
+    }
+    std.mem.sort([]const u8, header_names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+
+    const cors_key = CorsKey{
+        .url = url,
+        .origin = origin,
+        .method = transfer.req.method,
+        .authored_headers = header_names.items,
+    };
+    const key = try cors_key.build(transfer.arena.allocator());
+
+    const result = try self.single_flight.enter(key, transfer, .cors);
     if (result == .queued) return;
     errdefer {
-        self.single_flight.discard(url);
+        self.single_flight.discard(key);
         transfer.unpark();
     }
 
@@ -425,26 +476,24 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     errdefer arena_pool.release(arena);
 
     const owned_url = try arena.dupeZ(u8, transfer.req.url);
+    const owned_key = try arena.dupe(u8, key);
+    const owned_origin = try arena.dupe(u8, origin);
 
-    var header_names: std.ArrayList([]const u8) = .empty;
-    for (transfer.req_headers.items) |hdr| {
-        if (hdr.source != .author) continue;
-        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
-        try header_names.append(
-            arena.allocator(),
-            try std.ascii.allocLowerString(arena.allocator(), hdr.name),
-        );
+    const owned_header_names = try arena.alloc([]const u8, header_names.items.len);
+    for (header_names.items, 0..) |name, i| {
+        owned_header_names[i] = try arena.dupe(u8, name);
     }
 
     const ctx = try arena.create(CorsPreflightContext);
     ctx.* = .{
         .gate = self,
         .arena = arena,
-        .url = owned_url,
 
-        .origin = try arena.dupe(u8, transfer.req.origin orelse "null"),
+        .key = owned_key,
+        .url = owned_url,
+        .origin = owned_origin,
         .method = transfer.req.method,
-        .request_headers = header_names.items,
+        .request_headers = owned_header_names,
         .wants_credentials = transfer.req.credentials_mode == .include,
     };
 
