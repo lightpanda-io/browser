@@ -177,12 +177,12 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
                 .selector = opts.dump_selector,
-                .max_bytes = opts.dump_max_bytes,
                 .fail_on_http_error = opts.fail_on_http_error,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
+                    .max_bytes = opts.dump_max_bytes,
                 },
                 .json = opts.json,
             };

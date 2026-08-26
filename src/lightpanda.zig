@@ -40,7 +40,6 @@ pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const screenshot = @import("browser/screenshot.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
-const LimitedWriter = @import("LimitedWriter.zig");
 const Selector = @import("browser/webapi/selector/Selector.zig");
 const Node = @import("browser/webapi/Node.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
@@ -191,8 +190,6 @@ pub const FetchOpts = struct {
     dump_mode: ?Config.DumpFormat = null,
     /// Dump only the first match instead of the document.
     selector: ?[:0]const u8 = null,
-    /// html and markdown only.
-    max_bytes: ?u32 = null,
     /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
     fail_on_http_error: bool = false,
     writer: ?*std.Io.Writer = null,
@@ -438,18 +435,11 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
 fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
     const root = try dumpRoot(frame, opts.selector);
     switch (mode) {
-        .html => {
-            var lw: LimitedWriter = .init(writer, opts.max_bytes);
-            const result = if (opts.selector == null)
-                dump.root(frame.window._document, opts.dump, &lw.writer, frame)
-            else
-                dump.deep(root, opts.dump, &lw.writer, frame);
-            result catch |err| {
-                if (!lw.truncated) return err;
-                try writer.writeAll(LimitedWriter.truncation_marker);
-            };
-        },
-        .markdown => try markdown.dump(root, .{ .max_bytes = opts.max_bytes, .strip = opts.dump.strip }, writer, frame),
+        .html => if (opts.selector == null)
+            try dump.root(frame.window._document, opts.dump, writer, frame)
+        else
+            try dump.deep(root, opts.dump, writer, frame),
+        .markdown => try markdown.dump(root, .{ .max_bytes = opts.dump.max_bytes, .strip = opts.dump.strip }, writer, frame),
         .png => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();

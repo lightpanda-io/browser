@@ -28,7 +28,6 @@ const keenable = zenai.search.keenable;
 
 const DOMNode = @import("webapi/Node.zig");
 const CDPNode = @import("../cdp/Node.zig");
-const LimitedWriter = @import("../LimitedWriter.zig");
 const Selector = @import("webapi/selector/Selector.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
@@ -1287,32 +1286,18 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
+    const opts: lp.dump.Opts = .{ .strip = args.strip, .max_bytes = args.maxBytes };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    var lw: LimitedWriter = .init(&aw.writer, args.maxBytes);
-    dumpHtml(session, registry, page, args, &lw.writer) catch |err| switch (err) {
-        error.WriteFailed => if (!lw.truncated) return ToolError.InternalError,
-        else => |e| return e,
-    };
-    if (lw.truncated) {
-        aw.writer.writeAll(LimitedWriter.truncation_marker) catch return ToolError.InternalError;
-    }
-    return aw.written();
-}
-
-fn dumpHtml(session: *lp.Session, registry: *CDPNode.Registry, page: *lp.Frame, args: HtmlParams, writer: *std.Io.Writer) (ToolError || error{WriteFailed})!void {
-    const opts: lp.dump.Opts = .{ .strip = args.strip };
     if (args.selector) |sel| {
         const resolved = try resolveBySelector(session, sel);
-        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
-    }
-    if (args.backendNodeId) |nid| {
+        lp.dump.deep(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else if (args.backendNodeId) |nid| {
         const resolved = try resolveNodeAndPage(session, registry, nid);
-        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
+        lp.dump.deep(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
+    } else {
+        lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
-    return lp.dump.root(page.document, opts, writer, page) catch |err| switch (err) {
-        error.WriteFailed => error.WriteFailed,
-        else => ToolError.InternalError,
-    };
+    return aw.written();
 }
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
