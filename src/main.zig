@@ -52,7 +52,8 @@ pub fn main(init: std.process.Init) !void {
         // lp.Agent.UserError: a user-facing message was already printed.
         if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.process.exit(1);
         log.fatal(.app, "exit", .{ .err = err });
-        std.process.exit(1);
+        // curl's code for --fail on an HTTP error.
+        std.process.exit(if (err == error.HttpError) 22 else 1);
     };
 }
 
@@ -177,6 +178,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .dump_mode = opts.dump,
                 .selector = opts.dump_selector,
                 .max_bytes = opts.dump_max_bytes,
+                .fail_on_http_error = opts.fail_on_http_error,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,

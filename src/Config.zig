@@ -376,6 +376,7 @@ const Commands = cli.Builder(.{
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "dump_selector", .type = ?[:0]const u8 },
             .{ .name = "dump_max_bytes", .type = ?u32 },
+            .{ .name = "fail_on_http_error", .type = bool },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
             .{
