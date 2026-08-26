@@ -347,6 +347,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             .url = self._url,
             .err = err,
         });
+        self._ready_state = .done;
         self._send_flag = false;
         self.releaseSelfRef();
         return error.NetworkError;
