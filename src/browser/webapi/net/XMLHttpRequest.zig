@@ -347,6 +347,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         return error.NetworkError;
     };
     defer resp.deinit();
+    defer self.releaseSelfRef();
 
     self._response_status = resp.status;
     self._response_url = self._url;
