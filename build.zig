@@ -115,7 +115,11 @@ pub fn build(b: *Build) !void {
     fmt_step.dependOn(&fmt.step);
     b.default_step.dependOn(fmt_step);
 
-    linkV8(b, lightpanda_module, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
+    // With an orderfile, the prebuilt V8 archive is rewritten so its hot
+    // functions' sections can be addressed by the linker script.
+    const v8_archive: ?Build.LazyPath = if (prebuilt_v8_path) |path| .{ .cwd_relative = path } else null;
+    const v8_for_link = if (orderfile != null and v8_archive != null and !shared_v8) markHotSections(b, v8_archive.?) else v8_archive;
+    linkV8(b, lightpanda_module, enable_asan, enable_tsan, v8_for_link, shared_v8);
     linkCurl(b, lightpanda_module, enable_tsan, orderfile != null);
     linkRust(b, lightpanda_module);
     linkZenai(b, lightpanda_module);
@@ -319,6 +323,23 @@ fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Renames the hot V8 functions' sections (`.text` -> `.text.hot.<sym>`, see
+/// orderfile/mark_hot_sections.zig) so the orderfile script can gather them.
+fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
+    const tool = b.addExecutable(.{
+        .name = "mark_hot_sections",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("orderfile/mark_hot_sections.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run = b.addRunArtifact(tool);
+    run.addFileArg(archive);
+    run.addFileArg(b.path("orderfile/v8.txt"));
+    return run.addOutputFileArg("libc_v8.a");
+}
+
 /// Per-function/per-datum sections let the -Dorderfile linker script place
 /// individual hot functions. Only enabled for orderfile (release/LLVM) builds:
 /// the self-hosted backend used by Debug builds fails to link the C libraries
@@ -336,7 +357,7 @@ fn linkV8(
     mod: *Build.Module,
     is_asan: bool,
     is_tsan: bool,
-    prebuilt_v8_path: ?[]const u8,
+    prebuilt_v8_path: ?Build.LazyPath,
     shared_v8: bool,
 ) void {
     const target = mod.resolved_target.?;

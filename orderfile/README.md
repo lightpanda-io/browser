@@ -37,10 +37,21 @@ below), with no change in run duration.
   line instead of per file would make that 85s. Debug builds pay nothing.
 - The prebuilt V8 archive is compiled with `-fno-unique-section-names`
   (Chromium hardcodes it), so all of V8's function sections are named `.text`
-  and the script cannot address them. `tools/uniqar.py` rewrites the archive so
-  each section is named `.text.<symbol>` (`.rodata.<symbol>`); link against
-  that copy via `-Dprebuilt_v8_path=...`. Without it the script still orders
-  the Zig, Rust and C code, with a smaller gain.
+  and the script cannot address them. `mark_hot_sections.zig` (run
+  automatically by `build.zig` when an orderfile is set) rewrites the archive,
+  renaming just the *hot* sections to `.text.hot.<symbol>` /
+  `.rodata.hot.<symbol>` so the script gathers all of V8 with one
+  `.text.hot.*` glob (which keeps the link at ~2s instead of ~26s). The
+  browser's own hot Zig/Rust/C sections are matched by explicit per-file
+  patterns. The rewritten archive is a build cache artifact (~132MB -> ~158MB;
+  LLVM objects share .shstrtab with .strtab, so each touched member grows);
+  the linked binary is byte-for-byte unaffected.
+- V8's embedded builtins blob (the `Builtins_*` symbols, one ~2MB `.text`
+  section) is deliberately left cold. Pulling it into `.text.hot` shifts the
+  layout so that V8's runtime code range (a separate mmap) no longer reaches
+  the blob with a pc-relative call, and V8 then copies the whole 2MB blob into
+  an executable anonymous mapping at startup (+~1.8MB RSS, deterministic).
+  `mark_hot_sections.zig` and `gen_order.py` both skip `Builtins_*`.
 
 ## Regenerating the profile
 
