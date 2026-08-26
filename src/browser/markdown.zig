@@ -28,12 +28,11 @@ const Slot = @import("webapi/element/html/Slot.zig");
 
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 const LimitedWriter = @import("../LimitedWriter.zig");
-const Strip = @import("dump.zig").Opts.Strip;
+const dump_html = @import("dump.zig");
+const Strip = dump_html.Opts.Strip;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
-    // Only `ui` (images) applies: scripts, styles and hidden elements are
-    // never rendered.
     strip: Strip = .{},
 };
 
@@ -217,6 +216,7 @@ const Context = struct {
         const tag = el.getTag();
 
         if (el.asNode() != self.root and !isVisibleElement(el, self.frame)) return;
+        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return;
 
         if (!force_slot) {
             if (el.getAttributeSafe(comptime .wrap("slot")) != null) {
@@ -323,7 +323,6 @@ const Context = struct {
                 return;
             },
             .img => {
-                if (self.strip.ui) return;
                 try self.writer.writeAll("![");
                 if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
                     try self.escape(alt);
@@ -865,14 +864,14 @@ test "browser.markdown: scoped dump of a hidden subtree still renders it" {
     try testing.expectString("\ndialog text\n", aw.written());
 }
 
-test "browser.markdown: strip.ui drops images" {
+test "browser.markdown: strip.ui drops images and other visual elements" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
     frame.url = "http://localhost/";
 
     const doc = frame.window._document;
     const div = try doc.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Text <img src=\"a.png\" alt=\"A\"> more</p>");
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Text <img src=\"a.png\" alt=\"A\"> more<canvas>fallback</canvas></p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();

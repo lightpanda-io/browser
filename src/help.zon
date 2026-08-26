@@ -97,8 +97,8 @@
     \\          of the whole document. Fails if nothing matches.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
-    \\          Markdown never contains scripts, styles or hidden elements, so
-    \\          only 'ui' (images) applies to it.
+    \\          In markdown only 'ui' changes the output: scripts, styles and
+    \\          hidden elements are never rendered.
     \\          Defaults to no-strip.
     \\          Allowed values:
     \\              js        Script and link[as=script, rel=preload].

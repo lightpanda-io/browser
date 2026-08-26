@@ -111,7 +111,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         },
         .element => {
             const el = node.subtype(Node.Element);
-            if (shouldStripElement(el, opts, frame)) {
+            if (shouldStripElement(el, opts.strip, frame)) {
                 return;
             }
 
@@ -338,15 +338,15 @@ fn isVoidElement(el: *const Node.Element) bool {
     };
 }
 
-fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
+pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u4, @bitCast(opts.strip)) == 0) {
+    if (@as(u4, @bitCast(strip)) == 0) {
         return false;
     }
 
     const tag_name = el.getTagNameDump();
 
-    if (opts.strip.js) {
+    if (strip.js) {
         if (std.mem.eql(u8, tag_name, "script")) return true;
         if (std.mem.eql(u8, tag_name, "noscript")) return true;
 
@@ -364,7 +364,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         }
     }
 
-    if (opts.strip.css or opts.strip.ui) {
+    if (strip.css or strip.ui) {
         if (std.mem.eql(u8, tag_name, "style")) return true;
 
         if (std.mem.eql(u8, tag_name, "link")) {
@@ -374,7 +374,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         }
     }
 
-    if (opts.strip.ui) {
+    if (strip.ui) {
         if (std.mem.eql(u8, tag_name, "img")) return true;
         if (std.mem.eql(u8, tag_name, "picture")) return true;
         if (std.mem.eql(u8, tag_name, "video")) return true;
@@ -384,7 +384,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
     }
 
-    if (opts.strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
+    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
         return true;
     }
 
