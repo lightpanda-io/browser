@@ -179,7 +179,7 @@ test "links: one entry per href, keeping the first with text" {
 
     try testing.expectEqual(2, links.len);
     try testing.expectEqual("Read the post", links[0].text.?);
-    try testing.expectEqual("http://localhost/post/1", links[0].href);
+    try testing.expectEqual("/post/1", links[0].href);
     try testing.expectEqual("Other", links[1].text.?);
 }
 
