@@ -187,10 +187,9 @@ pub fn getTimeout(self: *const XMLHttpRequest) u32 {
     return self._timeout;
 }
 
-pub fn setTimeout(self: *XMLHttpRequest, value: u32) !void {
+pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !void {
     // https://xhr.spec.whatwg.org/#the-timeout-attribute
-    // Throw if the request is sync OR if it is already sent.
-    if (!self._async and self._ready_state != .unsent) {
+    if (!self._async and exec.js.global == .frame) {
         return error.InvalidAccessError;
     }
 
@@ -254,6 +253,12 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
     if (self._ready_state != .opened or self._send_flag) {
         return error.InvalidStateError;
+    }
+
+    if (!self._async and exec_.js.global == .frame and
+        (self._timeout != 0 or self._response_type != .default))
+    {
+        return error.InvalidAccessError;
     }
 
     if (body_) |b| {
@@ -428,9 +433,13 @@ pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
     return self._response_type;
 }
 
-pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) !void {
+pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execution) !void {
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
+    }
+
+    if (!self._async and exec.js.global == .frame) {
+        return error.InvalidAccessError;
     }
 
     if (value.len == 0) {
