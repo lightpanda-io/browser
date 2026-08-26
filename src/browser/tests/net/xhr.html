@@ -592,3 +592,53 @@
     });
   }
 </script>
+
+<!--
+Production crash (release overflow on unrelated pooled objects): a re-send from
+inside onerror stored a new transfer that httpErrorCallback then cleared once
+the handler returned. The re-send was orphaned, so the later abort() found an
+empty slot and never cancelled it, and the request ran on into a freed XHR.
+Observable here without the crash: the orphaned re-send is never aborted, so it
+delivers its response (onload) despite abort(). With the slot cleared before the
+handler runs, abort() cancels the re-send and no load is delivered.
+-->
+<script id=xhr_resend_in_onerror_then_abort type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let loadFired = false;
+    let abortFired = false;
+    let resent = false;
+
+    req.onload = () => { loadFired = true; };
+    req.onabort = () => { abortFired = true; };
+    req.onerror = () => {
+      if (resent) {
+        return;
+      }
+      resent = true;
+      // Retry inside the error handler, like a reconnecting client. The slow
+      // target keeps the retry in flight until the abort below.
+      req.open('GET', 'http://127.0.0.1:9582/xhr/slow');
+      req.send();
+      // After the handler has returned to httpErrorCallback.
+      setTimeout(() => {
+        req.abort();
+        // Long enough for the aborted-but-orphaned re-send to have delivered
+        // /xhr/slow (100ms) if abort() failed to cancel it.
+        setTimeout(() => state.resolve(), 250);
+      }, 0);
+    };
+
+    // Nothing listens on port 1: a network error, not an HTTP one.
+    req.open('GET', 'http://127.0.0.1:1/');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      // The aborted re-send must never deliver its response.
+      testing.expectEqual(false, loadFired);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+    });
+  }
+</script>

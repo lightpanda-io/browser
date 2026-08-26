@@ -635,6 +635,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/slow")) {
+        // Long enough for a timer scheduled by the requester to fire first.
+        lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
+        return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/xhr_empty")) {
         return req.respond("", .{
             .extra_headers = &.{

@@ -140,6 +140,11 @@ use_proxy: bool,
 // Current TLS verification state, applied per-connection in makeRequest.
 tls_verify: bool = true,
 
+// Test-only fault injection: makes the next submit() fail synchronously from
+// inside the pipeline, the shape where error_callback fires AND the error is
+// returned to the caller (see Transfer.submit).
+test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null else {},
+
 // User agent override set via CDP Emulation.setUserAgentOverride.
 // When set, takes precedence over the config's http_headers value.
 // Allocated from self.allocator when set, null otherwise.
@@ -914,6 +919,12 @@ const SubmitFrom = enum { start, after_intercept, network };
 fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
     sw: switch (from) {
         .start => {
+            if (comptime lp.IS_TEST) {
+                if (self.test_fail_submit) |err| {
+                    return err;
+                }
+            }
+
             if (self.network.web_bot_auth) |wba| {
                 const authority = URL.getHost(transfer.req.url);
                 try wba.signRequest(transfer, authority);
@@ -3672,6 +3683,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
         .single_flight = .init(testing.allocator),
     };
     client.url_blocklist = null;
+    client.test_fail_submit = null;
     // isUrlBlocked reaches through here for the adblocker; tests that want
     // one assign it to `client.network` after this returns.
     test_network.adblocker = null;

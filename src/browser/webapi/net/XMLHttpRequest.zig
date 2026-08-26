@@ -601,11 +601,9 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
-    // http client will close it after an error, it isn't safe to keep around
+    // handleError can execute JS, which could .send() again: clear this now.
+    self._http_transfer = null;
     self.handleError(err);
-    if (self._http_transfer != null) {
-        self._http_transfer = null;
-    }
     self.releaseSelfRef();
 }
 
