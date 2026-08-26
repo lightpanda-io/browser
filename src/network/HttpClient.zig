@@ -1850,8 +1850,8 @@ pub const Request = struct {
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
     basic_auth_credentials: ?[:0]const u8 = null,
-    credentials_mode: CredentialsMode = .same_origin,
-    request_mode: RequestMode = .cors,
+    credentials_mode: CredentialsMode,
+    request_mode: RequestMode,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 

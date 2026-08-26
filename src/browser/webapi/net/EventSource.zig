@@ -180,6 +180,8 @@ fn connect(self: *EventSource) !void {
         .method = .GET,
         .cookies = cookie_support,
         .origin = exec.origin(),
+        .request_mode = .cors,
+        .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
         .streaming = true,
         .header_callback = httpHeaderDoneCallback,

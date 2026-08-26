@@ -431,6 +431,8 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .method = .GET,
         .resource_type = .worker,
         .origin = self.origin,
+        .request_mode = .same_origin,
+        .credentials_mode = .same_origin,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });

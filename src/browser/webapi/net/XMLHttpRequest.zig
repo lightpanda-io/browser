@@ -317,6 +317,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .body = self._request_body,
         .cookies = cookie_support,
         .credentials_mode = if (self._with_credentials) .include else .same_origin,
+        .request_mode = .cors,
         .origin = exec.origin(),
         .resource_type = .xhr,
         .timeout_ms = self._timeout,

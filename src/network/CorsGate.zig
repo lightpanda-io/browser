@@ -509,6 +509,8 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .cookie_jar = null,
         .cookie_origin = transfer.req.cookie_origin,
         .origin = transfer.req.origin,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
         .ctx = ctx,
         .header_callback = CorsPreflightContext.headerCallback,
         .done_callback = CorsPreflightContext.doneCallback,

@@ -859,6 +859,8 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .throttle = self.parent == null,
         .origin = self.origin,
         .resource_type = .document,
+        .request_mode = .navigate,
+        .credentials_mode = .include,
         .header_callback = frameHeaderDoneCallback,
         .data_callback = frameDataCallback,
         .done_callback = frameDoneCallback,
@@ -2383,6 +2385,8 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .url = resolved,
         .method = .GET,
         .origin = self.origin,
+        .request_mode = .no_cors,
+        .credentials_mode = .same_origin,
         .resource_type = .stylesheet,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
