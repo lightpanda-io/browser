@@ -457,6 +457,7 @@ fn adblockResourceType(req: *const Request) AdBlocker.ResourceTypes {
         .script => .{ .script = true },
         .stylesheet => .{ .stylesheet = true },
         .xhr, .fetch => .{ .xmlhttprequest = true },
+        .image => .{ .image = true },
         .eventsource => .{ .other = true },
     };
 }
