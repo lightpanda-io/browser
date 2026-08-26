@@ -690,7 +690,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
-    if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
+        if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "none")) {
                 return true; // Early exit for hiding value
             }
@@ -703,7 +703,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_visibility) {
-    if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
+        if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse")) {
                 return true;
             }
@@ -718,7 +718,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_opacity) {
-    if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
+        if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "0")) {
                 return true;
             }
