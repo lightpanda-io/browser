@@ -123,11 +123,22 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
     return self;
 }
 
-pub fn deinit(self: *XMLHttpRequest, _: *Page) void {
+fn clearResponse(self: *XMLHttpRequest, page: *Page) void {
+    if (self._response) |res| {
+        if (res == .blob) {
+            res.blob.releaseRef(page);
+        }
+    }
+    self._response = null;
+}
+
+pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
         self._http_transfer = null;
     }
+
+    self.clearResponse(page);
 
     if (self._on_ready_state_change) |func| {
         func.release();
@@ -211,7 +222,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
-    self._response = null;
+    self.clearResponse(self._exec.page);
     self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
@@ -533,6 +544,7 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
             const mime = self._override_mime orelse self._response_mime;
             const content_type = if (mime) |m| m.contentTypeString() else "";
             const blob = try Blob.initFromBytes(data, content_type, exec);
+            blob.acquireRef();
             break :blk .{ .blob = blob };
         },
     };
