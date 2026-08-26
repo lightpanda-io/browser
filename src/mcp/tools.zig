@@ -1443,6 +1443,28 @@ test "MCP - html: maxBytes truncation and strip" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
 }
 
+test "MCP - links: dedup, hidden, text fallback, limit" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_links.html", &out.writer);
+    defer server.deinit();
+
+    const all =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"links"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, all);
+    try testing.expectEqual(2, std.mem.count(u8, out.written(), "href"));
+    try testing.expect(std.mem.indexOf(u8, out.written(), "/second") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Third") != null);
+
+    out.clearRetainingCapacity();
+    const limited =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"links","arguments":{"limit":1}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, limited);
+    try testing.expectEqual(1, std.mem.count(u8, out.written(), "href"));
+    try testing.expect(std.mem.indexOf(u8, out.written(), "/first") != null);
+}
+
 test "MCP - waitForScript: truthy returns, falsy times out" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("about:blank", &out.writer);

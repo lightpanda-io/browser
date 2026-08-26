@@ -400,9 +400,18 @@ pub const Tool = enum {
                 ),
             },
             .links => .{
-                .description = "Extract all links in the opened page as JSON objects with `text` (visible anchor text), `href` (resolved URL), and `backendNodeId` (pass to click/nodeDetails). If a url is provided, it navigates to that url first.",
+                .description = "Extract the visible links in the opened page as JSON objects with `text` (anchor text, falling back to aria-label/title/image alt), `href` (resolved URL), and `backendNodeId` (pass to click/nodeDetails). One entry per href; hidden links are omitted. If a url is provided, it navigates to that url first.",
                 .summary = "List all links on the page",
-                .input_schema = url_params_schema,
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "limit": { "type": "integer", "description": "Optional. Return at most this many links, in document order." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
+                    \\  }
+                    \\}
+                ),
             },
             .evaluate => .{
                 .description = "Evaluate JavaScript in the current page context — an escape hatch for page-side logic the dedicated tools can't express; prefer `extract` for data and click/fill/etc. for actions. It runs in the page, so it cannot see the agent script's variables or builtins — interpolate any value into the `script` string. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). Objects and arrays return as JSON, so no `JSON.stringify` is needed. If a url is provided, it navigates there first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of evaluate, surviving navigation; values previously set via `/extract save=` or `/evaluate save=` appear as `lp.<name>`.",
@@ -1316,11 +1325,19 @@ fn dumpHtml(session: *lp.Session, registry: *CDPNode.Registry, page: *lp.Frame, 
 }
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+    const Params = struct {
+        limit: ?u32 = null,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
+    var links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
+    if (args.limit) |limit| {
+        links_list = links_list[0..@min(limit, links_list.len)];
+    }
     lp.links.registerNodes(links_list, registry) catch
         return ToolError.InternalError;
     return renderJson(arena, links_list);
