@@ -1502,10 +1502,9 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNod
     const result = try extract(arena, session, registry, args.schema);
 
     if (!result.is_error) if (args.save) |name| {
-        bridgeStoreSet(session.browser.app.allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
-            error.OutOfMemory => return ToolError.OutOfMemory,
-            error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
-        };
+        // `extract` already parsed the walker output: canonical JSON.
+        bridgeStorePut(session.browser.app.allocator, &session.bridge_store, name, result.text) catch
+            return ToolError.OutOfMemory;
         return .{ .text = "", .fields = result.fields };
     };
 

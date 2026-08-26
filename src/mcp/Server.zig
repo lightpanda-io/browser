@@ -39,8 +39,8 @@ pub const Session = struct {
 
     const HealTarget = struct {
         path: []const u8,
-        kind: lp.replay.WireFailure.Kind,
-        dry_fields: []const []const u8,
+        /// `detail` left blank — the cure check never reads it.
+        failure: lp.replay.Failure,
     };
 
     fn isDefault(self: *const Session) bool {
@@ -61,20 +61,22 @@ pub const Session = struct {
         const arena = self.heal_arena.allocator();
         const dry_fields = try arena.alloc([]const u8, failure.dry_fields.len);
         for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try arena.dupe(u8, field);
-        self.heal_target = .{ .path = try arena.dupe(u8, report.path), .kind = failure.kind, .dry_fields = dry_fields };
+        self.heal_target = .{
+            .path = try arena.dupe(u8, report.path),
+            .failure = .{ .kind = failure.kind, .dry_fields = dry_fields },
+        };
     }
 
     /// Forget `path`'s target — a clean replay or a committed cure. No-op for
     /// any other path.
     pub fn retireHealTarget(self: *Session, path: []const u8) void {
-        if (self.cureTarget(path) == null) return;
-        self.dropHealTarget();
+        const target = self.heal_target orelse return;
+        if (std.mem.eql(u8, target.path, path)) self.dropHealTarget();
     }
 
-    pub fn cureTarget(self: *const Session, path: []const u8) ?lp.replay.WireFailure {
+    pub fn cureTarget(self: *const Session, path: []const u8) ?lp.replay.Failure {
         const target = self.heal_target orelse return null;
-        if (!std.mem.eql(u8, target.path, path)) return null;
-        return .{ .kind = target.kind, .dry_fields = target.dry_fields };
+        return if (std.mem.eql(u8, target.path, path)) target.failure else null;
     }
 
     fn dropHealTarget(self: *Session) void {

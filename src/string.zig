@@ -454,13 +454,6 @@ pub fn capBytesHint(allocator: std.mem.Allocator, bytes: []const u8, max_bytes: 
     return std.mem.concat(allocator, u8, &.{ prefix, suffix }) catch prefix;
 }
 
-/// `capBytes`, but the result is always owned by `allocator`, never an alias
-/// of `bytes` — for callers whose input lives in a shorter-lived arena.
-pub fn capBytesOwned(allocator: std.mem.Allocator, bytes: []const u8, max_bytes: usize) error{OutOfMemory}![]const u8 {
-    const capped = capBytes(allocator, bytes, max_bytes);
-    return if (capped.ptr == bytes.ptr) try allocator.dupe(u8, capped) else capped;
-}
-
 /// Reinterprets `bytes` as Latin-1 (each byte one codepoint) and encodes it
 /// as UTF-8. For bytes that aren't valid UTF-8 but must become a valid UTF-8
 /// string (JSON, filenames).
@@ -554,19 +547,6 @@ test "capBytes: appends a marker, keeps valid UTF-8" {
     try std.testing.expect(std.unicode.utf8ValidateSlice(out));
     try std.testing.expect(std.mem.startsWith(u8, out, "aaaaaaa"));
     try std.testing.expect(std.mem.indexOf(u8, out, "truncated, original 13 bytes") != null);
-}
-
-test "capBytesOwned: never aliases its input" {
-    const ta = testing.allocator;
-    const input = "short";
-    const out = try capBytesOwned(ta, input, 16);
-    defer ta.free(out);
-    try testing.expectEqual("short", out);
-    try std.testing.expect(out.ptr != input.ptr);
-
-    const over = try capBytesOwned(ta, "aaaaaaa한bbb", 8);
-    defer ta.free(over);
-    try std.testing.expect(std.mem.indexOf(u8, over, "truncated, original 13 bytes") != null);
 }
 
 test "latin1ToUtf8" {

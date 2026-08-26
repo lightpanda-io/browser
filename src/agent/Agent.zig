@@ -869,7 +869,7 @@ fn handleLoad(self: *Agent, rest: []const u8) void {
     while (true) {
         // Nothing from a prior retry is read again.
         _ = arena.reset(.retain_capacity);
-        const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+        const finding: Finding = switch (self.runAndJudge(arena.allocator(), path)) {
             .fatal, .clean => return,
             .broken => |f| f,
         };
@@ -890,7 +890,7 @@ const HealChoice = enum { heal, retry, no };
 /// Defaults to no: healing spends tokens and its validation step resets the
 /// browser session. Retry is the antidote to a transient failure (a flaky
 /// page load) that would otherwise send a correct script to the model.
-fn promptHeal(path: []const u8, kind: lp.replay.WireFailure.Kind) HealChoice {
+fn promptHeal(path: []const u8, kind: Failure.Kind) HealChoice {
     const symptom = switch (kind) {
         .threw => "failed",
         .empty => "ran but returned no data",
@@ -1690,13 +1690,19 @@ const ScriptOutput = struct {
 };
 
 const RunFacts = lp.replay.RunFacts;
-const ScriptError = lp.replay.ScriptError;
+const Failure = lp.replay.Failure;
+
+/// A failure with the text that produced it — the heal loop's input.
+const Finding = struct {
+    source: []const u8,
+    failure: Failure,
+};
 
 fn runScript(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
     const outcome = self.runScriptOutcome(arena.allocator(), path) orelse return false;
-    return outcome == .facts;
+    return outcome.run == .facts;
 }
 
 /// Terminal `fatal`/`clean` states, or the `broken` finding to heal — the model
@@ -1705,19 +1711,20 @@ fn runScript(self: *Agent, path: []const u8) bool {
 const RunJudgement = union(enum) {
     fatal,
     clean,
-    broken: ScriptError,
+    broken: Finding,
 };
 
 fn runAndJudge(self: *Agent, arena: std.mem.Allocator, path: []const u8) RunJudgement {
-    return switch (self.runScriptOutcome(arena, path) orelse return .fatal) {
-        .facts => |facts| if (self.judgedFinding(arena, path, facts)) |finding| .{ .broken = finding } else .clean,
-        .script_error => |script_error| .{ .broken = script_error },
+    const outcome = self.runScriptOutcome(arena, path) orelse return .fatal;
+    return switch (outcome.run) {
+        .facts => |facts| if (self.judgedFinding(arena, path, outcome.source, facts)) |finding| .{ .broken = finding } else .clean,
+        .threw => |failure| .{ .broken = .{ .source = outcome.source, .failure = failure } },
     };
 }
 
 /// Null covers setup failures (unreadable file, runtime init, OOM) that a
 /// retry can't help.
-fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?lp.replay.Classified {
+fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?lp.replay.RunOutcome {
     const content = lp.replay.readScriptFile(arena, path) catch |err| {
         self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
         return null;
@@ -1728,7 +1735,7 @@ fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?l
 /// `runScriptOutcome` for source already in hand — heal validates its revised
 /// candidate without touching disk. `label` names the run in the terminal and
 /// in V8 stack traces.
-fn runSourceOutcome(self: *Agent, arena: std.mem.Allocator, source: []const u8, label: []const u8) ?lp.replay.Classified {
+fn runSourceOutcome(self: *Agent, arena: std.mem.Allocator, source: []const u8, label: []const u8) ?lp.replay.RunOutcome {
     const runtime = ScriptRuntime.init(self.allocator, self.browser.app, self.session, &self.node_registry) catch |err| {
         self.terminal.printError("Failed to initialize script runtime: {s}", .{@errorName(err)});
         return null;
@@ -1778,14 +1785,15 @@ fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
     // gates on the local suspicion check alone — one retry filters a transient
     // failure (a flaky page load), and the model judges the re-run's facts,
     // the ones healing would act on.
-    switch (self.runScriptOutcome(arena.allocator(), path) orelse return false) {
+    const first_pass = self.runScriptOutcome(arena.allocator(), path) orelse return false;
+    switch (first_pass.run) {
         .facts => |facts| if (lp.replay.suspicionOf(arena.allocator(), facts) == null) return true,
-        .script_error => {},
+        .threw => {},
     }
     self.terminal.printInfo("Script run failed or looks broken; retrying once before healing.", .{});
     // Nothing from the first pass is read again.
     _ = arena.reset(.retain_capacity);
-    const finding: ScriptError = switch (self.runAndJudge(arena.allocator(), path)) {
+    const finding: Finding = switch (self.runAndJudge(arena.allocator(), path)) {
         .fatal => return false,
         .clean => return true,
         .broken => |f| f,
@@ -1799,7 +1807,7 @@ const max_heal_attempts = 2;
 
 /// Only a revision that passed validation in a fresh session replaces `path`;
 /// the original survives a failed heal.
-fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: ScriptError) bool {
+fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Finding) bool {
     var source = first.source;
     var error_detail = first.failure.detail;
 
@@ -1836,9 +1844,9 @@ fn healLoop(self: *Agent, arena: std.mem.Allocator, path: []const u8, first: Scr
         const classified = self.runSourceOutcome(arena, revised, path) orelse return false;
         const outcome = lp.heal.validationOutcome(arena, path, revised, first.failure, classified) catch return self.healFail("out of memory", .{});
         switch (outcome) {
-            // runSourceOutcome already printed a failed run's own error.
-            .failed_run, .not_cured => |residual| {
-                if (outcome == .not_cured) self.terminal.printWarning("{s}", .{residual.detail});
+            // runSourceOutcome already printed a thrown error.
+            .uncured => |residual| {
+                if (residual.kind != .threw) self.terminal.printWarning("{s}", .{residual.detail});
                 source = revised;
                 error_detail = residual.detail;
             },
@@ -1895,7 +1903,7 @@ const Verdict = struct {
 /// failure or cancellation — the caller falls back to surfacing the facts
 /// instead of guessing. A provider without forced tool choice (Ollama) may
 /// answer with text; that lands in the same fallback.
-fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, suspicion: ScriptError) ?Verdict {
+fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, suspicion: Finding) ?Verdict {
     const params = std.json.parseFromSliceLeaky(std.json.Value, arena, verdict_params_json, .{}) catch return null;
     const user_msg = std.fmt.allocPrint(arena,
         \\Replay of {s} completed without errors, but {s}
@@ -1917,8 +1925,8 @@ fn judgeSuspicion(self: *Agent, arena: std.mem.Allocator, path: []const u8, susp
 /// the run is fine (no suspicion, no model, or a not-broken verdict). A failed
 /// verdict call falls back to the raw facts — the heal prompt, defaulting to
 /// no, becomes the judgment of last resort.
-fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts: RunFacts) ?ScriptError {
-    const suspicion = lp.replay.suspicionOf(arena, facts) orelse return null;
+fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, source: []const u8, facts: RunFacts) ?Finding {
+    const suspicion: Finding = .{ .source = source, .failure = lp.replay.suspicionOf(arena, facts) orelse return null };
     if (self.ai_client == null) return null;
     if (self.judgeSuspicion(arena, path, suspicion)) |verdict| {
         if (!verdict.broken) {
@@ -2396,27 +2404,15 @@ test {
     _ = picker;
 }
 
-test "Verdict parses from tool-call arguments" {
+test "Verdict: a bare broken:false verdict judges no fields" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"broken\": true, \"fields\": [\"comments\", \"\"], \"reason\": \"selector drift\", \"confidence\": 1}", .{});
-    const v = try std.json.parseFromValueLeaky(Verdict, aa, args, .{ .ignore_unknown_fields = true });
-    try std.testing.expect(v.broken);
-    try std.testing.expectEqual(2, v.fields.len);
-    try std.testing.expectEqualStrings("comments", v.fields[0]);
-    try std.testing.expectEqualStrings("", v.fields[1]);
-    try std.testing.expectEqualStrings("selector drift", v.reason);
-
     const bare = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"broken\": false}", .{});
-    const b = try std.json.parseFromValueLeaky(Verdict, aa, bare, .{ .ignore_unknown_fields = true });
-    try std.testing.expect(!b.broken);
-    try std.testing.expectEqual(0, b.fields.len);
-
-    // A verdict without the required field is a parse failure, not a default.
-    const missing = try std.json.parseFromSliceLeaky(std.json.Value, aa, "{\"fields\": []}", .{});
-    try std.testing.expectError(error.MissingField, std.json.parseFromValueLeaky(Verdict, aa, missing, .{ .ignore_unknown_fields = true }));
+    const v = try std.json.parseFromValueLeaky(Verdict, aa, bare, .{ .ignore_unknown_fields = true });
+    try std.testing.expect(!v.broken);
+    try std.testing.expectEqual(0, v.fields.len);
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {

@@ -55,19 +55,20 @@ pub fn reset(self: *Baseline) void {
 
 /// Tally one successful extract's fields, as classified by the tool.
 pub fn noteExtractFields(self: *Baseline, fields: []const extract.ExtractField) error{OutOfMemory}!void {
-    for (fields) |fc| try self.bump(fc.field, !fc.empty);
+    const arena = self.arena.allocator();
+    for (fields) |fc| try add(&self.fields, arena, fc.field, 1, @intFromBool(!fc.empty));
 }
 
-fn bump(self: *Baseline, field: []const u8, nonempty: bool) error{OutOfMemory}!void {
-    const arena = self.arena.allocator();
-    const gop = try self.fields.getOrPut(arena, field);
+/// Fold `calls`/`nonempty` into `field`'s stat; the key is duped into `arena`
+/// on first sight — callers' field names may live in scratch.
+fn add(fields: *Fields, arena: std.mem.Allocator, field: []const u8, calls: u32, nonempty: u32) error{OutOfMemory}!void {
+    const gop = try fields.getOrPut(arena, field);
     if (!gop.found_existing) {
-        // The probe key may live in caller scratch; own it.
         gop.key_ptr.* = try arena.dupe(u8, field);
         gop.value_ptr.* = .{};
     }
-    gop.value_ptr.calls += 1;
-    if (nonempty) gop.value_ptr.nonempty += 1;
+    gop.value_ptr.calls += calls;
+    gop.value_ptr.nonempty += nonempty;
 }
 
 /// The session's baseline as a full `// lp:baseline {...}` line, or null when
@@ -80,12 +81,7 @@ pub fn serialize(self: *const Baseline, arena: std.mem.Allocator) error{OutOfMem
 /// across schemas), for refreshing a healed script from its validation run.
 pub fn serializeStats(arena: std.mem.Allocator, stats: []const extract.ExtractStat) error{OutOfMemory}!?[]const u8 {
     var fields: Fields = .empty;
-    for (stats) |stat| {
-        const gop = try fields.getOrPut(arena, stat.field);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
-        gop.value_ptr.calls += stat.calls;
-        gop.value_ptr.nonempty += stat.nonempty;
-    }
+    for (stats) |stat| try add(&fields, arena, stat.field, stat.calls, stat.nonempty);
     return fieldsToLine(arena, fields);
 }
 

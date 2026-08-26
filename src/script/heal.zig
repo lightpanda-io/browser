@@ -31,15 +31,14 @@ const replay = @import("replay.zig");
 const string = @import("../string.zig");
 
 const RunFacts = replay.RunFacts;
-const WireFailure = replay.WireFailure;
+const Failure = replay.Failure;
 
 /// Outcome of one heal validation run against the original failure.
 pub const ValidationOutcome = union(enum) {
-    /// The validation run itself threw; its finding verbatim.
-    failed_run: WireFailure,
-    /// Ran clean but did not cure `first`: `.empty` for a still-empty return,
-    /// `.dry_extracts` naming every field still dry (or gone).
-    not_cured: WireFailure,
+    /// The validation run's own `threw`, or — for a clean run that did not
+    /// cure `first` — `.empty` for a still-empty return, `.dry_extracts`
+    /// naming every field still dry (or gone).
+    uncured: Failure,
     /// Cured, but swapping the file failed; the message names the leftover
     /// `.heal.js` path.
     cured_uncommitted: []const u8,
@@ -51,7 +50,7 @@ pub const ValidationOutcome = union(enum) {
 /// retargets: the kind is fixed, names outside `first.dry_fields` are dropped
 /// (a hallucinated name could never be cured), and an empty or all-unknown
 /// `judged` leaves `first` unchanged.
-pub fn narrowTarget(arena: std.mem.Allocator, first: WireFailure, judged: []const []const u8) error{OutOfMemory}!WireFailure {
+pub fn narrowTarget(arena: std.mem.Allocator, first: Failure, judged: []const []const u8) error{OutOfMemory}!Failure {
     if (first.kind != .dry_extracts or judged.len == 0) return first;
     var kept: std.ArrayList([]const u8) = .empty;
     for (first.dry_fields) |dry| {
@@ -66,11 +65,11 @@ pub fn narrowTarget(arena: std.mem.Allocator, first: WireFailure, judged: []cons
 /// Callers pass the same (possibly `narrowTarget`ed) finding on every attempt,
 /// never a residual — attempt two could otherwise delete a field attempt one
 /// fixed.
-pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []const u8, first: WireFailure, classified: replay.Classified) error{OutOfMemory}!ValidationOutcome {
-    switch (classified) {
-        .script_error => |script_error| return .{ .failed_run = script_error.failure },
+pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []const u8, first: Failure, outcome: replay.RunOutcome) error{OutOfMemory}!ValidationOutcome {
+    switch (outcome.run) {
+        .threw => |failure| return .{ .uncured = failure },
         .facts => |facts| {
-            if (try cureFailure(arena, first, facts)) |residual| return .{ .not_cured = residual };
+            if (try cureFailure(arena, first, facts)) |residual| return .{ .uncured = residual };
             if (try commitValidated(arena, path, script, facts.extract_stats)) |failure| return .{ .cured_uncommitted = failure };
             return .committed;
         },
@@ -81,11 +80,11 @@ pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []c
 /// residual fed to the next heal attempt. Running clean is not a cure on its
 /// own — a revision that deletes the failing extract (or the `return`) also
 /// runs clean.
-fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?WireFailure {
+fn cureFailure(arena: std.mem.Allocator, first: Failure, facts: RunFacts) error{OutOfMemory}!?Failure {
     switch (first.kind) {
         .threw => return null,
         .empty => {
-            if ((try replay.returned(arena, facts)) == .data) return null;
+            if (facts.returned == .data) return null;
             return .{
                 .kind = .empty,
                 .detail = "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
@@ -231,6 +230,15 @@ pub const replay_suspicious_guidance =
     \\the file is replaced.
 ;
 
+/// The next-step guidance a replay report carries for its status.
+pub fn guidanceFor(status: replay.RunReport.Status) ?[]const u8 {
+    return switch (status) {
+        .ok => null,
+        .failed => replay_failed_guidance,
+        .suspicious => replay_suspicious_guidance,
+    };
+}
+
 /// One `heal_commit` validation, serializable. The script's path rides in
 /// `run.path`.
 pub const HealReport = struct {
@@ -238,44 +246,44 @@ pub const HealReport = struct {
     committed: bool = false,
     /// The residual finding — or the validation run's own `threw`; null when
     /// cured.
-    failure: ?WireFailure = null,
+    failure: ?Failure = null,
     /// Cured, but the file swap failed; names the leftover `.heal.js`.
     commit_error: ?[]const u8 = null,
     run: replay.RunReport,
 
     pub fn init(outcome: ValidationOutcome, run: replay.RunReport) HealReport {
         return switch (outcome) {
-            .failed_run, .not_cured => |failure| .{ .failure = failure, .run = run },
+            .uncured => |failure| .{ .failure = failure, .run = run },
             .cured_uncommitted => |message| .{ .cured = true, .commit_error = message, .run = run },
             .committed => .{ .cured = true, .committed = true, .run = run },
         };
     }
 };
 
-const testFacts = replay.testFacts;
-
 test "validationOutcome: failed run and uncured facts never reach the commit" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const dry: WireFailure = .{ .kind = .dry_extracts, .dry_fields = &.{"comments"} };
+    const dry: Failure = .{ .kind = .dry_extracts, .dry_fields = &.{"comments"} };
 
-    const failed = try validationOutcome(aa, "s.js", "return 1;", dry, .{ .script_error = .{
-        .failure = .{ .kind = .threw, .detail = "boom at line 2" },
+    const failed = try validationOutcome(aa, "s.js", "return 1;", dry, .{
         .source = "return 1;",
-    } });
-    try std.testing.expectEqual(WireFailure.Kind.threw, failed.failed_run.kind);
-    try std.testing.expectEqualStrings("boom at line 2", failed.failed_run.detail);
+        .run = .{ .threw = .{ .kind = .threw, .detail = "boom at line 2" } },
+    });
+    try std.testing.expectEqual(Failure.Kind.threw, failed.uncured.kind);
+    try std.testing.expectEqualStrings("boom at line 2", failed.uncured.detail);
 
-    const still_dry: replay.Classified = .{ .facts = testFacts("[1]", &.{
-        .{ .schema = "{}", .field = "comments", .calls = 3, .nonempty = 0 },
-    }) };
+    const still_dry: replay.RunOutcome = .{ .source = "return 1;", .run = .{ .facts = .{
+        .completion = "1",
+        .returned = .data,
+        .extract_stats = &.{.{ .schema = "{}", .field = "comments", .calls = 3, .nonempty = 0 }},
+    } } };
     const uncured = try validationOutcome(aa, "s.js", "return 1;", dry, still_dry);
-    try std.testing.expectEqual(WireFailure.Kind.dry_extracts, uncured.not_cured.kind);
-    try std.testing.expectEqual(1, uncured.not_cured.dry_fields.len);
-    try std.testing.expectEqualStrings("comments", uncured.not_cured.dry_fields[0]);
-    try std.testing.expect(std.mem.indexOf(u8, uncured.not_cured.detail, "\"comments\"") != null);
+    try std.testing.expectEqual(Failure.Kind.dry_extracts, uncured.uncured.kind);
+    try std.testing.expectEqual(1, uncured.uncured.dry_fields.len);
+    try std.testing.expectEqualStrings("comments", uncured.uncured.dry_fields[0]);
+    try std.testing.expect(std.mem.indexOf(u8, uncured.uncured.detail, "\"comments\"") != null);
 }
 
 test "narrowTarget: keeps the judged subset, never widens or retargets" {
@@ -283,7 +291,7 @@ test "narrowTarget: keeps the judged subset, never widens or retargets" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const first: WireFailure = .{ .kind = .dry_extracts, .detail = "dry", .dry_fields = &.{ "comments", "score", "" } };
+    const first: Failure = .{ .kind = .dry_extracts, .detail = "dry", .dry_fields = &.{ "comments", "score", "" } };
 
     const narrowed = try narrowTarget(aa, first, &.{"comments"});
     try std.testing.expectEqual(1, narrowed.dry_fields.len);
@@ -300,8 +308,8 @@ test "narrowTarget: keeps the judged subset, never widens or retargets" {
     try std.testing.expectEqual(3, (try narrowTarget(aa, first, &.{"bogus"})).dry_fields.len);
     try std.testing.expectEqual(first.dry_fields.ptr, (try narrowTarget(aa, first, &.{})).dry_fields.ptr);
 
-    const threw: WireFailure = .{ .kind = .threw };
-    try std.testing.expectEqual(WireFailure.Kind.threw, (try narrowTarget(aa, threw, &.{"comments"})).kind);
+    const threw: Failure = .{ .kind = .threw };
+    try std.testing.expectEqual(Failure.Kind.threw, (try narrowTarget(aa, threw, &.{"comments"})).kind);
 }
 
 test "cureFailure: running clean is not a cure" {
@@ -309,7 +317,7 @@ test "cureFailure: running clean is not a cure" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const dry: WireFailure = .{
+    const dry: Failure = .{
         .kind = .dry_extracts,
         .dry_fields = &.{ "comments", "" },
     };
@@ -317,11 +325,11 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 3 },
         .{ .schema = "[]", .field = "", .calls = 1, .nonempty = 1 },
     };
-    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts("[1]", cured_stats)));
+    try std.testing.expectEqual(null, try cureFailure(aa, dry, .{ .completion = null, .returned = .data, .extract_stats = cured_stats }));
 
     // Fix-by-deletion: the dry field is simply gone from the revised run.
-    const deleted = (try cureFailure(aa, dry, testFacts("[1]", cured_stats[1..]))).?;
-    try std.testing.expectEqual(WireFailure.Kind.dry_extracts, deleted.kind);
+    const deleted = (try cureFailure(aa, dry, .{ .completion = null, .returned = .data, .extract_stats = cured_stats[1..] })).?;
+    try std.testing.expectEqual(Failure.Kind.dry_extracts, deleted.kind);
     try std.testing.expectEqual(1, deleted.dry_fields.len);
     try std.testing.expectEqualStrings("comments", deleted.dry_fields[0]);
     try std.testing.expect(std.mem.indexOf(u8, deleted.detail, "\"comments\" extract is gone") != null);
@@ -331,18 +339,20 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 0 },
         .{ .schema = "[]", .field = "", .calls = 2, .nonempty = 0 },
     };
-    const still_dry = (try cureFailure(aa, dry, testFacts("[1]", still_dry_stats))).?;
+    const still_dry = (try cureFailure(aa, dry, .{ .completion = null, .returned = .data, .extract_stats = still_dry_stats })).?;
     try std.testing.expectEqual(2, still_dry.dry_fields.len);
     try std.testing.expectEqualStrings("", still_dry.dry_fields[1]);
     try std.testing.expect(std.mem.indexOf(u8, still_dry.detail, "in all 5 calls") != null);
     try std.testing.expect(std.mem.indexOf(u8, still_dry.detail, "extract([]) returned no data in all 2 calls") != null);
 
     // .empty is cured only by a data-carrying return.
-    const empty: WireFailure = .{ .kind = .empty };
-    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts("[1]", &.{})));
-    try std.testing.expectEqual(WireFailure.Kind.empty, (try cureFailure(aa, empty, testFacts(null, &.{}))).?.kind);
+    const empty: Failure = .{ .kind = .empty };
+    const with_data: RunFacts = .{ .completion = "[1]", .returned = .data, .extract_stats = &.{} };
+    const without: RunFacts = .{ .completion = null, .returned = .none, .extract_stats = &.{} };
+    try std.testing.expectEqual(null, try cureFailure(aa, empty, with_data));
+    try std.testing.expectEqual(Failure.Kind.empty, (try cureFailure(aa, empty, without)).?.kind);
 
     // .threw needs nothing beyond running clean.
-    const threw: WireFailure = .{ .kind = .threw };
-    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(null, &.{})));
+    const threw: Failure = .{ .kind = .threw };
+    try std.testing.expectEqual(null, try cureFailure(aa, threw, without));
 }

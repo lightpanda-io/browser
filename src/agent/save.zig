@@ -81,7 +81,7 @@ pub fn randomFilename(arena: std.mem.Allocator) ![]const u8 {
 /// Read a previously saved script back for revision. Returns null when there
 /// is nothing to feed the model: the file does not exist or is blank.
 pub fn readScript(arena: std.mem.Allocator, path: []const u8) !?[]const u8 {
-    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena, .limited(1024 * 1024)) catch |err| switch (err) {
+    const content = lp.replay.readScriptFile(arena, path) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };

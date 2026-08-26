@@ -93,12 +93,12 @@ pub const script_lifecycle_note =
 const extra_tools = [_]McpTool{
     .{
         .name = "replay",
-        .description = "Replay a saved Lightpanda agent script (see `save`) and return a JSON run report. `status` is \"ok\" (ran, output carries data), \"suspicious\" (ran clean but the output looks dry — judge whether that is breakage or the page genuinely has no such data right now, weighing any `// lp:baseline` comment in `source` as evidence of what the fields held at save time), or \"failed\" (the script threw). The script's `console.*` output and returned value arrive in `console` (the returned value is the final line). On suspicious/failed the report carries the script `source`, a `failure` object and `guidance` for the heal flow: diagnose against the live session, then call `heal_commit`. Pass `script` to trial a candidate revision without writing it. A failed or suspicious file replay arms `heal_commit` for that path (the server keeps the finding as the cure target); a clean file replay disarms it; a `script` trial does neither. The replay drives this session — the current page, cookies and node ids are replaced; re-inspect (tree) before reusing node ids.",
+        .description = "Replay a saved Lightpanda agent script (see `save`) and return a JSON run report. `status` is \"ok\" (ran, output carries data), \"suspicious\" (ran clean but the output looks dry — judge whether that is breakage or the page genuinely has no such data right now, weighing any `// lp:baseline` comment in `source` as evidence of what the fields held at save time), or \"failed\" (the script threw). The script's `console.*` output and returned value arrive in `console` (the returned value is the final line). On suspicious/failed the report carries the script `source`, a `failure` object and `guidance` for the heal flow: diagnose against the live session, then call `heal_commit`. A failed or suspicious file replay arms `heal_commit` for that path (the server keeps the finding as the cure target); a clean file replay disarms it; a `script` trial does neither. The replay drives this session — the current page, cookies and node ids are replaced; re-inspect (tree) before reusing node ids.",
         .inputSchema = replay_schema,
     },
     .{
         .name = "heal_commit",
-        .description = "Commit a healed script: the revised `script` is validated by replaying it in a fresh session, and only a validated cure replaces the file at `path` — the original is untouched otherwise. The cure target is the finding of your last file `replay` of `path`; for a `dry_extracts` target, pass `fields` to name the subset you judged broken (omitted fields count as legitimately empty — a target can be narrowed, never widened). The cure check is deterministic: `threw` needs a clean run, `empty` needs the return value to carry data, `dry_extracts` needs every listed field to come back with data (deleting the extract is not a cure). The response is a JSON heal report; on `cured: false` its `failure` is a finding like replay's — `threw` means the revision itself threw (see `detail`), `empty`/`dry_extracts` mean it ran clean but did not cure, with `dry_fields` listing every field still dry or removed. The target is unchanged: fix the revision and call `heal_commit` again. `commit_error` is set when the cure validated but the file swap failed. Afterwards the session is the fresh validation session at the script's end state (all prior node ids are stale).\n\n" ++ lp.heal.heal_revision_prompt ++ "\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
+        .description = "Commit a healed script: the revised `script` is validated by replaying it in a fresh session, and only a validated cure replaces the file at `path` — the original is untouched otherwise. The cure target is the finding of your last file `replay` of `path`, narrowed to `fields` when given. The cure check is deterministic: `threw` needs a clean run, `empty` needs the return value to carry data, `dry_extracts` needs every listed field to come back with data (deleting the extract is not a cure). The response is a JSON heal report; on `cured: false` its `failure` is a finding like replay's — `threw` means the revision itself threw (see `detail`), `empty`/`dry_extracts` mean it ran clean but did not cure, with `dry_fields` listing every field still dry or removed. The target is unchanged: fix the revision and call `heal_commit` again. `commit_error` is set when the cure validated but the file swap failed. Afterwards the session is the fresh validation session at the script's end state (all prior node ids are stale).\n\n" ++ lp.heal.heal_revision_prompt ++ "\n\n" ++ browser_tools.save_synthesis_prompt ++ "\n\n" ++ browser_tools.save_script_rules,
         .inputSchema = heal_commit_schema,
     },
     .{
@@ -260,13 +260,13 @@ const ConsoleCollector = struct {
         if (scrubbed.len > remaining) self.truncated = true;
         // `line` lives in the runtime's per-call arena, which dies before the
         // report is sent.
-        const text = try string.capBytesOwned(self.arena, scrubbed, remaining);
+        const text = try self.arena.dupe(u8, string.capBytes(self.arena, scrubbed, remaining));
         try self.lines.append(self.arena, .{ .level = @tagName(method), .text = text });
         self.bytes += text.len;
     }
 };
 
-fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, source: []const u8, collector: *ConsoleCollector) !lp.replay.Classified {
+fn runOutcome(server: *Server, arena: std.mem.Allocator, path: []const u8, source: []const u8, collector: *ConsoleCollector) !lp.replay.RunOutcome {
     const active = server.active_session;
     const runtime = try ScriptRuntime.init(server.allocator, server.app, active.session, &active.node_registry);
     defer runtime.deinit();
@@ -276,12 +276,15 @@ fn runClassified(server: *Server, arena: std.mem.Allocator, path: []const u8, so
 }
 
 /// `guidance` is the caller's: `replay` attaches the heal flow, `heal_commit`
-/// (whose client already drives it) leaves it null.
+/// (whose client already drives it) leaves it null. `source` is echoed on a
+/// failed/suspicious run only when `report_source` — a client that sent the
+/// script itself gains nothing from reading it back.
 fn buildRunReport(
     arena: std.mem.Allocator,
     path: []const u8,
-    classified: lp.replay.Classified,
+    outcome: lp.replay.RunOutcome,
     collector: *const ConsoleCollector,
+    report_source: bool,
 ) error{OutOfMemory}!lp.replay.RunReport {
     var report: lp.replay.RunReport = .{
         .status = .ok,
@@ -289,21 +292,22 @@ fn buildRunReport(
         .console = collector.lines.items,
         .console_truncated = collector.truncated,
     };
-    switch (classified) {
-        .script_error => |script_error| {
+    switch (outcome.run) {
+        .threw => |failure| {
             report.status = .failed;
-            report.failure = script_error.failure;
-            report.source = try reportSource(arena, script_error.source, collector.env_pairs);
+            report.failure = failure;
         },
         .facts => |facts| {
-            report.returned = try lp.replay.returned(arena, facts);
+            report.returned = facts.returned;
             report.extracts = facts.extract_stats;
-            if (lp.replay.suspicionOf(arena, facts)) |suspicion| {
+            if (lp.replay.suspicionOf(arena, facts)) |failure| {
                 report.status = .suspicious;
-                report.failure = suspicion.failure;
-                report.source = try reportSource(arena, facts.source, collector.env_pairs);
+                report.failure = failure;
             }
         },
+    }
+    if (report_source and report.status != .ok) {
+        report.source = try reportSource(arena, outcome.source, collector.env_pairs);
     }
     return report;
 }
@@ -323,7 +327,7 @@ fn guardPathSafe(server: *Server, id: std.json.Value, path: []const u8) !bool {
 
 /// One classified run with its report: the shared middle of `replay` and
 /// `heal_commit`. Null after a bring-up failure or OOM has been reported.
-fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8) !?struct { classified: lp.replay.Classified, report: lp.replay.RunReport } {
+fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, path: []const u8, source: []const u8, report_source: bool) !?struct { outcome: lp.replay.RunOutcome, report: lp.replay.RunReport } {
     var collector: ConsoleCollector = .{
         .arena = arena,
         .env_pairs = browser_tools.lpEnvPairs(arena) catch {
@@ -331,18 +335,18 @@ fn runAndReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, p
             return null;
         },
     };
-    const classified = runClassified(server, arena, path, source, &collector) catch |err| {
+    const outcome = runOutcome(server, arena, path, source, &collector) catch |err| {
         try sendErrorContent(server, id, switch (err) {
             error.OutOfMemory => "out of memory",
             error.RuntimeInitFailed, error.TooManyContexts => "could not initialize the script runtime",
         });
         return null;
     };
-    const report = buildRunReport(arena, path, classified, &collector) catch {
+    const report = buildRunReport(arena, path, outcome, &collector, report_source) catch {
         try sendErrorContent(server, id, "out of memory");
         return null;
     };
-    return .{ .classified = classified, .report = report };
+    return .{ .outcome = outcome, .report = report };
 }
 
 fn sendReport(server: *Server, arena: std.mem.Allocator, id: std.json.Value, report: anytype) !void {
@@ -364,12 +368,8 @@ fn handleReplay(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
 
     // A failed script is still a successful replay: report it in-band, never
     // as a tool error — the report is the answer.
-    var run = (try runAndReport(server, arena, id, args.path, source)) orelse return;
-    run.report.guidance = switch (run.report.status) {
-        .ok => null,
-        .failed => lp.heal.replay_failed_guidance,
-        .suspicious => lp.heal.replay_suspicious_guidance,
-    };
+    var run = (try runAndReport(server, arena, id, args.path, source, args.script == null)) orelse return;
+    run.report.guidance = lp.heal.guidanceFor(run.report.status);
     if (args.script == null) {
         server.active_session.noteFileReplay(run.report) catch
             return sendErrorContent(server, id, "out of memory");
@@ -402,9 +402,9 @@ fn handleHealCommit(server: *Server, arena: std.mem.Allocator, id: std.json.Valu
         return sendErrorContent(server, id, msg);
     };
 
-    const run = (try runAndReport(server, arena, id, args.path, script)) orelse return;
+    const run = (try runAndReport(server, arena, id, args.path, script, false)) orelse return;
 
-    const outcome = lp.heal.validationOutcome(arena, args.path, script, target, run.classified) catch
+    const outcome = lp.heal.validationOutcome(arena, args.path, script, target, run.outcome) catch
         return sendErrorContent(server, id, "out of memory");
     if (outcome == .committed) entry.retireHealTarget(args.path);
     const report: lp.heal.HealReport = .init(outcome, run.report);
@@ -450,9 +450,7 @@ fn handleSessionList(server: *Server, arena: std.mem.Allocator, id: std.json.Val
             return sendErrorContent(server, id, "out of memory");
     }
 
-    const json = std.json.Stringify.valueAlloc(arena, list.items, .{ .emit_null_optional_fields = false }) catch
-        return sendErrorContent(server, id, "out of memory");
-    try sendToolResultText(server, id, json, false);
+    return sendReport(server, arena, id, list.items);
 }
 
 fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -1172,11 +1170,8 @@ test "MCP - replay rejects unsafe path" {
     const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
-    const msg =
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"replay","arguments":{"path":"../evil.js"}}}
-    ;
-    try router.handleMessage(server, testing.arena_allocator, msg);
-    try testing.expect(std.mem.indexOf(u8, out.written(), "must be relative") != null);
+    const text = try testCall(server, &out, "replay", .{ .path = "../evil.js" });
+    try testing.expect(std.mem.indexOf(u8, text, "must be relative") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
 }
 
@@ -1204,7 +1199,8 @@ test "MCP - replay: throwing script reports failed with failure and guidance" {
     const failure = report.object.get("failure").?.object;
     try testing.expectString("threw", failure.get("kind").?.string);
     try testing.expect(std.mem.indexOf(u8, failure.get("detail").?.string, "boom") != null);
-    try testing.expectString("throw new Error(\"boom\");", report.object.get("source").?.string);
+    // The client sent the script itself; echoing it back would only cost tokens.
+    try testing.expectEqual(null, report.object.get("source"));
     try testing.expect(std.mem.indexOf(u8, report.object.get("guidance").?.string, "heal_commit") != null);
 }
 
@@ -1224,7 +1220,7 @@ test "MCP - replay: empty return reports suspicious" {
 test "MCP - replay: dry extract reports suspicious with dry_fields" {
     defer testing.reset();
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage(test_fixture_url, &out.writer);
+    const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const script =
@@ -1271,6 +1267,8 @@ test "MCP - heal_commit: uncured candidate leaves the file untouched" {
 
     const run = try testCallReport(server, &out, "replay", .{ .path = path });
     try testing.expectString("suspicious", run.object.get("status").?.string);
+    // A file replay echoes what actually ran, so the client need not re-read it.
+    try testing.expectString("return [];\n", run.object.get("source").?.string);
 
     const report = try testCallReport(server, &out, "heal_commit", .{ .path = path, .script = "return [];" });
     try testing.expectEqual(false, report.object.get("cured").?.bool);
@@ -1300,7 +1298,7 @@ test "MCP - heal_commit: rejected without a failing replay of the path" {
 test "MCP - heal_commit: fix-by-deletion does not cure a dry_extracts target" {
     defer testing.reset();
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage(test_fixture_url, &out.writer);
+    const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-heal-deletion-test.js";
@@ -1344,7 +1342,7 @@ test "MCP - heal_commit: fix-by-deletion does not cure a dry_extracts target" {
 test "MCP - heal_commit: `fields` narrows a dry_extracts target, never widens it" {
     defer testing.reset();
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage(test_fixture_url, &out.writer);
+    const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-heal-narrow-test.js";
@@ -1400,7 +1398,7 @@ test "MCP - heal_commit: cure commits atomically and refreshes the baseline" {
 test "MCP - script lifecycle: save, replay broken, heal_commit, replay clean" {
     defer testing.reset();
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const server = try testLoadPage(test_fixture_url, &out.writer);
+    const server = try testLoadPage("about:blank", &out.writer);
     defer server.deinit();
 
     const path = "mcp-lifecycle-test.js";

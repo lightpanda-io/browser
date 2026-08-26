@@ -282,15 +282,15 @@ fn setObjectProperty(
 pub const RunResult = union(enum) {
     ok: Ok,
     err: []const u8,
-};
 
-pub const Ok = struct {
-    /// Display text of the value the script returned — objects and arrays as
-    /// JSON, so what the model sees is what a replay judges. Null when it
-    /// returned `undefined` or the display form couldn't be computed.
-    completion: ?[]const u8,
-    /// Per-(schema, field) extract tallies for the run.
-    extract_stats: []const extract.ExtractStat,
+    pub const Ok = struct {
+        /// Display text of the value the script returned — objects and arrays
+        /// as JSON, so what the model sees is what a replay judges. Null when
+        /// it returned `undefined` or the display form couldn't be computed.
+        completion: ?[]const u8,
+        /// Per-(schema, field) extract tallies for the run.
+        extract_stats: []const extract.ExtractStat,
+    };
 };
 
 /// Run script source in the agent context.
