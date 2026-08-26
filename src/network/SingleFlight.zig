@@ -106,6 +106,8 @@ fn makeTestTransfer(arena: *lp.Arena, client: *HttpClient, id: u32) !*Transfer {
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = HttpClient.noopShutdown,
         },

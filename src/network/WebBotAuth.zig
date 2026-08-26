@@ -244,6 +244,8 @@ test "signRequest: adds headers with correct names" {
         .req = .{
             .method = .GET,
             .url = "https://example.com/",
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = @import("HttpClient.zig").noopShutdown,
         },
