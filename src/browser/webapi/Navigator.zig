@@ -265,17 +265,15 @@ pub const JsApi = struct {
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
 
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
-    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
+    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .noop = true });
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
-
-    // window only
-    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
-    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
-    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
-    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
-    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .exposed = .window });
+    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});
+    pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{});
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{});
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{});
 };
 
 const testing = @import("../../testing.zig");

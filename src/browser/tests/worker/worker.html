@@ -270,6 +270,9 @@
       const r = data.results;
 
       testing.expectEqual(true, r.has_navigator);
+      testing.expectEqual(true, r.is_worker_navigator);
+      testing.expectEqual('[object WorkerNavigator]', r.to_string_tag);
+      testing.expectEqual(true, r.no_navigator_interface);
       testing.expectEqual(true, r.user_agent_matches_page);
       testing.expectEqual('Netscape', r.app_name);
       testing.expectTrue(r.platform.length > 0);
@@ -277,6 +280,7 @@
       testing.expectEqual(true, r.identity_stable);
 
       // Permissions (transitive: Permissions -> PermissionStatus)
+      testing.expectEqual(true, r.permissions_distinct);
       testing.expectEqual('geolocation', r.permission_name);
       testing.expectEqual('prompt', r.permission_state);
 
@@ -292,6 +296,8 @@
       testing.expectEqual(true, r.no_plugins);
       testing.expectEqual(true, r.no_register_protocol_handler);
       testing.expectEqual(true, r.no_model_context);
+      testing.expectEqual(true, r.no_send_beacon);
+      testing.expectEqual(true, r.no_cookie_enabled);
     });
   }
 </script>
