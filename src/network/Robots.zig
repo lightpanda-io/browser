@@ -92,35 +92,11 @@ pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 pub const RobotStore = struct {
     const RobotsEntry = union(enum) {
         present: Robots,
-        absent,
+        allowed,
+        disallowed,
     };
 
-    pub const RobotsMap = std.HashMapUnmanaged([]const u8, RobotsEntry, struct {
-        const Context = @This();
-
-        pub fn hash(_: Context, value: []const u8) u32 {
-            var key = value;
-            var buf: [128]u8 = undefined;
-            var h = std.hash.Wyhash.init(value.len);
-
-            while (key.len >= 128) {
-                const lower = std.ascii.lowerString(buf[0..], key[0..128]);
-                h.update(lower);
-                key = key[128..];
-            }
-
-            if (key.len > 0) {
-                const lower = std.ascii.lowerString(buf[0..key.len], key);
-                h.update(lower);
-            }
-
-            return @truncate(h.final());
-        }
-
-        pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
-            return std.ascii.eqlIgnoreCase(a, b);
-        }
-    }, 80);
+    pub const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
 
     allocator: std.mem.Allocator,
     map: RobotsMap,
@@ -141,7 +117,7 @@ pub const RobotStore = struct {
 
             switch (entry.value_ptr.*) {
                 .present => |*robots| robots.deinit(self.allocator),
-                .absent => {},
+                .allowed, .disallowed => {},
             }
         }
 
@@ -175,16 +151,26 @@ pub const RobotStore = struct {
         const entry = self.map.get(url) orelse return null;
         return switch (entry) {
             .present => |robots| robots.content_signals,
-            .absent => null,
+            .allowed, .disallowed => null,
         };
     }
 
-    pub fn putAbsent(self: *RobotStore, url: []const u8) !void {
+    /// This URL has no restrictions on crawling.
+    pub fn putAllowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
         const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .absent);
+        try self.map.put(self.allocator, duped, .allowed);
+    }
+
+    /// This URL is fully restricted from crawling.
+    pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
+        self.mutex.lockUncancelable(lp.io);
+        defer self.mutex.unlock(lp.io);
+
+        const duped = try self.allocator.dupe(u8, url);
+        try self.map.put(self.allocator, duped, .disallowed);
     }
 };
 

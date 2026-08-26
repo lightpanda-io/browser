@@ -182,16 +182,33 @@ fn walkInteractive(
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
+    if (root.is(Element)) |root_el| {
+        // root is outside of the tree walk, so check its visibility upfront.
+        if (!root_el.checkVisibilityCached(null, frame, .scan)) {
+            return &.{};
+        }
+    }
+
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
-        const html_el = el.is(Element.Html) orelse continue;
 
-        // Skip non-visual elements that are never user-interactive.
         switch (el.getTag()) {
-            .script, .style, .link, .meta, .head, .noscript, .template => continue,
+            .script, .style, .link, .meta, .head, .noscript, .template => {
+                // Skip non-visual elements (and their children) that are never
+                // user-interactive.
+                tw.skipChildren();
+                continue;
+            },
             else => {},
         }
+
+        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+            tw.skipChildren();
+            continue;
+        }
+
+        const html_el = el.is(Element.Html) orelse continue;
 
         const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
 
@@ -295,7 +312,7 @@ pub fn classifyInteractivity(
     }
 
     // 2. ARIA interactive role
-    if (el.getAttributeSafe(comptime .wrap("role"))) |role| {
+    if (explicitRole(el)) |role| {
         if (isInteractiveRole(role)) return .aria;
     }
 
@@ -367,9 +384,15 @@ pub fn isContentRole(role: []const u8) bool {
     return content_roles.has(lowered);
 }
 
+// ARIA `role` is a space-separated fallback list; the first token wins.
+pub fn explicitRole(el: *Element) ?[]const u8 {
+    const attr = el.getAttributeSafe(comptime .wrap("role")) orelse return null;
+    var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
+    return it.next();
+}
+
 fn getRole(el: *Element) ?[]const u8 {
-    // Explicit role attribute takes precedence
-    if (el.getAttributeSafe(comptime .wrap("role"))) |role| return role;
+    if (explicitRole(el)) |role| return role;
 
     // Implicit role from tag
     return switch (el.getTag()) {
@@ -563,6 +586,23 @@ test "browser.interactive: aria role" {
     try testing.expectEqual(InteractivityType.aria, elements[0].interactivity_type);
 }
 
+test "browser.interactive: aria role token list" {
+    const elements = try testInteractive(
+        \\<div role="switch checkbox">Fallback</div>
+        \\<div role=" button ">Padded</div>
+        \\<div role="">Empty</div>
+        \\<button role="  ">Blank</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(3, elements.len);
+    try testing.expectEqual("switch", elements[0].role.?);
+    try testing.expectEqual(InteractivityType.aria, elements[0].interactivity_type);
+    try testing.expectEqual("button", elements[1].role.?);
+    try testing.expectEqual(InteractivityType.aria, elements[1].interactivity_type);
+    try testing.expectEqual("button", elements[2].tag_name);
+    try testing.expectEqual("button", elements[2].role.?);
+}
+
 test "browser.interactive: contenteditable" {
     const elements = try testInteractive("<div contenteditable=\"true\">Edit me</div>");
     defer testing.test_session.closeAllPages();
@@ -606,6 +646,12 @@ test "browser.interactive: pointer-events none" {
     try testing.expectEqual(0, elements.len);
 }
 
+test "browser.interactive: pointer-events none is case-insensitive" {
+    const elements = try testInteractive("<button style=\"pointer-events: NONE;\">Click me</button>");
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(0, elements.len);
+}
+
 test "browser.interactive: non-interactive div" {
     const elements = try testInteractive("<div>Just text</div>");
     defer testing.test_session.closeAllPages();
@@ -633,4 +679,19 @@ test "browser.interactive: mixed elements" {
     );
     defer testing.test_session.closeAllPages();
     try testing.expectEqual(4, elements.len);
+}
+
+test "browser.interactive: hidden elements are skipped" {
+    const elements = try testInteractive(
+        \\<button style="display:none">Inline</button>
+        \\<button hidden>Attribute</button>
+        \\<div style="display:none"><a href="/x">Ancestor</a><input type="text"></div>
+        \\<div hidden><button>Ancestor attribute</button></div>
+        \\<svg style="display:none"><foreignObject><button>Foreign</button></foreignObject></svg>
+        \\<button>Visible</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("button", elements[0].tag_name);
+    try testing.expectEqual("Visible", elements[0].name.?);
 }

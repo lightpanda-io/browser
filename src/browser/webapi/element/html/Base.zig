@@ -1,3 +1,5 @@
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const URL = @import("../../../URL.zig");
 const Frame = @import("../../../Frame.zig");
@@ -10,21 +12,14 @@ const Base = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Base) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Base) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getTarget(self: *Base) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
-}
-
-pub fn setTarget(self: *Base, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
 pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
@@ -75,8 +70,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Base);
+
     pub const href = bridge.accessor(Base.getHref, Base.setHref, .{ .ce_reactions = true });
-    pub const target = bridge.accessor(Base.getTarget, Base.setTarget, .{ .ce_reactions = true });
+    pub const target = reflect.string("target");
 };
 
 const testing = @import("../../../../testing.zig");

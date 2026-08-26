@@ -1,3 +1,5 @@
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
@@ -8,10 +10,11 @@ const Font = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Font) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Font) *Node {
     return self.asElement().asNode();
@@ -28,22 +31,6 @@ pub fn setColor(self: *Font, value: js.Value, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("color"), .wrap(str), frame);
 }
 
-pub fn getFace(self: *Font) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("face")) orelse "";
-}
-
-pub fn setFace(self: *Font, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("face"), .wrap(value), frame);
-}
-
-pub fn getSize(self: *Font) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("size")) orelse "";
-}
-
-pub fn setSize(self: *Font, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Font);
 
@@ -53,9 +40,11 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(Font);
+
     pub const color = bridge.accessor(Font.getColor, Font.setColor, .{ .ce_reactions = true });
-    pub const face = bridge.accessor(Font.getFace, Font.setFace, .{ .ce_reactions = true });
-    pub const size = bridge.accessor(Font.getSize, Font.setSize, .{ .ce_reactions = true });
+    pub const face = reflect.string("face");
+    pub const size = reflect.string("size");
 };
 
 const testing = @import("../../../../testing.zig");

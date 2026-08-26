@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -27,18 +29,19 @@ const Video = @This();
 
 pub const Proto = Media;
 
-_proto: *Media,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *Media else void = undefined,
 
 pub fn asMedia(self: *Video) *Media {
-    return self._proto;
+    return Factory.protoOf(self);
 }
 
 pub fn asElement(self: *Video) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asConstElement(self: *const Video) *const Element {
-    return self._proto.asConstElement();
+    return Factory.protoOf(self).asConstElement();
 }
 
 pub fn asNode(self: *Video) *Node {
@@ -74,6 +77,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(Video);
+    pub const width = reflect.unsignedLong("width", .{});
+    pub const height = reflect.unsignedLong("height", .{});
+    pub const playsInline = reflect.boolean("playsinline");
 
     pub const poster = bridge.accessor(Video.getPoster, Video.setPoster, .{ .ce_reactions = true });
     pub const videoWidth = bridge.accessor(Video.getVideoWidth, null, .{});

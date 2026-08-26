@@ -156,3 +156,35 @@
     document.body.removeChild(cb);
   }
 </script>
+
+<label id="lab_meter"><meter id="meter_in_label"></meter></label>
+<label id="lab_div"><div id="div_in_label"><output id="output_in_label"></output></div></label>
+
+<script id="click_inside_control_is_not_forwarded">
+  {
+    // A click that starts on the labeled control (or inside it) already is
+    // the control's click; forwarding it must not bounce through the label
+    // forever. Browsers differ on whether it is forwarded once (Firefox: 2,
+    // Chrome and us: 1), so only boundedness is asserted, like the WPT.
+    const meter = $('#meter_in_label');
+    let clicks = 0;
+    meter.addEventListener('click', () => { clicks++; if (clicks > 10) throw new Error('label click loop'); });
+    meter.click();
+    testing.expectEqual(true, clicks >= 1 && clicks <= 2);
+
+    clicks = 0;
+    const span = document.createElement('span');
+    meter.appendChild(span);
+    span.click();
+    testing.expectEqual(true, clicks >= 1 && clicks <= 2);
+
+    // A click elsewhere inside the label still forwards once.
+    const output = $('#output_in_label');
+    clicks = 0;
+    output.addEventListener('click', () => { clicks++; });
+    $('#div_in_label').click();
+    testing.expectEqual(1, clicks);
+    $('#lab_div').click();
+    testing.expectEqual(2, clicks);
+  }
+</script>

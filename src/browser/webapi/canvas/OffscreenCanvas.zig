@@ -70,10 +70,13 @@ pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Executio
     return null;
 }
 
-/// Returns a Promise that resolves to a Blob containing the image.
-/// Since we have no actual rendering, this returns an empty blob.
-pub fn convertToBlob(_: *OffscreenCanvas, exec: *Execution) !js.Promise {
-    const blob = try Blob.init(null, null, exec);
+/// Resolves to the same blank PNG as `HTMLCanvasElement.toBlob`. A canvas
+/// with no pixels rejects with IndexSizeError, per spec.
+pub fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
+    if (!BlankPNG.hasBitmap(self._width, self._height)) {
+        return error.IndexSizeError;
+    }
+    const blob = try BlankPNG.blob(exec);
     return exec.js.local.?.resolvePromise(blob);
 }
 
@@ -82,6 +85,34 @@ pub fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
     // ImageBitmap not implemented yet, return null
     return null;
 }
+
+pub const BlankPNG = struct {
+    const mime = "image/png";
+
+    const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+
+    pub const data_url = "data:" ++ mime ++ ";base64," ++ base64;
+
+    pub const bytes = blk: {
+        const decoder = std.base64.standard.Decoder;
+        var buf: [decoder.calcSizeForSlice(base64) catch unreachable]u8 = undefined;
+        decoder.decode(&buf, base64) catch unreachable;
+        break :blk buf;
+    };
+
+    /// Largest canvas Chrome backs with a bitmap (16384 x 16384). Past that, and
+    /// at zero size, there are no pixels to serialize and the serializers answer
+    /// with the spec's "no data" values.
+    const max_area = 16384 * 16384;
+
+    pub fn hasBitmap(width: u32, height: u32) bool {
+        return width > 0 and height > 0 and @as(u64, width) * height <= max_area;
+    }
+
+    pub fn blob(exec: *js.Execution) !*Blob {
+        return Blob.initFromBytes(&BlankPNG.bytes, BlankPNG.mime, exec);
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OffscreenCanvas);

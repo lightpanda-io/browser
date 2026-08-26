@@ -17,8 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const Factory = @import("../../Factory.zig");
 const Frame = @import("../../Frame.zig");
 const Node = @import("../Node.zig");
 const CData = @import("../CData.zig");
@@ -29,7 +31,13 @@ const Text = @This();
 
 pub const Proto = CData;
 
-_proto: *CData,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
+
+// Takes a const text but returns a mutable proto; see Node.subtype.
+pub fn asCData(self: *const Text) *CData {
+    return Factory.protoOf(self);
+}
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
     const node = try Frame.node_factory.createTextNode(frame, if (str) |s| s.value else "");
@@ -38,13 +46,13 @@ pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
 
 // This Text node's own data (getWholeText below spans adjacent Text nodes).
 pub fn ownData(self: *const Text) []const u8 {
-    return self._proto._data.str();
+    return Factory.protoOf(self)._data.str();
 }
 
 // The concatenated data of the contiguous exclusive Text nodes (adjacent
 // Text siblings on both sides of this one), in tree order.
 pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
-    const node = self._proto.asNode();
+    const node = Factory.protoOf(self).asNode();
 
     var first = node;
     while (first.previousSibling()) |prev| {
@@ -57,7 +65,7 @@ pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     // Common case: no adjacent text nodes, return our data directly.
     const has_next_text = if (node.nextSibling()) |next| isExclusiveTextNode(next) else false;
     if (first == node and !has_next_text) {
-        return self._proto._data.str();
+        return Factory.protoOf(self)._data.str();
     }
 
     var buf: std.ArrayList(u8) = .empty;
@@ -74,11 +82,11 @@ fn isExclusiveTextNode(node: *Node) bool {
 }
 
 pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
-    return slotting.findSlot(self._proto.asNode(), true, frame);
+    return slotting.findSlot(Factory.protoOf(self).asNode(), true, frame);
 }
 
 pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
-    const data = self._proto._data.str();
+    const data = Factory.protoOf(self)._data.str();
 
     const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 
@@ -86,7 +94,7 @@ pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
     const new_node = try Frame.node_factory.createTextNode(frame, new_data);
     const new_text = new_node.as(Text);
 
-    const node = self._proto.asNode();
+    const node = Factory.protoOf(self).asNode();
 
     // Per DOM spec splitText: insert first (step 7a), then update ranges (7b-7e),
     // then truncate original node (step 8).
@@ -103,8 +111,8 @@ pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
     // Step 8: truncate original node via replaceData(offset, count, "").
     // Use replaceData instead of setData so live range updates fire
     // (matters for detached text nodes where steps 7b-7e were skipped).
-    const length = self._proto.getLength();
-    try self._proto.replaceData(offset, length - offset, "", frame);
+    const length = Factory.protoOf(self).getLength();
+    try Factory.protoOf(self).replaceData(offset, length - offset, "", frame);
 
     return new_text;
 }

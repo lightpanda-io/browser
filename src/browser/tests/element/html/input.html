@@ -53,7 +53,7 @@
     testing.expectEqual(5, input.size);
     input.size = -449;
     testing.expectEqual(20, input.size);
-    testing.expectError('Error: ZeroNotAllowed', () => { input.size = 0; });
+    testing.expectError('IndexSizeError', () => { input.size = 0; });
 
     testing.expectEqual('', input.src);
     input.src = 'foo'

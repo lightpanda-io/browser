@@ -20,10 +20,10 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
-const reflect = @import("../../reflect.zig");
 const Factory = @import("../../Factory.zig");
 
 const Frame = @import("../../Frame.zig");
+const reflection = @import("reflection.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const global_event_handlers = @import("../global_event_handlers.zig");
@@ -116,6 +116,10 @@ _proto_canary: if (lp.IS_DEBUG) *Element else void = undefined,
 //    which custom element class was invoked; look it up in the registry.
 pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
     if (frame._upgrading_element) |node| {
+        if (frame._upgrading_consumed) {
+            return error.TypeError;
+        }
+        frame._upgrading_consumed = true;
         return node.is(Element) orelse return error.IllegalConstructor;
     }
     return Frame.node_factory.constructCustomElement(frame, new_target);
@@ -127,6 +131,10 @@ pub fn construct(new_target: js.Function, frame: *Frame) !*Element {
 // constructors routed here.
 pub fn upgradeConstruct(frame: *Frame) !*Element {
     const node = frame._upgrading_element orelse return error.TypeError;
+    if (frame._upgrading_consumed) {
+        return error.TypeError;
+    }
+    frame._upgrading_consumed = true;
     return node.is(Element) orelse return error.TypeError;
 }
 
@@ -394,12 +402,18 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
         else => {},
     }
 
-    const event = (try @import("../event/MouseEvent.zig").init("click", .{
+    const flags = &self.asElement()._flags;
+    if (flags.click_in_progress) {
+        return;
+    }
+    flags.click_in_progress = true;
+    defer flags.click_in_progress = false;
+
+    const event = (try @import("../event/PointerEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = 0,
-        .clientY = 0,
+        .pointerId = -1,
     }, frame)).asEvent();
 
     // Keep the event alive past dispatch (which runs handlers/microtasks) so we
@@ -454,6 +468,30 @@ pub fn getTranslate(self: *HtmlElement) bool {
 
 pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("translate"), .wrap(if (translate) "yes" else "no"), frame);
+}
+
+// The draggable IDL attribute reflects the enumerated content attribute:
+// "true" => true, "false" => false, anything else (or no attribute) is the
+// auto state, which defaults to true only for <img> and <a> with an href.
+// https://html.spec.whatwg.org/multipage/dnd.html#the-draggable-attribute
+pub fn getDraggable(self: *HtmlElement) bool {
+    if (self.asElement().getAttributeSafe(comptime .wrap("draggable"))) |value| {
+        if (std.ascii.eqlIgnoreCase(value, "true")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(value, "false")) {
+            return false;
+        }
+    }
+    return switch (self._type) {
+        .img => true,
+        .anchor => self.asElement().getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
+}
+
+pub fn setDraggable(self: *HtmlElement, draggable: bool, frame: *Frame) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("draggable"), .wrap(if (draggable) "true" else "false"), frame);
 }
 
 // accessKeyLabel: the UA-assigned shortcut for a valid (single character)
@@ -513,11 +551,7 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    return reflectEnumerated(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
-}
-
-pub fn setDir(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
+    return reflection.enumeratedValue(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn getAccessKey(self: *HtmlElement) []const u8 {
@@ -1437,55 +1471,14 @@ pub fn getOnWheel(self: *HtmlElement, frame: *Frame) !?js.Function.Global {
     return self.getAttributeFunction(.onwheel, frame);
 }
 
-// HTML integer parsing is lax
+// HTML "rules for parsing integers", for callers that want an i32 (tabindex);
+// out-of-range values parse as failure.
 pub fn parseInteger(input: []const u8) ?i32 {
-    var normalized = std.mem.trimStart(u8, input, "\t\n\r\x0c ");
-    if (normalized.len == 0) {
-        return null;
-    }
-
-    var negative = false;
-    if (normalized[0] == '-') {
-        negative = true;
-        normalized = normalized[1..];
-    } else if (normalized[0] == '+') {
-        normalized = normalized[1..];
-    }
-
-    if (normalized.len == 0 or std.ascii.isDigit(normalized[0]) == false) {
-        return null;
-    }
-
-    var i: usize = 0;
-    var value: i64 = 0;
-    while (i < normalized.len and std.ascii.isDigit(normalized[i])) : (i += 1) {
-        value = value * 10 + (normalized[i] - '0');
-        if (value > 2147483648) {
-            return null;
-        }
-    }
-
-    if (negative) {
-        value = -value;
-    }
-
-    if (value < -2147483648 or value > 2147483647) {
+    const value = reflection.parseInteger(input) orelse return null;
+    if (value < std.math.minInt(i32) or value > std.math.maxInt(i32)) {
         return null;
     }
     return @intCast(value);
-}
-
-pub fn reflectEnumerated(
-    value: ?[]const u8,
-    keywords: []const []const u8,
-    missing: ?[]const u8,
-    invalid: ?[]const u8,
-) ?[]const u8 {
-    const v = value orelse return missing;
-    for (keywords) |keyword| {
-        if (std.ascii.eqlIgnoreCase(v, keyword)) return keyword;
-    }
-    return invalid;
 }
 
 const InnerTextState = struct {
@@ -1619,7 +1612,7 @@ fn handleChildElement(
     // is hidden through its parent. If you can el.innerText on an element, the
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
-    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
+    if (state.frame._style_manager.hasDisplayNone(he.asElement(), .materialize)) {
         return;
     }
 
@@ -1773,7 +1766,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
 
     if (right_node.parentNode()) |p| {
         // remove right node
-        frame.removeNode(p, right_node, .{ .will_be_reconnected = false });
+        frame.removeNode(p, right_node, .{ .reconnect_to = null });
     }
     return true;
 }
@@ -1811,6 +1804,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    const reflect = Element.Reflect(HtmlElement);
+    pub const inputMode = reflect.enumerated("inputmode", &.{ "none", "text", "tel", "url", "email", "numeric", "decimal", "search" }, .{});
+    pub const enterKeyHint = reflect.enumerated("enterkeyhint", &.{ "enter", "done", "go", "next", "previous", "search", "send" }, .{});
+
     pub const constructor = bridge.constructor(HtmlElement.construct, .{ .new_target = true });
     pub const upgrade_constructor = bridge.constructor(HtmlElement.upgradeConstruct, .{});
 
@@ -1833,7 +1830,8 @@ pub const JsApi = struct {
 
     pub const accessKey = bridge.accessor(HtmlElement.getAccessKey, HtmlElement.setAccessKey, .{ .ce_reactions = true });
     pub const autofocus = bridge.accessor(HtmlElement.getAutofocus, HtmlElement.setAutofocus, .{ .ce_reactions = true });
-    pub const dir = bridge.accessor(HtmlElement.getDir, HtmlElement.setDir, .{ .ce_reactions = true });
+    pub const dir = reflect.enumerated("dir", &.{ "ltr", "rtl", "auto" }, .{});
+    pub const draggable = bridge.accessor(HtmlElement.getDraggable, HtmlElement.setDraggable, .{ .ce_reactions = true });
     pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{ .ce_reactions = true });
     pub const translate = bridge.accessor(HtmlElement.getTranslate, HtmlElement.setTranslate, .{ .ce_reactions = true });
     pub const accessKeyLabel = bridge.accessor(HtmlElement.getAccessKeyLabel, null, .{});

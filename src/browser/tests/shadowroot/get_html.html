@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="matches_inner_html_without_options">
+{
+    const div = document.createElement('div');
+    div.innerHTML = '<span id="a">one</span><p class="x">two &amp; three</p>';
+    document.body.appendChild(div);
+
+    testing.expectEqual(div.innerHTML, div.getHTML());
+    testing.expectEqual(div.innerHTML, div.getHTML({ serializableShadowRoots: false }));
+    // A shadow host without qualification also matches innerHTML.
+    const host = document.createElement('div');
+    host.attachShadow({ mode: 'open' }).innerHTML = '<b>hidden</b>';
+    host.innerHTML = '<i>light</i>';
+    div.appendChild(host);
+    testing.expectEqual(div.innerHTML, div.getHTML());
+    testing.expectEqual(div.innerHTML, div.getHTML({ serializableShadowRoots: true }));
+
+    div.remove();
+}
+</script>
+
+<script id="serializable_shadow_roots">
+{
+    const wrapper = document.createElement('div');
+    const host = document.createElement('div');
+    wrapper.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open', serializable: true });
+    shadow.innerHTML = '<slot></slot>';
+    host.innerHTML = '<span>light</span>';
+
+    testing.expectEqual(
+        '<div><template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span></div>',
+        wrapper.getHTML({ serializableShadowRoots: true }));
+    // default is false
+    testing.expectEqual('<div><span>light</span></div>', wrapper.getHTML());
+}
+</script>
+
+<script id="flag_attributes_and_order">
+{
+    const wrapper = document.createElement('div');
+    const host = document.createElement('section');
+    wrapper.appendChild(host);
+    const shadow = host.attachShadow({
+        mode: 'closed',
+        serializable: true,
+        clonable: true,
+        delegatesFocus: true,
+    });
+    shadow.appendChild(document.createElement('slot'));
+
+    testing.expectEqual(
+        '<section><template shadowrootmode="closed" shadowrootdelegatesfocus="" shadowrootserializable="" shadowrootclonable=""><slot></slot></template></section>',
+        wrapper.getHTML({ serializableShadowRoots: true }));
+}
+</script>
+
+<script id="own_shadow_root_serializes_first">
+{
+    // getHTML called on the host itself: its own template precedes its light
+    // children.
+    const host = document.createElement('article');
+    const shadow = host.attachShadow({ mode: 'open', serializable: true });
+    shadow.innerHTML = '<slot></slot>';
+    host.innerHTML = '<span>light</span>';
+
+    testing.expectEqual(
+        '<template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span>',
+        host.getHTML({ serializableShadowRoots: true }));
+    testing.expectEqual(
+        '<template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span>',
+        host.getHTML({ shadowRoots: [shadow] }));
+    // ...but not when it doesn't qualify.
+    testing.expectEqual('<span>light</span>', host.getHTML());
+    testing.expectEqual(host.innerHTML, host.getHTML());
+}
+</script>
+
+<script id="explicit_shadow_roots_list">
+{
+    const wrapper = document.createElement('div');
+    const host = document.createElement('div');
+    wrapper.appendChild(host);
+    // Not serializable, closed — only reachable via the explicit list.
+    const shadow = host.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = '<em>secret</em>';
+
+    testing.expectEqual('<div></div>', wrapper.getHTML({ serializableShadowRoots: true }));
+    const expected = '<div><template shadowrootmode="closed"><em>secret</em></template></div>';
+    testing.expectEqual(expected, wrapper.getHTML({ shadowRoots: [shadow] }));
+    testing.expectEqual(expected, wrapper.getHTML({ serializableShadowRoots: false, shadowRoots: [shadow] }));
+    testing.expectEqual(expected, wrapper.getHTML({ serializableShadowRoots: true, shadowRoots: [shadow] }));
+}
+</script>
+
+<script id="shadow_root_get_html">
+{
+    // ShadowRoot.getHTML serializes the shadow root's own children.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const outer = host.attachShadow({ mode: 'open' });
+
+    const inner_host = document.createElement('div');
+    outer.appendChild(inner_host);
+    const inner = inner_host.attachShadow({ mode: 'open', serializable: true });
+    inner.innerHTML = '<slot></slot>';
+    inner_host.innerHTML = '<span>light</span>';
+
+    testing.expectEqual(
+        '<div><template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span></div>',
+        outer.getHTML({ serializableShadowRoots: true }));
+    testing.expectEqual(outer.innerHTML, outer.getHTML());
+    // The flag attribute reflects the root's serializable state even when it
+    // qualified via the explicit list.
+    testing.expectEqual(
+        '<div><template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span></div>',
+        outer.getHTML({ shadowRoots: [inner] }));
+
+    host.remove();
+}
+</script>
+
+<script id="nested_serializable_roots">
+{
+    const wrapper = document.createElement('div');
+    const host = document.createElement('div');
+    wrapper.appendChild(host);
+    const outer = host.attachShadow({ mode: 'open', serializable: true });
+
+    const inner_host = document.createElement('p');
+    outer.appendChild(inner_host);
+    const inner = inner_host.attachShadow({ mode: 'open', serializable: true });
+    inner.innerHTML = '<b>deep</b>';
+
+    testing.expectEqual(
+        '<div><template shadowrootmode="open" shadowrootserializable=""><p><template shadowrootmode="open" shadowrootserializable=""><b>deep</b></template></p></template></div>',
+        wrapper.getHTML({ serializableShadowRoots: true }));
+
+    // The explicit list does not descend for non-listed nested roots.
+    testing.expectEqual(
+        '<div><template shadowrootmode="open" shadowrootserializable=""><p></p></template></div>',
+        wrapper.getHTML({ shadowRoots: [outer] }));
+}
+</script>
+
+<script id="declarative_root_round_trip">
+{
+    const wrapper = document.createElement('div');
+    document.body.appendChild(wrapper);
+    const html = '<div><template shadowrootmode="open" shadowrootserializable=""><slot></slot></template><span>light</span></div>';
+    wrapper.setHTMLUnsafe(html);
+
+    testing.expectEqual(html, wrapper.getHTML({ serializableShadowRoots: true }));
+    testing.expectEqual('<div><span>light</span></div>', wrapper.getHTML());
+
+    wrapper.remove();
+}
+</script>

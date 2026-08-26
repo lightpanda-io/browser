@@ -240,7 +240,6 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
     for (http_client.baselineHeaders()) |hdr| {
         try conn.addHeader(allocator, hdr.name, hdr.value);
     }
-
     if (protocols.len > 0) {
         try conn.addHeader(allocator, "Sec-WebSocket-Protocol", try std.mem.join(allocator, ", ", protocols));
     }
@@ -803,7 +802,7 @@ fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyo
 }
 
 fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
-    lp.assert(buf.len >= 2, "WS short buffer", .{ .len = buf.len });
+    lp.assert(buf.len > 0, "WS short buffer", .{ .len = buf.len });
 
     const self = conn.transport.websocket;
 
@@ -820,22 +819,29 @@ fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
             const reason = self._close_reason;
 
             // Close frame: 2 bytes for code (big-endian) + optional reason
-            // Truncate reason to fit in buf (max 123 bytes per spec)
-            const reason_len: usize = @min(reason.len, 123, buf.len -| 2);
-            const frame_len = 2 + reason_len;
-            const to_copy = @min(buf.len, frame_len);
-
+            // (max 123 bytes per spec)
+            const reason_len: usize = @min(reason.len, 123);
             var close_payload: [125]u8 = undefined;
             close_payload[0] = @intCast((code >> 8) & 0xFF);
             close_payload[1] = @intCast(code & 0xFF);
             if (reason_len > 0) {
                 @memcpy(close_payload[2..][0..reason_len], reason[0..reason_len]);
             }
+            const payload = close_payload[0 .. 2 + reason_len];
 
-            try conn.wsStartFrame(.close, to_copy);
-            @memcpy(buf[0..to_copy], close_payload[0..to_copy]);
+            if (self._send_offset == 0) {
+                try conn.wsStartFrame(.close, payload.len);
+            }
 
-            _ = self._send_queue.orderedRemove(0);
+            const remaining = payload[self._send_offset..];
+            const to_copy = @min(remaining.len, buf.len);
+            @memcpy(buf[0..to_copy], remaining[0..to_copy]);
+
+            self._send_offset += to_copy;
+            if (self._send_offset == payload.len) {
+                _ = self._send_queue.orderedRemove(0);
+                self._send_offset = 0;
+            }
             return to_copy;
         },
         .text => |content| return self.writeContent(conn, buf, content, .text),

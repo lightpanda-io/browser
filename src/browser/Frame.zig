@@ -52,6 +52,7 @@ const VisualViewport = @import("webapi/VisualViewport.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMNodeIterator = @import("webapi/DOMNodeIterator.zig");
 const Worker = @import("webapi/Worker.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
 const MessagePort = @import("webapi/MessagePort.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -78,6 +79,7 @@ const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lo
 
 pub const parse = @import("frame/parse.zig");
 pub const preload = @import("frame/preload.zig");
+pub const resource_load = @import("frame/resource_load.zig");
 pub const observers = @import("frame/observers.zig");
 pub const user_input = @import("frame/user_input.zig");
 pub const node_factory = @import("frame/node_factory.zig");
@@ -136,9 +138,10 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 // that actually access these features via JavaScript, saving 24 bytes per element.
 _element_styles: Element.StyleLookup = .empty,
 // Computed-style views handed out by window.getComputedStyle. The computed
-// variant is a stateless lazy view, so one per element suffices — and Chrome
-// returns the same object for repeated calls, so identity is also conformance.
-_element_computed_styles: Element.StyleLookup = .empty,
+// variant is a stateless lazy view, so one per (element, pseudo-element)
+// suffices — and Chrome returns the same object for repeated calls, so
+// identity is also conformance.
+_element_computed_styles: Element.ComputedStyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,
@@ -230,6 +233,10 @@ _customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Ele
 // This is set when an element is being upgraded (constructor is called).
 // The constructor can access this to get the element being upgraded.
 _upgrading_element: ?*Node = null,
+
+// _upgrading_element can be consumed once. A second HTMLElement construction
+// during upgrade is a TypeError.
+_upgrading_consumed: bool = false,
 
 // Set when materializing the fragment parser's context element. The element
 // is never inserted into the tree so if its a custom element ,we must not run
@@ -467,6 +474,11 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
             }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .blocks_done = false });
         }
     }
+
+    if (parent == null) {
+        // no point reporting this for each child page
+        session.browser.reportJsHeap();
+    }
 }
 
 pub fn deinit(self: *Frame) void {
@@ -538,6 +550,9 @@ pub fn deinit(self: *Frame) void {
     const browser = page.session.browser;
 
     browser.http_client.abortOwner(&self._http_owner);
+    if (self.parent == null) {
+        browser.reportJsHeap();
+    }
 
     browser.env.destroyContext(self.js);
 
@@ -573,6 +588,16 @@ pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
+fn referrerSource(self: *const Frame) [:0]const u8 {
+    var frame = self;
+    while (std.mem.startsWith(u8, frame.url, "about:")) {
+        // about:blank and about:srcdoc documents aren't valid referrer sources,
+        // use the parents
+        frame = frame.parent orelse return frame.url;
+    }
+    return frame.url;
+}
+
 pub fn getTitle(self: *Frame) !?[]const u8 {
     if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
         return try html_doc.getTitle(self);
@@ -598,8 +623,9 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 // * referer
 pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
     const arena = transfer.arena.allocator();
-    if (try referrer.compute(arena, self.referrer_policy, self.url, transfer.req.url)) |ref| {
-        try transfer.addHeader("Referer", ref, .{});
+    if (try referrer.compute(arena, self.referrer_policy, self.referrerSource(), transfer.req.url)) |ref| {
+        try transfer.setHeader("Referer", ref, .{});
+        transfer.req.referrer_policy = self.referrer_policy;
     }
 }
 
@@ -613,15 +639,7 @@ pub fn getPinnedArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) 
 
 pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
-
-    // fastpath
-    if (!std.mem.startsWith(u8, url, current_origin)) {
-        return false;
-    }
-
-    // Starting here, at least protocols are equals.
-    // Compare hosts (domain:port) strictly
-    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
+    return URL.isSameOrigin(url, current_origin);
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -640,11 +658,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
 
     const http_client = &session.browser.http_client;
 
-    // Handle synthetic navigations: about:blank and blob: URLs
+    // Handle synthetic navigations: about:blank, about:srcdoc and blob: URLs
     const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
-    const is_blob = !is_about_blank and std.mem.startsWith(u8, request_url, "blob:");
+    const is_srcdoc = !is_about_blank and std.mem.eql(u8, "about:srcdoc", request_url);
+    const is_blob = !is_about_blank and !is_srcdoc and std.mem.startsWith(u8, request_url, "blob:");
 
-    if (is_about_blank or is_blob) {
+    if (is_about_blank or is_srcdoc or is_blob) {
         if (is_blob) {
             if (!Blob.urlBelongsToOrigin(request_url, opts.initiator_origin)) {
                 log.warn(.js, "invalid blob", .{ .url = request_url });
@@ -652,7 +671,12 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             }
         }
 
-        self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
+        self.url = if (is_about_blank)
+            "about:blank"
+        else if (is_srcdoc)
+            "about:srcdoc"
+        else
+            try self.arena.dupeZ(u8, request_url);
 
         // even though about:blank navigations may share the same _data_, we
         // have to do this to make sure window.location is at a unique _address_.
@@ -669,13 +693,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
         } else if (self.parent) |parent| {
             self.origin = parent.origin;
-            if (is_about_blank) {
+            if (is_about_blank or is_srcdoc) {
                 self.base_url = parent.base();
+                // about:blank and about:srcdoc documents inherit their
+                // creator's policy container, including the referrer policy
+                self.referrer_policy = parent.referrer_policy;
             }
         } else if (self.window._opener) |opener| {
             self.origin = opener._frame.origin;
             if (is_about_blank) {
                 self.base_url = opener._frame.base();
+                self.referrer_policy = opener._frame.referrer_policy;
             }
         } else {
             self.origin = null;
@@ -700,6 +728,30 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
             const html = try parse_arena.dupe(u8, blob._slice);
             var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
             parser.parse(html);
+        } else if (is_srcdoc) {
+            // The "response body" is the iframe's srcdoc attribute. Only an
+            // iframe can navigate here (e.g. location = 'about:srcdoc' on a
+            // root frame ends up with an empty document, like Chrome).
+            const content = blk: {
+                const iframe = self.iframe orelse break :blk "";
+                break :blk iframe.asElement().getAttributeSafe(comptime .wrap("srcdoc")) orelse "";
+            };
+            if (content.len == 0) {
+                // the parser emits nothing for an empty input; commit the
+                // same html/head/body scaffolding an empty srcdoc implies
+                self.document.injectBlank(self) catch |err| {
+                    log.err(.browser, "inject blank", .{ .err = err });
+                    return error.InjectBlankFailed;
+                };
+            } else {
+                const parse_arena = try self.getArena(content.len, "Frame.parseSrcdoc");
+                defer parse_arena.release();
+                // A script executed mid-parse can rewrite the srcdoc attribute,
+                // freeing the value under the parser; parse a copy.
+                const html = try parse_arena.dupe(u8, content);
+                var parser = Parser.init(parse_arena.allocator(), self.document.asNode(), self, .{ .allow_declarative_shadow = true });
+                parser.parse(html);
+            }
         } else {
             self.document.injectBlank(self) catch |err| {
                 log.err(.browser, "inject blank", .{ .err = err });
@@ -776,6 +828,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // don't cache top-level pages, most cases won't revisit this, and, if they
         // do, they probably don't want the cached version.
         .skip_cache = self.parent == null,
+        .throttle = self.parent == null,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = opts.initiator_url orelse self.url,
         .resource_type = .document,
@@ -792,16 +845,17 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     {
         // Ours until submit; clean up if header setup fails.
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
+        try transfer.setHeader("Accept", lp.Config.HttpHeaders.navigation_accept, .{});
         if (opts.header) |hdr| {
             // Arrives pre-joined ("Name: Value"), e.g. from the CLI.
             if (HttpClient.Header.parse(hdr)) |parsed| {
-                try transfer.addHeader(parsed.name, parsed.value, .{});
+                try transfer.setHeader(parsed.name, parsed.value, .{});
             }
         }
         if (opts.referer) |ref| {
-            try transfer.addHeader("Referer", ref, .{});
+            try transfer.setHeader("Referer", ref, .{});
             self._referrer = try self.arena.dupe(u8, ref);
+            transfer.req.referrer_policy = opts.referrer_policy;
         }
     }
 
@@ -868,7 +922,7 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 // might change inside the function. So the code should be explicit about the
 // frame that it's acting on.
 fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
-    const resolved_url, const is_about_blank = blk: {
+    const resolved_url, const is_about_something = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk .{ try arena.dupeZ(u8, request_url), false };
         }
@@ -876,6 +930,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         if (std.mem.eql(u8, request_url, "about:blank")) {
             // navigate will handle this special case
             break :blk .{ "about:blank", true };
+        }
+
+        if (std.mem.eql(u8, request_url, "about:srcdoc")) {
+            // like about:blank, a synchronous navigation handled by navigate
+            break :blk .{ "about:srcdoc", true };
         }
 
         // request_url isn't a "complete" URL, so it has to be resolved with the
@@ -963,12 +1022,14 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // runs (processRootQueuedNavigation rebuilds the Page in-place), so
     // allocate from the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
-    if (std.mem.startsWith(u8, originator.url, "http")) {
+    const referrer_source = originator.referrerSource();
+    if (std.mem.startsWith(u8, referrer_source, "http")) {
         if (nav_opts.referer == null) {
-            nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, originator.url, resolved_url);
+            nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, referrer_source, resolved_url);
+            nav_opts.referrer_policy = originator.referrer_policy;
         }
         if (nav_opts.initiator_url == null) {
-            nav_opts.initiator_url = try arena.dupeZ(u8, originator.url);
+            nav_opts.initiator_url = try arena.dupeZ(u8, referrer_source);
         }
     }
     if (nav_opts.initiator_origin == null) {
@@ -982,7 +1043,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         .opts = nav_opts,
         .arena = arena,
         .url = resolved_url,
-        .is_about_blank = is_about_blank,
+        .is_about_something = is_about_something,
         .navigation_type = std.meta.activeTag(nt),
     };
 
@@ -1109,8 +1170,8 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
         .html => true,
         else => false,
     };
-    if (parsing_html and iframe._src.len > 0) {
-        self.queueElementEvent(iframe._proto, .load) catch |err| {
+    if (parsing_html and (iframe._src.len > 0 or iframe.hasSrcdoc())) {
+        self.queueElementEvent(Factory.protoOf(iframe), .load) catch |err| {
             log.err(.frame, "iframe queue load", .{ .err = err, .url = iframe._src });
         };
         if (delays_load) {
@@ -1138,7 +1199,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
     }
 }
 
-fn pendingLoadCompleted(self: *Frame) void {
+pub fn pendingLoadCompleted(self: *Frame) void {
     const pending_loads = self._pending_loads;
     if (pending_loads == 1) {
         self._pending_loads = 0;
@@ -1170,6 +1231,10 @@ pub fn documentIsComplete(self: *Frame) void {
         error.JsException => {}, // already logged
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
+
+    if (self.parent == null) {
+        self._session.browser.reportJsHeap();
+    }
 }
 
 fn _documentIsComplete(self: *Frame) !void {
@@ -1254,6 +1319,13 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
             no.body = null;
             no.header = null;
         }
+
+        // The Referer may have been recomputed at each hop; document.referrer
+        // reports what the final request actually sent.
+        self._referrer = if (transfer.findRequestHeader("referer")) |ref|
+            try self.arena.dupe(u8, ref)
+        else
+            null;
     }
 
     // Init new location.
@@ -1537,16 +1609,18 @@ fn frameDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     switch (self._parse_state) {
         .html => |*html| try html.buffer.appendSlice(html.arena.allocator(), data),
         .text => |*buf| {
-            // we have to escape the data...
+            // The payload is text, not markup: `&` has to be escaped too, or
+            // the parser turns a literal "&#9733;" in the body into a star.
             var v = data;
             while (v.len > 0) {
-                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>' }) orelse {
+                const index = std.mem.indexOfAnyPos(u8, v, 0, &.{ '<', '>', '&' }) orelse {
                     return buf.appendSlice(self.arena, v);
                 };
                 try buf.appendSlice(self.arena, v[0..index]);
                 switch (v[index]) {
                     '<' => try buf.appendSlice(self.arena, "&lt;"),
                     '>' => try buf.appendSlice(self.arena, "&gt;"),
+                    '&' => try buf.appendSlice(self.arena, "&amp;"),
                     else => unreachable,
                 }
                 v = v[index + 1 ..];
@@ -1736,12 +1810,17 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
         return;
     };
 }
+
 pub fn isGoingAway(self: *const Frame) bool {
+    return self.js.env.terminatePending() or self.hasQueuedNavigation();
+}
+
+fn hasQueuedNavigation(self: *const Frame) bool {
     if (self._queued_navigation != null) {
         return true;
     }
     const parent = self.parent orelse return false;
-    return parent.isGoingAway();
+    return parent.hasQueuedNavigation();
 }
 
 pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *Element.Html.Script) !void {
@@ -1782,15 +1861,23 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         return;
     }
 
-    var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
-    if (src.len == 0) {
-        src = "about:blank";
-    }
+    const src = blk: {
+        if (iframe.hasSrcdoc()) {
+            // srcdoc takes precedence over src, even when empty
+            break :blk "about:srcdoc";
+        }
 
-    if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
-        // per spec, if we can't parse the URL, we should load about:blank
-        src = "about:blank";
-    }
+        var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
+        if (src.len == 0) {
+            src = "about:blank";
+        }
+
+        if (URL.isCompleteHTTPUrl(src) and !URL.canParse(src, null)) {
+            // per spec, if we can't parse the URL, we should load about:blank
+            src = "about:blank";
+        }
+        break :blk src;
+    };
 
     if (iframe._window != null) {
         // This frame is being re-navigated. We need to do this through a
@@ -1834,6 +1921,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         if (std.mem.eql(u8, src, "about:blank")) {
             break :blk "about:blank"; // navigate will handle this special case
         }
+        if (std.mem.eql(u8, src, "about:srcdoc")) {
+            break :blk "about:srcdoc"; // navigate will handle this special case
+        }
         break :blk try URL.resolve(
             self.call_arena, // ok to use, frame.navigate dupes this
             self.base(),
@@ -1854,12 +1944,15 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
 
     // Iframe's initial src request carries the parent's URL as Referer
     // (subject to the parent's Referrer-Policy) and as the SameSite
-    // initiator. Parent frame outlives this navigate() call, so the slice
-    // is safe; navigate dupes what it keeps.
-    const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, self.url, "http")) self.url else null;
+    // initiator. When this frame is itself an about: document, the nearest
+    // ancestor's URL is the referrer source. Parent frame outlives this
+    // navigate() call, so the slice is safe; navigate dupes what it keeps.
+    const referrer_source = self.referrerSource();
+    const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, referrer_source, "http")) referrer_source else null;
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
-        .referer = try referrer.compute(self.call_arena, self.referrer_policy, self.url, url),
+        .referer = try referrer.compute(self.call_arena, self.referrer_policy, referrer_source, url),
+        .referrer_policy = self.referrer_policy,
         .initiator_url = parent_url,
         .initiator_origin = self.origin,
     }) catch |err| {
@@ -1988,40 +2081,52 @@ pub fn domChanged(self: *Frame) void {
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
 
 fn getElementIdMap(frame: *Frame, node: *Node) ElementIdMaps {
-    // Walk up the tree checking for ShadowRoot and tracking the root
-    var current = node;
-    while (true) {
-        if (current.is(ShadowRoot)) |shadow_root| {
-            return .{
-                .lookup = &shadow_root._elements_by_id,
-                .removed_ids = &shadow_root._removed_ids,
-            };
+    return idMapsForRoot(node.getRootNode(.{})) orelse {
+        // Detached nodes should not have IDs registered
+        if (lp.IS_DEBUG) {
+            std.debug.assert(false);
         }
-
-        const parent = current._parent orelse {
-            if (current._type == .document) {
-                const doc = current.subtype(Document);
-                return .{
-                    .lookup = &doc._elements_by_id,
-                    .removed_ids = &doc._removed_ids,
-                };
-            }
-            // Detached nodes should not have IDs registered
-            if (lp.IS_DEBUG) {
-                std.debug.assert(false);
-            }
-            return .{
-                .lookup = &frame.document._elements_by_id,
-                .removed_ids = &frame.document._removed_ids,
-            };
+        return .{
+            .lookup = &frame.document._elements_by_id,
+            .removed_ids = &frame.document._removed_ids,
         };
+    };
+}
 
-        current = parent;
+// Ids are registered per tree scope: a ShadowRoot or a Document each own a
+// map. A root that is neither (a detached tree) has none.
+fn idMapsForRoot(root: *Node) ?ElementIdMaps {
+    if (root.is(ShadowRoot)) |shadow_root| {
+        return .{
+            .lookup = &shadow_root._elements_by_id,
+            .removed_ids = &shadow_root._removed_ids,
+        };
     }
+    if (root._type == .document) {
+        const doc = root.subtype(Document);
+        return .{
+            .lookup = &doc._elements_by_id,
+            .removed_ids = &doc._removed_ids,
+        };
+    }
+    return null;
+}
+
+// Node.isConnected re-walks the ancestor chain; callers here already have the
+// root in hand.
+fn rootIsConnected(root: *Node) bool {
+    if (root._type == .document) {
+        return true;
+    }
+    const shadow_root = root.is(ShadowRoot) orelse return false;
+    return shadow_root._host.asNode().isConnected();
 }
 
 pub fn addElementId(self: *Frame, parent: *Node, element: *Element, id: []const u8) !void {
-    var id_maps = self.getElementIdMap(parent);
+    return self.addElementIdWithMaps(self.getElementIdMap(parent), element, id);
+}
+
+fn addElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, element: *Element, id: []const u8) !void {
     const gop = try id_maps.lookup.getOrPut(self.arena, id);
     if (!gop.found_existing) {
         gop.value_ptr.* = element;
@@ -2061,7 +2166,7 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     }
     // Detached subtree (root is neither a Document nor a ShadowRoot): no id map
     // exists, so scan it.
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
         if (std.mem.eql(u8, element_id, id)) {
@@ -2167,7 +2272,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     // this feature is disabled by default, and can be turned on via a command
     // line flag or via an CDP command
     if (session.load_external_stylesheets == false) {
-        return self.queueLoad(link._proto);
+        return self.queueLoad(Factory.protoOf(link));
     }
 
     // Fragment-parsed links (innerHTML, DOMParser, ...) may not be attached.
@@ -2211,7 +2316,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
     {
         errdefer transfer.deinit();
-        try transfer.addHeader("Accept", "text/css,*/*;q=0.1", .{});
+        try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
         try self.headersForRequest(transfer);
     }
 
@@ -2370,12 +2475,8 @@ pub fn notifyNetworkAlmostIdle(self: *Frame) void {
 // "insert this fully-formed node as a new last child of parent" entry point.
 pub fn appendNew(self: *Frame, parent: *Node, child: *Node) !void {
     lp.assert(child._parent == null, "Frame.appendNew", .{});
-    try self._insertNodeRelative(true, parent, child, .append, .{
-        // this opts has no meaning since we're passing `true` as the first
-        // parameter, which indicates this comes from the parser, and has its
-        // own special processing. Still, set it to be clear.
-        .child_already_connected = false,
-    });
+    // opts is meaningless when from_parser (the first param) is true.
+    try self._insertNodeRelative(true, parent, child, .append, .{});
 }
 
 // called from the parser when the node and all its children have been added
@@ -2405,6 +2506,12 @@ pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner:
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
         Element.Html.Custom.enqueueAdoptedCallbackOnElement(el, old_owner, new_owner, self);
+
+        // The shadow tree follows its host across documents: re-own it and
+        // run its adopted reactions too (spec: shadow-including descendants).
+        if (el.hostedShadowRoot(self)) |shadow_root| {
+            try self.adoptNodeTree(shadow_root.asNode(), old_owner, new_owner);
+        }
     }
 
     var it = node.childrenIterator();
@@ -2442,7 +2549,12 @@ pub fn dupeSSO(self: *Frame, value: []const u8) !String {
 }
 
 const RemoveNodeOpts = struct {
-    will_be_reconnected: bool,
+    // The parent the child is going to be attached to after it is removed. null
+    // if it isn't AND null if the parent is cross-document. Why cross-document?
+    // because a remove + add-to-another-document behaves like a distinct remove
+    // + add. Where as a remove+add-to-the-same-document behaves more like a
+    // "move", e.g. it doesn't require idmap changes NOR disconnectedCallbacks.
+    reconnect_to: ?*Node,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
 };
@@ -2467,10 +2579,10 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         null;
 
     parent.unlink(child);
-    // grab this before we null the parent
-    const was_connected = child.isConnected();
-    // Capture the ID map before disconnecting, so we can remove IDs from the correct document
-    const id_maps = if (was_connected) self.getElementIdMap(child) else null;
+
+    const old_root = child.getRootNode(.{});
+    const was_connected = rootIsConnected(old_root);
+    const old_id_maps = idMapsForRoot(old_root);
 
     child._parent = null;
 
@@ -2486,29 +2598,58 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
         observers.notifyChildListChange(self, parent, &.{}, &removed, previous_sibling, next_sibling);
     }
 
-    if (opts.will_be_reconnected) {
-        // We might be removing the node only to re-insert it. If the node will
-        // remain connected, we can skip the expensive process of fully
-        // disconnecting it.
-        return;
+    if (opts.reconnect_to) |dest| {
+        const dest_root = dest.getRootNode(.{});
+        if (dest_root == old_root) {
+            // reconnected under the same root, nothing to do (e.g. if it WAS in the
+            // idmap, it'll stay there)
+            return;
+        }
+        if (rootIsConnected(dest_root)) {
+            // The node is going to be reconnected to a different root which IS
+            // connected, we need to remove it from the old root's idmap.
+            if (old_id_maps) |id_maps| {
+                self.unregisterSubtreeIds(child, id_maps);
+            }
+            // but it isn't a REAL disconnect (more like a move), so there's
+            // nothing else to do, e.g. no disconnectedCallback
+            return;
+        }
+        // The destination is detached: this is a real disconnect.
     }
 
     if (was_connected == false) {
-        // If the child wasn't connected, then there should be nothing left for
-        // us to do
+        // the node wasn't connected, but it could still have lived in a shadow
+        // root's id map
+        if (old_id_maps) |id_maps| {
+            self.unregisterSubtreeIds(child, id_maps);
+        }
+        // and because it wasn't disconnected, there's nothing else to do.
         return;
+    }
+
+    // Focus goes with the removed subtree. The focused element can be inside a
+    // shadow tree hanging off it, which the walk below doesn't descend into,
+    // so ask it directly whether it's still in the document.
+    if (self.document._active_element) |active| {
+        if (active.asNode().isConnected() == false) {
+            self.document._active_element = null;
+        }
     }
 
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
     // the ID map and invoking disconnectedCallback for custom elements
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
+    var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
-            self.removeElementIdWithMaps(id_maps.?, id);
+            self.removeElementIdWithMaps(old_id_maps.?, id);
         }
 
         Element.Html.Custom.enqueueDisconnectedCallbackOnElement(el, self);
+        Element.Html.Custom.enqueueShadowTreeCallbacks(el, .disconnected, self) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
 
         popover.removeFromOpen(el, self);
 
@@ -2539,6 +2680,17 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     }
 }
 
+// The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
+// descendants (ids nested under a shadow DOM are owned by that shadow DOM).
+fn unregisterSubtreeIds(self: *Frame, node: *Node, id_maps: ElementIdMaps) void {
+    var tw = TreeWalker.Full.Elements.init(node, .{});
+    while (tw.next()) |el| {
+        if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+            self.removeElementIdWithMaps(id_maps, id);
+        }
+    }
+}
+
 pub fn appendNode(self: *Frame, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, .append, opts);
 }
@@ -2562,26 +2714,39 @@ pub const MoveChildrenNotify = enum { records, silent_parent };
 // pay attention to suppressObservers".
 pub fn moveAllChildren(self: *Frame, source: *Node, parent: *Node, ref_node: ?*Node, notify_mode: MoveChildrenNotify) !void {
     self.domChanged();
-    const dest_connected = parent.isConnected();
     const notify = observers.hasMutationObservers(self);
 
     var moved: std.ArrayList(*Node) = .empty;
     const previous_sibling = if (ref_node) |ref| ref.previousSibling() else parent.lastChild();
 
+    // Every child shares source's root, and source itself doesn't move.
+    const previous_root = source.getRootNode(.{});
+
+    // Fragment insertion adopts like single-node insertion does. Every child
+    // shares source's owner document, so one comparison covers them all.
+    const source_owner = source.ownerDocument(self);
+    const parent_owner = parent.ownerDocument(self) orelse parent.as(Document);
+    const adopting = source_owner != null and source_owner.? != parent_owner;
+
     var it = source.childrenIterator();
     while (it.next()) |child| {
         try moved.append(self.call_arena, child);
-        const child_was_connected = child.isConnected();
-        self.removeNode(source, child, .{ .will_be_reconnected = dest_connected, .notify_observers = false });
+        self.removeNode(source, child, .{
+            .reconnect_to = if (adopting) null else parent,
+            .notify_observers = false,
+        });
+        if (adopting) {
+            try self.adoptNodeTree(child, source_owner.?, parent_owner);
+        }
         if (ref_node) |ref| {
             try self.insertNodeRelative(
                 parent,
                 child,
                 .{ .before = ref },
-                .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false },
+                .{ .previous_root = previous_root, .adopting_to_new_document = adopting, .notify_observers = false, .run_ready = false },
             );
         } else {
-            try self.appendNode(parent, child, .{ .child_already_connected = child_was_connected, .notify_observers = false, .run_ready = false });
+            try self.appendNode(parent, child, .{ .previous_root = previous_root, .adopting_to_new_document = adopting, .notify_observers = false, .run_ready = false });
         }
     }
 
@@ -2615,7 +2780,10 @@ const InsertNodeRelative = union(enum) {
     before: *Node,
 };
 const InsertNodeOpts = struct {
-    child_already_connected: bool = false,
+    // The other half of RemoveNodeOpts.reconnect_to. This is the root (not
+    // parent) of the node before it was moved. This is null when the operation
+    // isn't part of a "move" (remove+add) but was a new/cloned child.
+    previous_root: ?*Node = null,
     adopting_to_new_document: bool = false,
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
@@ -2697,7 +2865,8 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         return;
     }
 
-    const parent_is_connected = parent.isConnected();
+    const parent_root = parent.getRootNode(.{});
+    const parent_is_connected = rootIsConnected(parent_root);
 
     // Mutation records queue synchronously at insertion, before any script
     // runs: an inserted script can observe its own record via takeRecords.
@@ -2722,41 +2891,52 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         try self.nodeIsReadySubtree(child);
     }
 
-    if (opts.child_already_connected and !opts.adopting_to_new_document) {
-        // The child is already connected in the same document, we don't have to reconnect it.
-        // On cross-document adoption the child has already fired
-        // disconnectedCallback against the old tree and must re-fire
-        // connectedCallback for the new tree, so we fall through.
+    // nothing to register, and nothing can become connected.
+    const new_id_maps = idMapsForRoot(parent_root) orelse {
+        // The destination has no id scope, it's detached and outside of a
+        // shadow root. There's nothing left to do.
         return;
+    };
+
+    if (!opts.adopting_to_new_document) {
+        if (opts.previous_root) |previous_root| {
+            if (previous_root == parent_root) {
+                // The child already belongs to this scope; nothing to do.
+                return;
+            }
+            if (rootIsConnected(previous_root)) {
+                // The child is being moved to a different scope, but was and
+                // remains connected. We need to move it (and any children)'s
+                // id to the new parent...
+                var tw = TreeWalker.Full.Elements.init(child, .{});
+                while (tw.next()) |el| {
+                    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+                        try self.addElementIdWithMaps(new_id_maps, el, id);
+                    }
+                }
+                // but beause it was and stays connected, we don't trigger
+                // a connectedCallback.
+                return;
+            }
+            // The child was in a detached tree (removeNode already cleaned a
+            // detached-host shadow map, if any): a fresh connect, below.
+        }
     }
 
-    const parent_in_shadow = parent.is(ShadowRoot) != null or parent.isInShadowTree();
+    // The child was not connected or is being adopted. We need to move the id
+    // (of it and its chidlren) and if it is newly becoming connected, invoke
+    // connectedCallback.
+    const should_invoke_connected = parent_is_connected;
 
-    if (!parent_in_shadow and !parent_is_connected) {
-        return;
-    }
-
-    // If we're here, it means either:
-    // 1. A disconnected child became connected (parent.isConnected() == true)
-    // 2. Child is being added to a shadow tree (parent_in_shadow == true)
-    // In both cases, we need to update ID maps and invoke callbacks
-
-    // Only invoke connectedCallback if the root child is transitioning from
-    // disconnected to connected. When that happens, all descendants should also
-    // get connectedCallback invoked (they're becoming connected as a group).
-    // Cross-document adoption also counts as a transition: the element fired
-    // disconnectedCallback against the old tree during removeNode and must
-    // now fire connectedCallback against the new tree.
-    const should_invoke_connected = parent_is_connected and (!opts.child_already_connected or opts.adopting_to_new_document);
-
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
+    var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
-            try self.addElementId(el.asNode()._parent.?, el, id);
+            try self.addElementIdWithMaps(new_id_maps, el, id);
         }
 
         if (should_invoke_connected) {
             try Element.Html.Custom.enqueueConnectedCallbackOnElement(false, el, self);
+            try Element.Html.Custom.enqueueShadowTreeCallbacks(el, .connected, self);
         }
     }
 }
@@ -2793,6 +2973,9 @@ pub fn attributeChange(self: *Frame, element: *Element, name: String, value: Str
     } else if (name.eql(comptime .wrap("popover"))) {
         const old = if (old_value) |o| o.str() else null;
         popover.attributeChanged(element, old, value.str(), self);
+    } else if (name.eql(comptime .wrap("style"))) {
+        element._flags.has_inline_style = true;
+        self.styleAttributeChanged(element, value.str());
     }
 }
 
@@ -2814,7 +2997,16 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
         }
     } else if (name.eql(comptime .wrap("popover"))) {
         popover.attributeChanged(element, old_value.str(), null, self);
+    } else if (name.eql(comptime .wrap("style"))) {
+        self.styleAttributeChanged(element, null);
     }
+}
+
+fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
+    const style = element.getStyle(self) orelse return;
+    style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
+        log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
+    };
 }
 
 pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
@@ -2828,11 +3020,15 @@ pub fn signalSlotChange(self: *Frame, slot: *Element.Html.Slot) void {
 }
 
 pub fn getCustomizedBuiltInDefinition(self: *Frame, element: *Element) ?*CustomElementDefinition {
+    if (!element._flags.customized_builtin) {
+        return null;
+    }
     return self._customized_builtin_definitions.get(element);
 }
 
 pub fn setCustomizedBuiltInDefinition(self: *Frame, element: *Element, definition: *CustomElementDefinition) !void {
     try self._customized_builtin_definitions.put(self.arena, element, definition);
+    element._flags.customized_builtin = true;
 }
 
 // --- Live range update methods (DOM spec §4.2.3, §4.2.4, §4.7, §4.8) ---
@@ -2894,7 +3090,7 @@ fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
     // connectivity.
     var elements: std.ArrayList(*Node) = .empty;
-    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
         try elements.append(self.call_arena, el.asNode());
     }
@@ -3116,6 +3312,10 @@ pub const NavigateOpts = struct {
     // anchor click / form submit / location.href navigations carry a Referer.
     // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
     referer: ?[]const u8 = null,
+    // The originating frame's policy, paired with `referer` so redirect hops
+    // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
+    // the Referer untouched across redirects.
+    referrer_policy: ?referrer.Policy = null,
     // The URL of the document that initiated this navigation, used as the
     // "site for cookies" when computing SameSite. Distinct from `referer`
     // because a Referrer-Policy can suppress the Referer header without
@@ -3154,7 +3354,7 @@ pub const QueuedNavigation = struct {
     arena: *lp.Arena,
     url: [:0]const u8,
     opts: NavigateOpts,
-    is_about_blank: bool,
+    is_about_something: bool, // about:blank or about:srcdoc
     navigation_type: NavigationType,
 };
 
@@ -3208,9 +3408,11 @@ pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
 fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
     for (frame.child_frames.items) |f| {
         if (f.iframe) |iframe| {
-            const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-            if (std.mem.eql(u8, frame_name, name)) {
-                return f;
+            if (iframe.asNode().isConnected()) {
+                const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+                if (std.mem.eql(u8, frame_name, name)) {
+                    return f;
+                }
             }
         }
         // Recursively search child frames
@@ -3323,7 +3525,20 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     // The submitter can be an input box (if enter was entered on the box)
     // I don't think this is technically correct, but FormData handles it ok
-    const form_data = try FormData.init(form, submitter_, &self.js.execution);
+    // Resolved before the entry list is built: a hidden `_charset_` field
+    // takes the submission encoding's name as its value.
+    const charset: []const u8 = blk: {
+        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
+            // Normalize to canonical encoding name
+            const info = h5e.encoding_for_label(ac.ptr, ac.len);
+            if (info.isValid()) {
+                break :blk info.name();
+            }
+        }
+        break :blk self.charset;
+    };
+
+    const form_data = try FormData.initWithCharset(form, submitter_, charset, &self.js.execution);
     form_data.acquireRef();
     defer form_data.releaseRef(self._page);
 
@@ -3375,18 +3590,6 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     const arena = try self._session.getArena(.medium, "submitForm");
     errdefer arena.release();
 
-    // Get charset from accept-charset attribute or fall back to document charset
-    const charset: []const u8 = blk: {
-        if (form_element.getAttributeSafe(.wrap("accept-charset"))) |ac| {
-            // Normalize to canonical encoding name
-            const info = h5e.encoding_for_label(ac.ptr, ac.len);
-            if (info.isValid()) {
-                break :blk info.name();
-            }
-        }
-        break :blk self.charset;
-    };
-
     var boundary_buf: [36]u8 = undefined;
     // GET ignores enctype per HTML spec; only resolve the union for POST.
     const encoding: FormData.EncType = blk: {
@@ -3403,7 +3606,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     };
 
     var buf = std.Io.Writer.Allocating.init(arena.allocator());
-    try form_data.write(.{ .encoding = encoding, .charset = charset, .allocator = arena.allocator() }, &buf.writer);
+    try form_data.write(arena.allocator(), .{ .encoding = encoding, .charset = charset }, &buf.writer);
 
     var action = blk: {
         if (submit_button) |s| {
@@ -3505,8 +3708,8 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo#hash"));
     try testing.expectEqual(true, frame.isSameOrigin("https://origin.com/foo?q=1#hash"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
-    // FIXME try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://foo:bar@origin.com"));
+    try testing.expectEqual(true, frame.isSameOrigin("https://origin.com:443/foo"));
 
     try testing.expectEqual(false, frame.isSameOrigin("http://origin.com/")); // another proto
     try testing.expectEqual(false, frame.isSameOrigin("https://origin.com:123/")); // another port
@@ -3557,4 +3760,56 @@ test "Frame: 401" {
     defer buf.deinit();
     try @import("dump.zig").root(frame.document, .{}, &buf.writer, frame);
     try testing.expectEqual("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head><body><pre>No</pre></body></html>", buf.written());
+}
+
+test "Frame: scriptAddedCallback does not run a module when termination is pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    // An inline module: classic scripts are already refused by js.Script.run,
+    // modules go through Module.evaluate which has no gate of its own.
+    const element = try frame.document.createElement("script", null, frame);
+    try element.setAttribute(comptime .wrap("type"), comptime .wrap("module"), frame);
+    try element.asNode().setTextContent("globalThis.__terminated_inline_ran = true", frame);
+
+    // Parsing is over, so the inline module is evaluated on insertion rather
+    // than queued behind the static scripts.
+    frame._script_manager.base.static_scripts_done = true;
+
+    // The sticky terminate is set but V8's own state was consumed by the
+    // JSEntry unwind of whatever the terminate landed in.
+    const env = frame.js.env;
+    env.terminate();
+    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+
+    try frame.scriptAddedCallback(false, element.as(HtmlElement.Script));
+    env.cancelTerminate();
+
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(false, (try ls.local.exec("globalThis.__terminated_inline_ran === true", null)).toBool());
+}
+
+test "Frame: iframeAddedCallback does not create a frame when termination is pending" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const session = frame._session;
+    const subframe_loading_enabled = session.subframe_loading_enabled;
+    session.subframe_loading_enabled = true;
+    defer session.subframe_loading_enabled = subframe_loading_enabled;
+
+    const element = try frame.document.createElement("iframe", null, frame);
+    const iframe = element.as(HtmlElement.IFrame);
+
+    const env = frame.js.env;
+    const contexts_before = env.contexts.items.len;
+    env.terminate();
+    JS.v8.v8__Isolate__CancelTerminateExecution(env.isolate.handle);
+    defer env.cancelTerminate();
+
+    try frame.iframeAddedCallback(iframe);
+    try testing.expectEqual(contexts_before, env.contexts.items.len);
+    try testing.expectEqual(false, iframe._executed);
 }

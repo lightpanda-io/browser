@@ -32,9 +32,9 @@ _loaded: usize = 0,
 _length_computable: bool = false,
 
 const ProgressEventOptions = struct {
-    total: usize = 0,
-    loaded: usize = 0,
     lengthComputable: bool = false,
+    loaded: usize = 0,
+    total: usize = 0,
 };
 
 const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);

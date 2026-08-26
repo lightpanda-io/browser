@@ -20,10 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 const Document = @import("../../Document.zig");
 const HtmlElement = @import("../Html.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
@@ -35,14 +37,15 @@ const String = lp.String;
 const Custom = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _tag_name: String,
 _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
+_upgrade_failed: bool = false, // a failed upgrade is never retried
 
 pub fn asElement(self: *Custom) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
@@ -61,6 +64,9 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
     if (element.is(Custom)) |custom| {
         // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
+            if (custom._upgrade_failed) {
+                return;
+            }
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
                 const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
@@ -137,16 +143,40 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
 
 // Enqueues an atomic-move reaction (moveBefore). Unlike connect/disconnect there
 // is no dedup state to flip: a move always fires, and the element's connected
-// state is unchanged by the move.
+// state is unchanged by the move. The element's shadow tree (if any) always
+// moves with it.
 pub fn enqueueMoveCallbackOnElement(element: *Element, frame: *Frame) void {
-    if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
-    } else {
-        if (frame.getCustomizedBuiltInDefinition(element) == null) return;
+    const eligible = if (element.is(Custom)) |custom|
+        custom._definition != null
+    else
+        frame.getCustomizedBuiltInDefinition(element) != null;
+
+    if (eligible) {
+        frame._ce_reactions.enqueueMove(frame, element) catch |err| {
+            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
+        };
     }
-    frame._ce_reactions.enqueueMove(frame, element) catch |err| {
-        log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
-    };
+
+    const shadow_root = element.hostedShadowRoot(frame) orelse return;
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_root.asNode(), .{});
+    while (tw.next()) |el| {
+        enqueueMoveCallbackOnElement(el, frame);
+    }
+}
+
+// Reactions descend through the shadodom, so when an element is connected or
+// disconnected, we need to enqueue the connect/disconnect callback for any
+// nested element including those nested in a shadow root.
+pub fn enqueueShadowTreeCallbacks(host: *Element, comptime reaction: enum { connected, disconnected }, frame: *Frame) error{OutOfMemory}!void {
+    const shadow_root = host.hostedShadowRoot(frame) orelse return;
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(shadow_root.asNode(), .{});
+    while (tw.next()) |el| {
+        switch (comptime reaction) {
+            .connected => try enqueueConnectedCallbackOnElement(false, el, frame),
+            .disconnected => enqueueDisconnectedCallbackOnElement(el, frame),
+        }
+        try enqueueShadowTreeCallbacks(el, reaction, frame);
+    }
 }
 
 pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
@@ -256,9 +286,14 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
 
     // Invoke constructor
     const prev_upgrading = frame._upgrading_element;
+    const prev_consumed = frame._upgrading_consumed;
     const node = element.asNode();
     frame._upgrading_element = node;
-    defer frame._upgrading_element = prev_upgrading;
+    frame._upgrading_consumed = false;
+    defer {
+        frame._upgrading_element = prev_upgrading;
+        frame._upgrading_consumed = prev_consumed;
+    }
 
     // PERFORMANCE OPTIMIZATION: This pattern is discouraged in general code.
     // Used here because: (1) multiple early returns before needing Local,
@@ -279,7 +314,7 @@ pub fn checkAndAttachBuiltIn(element: *Element, frame: *Frame) !void {
         ls.deinit();
     };
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
         log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;

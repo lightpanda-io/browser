@@ -197,7 +197,7 @@ fn dispatchBrowserTool(
             error.Timeout => .Timeout,
             error.NavigationFailed, error.InternalError, error.OutOfMemory => .InternalError,
         };
-        return server.sendError(id, code, @errorName(err));
+        return server.sendError(id, code, browser_tools.errorMessage(err));
     };
 
     try sendToolResultText(server, id, result.text, result.is_error);
@@ -1386,6 +1386,34 @@ test "MCP - tree rejects stale backendNodeId instead of dumping whole document" 
     try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
 }
 
+test "MCP - tree treats zero-filled backendNodeId as omitted" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tree","arguments":{"backendNodeId":0,"maxDepth":3}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") == null);
+    try testing.expect(std.mem.indexOf(u8, written, "\"isError\":true") == null);
+}
+
+test "MCP - stale backendNodeId surfaces recovery guidance" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tree","arguments":{"backendNodeId":999999}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, msg);
+    const written = out.written();
+    try testing.expect(std.mem.indexOf(u8, written, "NodeNotFound") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "omit backendNodeId") != null);
+}
+
 test "MCP - PascalCase argument keys from LLMs are normalized to canonical" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
@@ -1724,7 +1752,7 @@ test "MCP - waitForSelector: timeout" {
     try router.handleMessage(server, testing.arena_allocator, msg);
     try testing.expectJson(.{
         .id = 1,
-        .@"error" = .{ .message = "NodeNotFound" },
+        .@"error" = .{ .message = browser_tools.errorMessage(error.NodeNotFound) },
     }, out.written());
 }
 
@@ -1779,6 +1807,38 @@ test "MCP - html: full document, selector subtree, backendNodeId subtree" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<input id=\\\"q\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<form") == null);
+}
+
+test "MCP - html: maxBytes truncation and strip" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/dump.html", &out.writer);
+    defer server.deinit();
+
+    const full =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"html"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, full);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") == null);
+
+    out.clearRetainingCapacity();
+    const stripped =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"html","arguments":{"strip":{"js":true,"css":true}}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, stripped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<script>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<style>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>Title</h1>") != null);
+
+    out.clearRetainingCapacity();
+    const capped =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"html","arguments":{"maxBytes":20}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, capped);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
 }
 
 test "MCP - waitForScript: truthy returns, falsy times out" {

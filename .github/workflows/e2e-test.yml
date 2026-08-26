@@ -53,7 +53,7 @@ jobs:
       - uses: ./.github/actions/v8-snapshot
 
       - name: zig build release
-        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dorderfile=orderfile/lightpanda.ld -Dcpu=x86_64
 
       - name: upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const posix = std.posix;
+const lp = @import("lightpanda");
 
 const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
@@ -25,8 +25,10 @@ const libcurl = @import("../sys/libcurl.zig");
 const crypto = @import("../sys/libcrypto.zig");
 
 const IpFilter = @import("IpFilter.zig");
+const Certificates = @import("Certificates.zig");
 
-const log = @import("lightpanda").log;
+const log = lp.log;
+const posix = std.posix;
 
 pub const ENABLE_DEBUG = false;
 
@@ -280,7 +282,7 @@ pub const Connection = struct {
     };
 
     pub fn init(
-        x509_store: *crypto.X509_STORE,
+        certificates: Certificates,
         config: *const Config,
         ip_filter: ?*const IpFilter,
     ) !Connection {
@@ -289,7 +291,7 @@ pub const Connection = struct {
         var self = Connection{ ._easy = easy, .transport = .none };
         errdefer self.deinit();
 
-        try self.reset(config, x509_store, ip_filter);
+        try self.reset(config, certificates, ip_filter);
         return self;
     }
 
@@ -443,7 +445,7 @@ pub const Connection = struct {
     pub fn reset(
         self: *Connection,
         config: *const Config,
-        x509_store: *crypto.X509_STORE,
+        certificates: Certificates,
         ip_filter: ?*const IpFilter,
     ) !void {
         libcurl.curl_easy_reset(self._easy);
@@ -487,7 +489,7 @@ pub const Connection = struct {
                 }
             }).wrap);
             // Pass our store to CURLOPT_SSL_CTX_FUNCTION.
-            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_data, x509_store);
+            try libcurl.curl_easy_setopt(self._easy, .ssl_ctx_data, certificates.store);
         } else {
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_host, false);
             try libcurl.curl_easy_setopt(self._easy, .ssl_verify_peer, false);
@@ -898,6 +900,50 @@ test "isBadPort" {
     for ([_]u16{ 0, 80, 443, 8000, 8080, 9584, 65535 }) |port| {
         try testing.expect(!isBadPort(port));
     }
+}
+
+test "Header.parse" {
+    {
+        const h = Header.parse("Content-Type: text/html; charset=utf-8").?;
+        try testing.expectEqualSlices(u8, "Content-Type", h.name);
+        try testing.expectEqualSlices(u8, "text/html; charset=utf-8", h.value);
+    }
+    {
+        // no space after the colon
+        const h = Header.parse("X-Custom:value").?;
+        try testing.expectEqualSlices(u8, "X-Custom", h.name);
+        try testing.expectEqualSlices(u8, "value", h.value);
+    }
+    {
+        // name and value are trimmed of spaces and tabs
+        const h = Header.parse(" \tAccept \t: \tapplication/json \t").?;
+        try testing.expectEqualSlices(u8, "Accept", h.name);
+        try testing.expectEqualSlices(u8, "application/json", h.value);
+    }
+    {
+        // only the first colon splits; later colons stay in the value
+        const h = Header.parse("Referer: http://example.com:8080/").?;
+        try testing.expectEqualSlices(u8, "Referer", h.name);
+        try testing.expectEqualSlices(u8, "http://example.com:8080/", h.value);
+    }
+    {
+        // empty value
+        const h = Header.parse("X-Empty:").?;
+        try testing.expectEqualSlices(u8, "X-Empty", h.name);
+        try testing.expectEqualSlices(u8, "", h.value);
+    }
+
+    {
+        // Splitting is all `parse` does; a name that isn't an HTTP token still
+        // parses. Callers validate what comes back.
+        const h = Header.parse("Foo Bar: value").?;
+        try testing.expectEqualSlices(u8, "Foo Bar", h.name);
+        try testing.expectEqualSlices(u8, "value", h.value);
+    }
+
+    // no colon, no header
+    try testing.expect(Header.parse("not-a-header") == null);
+    try testing.expect(Header.parse("") == null);
 }
 
 test "Header.firstValue" {

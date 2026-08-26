@@ -38,6 +38,8 @@ pub const Session = @import("browser/Session.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const screenshot = @import("browser/screenshot.zig");
+pub const Base64Writer = @import("Base64Writer.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const CDPNode = @import("cdp/Node.zig");
 pub const interactive = @import("browser/interactive.zig");
@@ -63,8 +65,6 @@ pub const cookies = @import("cookies.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
-
-pub const Updater = @import("Updater.zig");
 
 pub var metrics = @import("Metrics.zig"){};
 
@@ -193,10 +193,22 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
+
+/// `.load`, not `.done`: pages with constant background activity never go
+/// quiescent, so `.done` just rides the `wait_ms` cap. A lone
+/// `wait_selector`/`wait_script` is itself the wait, so no level applies
+/// unless given explicitly.
+fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
+    if (opts.wait_until) |wu| return wu;
+    if (opts.wait_selector == null and opts.wait_script == null) return .load;
+    return null;
+}
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
 /// Errors:
-///   - `error.Timeout` if the wait deadline (`opts.wait_ms`) expires.
+///   - `error.Timeout` if the deadline expires while a `wait_selector` or
+///     `wait_script` is still unmet. The `wait_until` phase never raises it:
+///     when the budget runs out the page is dumped as-is.
 ///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
 ///     that returned true during the wait. The hook is opt-in via
 ///     `session.cancel_hook = .{...}`; without it, this error never fires.
@@ -239,17 +251,54 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         pages.appendAssumeCapacity(page);
     }
 
+    // // Both profilers are debug-only (`@compileError` in the start functions)
+    // // and cover pages.items[0], so pass a single url.
+
+    // // Uncomment to get a profile of the JS code. You can open this in
+    // // Chrome's profiler. I've seen it generate invalid JSON, but I'm not
+    // // sure why. It happens rarely, and I manually fix the file.
+    // pages.items[0].frame().?.js.startCpuProfiler();
+    // defer {
+    //     if (pages.items[0].frame().?.js.stopCpuProfiler()) |profile| {
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/cpu_profile.json",
+    //             .data = profile,
+    //         }) catch |err| {
+    //             log.err(.app, "profile write error", .{ .err = err });
+    //         };
+    //     } else |err| {
+    //         log.err(.app, "profile error", .{ .err = err });
+    //     }
+    // }
+
+    // // Uncomment to get a V8 heap profile. The snapshot opens in Chrome's
+    // // Memory tab, which is where the retainer breakdown lives.
+    // pages.items[0].frame().?.js.startHeapProfiler();
+    // defer {
+    //     if (pages.items[0].frame().?.js.stopHeapProfiler()) |profile| {
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/allocating.heapprofile",
+    //             .data = profile.@"0",
+    //         }) catch |err| {
+    //             log.err(.app, "allocating write error", .{ .err = err });
+    //         };
+    //         std.Io.Dir.cwd().writeFile(io, .{
+    //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
+    //             .data = profile.@"1",
+    //         }) catch |err| {
+    //             log.err(.app, "heapsnapshot write error", .{ .err = err });
+    //         };
+    //     } else |err| {
+    //         log.err(.app, "profile error", .{ .err = err });
+    //     }
+    // }
+
     var runner = session.runner(.{});
 
     var timer: std.Io.Timestamp = .now(io, .boot);
 
-    if (opts.wait_until) |wu| {
+    if (resolveWaitUntil(opts)) |wu| {
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
-    } else if (opts.wait_selector == null and opts.wait_script == null) {
-        // We default to .done if both wait_selector and wait_script are null
-        // This allows the caller to ONLY --wait-selector or ONLY --wait-script
-        // or combine --wait-until WITH --wait-selector/script
-        try runner.waitForAll(opts.wait_ms, .{ .until = .done });
     }
 
     if (opts.wait_selector) |selector| {
@@ -295,15 +344,25 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 try writer.writeByte(',');
             }
 
+            const frame = page.frame();
+            if (opts.dump_mode == .png and frame != null) {
+                const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
+                defer arena.release();
+
+                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
+                    .width = frame.?._page.getViewport().width,
+                }, frame.?);
+                try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
+                continue;
+            }
+
             var aw: std.Io.Writer.Allocating = .init(app.allocator);
             defer aw.deinit();
 
-            if (opts.dump_mode) |mode| blk: {
-                const frame = page.frame() orelse break :blk;
-                try dumpContent(app, mode, opts.dump, frame, &aw.writer);
+            if (opts.dump_mode) |mode| {
+                if (frame) |f| try dumpContent(app, mode, opts.dump, f, &aw.writer);
             }
-
-            try writeJsonEnvelope(writer, page.frame(), opts.dump_mode, aw.written());
+            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
         }
         if (wrap) {
             try writer.writeAll("]}");
@@ -327,6 +386,13 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
     switch (mode) {
         .html => try dump.root(frame.window._document, dump_opts, writer, frame),
         .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .png => {
+            var arena: std.heap.ArenaAllocator = .init(app.allocator);
+            defer arena.deinit();
+            _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
+                .width = frame._page.getViewport().width,
+            }, writer, frame);
+        },
         .semantic_tree, .semantic_tree_text => {
             var registry = CDPNode.Registry.init(app.allocator);
             defer registry.deinit();
@@ -350,19 +416,15 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: 
 }
 
 pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
-    var client = try Updater.init(allocator, config);
-    defer client.deinit();
-
     const stdout = std.Io.File.stdout();
     var buf: [4096]u8 = undefined;
     var writer = stdout.writer(io, &buf);
-    const w = &writer.interface;
-    try client.inform(w);
+    try @import("Updater.zig").inform(allocator, config, &writer.interface);
 }
 
 // Writes a single page's result object. Framing (the enclosing array and any
 // separators / trailing newline) is the caller's responsibility.
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: []const u8) !void {
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
         .url = if (meta) |m| m.url else "",
@@ -510,6 +572,17 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
         .dump = "html",
         .content = "<html><body>hello</body></html>",
     }, aw.written());
+}
+
+test "fetch: resolveWaitUntil" {
+    try testing.expectEqual(.load, resolveWaitUntil(.{ .dump = .{} }));
+    try testing.expectEqual(.done, resolveWaitUntil(.{ .dump = .{}, .wait_until = .done }));
+    try testing.expectEqual(null, resolveWaitUntil(.{ .dump = .{}, .wait_selector = "#main" }));
+    try testing.expectEqual(null, resolveWaitUntil(.{ .dump = .{}, .wait_script = "true" }));
+    try testing.expectEqual(
+        .networkidle,
+        resolveWaitUntil(.{ .dump = .{}, .wait_until = .networkidle, .wait_selector = "#main" }),
+    );
 }
 
 test {

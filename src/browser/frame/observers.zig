@@ -212,7 +212,7 @@ pub fn performScheduledResizeChecks(frame: *Frame) void {
 }
 
 // Only these attributes can change an element's size or visibility in our
-// styling model (StyleManager.isHidden + Element.getElementDimensions), and
+// styling model (StyleManager.isHidden + Element.getElementAxis), and
 // only for the element itself and its descendants — so a delivery is only
 // scheduled when an observed element is in the changed element's subtree.
 fn resizeAttributeChanged(frame: *Frame, element: *Element, name: String) void {
@@ -299,10 +299,13 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
     frame._intersection.delivery_scheduled = false;
 
-    // Iterate backwards to handle observers that disconnect during their callback
+    // Iterate backwards so an observer disconnecting during its callback is safe.
     var i = frame._intersection.observers.items.len;
     while (i > 0) {
         i -= 1;
+        if (i >= frame._intersection.observers.items.len) {
+            continue;
+        }
         const observer = frame._intersection.observers.items[i];
         observer.deliverEntries(frame) catch |err| {
             log.err(.frame, "frame.deliverIntersections", .{ .err = err, .type = frame._type, .url = frame.url });

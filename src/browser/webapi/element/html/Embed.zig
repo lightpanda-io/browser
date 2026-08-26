@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
@@ -25,13 +27,14 @@ const HtmlElement = @import("../Html.zig");
 const Embed = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Embed) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Embed) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Embed) *Node {
     return self.asElement().asNode();
@@ -50,30 +53,6 @@ pub fn setSrc(self: *Embed, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
-pub fn getType(self: *const Embed) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
-}
-
-pub fn setType(self: *Embed, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
-}
-
-pub fn getWidth(self: *const Embed) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse "";
-}
-
-pub fn setWidth(self: *Embed, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(value), frame);
-}
-
-pub fn getHeight(self: *const Embed) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse "";
-}
-
-pub fn setHeight(self: *Embed, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(value), frame);
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Embed);
 
@@ -83,10 +62,14 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const height = bridge.accessor(Embed.getHeight, Embed.setHeight, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Embed);
+    pub const @"align" = reflect.string("align");
+    pub const name = reflect.string("name");
+
+    pub const height = reflect.string("height");
     pub const src = bridge.accessor(Embed.getSrc, Embed.setSrc, .{ .ce_reactions = true });
-    pub const @"type" = bridge.accessor(Embed.getType, Embed.setType, .{ .ce_reactions = true });
-    pub const width = bridge.accessor(Embed.getWidth, Embed.setWidth, .{ .ce_reactions = true });
+    pub const @"type" = reflect.string("type");
+    pub const width = reflect.string("width");
 };
 
 const testing = @import("../../../../testing.zig");

@@ -271,6 +271,29 @@
   }
 </script>
 
+<script id="ua_closed_dialog_is_hidden">
+  {
+    // dialog:not([open]) { display: none }
+    const dialog = document.createElement('dialog');
+    const child = document.createElement('p');
+    dialog.appendChild(child);
+    document.body.appendChild(dialog);
+
+    testing.expectEqual(false, dialog.checkVisibility());
+    testing.expectEqual(false, child.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(dialog).display);
+
+    dialog.show();
+    testing.expectEqual(true, dialog.checkVisibility());
+    testing.expectEqual(true, child.checkVisibility());
+
+    dialog.close();
+    testing.expectEqual(false, dialog.checkVisibility());
+
+    dialog.remove();
+  }
+</script>
+
 <script id="hidden_attribute_propagates_through_check_visibility">
   {
     // [hidden] { display: none } applies to the element itself...
@@ -441,5 +464,34 @@
     testing.expectEqual(false, elements[4].checkVisibility());
 
     elements[0].remove();
+  }
+</script>
+
+<style id="style-keyword-case">
+  .hidden-upper { DISPLAY: NONE; }
+  .invisible-upper { Visibility: Hidden; }
+</style>
+<script id="keyword_values_are_case_insensitive">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    el.setAttribute("style", "display: NONE");
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(el).display);
+
+    el.setAttribute("style", "visibility: HIDDEN");
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.removeAttribute("style");
+    el.className = "hidden-upper";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.className = "invisible-upper";
+    testing.expectEqual(true, el.checkVisibility());
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.remove();
   }
 </script>

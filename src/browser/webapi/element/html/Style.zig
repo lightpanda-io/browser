@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -27,56 +29,20 @@ const HtmlElement = @import("../Html.zig");
 const Style = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _sheet: ?*CSSStyleSheet = null,
 
 pub fn asElement(self: *Style) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Style) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Style) *Node {
     return self.asElement().asNode();
 }
 
 // Attribute-backed properties
-
-pub fn getBlocking(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("blocking")) orelse "";
-}
-
-pub fn setBlocking(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("blocking"), .wrap(value), frame);
-}
-
-pub fn getMedia(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("media")) orelse "";
-}
-
-pub fn setMedia(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
-}
-
-pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
-}
-
-pub fn setType(self: *Style, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
-}
-
-pub fn getDisabled(self: *const Style) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *Style, disabled: bool, frame: *Frame) !void {
-    if (disabled) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
 pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
@@ -116,7 +82,11 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
         return;
     }
 
-    try frame.queueLoad(self._proto);
+    try frame.queueLoad(Factory.protoOf(self));
+}
+
+pub fn getType(self: *const Style) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
 
 pub const JsApi = struct {
@@ -128,10 +98,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{ .ce_reactions = true });
-    pub const media = bridge.accessor(Style.getMedia, Style.setMedia, .{ .ce_reactions = true });
-    pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{ .ce_reactions = true });
-    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Style);
+    pub const nonce = reflect.string("nonce");
+
+    pub const blocking = reflect.string("blocking");
+    pub const media = reflect.string("media");
+    pub const @"type" = reflect.string("type");
+    pub const disabled = reflect.boolean("disabled");
     pub const sheet = bridge.accessor(Style.getSheet, null, .{});
 };
 

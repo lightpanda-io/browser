@@ -111,6 +111,24 @@
 {
   const resolver = document.createNSResolver(document);
   testing.expectEqual(document, resolver);
+
+  // The Node it returns must be accepted back as the resolver argument
+  const r = document.evaluate("//p", document, resolver, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+  testing.expectEqual(3, r.snapshotLength);
+  const expr = document.createExpression("//p", resolver);
+  testing.expectEqual(3, expr.evaluate(document, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength);
+}
+</script>
+
+<script id=prefixed_attribute_in_xml>
+{
+  const doc = new DOMParser().parseFromString(
+    '<mu xml:id="id1"><rho xml:lang="en-GB"/><rho xml:lang="no"/></mu>', 'text/xml');
+  const root = doc.documentElement;
+  const r = doc.evaluate('//mu[@xml:id="id1"]/rho[@xml:lang="en-GB"]', root,
+    doc.createNSResolver(root), XPathResult.ANY_TYPE, null);
+  testing.expectEqual(root.firstChild, r.iterateNext());
+  testing.expectEqual(null, r.iterateNext());
 }
 </script>
 

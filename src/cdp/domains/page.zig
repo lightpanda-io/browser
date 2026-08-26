@@ -20,7 +20,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const screenshot_png = @embedFile("screenshot.png");
 const screenshot_pdf = @embedFile("screenshot.pdf");
 
 const id = @import("../id.zig");
@@ -300,24 +299,23 @@ fn navigate(cmd: *CDP.Command) !void {
 
     const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
 
-    // Fast path: a freshly-created target whose root frame hasn't navigated
-    // yet has nothing to preserve across the HTTP round-trip. Skip the
-    // pending-Page allocation (which would create a V8 context just to
-    // throw the OLD blank one away at commit) and navigate the active
-    // frame in place.
-    if (frame._load_state == .waiting) {
-        return frame.navigate(encoded_url, .{
-            .reason = .address_bar,
-            .cdp_id = cmd.input.id,
-            .kind = .{ .push = null },
-        });
-    }
-
-    try session.initiateRootNavigation(frame._frame_id, encoded_url, .{
+    const opts: Frame.NavigateOpts = .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },
-    });
+    };
+
+    if (canNavigateInPlace(bc, frame)) {
+        return frame.navigate(encoded_url, opts);
+    }
+    try session.initiateRootNavigation(frame._frame_id, encoded_url, opts);
+}
+
+// Fast path that allows using the initial about:blank Frame as-is. Only safe
+// when the frame is still waiting for a navigate AND no JS has been run in the
+// instance (for about:blank, that's only possible via an Runtime.* call)
+fn canNavigateInPlace(bc: *const CDP.BrowserContext, frame: *const Frame) bool {
+    return frame._load_state == .waiting and !bc.main_world_touched;
 }
 
 fn doReload(cmd: *CDP.Command) !void {
@@ -433,7 +431,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
         .kind = .{ .traverse = idx },
     };
 
-    if (frame._load_state == .waiting) {
+    if (canNavigateInPlace(bc, frame)) {
         return frame.navigate(url, opts);
     }
 
@@ -536,17 +534,19 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
 
     if (!in_commit) {
         _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+        bc.main_world_touched = false;
     }
 
     for (bc.isolated_worlds.items) |isolated_world| {
         _ = try isolated_world.createContext(frame);
     }
 
-    if (!in_commit) {
+    if (in_commit == false) {
         // Only retain captured responses until a navigation event. In CDP
         // terms, this is called a "renderer" and the cache-duration can be
         // controlled via Network.configureDurableMessages (which we don't
         // support).
+        bc.captured_requests = .empty;
         bc.captured_responses = .empty;
     }
 }
@@ -969,7 +969,6 @@ fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSiz
     return buf;
 }
 
-// Return a fake screenshot
 fn captureScreenshot(cmd: *CDP.Command) !void {
     const Params = struct {
         format: ?[]const u8 = "png",
@@ -982,7 +981,6 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     const params = try cmd.params(Params) orelse Params{};
 
     const format = params.format orelse "png";
-
     if (!std.mem.eql(u8, format, "png")) {
         log.warn(.not_implemented, "Page.captureScreenshot params", .{ .format = format });
         return cmd.sendError(-32000, "unsupported screenshot format.", .{});
@@ -990,20 +988,29 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     if (params.quality != null) {
         log.warn(.not_implemented, "Page.captureScreenshot params", .{ .quality = params.quality });
     }
-    if (params.clip != null) {
-        log.warn(.not_implemented, "Page.captureScreenshot params", .{ .clip = params.clip });
-    }
-    if (params.fromSurface orelse false or params.captureBeyondViewport orelse false or params.optimizeForSpeed orelse false) {
-        log.warn(.not_implemented, "Page.captureScreenshot params", .{
-            .fromSurface = params.fromSurface,
-            .captureBeyondViewport = params.captureBeyondViewport,
-            .optimizeForSpeed = params.optimizeForSpeed,
-        });
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const viewport = cmd.cdp.browser.getViewport();
+
+    var opts: lp.screenshot.Opts = .{
+        .scale = viewport.scale,
+        .width = viewport.width,
+        .height = if (params.captureBeyondViewport orelse false) 0 else viewport.height,
+    };
+    if (params.clip) |clip| {
+        opts.clip = .{
+            .x = @floatCast(clip.x),
+            .y = @floatCast(clip.y),
+            .width = @floatCast(clip.width),
+            .height = @floatCast(clip.height),
+        };
+        opts.scale *= @floatCast(clip.scale);
     }
 
-    return cmd.sendResult(.{
-        .data = base64Encode(screenshot_png),
-    }, .{});
+    // Prepared streams itself as base64 straight into the outgoing message.
+    const shot = try lp.screenshot.prepare(cmd.arena, frame.window._document.asNode(), opts, frame);
+    return cmd.sendResult(.{ .data = shot }, .{});
 }
 
 // Return a fake pdf
@@ -1020,6 +1027,15 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
     const viewport = cmd.cdp.browser.getViewport();
     const width = viewport.width;
     const height = viewport.height;
+
+    // Full-page height as our text rendering lays it out, so a fullPage
+    // screenshot (getLayoutMetrics → captureScreenshot) is consistent.
+    const content_height: u32 = blk: {
+        const bc = cmd.browser_context orelse break :blk height;
+        const frame = bc.mainFrame() orelse break :blk height;
+        const h = lp.screenshot.contentHeight(cmd.arena, frame.window._document.asNode(), width, frame) catch break :blk height;
+        break :blk @max(height, h);
+    };
 
     return cmd.sendResult(.{
         .layoutViewport = .{
@@ -1042,7 +1058,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
             .x = 0,
             .y = 0,
             .width = width,
-            .height = height,
+            .height = content_height,
         },
         .cssLayoutViewport = .{
             .pageX = 0,
@@ -1064,7 +1080,7 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
             .x = 0,
             .y = 0,
             .width = width,
-            .height = height,
+            .height = content_height,
         },
     }, .{});
 }
@@ -1265,12 +1281,82 @@ test "cdp.frame: captureScreenshot" {
         try ctx.expectSentError(-32000, "unsupported screenshot format.", .{ .id = 10 });
     }
 
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    // Keep the payload small: the test transport buffers 32KB frames.
+    try ctx.processMessage(.{ .id = 10, .method = "Emulation.setDeviceMetricsOverride", .params = .{ .width = 400, .height = 300 } });
+
     {
+        // Viewport-sized: the PNG header carries the size.
         try ctx.processMessage(.{ .id = 11, .method = "Page.captureScreenshot" });
-        try ctx.expectSentResult(.{
-            .data = base64Encode(screenshot_png),
-        }, .{ .id = 11 });
+        const png = try screenshotResult(&ctx, 11);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(300, std.mem.readInt(u32, png[20..24], .big));
     }
+
+    {
+        // clip + scale crops after layout and scales the raster.
+        try ctx.processMessage(.{ .id = 12, .method = "Page.captureScreenshot", .params = .{
+            .clip = .{ .x = 0, .y = 0, .width = 100, .height = 40, .scale = 2 },
+        } });
+        const png = try screenshotResult(&ctx, 12);
+        try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    try ctx.processMessage(.{ .id = 13, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+        .width = 200,
+        .height = 100,
+        .deviceScaleFactor = 2,
+    } });
+
+    {
+        // deviceScaleFactor alone rasters at 2x; the viewport stays CSS px.
+        try ctx.processMessage(.{ .id = 14, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 14);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // clip.scale is a zoom on top of it, not a replacement: 2 * 2 = 4x.
+        try ctx.processMessage(.{ .id = 15, .method = "Page.captureScreenshot", .params = .{
+            .clip = .{ .x = 0, .y = 0, .width = 50, .height = 20, .scale = 2 },
+        } });
+        const png = try screenshotResult(&ctx, 15);
+        try testing.expectEqual(200, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(80, std.mem.readInt(u32, png[20..24], .big));
+    }
+
+    {
+        // A width/height of 0 keeps the current values, and so does a
+        // deviceScaleFactor of 0.
+        try ctx.processMessage(.{ .id = 16, .method = "Emulation.setDeviceMetricsOverride", .params = .{
+            .width = 0,
+            .height = 0,
+            .deviceScaleFactor = 0,
+        } });
+        try ctx.processMessage(.{ .id = 17, .method = "Page.captureScreenshot" });
+        const png = try screenshotResult(&ctx, 17);
+        try testing.expectEqual(400, std.mem.readInt(u32, png[16..20], .big));
+        try testing.expectEqual(200, std.mem.readInt(u32, png[20..24], .big));
+    }
+}
+
+fn screenshotResult(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = msg.object;
+        const got = obj.get("id") orelse continue;
+        if (got != .integer or got.integer != msg_id) continue;
+        const data = obj.get("result").?.object.get("data").?.string;
+        const decoder = std.base64.standard.Decoder;
+        const out = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(data));
+        try decoder.decode(out, data);
+        try testing.expectEqual("\x89PNG\r\n\x1a\n", out[0..8]);
+        return out;
+    }
+    return error.ResultNotFound;
 }
 
 test "cdp.frame: printToPDF" {
@@ -1634,6 +1720,83 @@ test "cdp.frame: navigate to about:blank replaces a non-blank document" {
     defer ls.deinit();
     const v = try ls.local.exec("window.location.href === 'about:blank'", null);
     try testing.expect(v.toBool());
+}
+
+// https://github.com/lightpanda-io/browser/issues/3215
+test "cdp.frame: first navigation replaces the bootstrap about:blank global" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // A fresh, attached target sitting on its bootstrap about:blank document.
+    try ctx.processMessage(.{ .id = 69, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 70, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        try testing.expectEqualSlices(u8, "about:blank", frame.url);
+    }
+
+    // A client runs JS on the blank page before navigating. This must go
+    // through the CDP Runtime domain: that is what marks the bootstrap main
+    // world as touched and disables the in-place navigation fast path.
+    try ctx.processMessage(.{
+        .id = 71,
+        .method = "Runtime.evaluate",
+        .params = .{ .expression = "window.leak = 'set-on-about-blank'; window.leak" },
+        .sessionId = bc.session_id.?,
+    });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "set-on-about-blank" } }, .{ .id = 71 });
+    {
+        const frame = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec("window.leak === 'set-on-about-blank'", null);
+        try testing.expect(v.toBool());
+    }
+
+    // First real navigation. It must NOT inherit the about:blank global.
+    try ctx.processMessage(.{
+        .id = 72,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" },
+        .sessionId = bc.session_id.?,
+    });
+    try testing.waitForPage(bc);
+
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/cdp/dom1.html"));
+
+    // The leaked global must be gone: the navigation created a fresh global.
+    var ls2: js.Local.Scope = undefined;
+    frame.js.localScope(&ls2);
+    defer ls2.deinit();
+    const v2 = try ls2.local.exec("window.leak === undefined", null);
+    try testing.expect(v2.toBool());
+}
+
+test "cdp.frame: first navigation of a pristine bootstrap about:blank navigates in place" {
+    // Counterpart of the #3215 test: with no client JS on the bootstrap page,
+    // the first Page.navigate keeps the in-place fast path (no pending Page).
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-PRS", .target_id = "TID-PRS-000000".* });
+    bc.session_id = "SID-PRS";
+    _ = try bc.session.createPage();
+    const before = bc.mainFrame() orelse unreachable;
+    try testing.expectEqualSlices(u8, "about:blank", before.url);
+
+    try ctx.processMessage(.{
+        .id = 73,
+        .method = "Page.navigate",
+        .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html" },
+    });
+    try testing.waitForPage(bc);
+
+    const after = bc.mainFrame() orelse unreachable;
+    try testing.expect(before == after);
+    try testing.expect(std.mem.endsWith(u8, after.url, "/cdp/dom1.html"));
 }
 
 test "cdp.frame: anchor click sends Referer matching the originating page" {

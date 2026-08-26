@@ -181,7 +181,7 @@ pub fn dispatch(self: *PerformanceObserver) !void {
     self._js.localScope(&ls);
     defer ls.deinit();
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
     ls.toLocal(self._callback).tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
         log.err(.frame, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
         return err;

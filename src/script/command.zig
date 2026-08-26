@@ -169,7 +169,7 @@ pub const Command = union(enum) {
         return .{ .tool_call = .{ .tool = s.tool, .args = args } };
     }
 
-    /// JavaScript recorder format for `lightpanda agent <script>.js`.
+    /// JavaScript recorder format for `lightpanda run <script>.js`.
     /// Slash command parsing stays separate; this renders recorded browser
     /// primitives as blocking global function calls in the agent script
     /// runtime.

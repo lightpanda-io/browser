@@ -1,3 +1,5 @@
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
@@ -8,33 +10,14 @@ const OptGroup = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *OptGroup) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *OptGroup) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getDisabled(self: *OptGroup) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *OptGroup, value: bool, frame: *Frame) !void {
-    if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
-pub fn getLabel(self: *OptGroup) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("label")) orelse "";
-}
-
-pub fn setLabel(self: *OptGroup, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("label"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {
@@ -46,8 +29,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(OptGroup.getDisabled, OptGroup.setDisabled, .{ .ce_reactions = true });
-    pub const label = bridge.accessor(OptGroup.getLabel, OptGroup.setLabel, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(OptGroup);
+
+    pub const disabled = reflect.boolean("disabled");
+    pub const label = reflect.string("label");
 };
 
 const testing = @import("../../../../testing.zig");

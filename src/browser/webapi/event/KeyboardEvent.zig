@@ -276,17 +276,17 @@ pub const Location = enum(i32) {
 };
 
 pub const KeyboardEventOptions = struct {
-    key: []const u8 = "",
-    code: ?[]const u8 = null,
-    location: u32 = 0,
-    repeat: bool = false,
-    isComposing: bool = false,
-    ctrlKey: bool = false,
-    shiftKey: bool = false,
     altKey: bool = false,
-    metaKey: bool = false,
     charCode: u32 = 0,
+    code: ?[]const u8 = null,
+    ctrlKey: bool = false,
+    isComposing: bool = false,
+    key: []const u8 = "",
     keyCode: u32 = 0,
+    location: u32 = 0,
+    metaKey: bool = false,
+    repeat: bool = false,
+    shiftKey: bool = false,
 };
 
 const Options = Event.inheritOptions(

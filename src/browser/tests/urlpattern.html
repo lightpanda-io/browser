@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<script src="testing.js"></script>
+<script id=constructor>
+  testing.expectEqual("function", typeof window.URLPattern);
+
+  {
+    // Empty init: every component is a wildcard.
+    const p = new URLPattern();
+    testing.expectEqual('*', p.protocol);
+    testing.expectEqual('*', p.username);
+    testing.expectEqual('*', p.password);
+    testing.expectEqual('*', p.hostname);
+    testing.expectEqual('*', p.port);
+    testing.expectEqual('*', p.pathname);
+    testing.expectEqual('*', p.search);
+    testing.expectEqual('*', p.hash);
+    testing.expectEqual(false, p.hasRegExpGroups);
+    testing.expectEqual(true, p.test('https://example.com/foo?bar#baz'));
+    testing.expectEqual(true, p.test());
+  }
+
+  {
+    const p = new URLPattern({ pathname: '/foo/:bar' });
+    testing.expectEqual('/foo/:bar', p.pathname);
+    testing.expectEqual('*', p.hostname);
+    testing.expectEqual(true, p.test({ pathname: '/foo/baz' }));
+    testing.expectEqual(false, p.test({ pathname: '/foo/baz/qux' }));
+    testing.expectEqual(true, p.test('https://example.com/foo/baz'));
+  }
+
+  {
+    // Constructor string: hostname implies the default port; the trailing
+    // components are wildcards, so this is "any URL on that origin".
+    const p = new URLPattern('https://example.com');
+    testing.expectEqual('https', p.protocol);
+    testing.expectEqual('example.com', p.hostname);
+    testing.expectEqual('', p.port);
+    testing.expectEqual('*', p.pathname);
+    testing.expectEqual('*', p.search);
+    testing.expectEqual('*', p.hash);
+    testing.expectEqual(true, p.test('https://example.com/?a=1#x'));
+    testing.expectEqual(true, p.test('https://example.com/foo'));
+    testing.expectEqual(false, p.test('https://example.com:8443/'));
+    // A search prefix, on the other hand, pins the pathname to "/".
+    const q = new URLPattern('https://example.com:8080?foo');
+    testing.expectEqual('8080', q.port);
+    testing.expectEqual('/', q.pathname);
+    testing.expectEqual('foo', q.search);
+    testing.expectEqual('*', q.hash);
+  }
+
+  {
+    // Explicit default port is dropped; groups in the hostname.
+    const p = new URLPattern('https://{sub.}?example.com:443/*');
+    testing.expectEqual('{sub.}?example.com', p.hostname);
+    testing.expectEqual('', p.port);
+    testing.expectEqual('/*', p.pathname);
+    testing.expectEqual(true, p.test('https://sub.example.com/x/y'));
+    testing.expectEqual(true, p.test('https://example.com/'));
+  }
+
+  {
+    // Relative string with a base URL.
+    const p = new URLPattern('/foo/*', 'https://example.com/a/b?c#d');
+    testing.expectEqual('https', p.protocol);
+    testing.expectEqual('example.com', p.hostname);
+    testing.expectEqual('/foo/*', p.pathname);
+    testing.expectEqual('*', p.search);
+    testing.expectEqual('*', p.hash);
+    // Relative pathname resolves against the base directory.
+    const q = new URLPattern({ pathname: 'foo/bar', baseURL: 'https://example.com/a/b' });
+    testing.expectEqual('/a/foo/bar', q.pathname);
+  }
+
+  {
+    // Overload resolution: (input, options) vs (input, baseURL, options).
+    const p = new URLPattern({ pathname: '/FOO' }, { ignoreCase: true });
+    testing.expectEqual(true, p.test({ pathname: '/foo' }));
+    const q = new URLPattern('/FOO', 'https://example.com', { ignoreCase: true });
+    testing.expectEqual(true, q.test('https://example.com/foo'));
+    const r = new URLPattern({ pathname: '/FOO' });
+    testing.expectEqual(false, r.test({ pathname: '/foo' }));
+  }
+
+  // Errors.
+  testing.expectError('TypeError', () => new URLPattern('/foo'));                        // relative, no base
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo' }, 'https://x')); // dict + baseURL
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo/(' }));         // bad regexp token
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/:a/:a' }));         // duplicate name
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '(café)' }));    // non-ASCII regexp
+  testing.expectError('TypeError', () => new URLPattern({ hostname: 'bad|hostname' }));
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo/(a[)' }));      // invalid RegExp
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo', baseURL: '' }));
+</script>
+
+<script id=canonicalization>
+  {
+    const p = new URLPattern({ pathname: '/foo/../bar' });
+    testing.expectEqual('/bar', p.pathname);
+    const q = new URLPattern({ pathname: '/café bar' });
+    testing.expectEqual('/caf%C3%A9%20bar', q.pathname);
+    // Relative pattern pieces are not slash-prefixed and "./" survives.
+    const r = new URLPattern({ pathname: './foo' });
+    testing.expectEqual('./foo', r.pathname);
+    testing.expectEqual(true, r.test({ pathname: './foo' }));
+  }
+  {
+    const p = new URLPattern({ username: 'café', password: 'a b', search: 'a b\'', hash: 'x y' });
+    testing.expectEqual('caf%C3%A9', p.username);
+    testing.expectEqual('a%20b', p.password);
+    testing.expectEqual('a%20b%27', p.search);
+    testing.expectEqual('x%20y', p.hash);
+    testing.expectEqual(true, p.test({ username: 'café', password: 'a b', search: '?a b\'', hash: '#x y' }));
+  }
+  {
+    const p = new URLPattern('HTTP://EXAMPLE.com:80/');
+    testing.expectEqual('http', p.protocol);
+    testing.expectEqual('example.com', p.hostname);
+    // Only a literal special scheme drops its default port; "HTTP" is
+    // canonicalized after that check, so 80 stays.
+    testing.expectEqual('80', p.port);
+    testing.expectEqual('', new URLPattern('http://example.com:80/').port);
+    const idn = new URLPattern('http://🚲.com/');
+    testing.expectEqual('xn--h78h.com', idn.hostname);
+    testing.expectEqual(true, idn.test('http://🚲.com/'));
+  }
+  {
+    // Port canonicalization on the input side.
+    const p = new URLPattern({ protocol: 'http', port: '80' });
+    testing.expectEqual('', p.port);
+    testing.expectEqual(true, p.test({ protocol: 'http', port: '80' }));
+    const q = new URLPattern({ protocol: 'http{s}?', port: '80' });
+    testing.expectEqual('80', q.port);
+    testing.expectEqual(false, q.test({ protocol: 'http', port: '80' }));
+    // Invalid input port: test() is false, no throw.
+    testing.expectEqual(false, q.test({ port: 'abc' }));
+  }
+  {
+    // Non-special protocols use an opaque pathname.
+    const p = new URLPattern('data\\:foo\\:bar@example.com');
+    testing.expectEqual('data', p.protocol);
+    testing.expectEqual('', p.hostname);
+    testing.expectEqual('foo\\:bar@example.com', p.pathname);
+    testing.expectEqual(true, p.test('data:foo:bar@example.com'));
+  }
+</script>
+
+<script id=exec>
+  {
+    const p = new URLPattern({ pathname: '/foo/:bar/*' });
+    const r = p.exec({ pathname: '/foo/baz/qux/quux' });
+    testing.expectEqual(1, r.inputs.length);
+    testing.expectEqual('/foo/baz/qux/quux', r.inputs[0].pathname);
+    testing.expectEqual('/foo/baz/qux/quux', r.pathname.input);
+    testing.expectEqual('baz', r.pathname.groups.bar);
+    testing.expectEqual('qux/quux', r.pathname.groups[0]);
+    testing.expectEqual('', r.hostname.input);
+    testing.expectEqual('', r.hostname.groups[0]);
+    testing.expectEqual(null, p.exec({ pathname: '/nope' }));
+  }
+  {
+    // Optional group leaves an own property set to undefined.
+    const p = new URLPattern({ pathname: '/foo/:bar?' });
+    const r = p.exec({ pathname: '/foo' });
+    testing.expectEqual(true, 'bar' in r.pathname.groups);
+    testing.expectEqual(undefined, r.pathname.groups.bar);
+  }
+  {
+    // URL string input with a base; both echoed in inputs.
+    const p = new URLPattern({ pathname: '/foo/bar' });
+    const r = p.exec('./foo/bar', 'https://example.com');
+    testing.expectEqual(2, r.inputs.length);
+    testing.expectEqual('./foo/bar', r.inputs[0]);
+    testing.expectEqual('https://example.com', r.inputs[1]);
+    testing.expectEqual('example.com', r.hostname.groups[0]);
+    testing.expectEqual('https', r.protocol.input);
+    testing.expectEqual(null, p.exec('./foo/bar', 'nope'));
+    testing.expectError('TypeError', () => p.exec({ pathname: '/foo/bar' }, 'https://example.com'));
+  }
+  {
+    // Repeated named group with the pathname prefix.
+    const p = new URLPattern({ pathname: '/foo/:bar+' });
+    testing.expectEqual('bar/baz', p.exec({ pathname: '/foo/bar/baz' }).pathname.groups.bar);
+    testing.expectEqual(null, p.exec({ pathname: '/foo' }));
+  }
+  {
+    // exec() with no input matches an all-empty init.
+    const p = new URLPattern();
+    const r = p.exec();
+    testing.expectEqual(1, r.inputs.length);
+    testing.expectEqual(0, Object.keys(r.inputs[0]).length);
+  }
+</script>
+
+<script id=pattern_strings>
+  // Normalized pattern strings, per the WPT expectations.
+  const cases = [
+    [{ pathname: '/foo/(.*)?' }, 'pathname', '/foo/*?'],
+    [{ pathname: '/foo/(.*)*' }, 'pathname', '/foo/**'],
+    [{ pathname: '{:foo}{(.*)bar}' }, 'pathname', ':foo{*bar}'],
+    [{ pathname: '/foo{/bar}' }, 'pathname', '/foo/bar'],
+    [{ pathname: '/foo/:bar/' }, 'pathname', '/foo/:bar/'],
+    [{ pathname: '/foo/:bar+/' }, 'pathname', '/foo/:bar+/'],
+    [{ hostname: '[\\:\\:ab\\::num]' }, 'hostname', '[\\:\\:ab\\::num]'],
+    [{ pathname: '/:foo\\bar' }, 'pathname', '{/:foo}bar'],
+    [{ pathname: ':foo\\bar' }, 'pathname', '{:foo}bar'],
+    [{ pathname: '/foo/:bar([a-z]+)?' }, 'pathname', '/foo/:bar([a-z]+)?'],
+  ];
+  for (const [init, component, expected] of cases) {
+    testing.expectEqual(expected, new URLPattern(init)[component]);
+  }
+  testing.expectEqual(true, new URLPattern({ pathname: '/foo/:bar([a-z]+)?' }).hasRegExpGroups);
+  testing.expectEqual(false, new URLPattern({ pathname: '/a/:foo/:baz?/b/*' }).hasRegExpGroups);
+</script>
+
+<script id=ipv6>
+  {
+    const p = new URLPattern('http://[\\:\\:AB\\::num]/');
+    testing.expectEqual('[\\:\\:ab\\::num]', p.hostname);
+    const r = p.exec('http://[::ab:1]/');
+    testing.expectEqual('[::ab:1]', r.hostname.input);
+    testing.expectEqual('1', r.hostname.groups.num);
+  }
+  {
+    const p = new URLPattern({ hostname: '[*\\:1]' });
+    testing.expectEqual('::ab', p.exec({ hostname: '[::ab:1]' }).hostname.groups[0]);
+  }
+</script>
+
+<script id=names>
+  {
+    // Non-ASCII identifier characters in group names.
+    const p = new URLPattern({ pathname: '/:café/:℘' });
+    const r = p.exec({ pathname: '/a/b' });
+    testing.expectEqual('a', r.pathname.groups['café']);
+    testing.expectEqual('b', r.pathname.groups['℘']);
+    // A ":" that starts no valid name is a hard error in a component pattern.
+    testing.expectError('TypeError', () => new URLPattern({ pathname: ':🚲' }));
+  }
+</script>
+
+<script id=tentative>
+  // Chromium-only tentative APIs (WPT urlpattern-{compare,generate}.tentative).
+  const cmp = (l, r) => URLPattern.compareComponent('pathname', new URLPattern(l), new URLPattern(r));
+  testing.expectEqual(-1, cmp({ pathname: '/foo/a' }, { pathname: '/foo/b' }));
+  testing.expectEqual(1, cmp({ pathname: '/foo/bar' }, { pathname: '/foo/:bar' }));
+  testing.expectEqual(1, cmp({ pathname: '/foo/:bar' }, { pathname: '/foo/*' }));
+  testing.expectEqual(1, cmp({ pathname: '/foo/{bar}+' }, { pathname: '/foo/{bar}?' }));
+  testing.expectEqual(1, cmp({ pathname: '*/foo' }, { pathname: '*' }));
+  testing.expectEqual(0, cmp({ pathname: '/foo/:b' }, { pathname: '/foo/:a' }));
+  testing.expectEqual(1, URLPattern.compareComponent('port', new URLPattern({ port: '9' }), new URLPattern({ port: '100' })));
+  testing.expectError('TypeError', () => URLPattern.compareComponent('nope', new URLPattern(), new URLPattern()));
+
+  testing.expectEqual('/foo/baz', new URLPattern({ pathname: '/foo/:bar' }).generate('pathname', { bar: 'baz' }));
+  testing.expectEqual('/%20', new URLPattern('https://example.com/:foo').generate('pathname', { foo: ' ' }));
+  testing.expectEqual('/ ', new URLPattern('original-scheme://example.com/:foo').generate('pathname', { foo: ' ' }));
+  testing.expectEqual('xn--fi8h.example.com', new URLPattern({ hostname: '{:foo}.example.com' }).generate('hostname', { foo: '🍅' }));
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/:foo' }).generate('pathname', {}));
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/:foo' }).generate('pathname', { foo: 'bar/baz' }));
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/*' }).generate('pathname', {}));
+  testing.expectError('TypeError', () => new URLPattern({ pathname: '/foo' }).generate('invalid', {}));
+</script>

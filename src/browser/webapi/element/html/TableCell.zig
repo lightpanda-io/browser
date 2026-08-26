@@ -1,7 +1,7 @@
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -15,36 +15,13 @@ pub const Proto = HtmlElement;
 
 _tag_name: String,
 _tag: Element.Tag,
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *TableCell) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *TableCell) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getColSpan(self: *TableCell) u32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("colspan")) orelse return 1;
-    const v = std.fmt.parseUnsigned(u32, attr, 10) catch return 1;
-    if (v == 0) return 1;
-    return @min(v, 1000);
-}
-
-pub fn setColSpan(self: *TableCell, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("colspan"), .wrap(str), frame);
-}
-
-pub fn getRowSpan(self: *TableCell) u32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("rowspan")) orelse return 1;
-    const v = std.fmt.parseUnsigned(u32, attr, 10) catch return 1;
-    return @min(v, 65534);
-}
-
-pub fn setRowSpan(self: *TableCell, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("rowspan"), .wrap(str), frame);
 }
 
 pub const JsApi = struct {
@@ -56,8 +33,22 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const colSpan = bridge.accessor(TableCell.getColSpan, TableCell.setColSpan, .{ .ce_reactions = true });
-    pub const rowSpan = bridge.accessor(TableCell.getRowSpan, TableCell.setRowSpan, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(TableCell);
+    pub const scope = reflect.enumerated("scope", &.{ "row", "col", "rowgroup", "colgroup" }, .{});
+    pub const noWrap = reflect.boolean("nowrap");
+    pub const width = reflect.string("width");
+    pub const vAlign = reflect.string("valign");
+    pub const height = reflect.string("height");
+    pub const headers = reflect.string("headers");
+    pub const chOff = reflect.string("charoff");
+    pub const ch = reflect.string("char");
+    pub const bgColor = reflect.stringNullToEmpty("bgcolor");
+    pub const axis = reflect.string("axis");
+    pub const @"align" = reflect.string("align");
+    pub const abbr = reflect.string("abbr");
+
+    pub const colSpan = reflect.unsignedLong("colspan", .{ .default = 1, .clamp = .{ .min = 1, .max = 1000 } });
+    pub const rowSpan = reflect.unsignedLong("rowspan", .{ .default = 1, .clamp = .{ .min = 0, .max = 65534 } });
 };
 
 const testing = @import("../../../../testing.zig");

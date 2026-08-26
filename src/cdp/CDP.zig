@@ -25,7 +25,7 @@ const Notification = @import("../Notification.zig");
 
 const WS = @import("../network/WS.zig");
 const http = @import("../network/http.zig");
-const Network = @import("../network/Network.zig");
+const Server = @import("../Server.zig");
 const Transfer = @import("../network/HttpClient.zig").Transfer;
 
 const js = @import("../browser/js/js.zig");
@@ -62,11 +62,10 @@ conn: Connection,
 browser: Browser,
 allocator: Allocator,
 
-// Network-thread read-side handle for the CDP socket. Populated in
-// init; Server.handleConnection calls network.registerCdp(&cdp.link)
-// after the worker-side handshake completes, and unregisterCdp before
-// teardown.
-link: Network.CdpLink,
+// Server run-loop read-side handle for the CDP socket. Populated in
+// init; Server.handleConnection calls registerLink(&cdp.link) after the
+// worker-side handshake completes, and unregisterLink before teardown.
+link: Server.Link,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -143,10 +142,10 @@ pub fn deinit(self: *CDP) void {
     self.browser_context_arena.deinit();
     self.conn.deinit();
 }
-// Called by Network when readable bytes arrive on the CDP socket.
-// Feeds them through the WS framer and pushes each parsed frame into
-// the worker's inbox. Returns false if a close frame was seen (or a
-// fatal frame error) so Network drops the link from its poll set.
+// Called by the Server run loop when readable bytes arrive on the CDP
+// socket. Feeds them through the WS framer and pushes each parsed frame
+// into the worker's inbox. Returns false if a close frame was seen (or a
+// fatal frame error) so the loop drops the link from its poll set.
 //
 // One network read can carry more bytes than the reader's current
 // free space — large CDP messages (Page.addScriptToEvaluateOnNewDocument,
@@ -167,8 +166,8 @@ pub fn onData(self: *CDP, data: []const u8) anyerror!bool {
     return true;
 }
 
-// Called by Network when it drops the link unsolicited (peer EOF, read
-// error, poll HUP/ERR). Push a disconnect into the inbox so the
+// Called by the Server run loop when it drops the link unsolicited (peer
+// EOF, read error, poll HUP/ERR). Push a disconnect into the inbox so the
 // worker's drainInbox surfaces error.ClientDisconnected.
 pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     const arena = self.browser.arena_pool.acquire(.tiny, "cdp disconnect") catch |e| switch (e) {
@@ -178,14 +177,14 @@ pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
     self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
 }
 
-// Called by Network to try to force the Worker to shutdown. Protects against a
-// stuck worker.
-pub fn terminateFromNetwork(self: *CDP) void {
+// Called by the Server run loop to try to force the Worker to shutdown.
+// Protects against a stuck worker.
+pub fn terminateFromServer(self: *CDP) void {
     self.browser.env.requestTerminate();
 }
 
 // Called in the Worker to dispatch a single CDP message bubbled up by
-// HttpClient.drainInbox. The Network thread already parsed the JSON
+// HttpClient.drainInbox. The Server run loop already parsed the JSON
 // when it pushed the message to the inbox, so we skip straight to
 // dispatchParsed without re-parsing. `c.raw` and `c.arena` outlive
 // this call (they're owned by the inbox Message which drainInbox
@@ -193,7 +192,7 @@ pub fn terminateFromNetwork(self: *CDP) void {
 // valid for the duration of dispatch.
 pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
     // Once a terminate is pending, don't dispatch
-    if (self.browser.env.isExecutionTerminating()) {
+    if (self.browser.env.terminatePending()) {
         return;
     }
 
@@ -440,15 +439,28 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
     return error.UnknownDomain;
 }
 
-fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+pub fn resolveSessionId(self: *const CDP, input_session_id: []const u8) ?[]const u8 {
     if (self.browser_session_id) |browser_session_id| {
         if (std.mem.eql(u8, browser_session_id, input_session_id)) {
-            return true;
+            return browser_session_id;
         }
     }
-    const browser_context = &(self.browser_context orelse return false);
-    const session_id = browser_context.session_id orelse return false;
-    return std.mem.eql(u8, session_id, input_session_id);
+    const browser_context = &(self.browser_context orelse return null);
+    if (browser_context.session_id) |session_id| {
+        if (std.mem.eql(u8, session_id, input_session_id)) {
+            return session_id;
+        }
+    }
+    for (browser_context.attached_sessions.items) |session| {
+        if (std.mem.eql(u8, session.id, input_session_id)) {
+            return session.id;
+        }
+    }
+    return null;
+}
+
+fn isValidSessionId(self: *const CDP, input_session_id: []const u8) bool {
+    return self.resolveSessionId(input_session_id) != null;
 }
 
 pub fn createBrowserContext(self: *CDP) ![]const u8 {
@@ -496,18 +508,22 @@ pub const BrowserContext = struct {
         data: std.ArrayList(u8),
     };
 
-    // Key for `captured_responses`. Documents are keyed by `loader_id`,
-    // everything else by `request_id` — the two id-spaces are independent
-    // counters and overlap numerically (loader 1 / request 1, loader 2 /
-    // request 2, ...), so the map key has to carry the namespace or
-    // entries collide. The wire-format prefix (`LID-` / `REQ-`) provides
-    // the same disambiguation on lookup; see `idFromRequestId` in
-    // domains/network.zig.
-    pub const CapturedResponseKey = struct {
+    // Key for `captured_responses` / `captured_requests`. Documents are
+    // keyed by `loader_id`, everything else by `request_id` — the two
+    // id-spaces are independent counters and overlap numerically (loader 1
+    // / request 1, loader 2 / request 2, ...), so the map key has to carry
+    // the namespace or entries collide. The wire-format prefix (`LID-` /
+    // `REQ-`) provides the same disambiguation on lookup; see
+    // `idFromRequestId` in domains/network.zig.
+    pub const CapturedKey = struct {
         kind: enum { request, loader },
         id: u32,
     };
 
+    pub const AttachedSession = struct {
+        id: []const u8,
+        parent_id: ?[]const u8,
+    };
     id: []const u8,
     cdp: *CDP,
 
@@ -550,6 +566,7 @@ pub const BrowserContext = struct {
     // if we get a request with a sessionId that doesn't match the current one
     // we should reject it.
     session_id: ?[]const u8,
+    attached_sessions: std.ArrayList(AttachedSession) = .empty,
 
     security_origin: []const u8,
     page_life_cycle_events: bool,
@@ -559,6 +576,11 @@ pub const BrowserContext = struct {
 
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
+
+    // True when Runtime.evaluate has been run in the main world. Optimization
+    // so that, if it has _not_ and the page is on its initial about:blank, we
+    // can use the existing Frame/js.Context as-is.
+    main_world_touched: bool = false,
 
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
@@ -572,6 +594,11 @@ pub const BrowserContext = struct {
     extra_headers: std.ArrayList(http.Header) = .empty,
 
     intercept_state: InterceptState,
+    fetch_session_id: ?[]const u8 = null,
+
+    // Request bodies retained for Network.getRequestPostData, which can be
+    // called after the transfer is gone. Capped at max_post_data_size.
+    captured_requests: std.AutoHashMapUnmanaged(CapturedKey, []const u8),
 
     // When network is enabled, we'll capture the transfer.id -> body
     // This is awfully memory intensive, but our underlying http client and
@@ -580,7 +607,7 @@ pub const BrowserContext = struct {
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
     // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(CapturedResponseKey, CapturedResponse),
+    captured_responses: std.AutoHashMapUnmanaged(CapturedKey, CapturedResponse),
 
     notification: *Notification,
 
@@ -632,6 +659,7 @@ pub const BrowserContext = struct {
             .arena = cdp.browser_context_arena.allocator(),
             .notification_arena = cdp.notification_arena.allocator(),
             .intercept_state = try InterceptState.init(allocator),
+            .captured_requests = .empty,
             .captured_responses = .empty,
             .notification = notification,
         };
@@ -832,17 +860,26 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_request_served_from_cache, self);
     }
 
-    pub fn fetchEnable(self: *BrowserContext, authRequests: bool) !void {
+    pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
         self.fetchDisable(); //in case of multiple calls
+        self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
         if (authRequests) {
             try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
         }
     }
 
+    pub fn fetchDisableForSession(self: *BrowserContext, session_id: []const u8) void {
+        const active_session_id = self.fetch_session_id orelse return;
+        if (std.mem.eql(u8, active_session_id, session_id)) {
+            self.fetchDisable();
+        }
+    }
+
     pub fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
+        self.fetch_session_id = null;
     }
 
     pub fn lifecycleEventsEnable(self: *BrowserContext) !void {
@@ -963,12 +1000,26 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/network.zig").httpRequestStart(self, msg);
+        {
+            // capture the request
+            const transfer = msg.transfer;
+            const key = keyFromTransfer(transfer);
+            const body = transfer.req.body orelse "";
+            if (body.len == 0 or body.len > @import("domains/network.zig").max_post_data_size) {
+                _ = self.captured_requests.remove(key);
+            } else {
+                const owned_body = try self.frame_arena.dupe(u8, body);
+                try self.captured_requests.put(self.frame_arena, key, owned_body);
+            }
+        }
+        defer self.resetNotificationArena();
+        try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        try @import("domains/fetch.zig").requestIntercept(self, msg);
+        defer self.resetNotificationArena();
+        try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
@@ -991,7 +1042,7 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedResponseKey {
+    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedKey {
         return if (transfer.req.resource_type == .document)
             .{ .kind = .loader, .id = transfer.req.loader_id }
         else
@@ -1050,7 +1101,7 @@ pub const BrowserContext = struct {
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
-        try @import("domains/fetch.zig").requestAuthRequired(self, data);
+        try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
     }
 
     pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
@@ -1441,9 +1492,9 @@ test "cdp: disconnect latches so the worker keeps exiting" {
 
     const client = &ctx.cdp().browser.http_client;
 
-    // Simulate the Network thread delivering a peer disconnect into the
-    // worker's inbox — the dropCdp(notify=true) path used on peer EOF and,
-    // since #2510, on shutdown via shutdownCdpLinks.
+    // Simulate the Server run loop delivering a peer disconnect into the
+    // worker's inbox — the dropLink(notify=true) path used on peer EOF and,
+    // since #2510, on shutdown via shutdownLinks.
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
         client.inbox.push(arena, .{ .disconnect = null });

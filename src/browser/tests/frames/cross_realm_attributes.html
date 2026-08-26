@@ -80,4 +80,47 @@ reads of iframe data-* returned null (WPT encoding/*).
   });
 }
 </script>
+
+<script id="cross_realm_style_resync">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const el = idf.contentDocument.getElementById('s1');
+
+    // el.style materialized from the parent realm must live in the iframe's
+    // (owner) map: a style attribute write from either realm resyncs it.
+    el.style.color = 'red';
+    testing.expectEqual('color: red;', iwin.readAttr('style'));
+
+    iwin.setAttr('style', 'color: blue');
+    testing.expectEqual('blue', el.style.color);
+
+    el.setAttribute('style', 'color: green');
+    testing.expectEqual('green', el.style.color);
+
+    // and a subsequent parent-side write must not resurrect the stale list
+    el.style.margin = '1px';
+    testing.expectEqual('color: green; margin: 1px;', iwin.readAttr('style'));
+
+    iwin.removeAttr('style');
+    testing.expectEqual('', el.style.cssText);
+    testing.expectEqual(false, iwin.checkHidden());
+
+    // inline display:none set from the parent is seen by the iframe realm's
+    // visibility check (same map, same StyleManager walk)
+    el.style.display = 'none';
+    testing.expectEqual(true, iwin.checkHidden());
+    iwin.removeAttr('style');
+    testing.expectEqual(true, el.checkVisibility());
+
+    // a rule from the iframe's own stylesheet must apply, even when the
+    // check is made from the parent realm (owner frame's StyleManager)
+    el.className = 'iframe-hidden';
+    testing.expectEqual(false, el.checkVisibility());
+    testing.expectEqual('none', iwin.getComputedStyle(el).display);
+    testing.expectEqual('none', getComputedStyle(el).display);
+    el.className = '';
+    testing.expectEqual(true, el.checkVisibility());
+  });
+</script>
 </body>

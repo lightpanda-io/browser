@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- parser-inserted srcdoc iframe; its load event is queued while the parent
+     is still parsing, so a later script's onload check observes it -->
+<iframe id=static_srcdoc srcdoc="<p>static</p>"></iframe>
+
+<script id=static_parse>
+  testing.onload(() => {
+    const doc = document.getElementById('static_srcdoc').contentDocument;
+    testing.expectEqual('static', doc.querySelector('p').textContent);
+  });
+</script>
+
+<script id=basic type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '<p>hello</p>';
+    f.onload = () => state.resolve(f);
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      // same-origin as the parent: contentDocument is readable
+      testing.expectEqual('hello', f.contentDocument.querySelector('p').textContent);
+      testing.expectEqual('about:srcdoc', f.contentWindow.location.href);
+      testing.expectEqual('about:srcdoc', f.contentDocument.URL);
+      // base URL is inherited from the parent
+      testing.expectEqual(document.baseURI, f.contentDocument.baseURI);
+    });
+  }
+</script>
+
+<script id=srcdoc_precedence_over_src type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.setAttribute('src', '/xhr');
+    f.setAttribute('srcdoc', '<p>doc wins</p>');
+    f.onload = () => state.resolve(f);
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      testing.expectEqual('doc wins', f.contentDocument.querySelector('p').textContent);
+      testing.expectEqual('about:srcdoc', f.contentWindow.location.href);
+    });
+  }
+</script>
+
+<script id=script_runs_and_posts type=module>
+  {
+    const state = await testing.async();
+    const listener = (e) => {
+      if (e.data && e.data.test === 'script_runs') {
+        window.removeEventListener('message', listener);
+        state.resolve(e.data);
+      }
+    };
+    window.addEventListener('message', listener);
+
+    const f = document.createElement('iframe');
+    f.srcdoc = "<script>parent.postMessage({test: 'script_runs', base: document.baseURI}, '*')<\/script>";
+    document.body.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual(document.baseURI, data.base);
+    });
+  }
+</script>
+
+<script id=reassign_reloads type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '<p>first</p>';
+    let loads = 0;
+    f.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        testing.expectEqual('first', f.contentDocument.querySelector('p').textContent);
+        // setAttribute on a connected iframe re-navigates too
+        f.setAttribute('srcdoc', '<p>second</p>');
+        return;
+      }
+      state.resolve(f);
+    };
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      testing.expectEqual('second', f.contentDocument.querySelector('p').textContent);
+    });
+  }
+</script>
+
+<script id=remove_falls_back_to_src type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '<p>content</p>';
+    let loads = 0;
+    f.onload = () => {
+      loads += 1;
+      if (loads === 1) {
+        f.removeAttribute('srcdoc');
+        return;
+      }
+      state.resolve(f);
+    };
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      // no src attribute, so removal navigates back to about:blank
+      testing.expectEqual('about:blank', f.contentWindow.location.href);
+      testing.expectEqual(null, f.contentDocument.querySelector('p'));
+    });
+  }
+</script>
+
+<script id=empty_srcdoc type=module>
+  {
+    const state = await testing.async();
+
+    const f = document.createElement('iframe');
+    f.srcdoc = '';
+    f.onload = () => state.resolve(f);
+    document.body.appendChild(f);
+
+    await state.done((f) => {
+      testing.expectEqual('about:srcdoc', f.contentWindow.location.href);
+      testing.expectEqual('', f.contentDocument.body.textContent);
+    });
+  }
+</script>
+
+<script id=referrer_is_parent type=module>
+  {
+    // a request from inside a srcdoc frame carries the parent's URL as the
+    // Referer (about:srcdoc isn't a valid referrer source); the relative
+    // fetch URL also proves base inheritance
+    const state = await testing.async();
+    const listener = (e) => {
+      if (e.data && e.data.test === 'referrer') {
+        window.removeEventListener('message', listener);
+        state.resolve(e.data);
+      }
+    };
+    window.addEventListener('message', listener);
+
+    const f = document.createElement('iframe');
+    f.srcdoc = "<script>fetch('/echo_referer').then(r => r.text()).then(t => parent.postMessage({test: 'referrer', body: t}, '*'))<\/script>";
+    document.body.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual(true, data.body.includes('referer=' + location.href));
+    });
+  }
+</script>
+
+<script id=meta_referrer_in_srcdoc type=module>
+  {
+    // <meta name=referrer> inside the srcdoc content sets that frame's policy
+    const state = await testing.async();
+    const listener = (e) => {
+      if (e.data && e.data.test === 'meta_referrer') {
+        window.removeEventListener('message', listener);
+        state.resolve(e.data);
+      }
+    };
+    window.addEventListener('message', listener);
+
+    const f = document.createElement('iframe');
+    f.srcdoc = "<meta name='referrer' content='no-referrer'><script>fetch('/echo_referer').then(r => r.text()).then(t => parent.postMessage({test: 'meta_referrer', body: t}, '*'))<\/script>";
+    document.body.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual(true, data.body.includes('referer=NONE'));
+    });
+  }
+</script>

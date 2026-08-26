@@ -16,10 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -31,49 +31,17 @@ const Track = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _kind: String,
 _ready_state: ReadyState,
 
 const ReadyState = enum(u8) { none, loading, loaded, @"error" };
 
 pub fn asElement(self: *Track) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Track) *Node {
     return self.asElement().asNode();
-}
-
-pub fn setKind(self: *Track, maybe_kind: ?String) void {
-    const kind = maybe_kind orelse {
-        self._kind = comptime .wrap("metadata");
-        return;
-    };
-
-    // Special case, for some reason, FF does this case-insensitive.
-    if (std.ascii.eqlIgnoreCase(kind.str(), "subtitles")) {
-        self._kind = comptime .wrap("subtitles");
-        return;
-    }
-    if (kind.eql(comptime .wrap("captions"))) {
-        self._kind = comptime .wrap("captions");
-        return;
-    }
-    if (kind.eql(comptime .wrap("descriptions"))) {
-        self._kind = comptime .wrap("descriptions");
-        return;
-    }
-    if (kind.eql(comptime .wrap("chapters"))) {
-        self._kind = comptime .wrap("chapters");
-        return;
-    }
-
-    // Anything else must be considered as `metadata`.
-    self._kind = comptime .wrap("metadata");
-}
-
-pub fn getKind(self: *const Track) String {
-    return self._kind;
 }
 
 pub const JsApi = struct {
@@ -85,7 +53,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const kind = bridge.accessor(Track.getKind, Track.setKind, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Track);
+    pub const src = reflect.url("src");
+    pub const default = reflect.boolean("default");
+    pub const srclang = reflect.string("srclang");
+    pub const label = reflect.string("label");
+
+    pub const kind = reflect.enumerated("kind", &.{ "subtitles", "captions", "descriptions", "chapters", "metadata" }, .{ .missing = "subtitles", .invalid = "metadata" });
 
     pub const NONE = bridge.property(@as(u16, @intFromEnum(ReadyState.none)), .{ .template = true });
     pub const LOADING = bridge.property(@as(u16, @intFromEnum(ReadyState.loading)), .{ .template = true });

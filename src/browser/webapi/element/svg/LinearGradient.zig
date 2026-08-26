@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -29,10 +31,11 @@ const GradientElement = @import("GradientElement.zig");
 const LinearGradient = @This();
 
 pub const Proto = GradientElement;
-_proto: *GradientElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *GradientElement else void = undefined,
 
 pub fn asElement(self: *LinearGradient) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *LinearGradient) *Node {
     return self.asElement().asNode();

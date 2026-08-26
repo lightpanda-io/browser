@@ -674,7 +674,7 @@ pub fn evaluate(
     self: *Document,
     expression: []const u8,
     context_node: ?*Node,
-    resolver: ?js.Function,
+    resolver: ?js.Value,
     result_type: ?u16,
     result: ?*XPathResult,
     frame: *Frame,
@@ -697,7 +697,7 @@ pub fn evaluate(
 pub fn createExpression(
     _: *const Document,
     expression: []const u8,
-    resolver: ?js.Function,
+    resolver: ?js.Value,
     frame: *Frame,
 ) !*XPathExpression {
     _ = resolver;
@@ -728,7 +728,15 @@ pub fn getReadyState(self: *const Document) []const u8 {
 
 pub fn getActiveElement(self: *Document) ?*Element {
     if (self._active_element) |el| {
-        return el;
+        // A focused element inside a shadow tree is exposed as its outermost
+        // host; one in a detached tree isn't exposed at all.
+        var candidate = el;
+        while (candidate.asNode().containingShadowRoot()) |shadow| {
+            candidate = shadow._host;
+        }
+        if (candidate.asNode().getRootNode(.{}) == self.asNode()) {
+            return candidate;
+        }
     }
 
     // Default to body if it exists
@@ -765,11 +773,14 @@ pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
+    if (node.is(Node.ShadowRoot) != null) {
+        return error.HierarchyError;
+    }
 
     const old_owner = node.ownerDocument(frame) orelse frame.document;
 
     if (node._parent) |parent| {
-        frame.removeNode(parent, node, .{ .will_be_reconnected = false });
+        frame.removeNode(parent, node, .{ .reconnect_to = null });
     }
 
     if (old_owner != self) {
@@ -792,7 +803,6 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
 
     const parent = self.asNode();
     frame.domChanged();
-    const parent_is_connected = parent.isConnected();
 
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(frame);
@@ -803,12 +813,12 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
             continue;
         }
 
-        var child_connected = false;
+        var previous_root: ?*Node = null;
         if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            previous_root = child.getRootNode(.{});
+            frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
         }
-        try frame.appendNode(parent, child, .{ .child_already_connected = child_connected });
+        try frame.appendNode(parent, child, .{ .previous_root = previous_root });
     }
 }
 
@@ -817,7 +827,6 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
 
     const parent = self.asNode();
     frame.domChanged();
-    const parent_is_connected = parent.isConnected();
 
     var i = nodes.len;
     while (i > 0) {
@@ -830,7 +839,7 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
             var frag_child = frag.asNode().lastChild();
             while (frag_child) |fc| {
                 const prev = fc.previousSibling();
-                frame.removeNode(frag.asNode(), fc, .{ .will_be_reconnected = parent_is_connected });
+                frame.removeNode(frag.asNode(), fc, .{ .reconnect_to = parent });
                 if (first_child) |before| {
                     try frame.insertNodeRelative(parent, fc, .{ .before = before }, .{});
                 } else {
@@ -841,17 +850,17 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
             continue;
         }
 
-        var child_connected = false;
+        var previous_root: ?*Node = null;
         if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            previous_root = child.getRootNode(.{});
+            frame.removeNode(previous_parent, child, .{ .reconnect_to = parent });
         }
 
         const first_child = parent.firstChild();
         if (first_child) |before| {
-            try frame.insertNodeRelative(parent, child, .{ .before = before }, .{ .child_already_connected = child_connected });
+            try frame.insertNodeRelative(parent, child, .{ .before = before }, .{ .previous_root = previous_root });
         } else {
-            try frame.appendNode(parent, child, .{ .child_already_connected = child_connected });
+            try frame.appendNode(parent, child, .{ .previous_root = previous_root });
         }
     }
 }
@@ -907,16 +916,18 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(&visibility_cache, frame)) {
-                const dims = element.getElementDimensions(frame);
-                // x and y both come from preorder position in our faux layout.
-                const left = pos;
-                const top = pos;
-                const right = pos + dims.width;
-                const bottom = pos + dims.height;
-                const x_contained = ignore_x or (x >= left and x <= right);
-                if (x_contained and y >= top and y <= bottom) {
-                    topmost = element;
+            if (element.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
+                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
+                    if (ignore_x) {
+                        topmost = element;
+                    } else {
+                        // only bother calculating the horiziontal position for
+                        // elements contained by the vertical band
+                        const left = element.horizontalPosition(frame);
+                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                            topmost = element;
+                        }
+                    }
                 }
             }
         }
@@ -1135,7 +1146,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         // Remove all children from document
         var it = doc_node.childrenIterator();
         while (it.next()) |child| {
-            frame.removeNode(doc_node, child, .{ .will_be_reconnected = false });
+            frame.removeNode(doc_node, child, .{ .reconnect_to = null });
         }
     }
 

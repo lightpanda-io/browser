@@ -638,7 +638,7 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
 
     var files = try cmd.arena.alloc(*File, params.files.len);
     {
-        // Files are created at refcount 0; setFiles takes ownership. If a later
+        // Files are created at refcount 0; selectFiles takes ownership. If a later
         // path fails to load, release the arenas of the ones already created.
         var created: usize = 0;
         errdefer for (files[0..created]) |f| f._proto.deinit(frame._page);
@@ -647,7 +647,7 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
             created = i + 1;
         }
     }
-    try input.setFiles(files, frame);
+    try input.selectFiles(files, frame);
 
     return cmd.sendResult(null, .{});
 }
@@ -1156,7 +1156,7 @@ test "cdp.dom: getBoxModel" {
         .params = .{ .nodeId = 3 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 25.0, 25.0, 30.0, 25.0, 30.0, 30.0, 25.0, 30.0 },
+        .content = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
         .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },

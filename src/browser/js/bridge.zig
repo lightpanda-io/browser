@@ -170,6 +170,7 @@ pub const Function = struct {
     js_name: ?[:0]const u8 = null,
     exposed: Caller.Function.Opts.Exposed = .both,
     cache: ?Caller.Function.Opts.Caching = null,
+    rejects_bad_receiver: bool,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
@@ -179,8 +180,7 @@ pub const Function = struct {
             .wpt_only = opts.wpt_only,
             .js_name = opts.js_name,
             .exposed = opts.exposed,
-            // Non-static methods receive `self` as their first param; static
-            // methods don't, so don't skip the first param for them.
+            .rejects_bad_receiver = returnsPromise(@TypeOf(func)),
             .arity = getArity(@TypeOf(func), if (opts.static) 0 else 1),
             .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
@@ -191,6 +191,14 @@ pub const Function = struct {
     }
 
     pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
+
+    fn returnsPromise(comptime F: type) bool {
+        const R = @typeInfo(F).@"fn".return_type orelse return false;
+        return switch (@typeInfo(R)) {
+            .error_union => |eu| eu.payload,
+            else => R,
+        } == js.Promise;
+    }
 
     fn getArity(comptime T: type, comptime start: usize) usize {
         const Execution = js.Execution;
@@ -219,6 +227,12 @@ pub const Function = struct {
             }
 
             if (@typeInfo(PT) == .optional) {
+                break;
+            }
+
+            // A slice of js.Value is always bound as variadic (see
+            // Caller.getArgs) and variadics contribute 0 to length.
+            if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice and @typeInfo(PT).pointer.child == js.Value) {
                 break;
             }
             count += 1;
@@ -1179,12 +1193,17 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/storage/idb/idb.zig"),
     @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/EventCounts.zig"),
     @import("../webapi/PluginArray.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
+    @import("../webapi/geolocation/Geolocation.zig"),
+    @import("../webapi/geolocation/GeolocationPosition.zig"),
+    @import("../webapi/geolocation/GeolocationCoordinates.zig"),
+    @import("../webapi/geolocation/GeolocationPositionError.zig"),
     @import("../webapi/CustomElementRegistry.zig"),
     @import("../webapi/ResizeObserver.zig"),
     @import("../webapi/IdleDeadline.zig"),
@@ -1269,6 +1288,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/TaskSignal.zig"),
     @import("../webapi/event/TaskPriorityChangeEvent.zig"),
     @import("../webapi/URL.zig"),
+    @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
@@ -1277,6 +1297,7 @@ const worker_common_apis = [_]type{
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
+    @import("../webapi/FileReaderSync.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
@@ -1302,6 +1323,8 @@ pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedW
 // subsets (PageJsApis, WorkerSnapshot.JsApis).
 pub const JsApis = blk: {
     const base = PageJsApis ++ [_]type{
+        // Worker-only, so it isn't in PageJsApis.
+        @import("../webapi/FileReaderSync.zig").JsApi,
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/SharedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,

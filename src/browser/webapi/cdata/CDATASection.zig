@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 
 const Text = @import("Text.zig");
@@ -24,7 +26,8 @@ const CDATASection = @This();
 
 pub const Proto = Text;
 
-_proto: *Text,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *Text else void = undefined,
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CDATASection);

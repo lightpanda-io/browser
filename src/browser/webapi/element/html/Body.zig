@@ -18,6 +18,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -31,10 +32,11 @@ const Body = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Body) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Body) *Node {
     return self.asElement().asNode();
@@ -101,6 +103,14 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(Body);
+    pub const vLink = reflect.stringNullToEmpty("vlink");
+    pub const text = reflect.stringNullToEmpty("text");
+    pub const link = reflect.stringNullToEmpty("link");
+    pub const bgColor = reflect.stringNullToEmpty("bgcolor");
+    pub const background = reflect.string("background");
+    pub const aLink = reflect.stringNullToEmpty("alink");
 
     pub const onblur = bridge.accessor(getOnBlur, setOnBlur, .{ .null_as_undefined = false });
     pub const onerror = bridge.accessor(getOnError, setOnError, .{ .null_as_undefined = false });

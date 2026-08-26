@@ -55,6 +55,31 @@
 }
 </script>
 
+<script id=matchMedia_device_width_height>
+{
+  // The deprecated device-* features resolve against the same 1920×1080
+  // viewport as window.screen.width / .height.
+  testing.expectEqual(true,  window.matchMedia('(min-device-width: 1px)').matches);
+  testing.expectEqual(true,  window.matchMedia('(min-device-width: 1920px)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-device-width: 1921px)').matches);
+  testing.expectEqual(true,  window.matchMedia('(max-device-width: 1920px)').matches);
+  testing.expectEqual(false, window.matchMedia('(max-device-width: 1919px)').matches);
+  testing.expectEqual(true,  window.matchMedia('(device-width: 1920px)').matches);
+
+  testing.expectEqual(true,  window.matchMedia('(min-device-height: 1080px)').matches);
+  testing.expectEqual(false, window.matchMedia('(min-device-height: 1081px)').matches);
+  testing.expectEqual(true,  window.matchMedia('(device-height: 1080px)').matches);
+
+  // .media round-trips the query as written.
+  const mql = window.matchMedia('(min-device-width: 1px)');
+  testing.expectEqual('(min-device-width: 1px)', mql.media);
+
+  // They agree with window.screen, which is what scripts cross-check.
+  testing.expectEqual(true, window.matchMedia('(min-device-width: ' + screen.width + 'px)').matches);
+  testing.expectEqual(true, window.matchMedia('(max-device-width: ' + screen.width + 'px)').matches);
+}
+</script>
+
 <script id=matchMedia_unsupported_feature>
 {
   // Unknown features evaluate to false per Media Queries Level 4.

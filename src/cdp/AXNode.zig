@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const Frame = @import("../browser/Frame.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
 const Label = @import("../browser/webapi/element/html/Label.zig");
+const interactive = @import("../browser/interactive.zig");
 
 const Node = @import("Node.zig");
 
@@ -915,13 +916,7 @@ role_attr: ?[]const u8,
 pub fn fromNode(dom: *DOMNode) AXNode {
     return .{
         .dom = dom,
-        .role_attr = blk: {
-            if (dom.is(DOMNode.Element.Html) == null) {
-                break :blk null;
-            }
-            const elt = dom.as(DOMNode.Element);
-            break :blk elt.getAttributeSafe(comptime .wrap("role"));
-        },
+        .role_attr = if (dom.is(DOMNode.Element.Html) != null) interactive.explicitRole(dom.as(DOMNode.Element)) else null,
     };
 }
 
@@ -1305,7 +1300,7 @@ fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.Visibi
 
     // CSS display:none and visibility:hidden (both inherited from ancestors via
     // style computation). Matches Chromium's AX tree which prunes both.
-    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true })) {
+    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true }, .scan)) {
         return true;
     }
 
@@ -1429,7 +1424,6 @@ fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache
 
 pub fn getRole(self: AXNode) ![]const u8 {
     if (self.role_attr) |role_value| {
-        // TODO the role can have multiple comma separated values.
         return role_value;
     }
 
@@ -1788,6 +1782,24 @@ test "AXNode: Writer query filters by role" {
 
     const name_val = nodes[0].object.get("name").?.object.get("value").?.string;
     try testing.expectEqual("Visible", name_val);
+}
+
+test "AXNode: role attribute token list" {
+    var page = try testing.pageTest("cdp/accname.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<div role="switch checkbox"></div><div role=" heading "></div><h1 role=""></h1>
+    );
+
+    var child = div.asNode().firstChild().?;
+    try testing.expectEqual("switch", try AXNode.fromNode(child).getRole());
+    child = child.nextSibling().?;
+    try testing.expectEqual("heading", try AXNode.fromNode(child).getRole());
+    child = child.nextSibling().?;
+    try testing.expectEqual("heading", try AXNode.fromNode(child).getRole());
 }
 
 test "AXNode: writer maps password input to textbox" {

@@ -35,9 +35,9 @@ _writable: *WritableStream,
 _controller: *TransformStreamDefaultController,
 
 const Transformer = struct {
+    flush: ?js.Function.Global = null,
     start: ?js.Function = null,
     transform: ?js.Function.Global = null,
-    flush: ?js.Function.Global = null,
 };
 
 pub fn init(transformer_: ?Transformer, exec: *const Execution) !*TransformStream {

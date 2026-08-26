@@ -34,6 +34,7 @@ const Element = @import("../webapi/Element.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
+const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
 
 const log = lp.log;
@@ -204,13 +205,25 @@ fn deltaToScroll(d: f64) i32 {
 // implements.
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
-    const html_element = element.is(Element.Html) orelse return false;
+
+    const html_element = element.is(Element.Html) orelse {
+        if (element.is(Element.Svg.Graphics.A) != null) {
+            return svgAnchorHref(element) != null;
+        }
+        return false;
+    };
+
     return switch (html_element._type) {
         .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
         .input, .button, .select, .textarea, .label => true,
         .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
     };
+}
+
+// SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
+fn svgAnchorHref(element: *Element) ?[]const u8 {
+    return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
 }
 
 // Clicks on editable content are for editing: they don't activate the
@@ -322,47 +335,27 @@ const JavascriptUrlTask = struct {
     }
 };
 
-pub fn handleClick(frame: *Frame, target: *Node) !void {
+// event_target is the element that was actually clicked
+// target is the element that's being activated. Imagine a span inside an anchor
+// the span is clicked (event_target), but it's the anchor that we're activating
+// (target).
+pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
+
+    if (element.is(Element.Svg.Graphics.A) != null) {
+        const href = svgAnchorHref(element) orelse return;
+        const target_name = element.getAttributeSafe(comptime .wrap("target")) orelse "";
+        return followLink(frame, target, element, href, target_name);
+    }
+
     const html_element = element.is(Element.Html) orelse return;
 
     switch (html_element._type) {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
             const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
-            if (href.len == 0) {
-                return;
-            }
-
-            if (std.mem.startsWith(u8, href, "javascript:")) {
-                // Navigating to a javascript: URL evaluates the script in the
-                // node's frame as a queued task. (A string completion value
-                // would replace the document; we ignore results.)
-                return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
-            }
-
-            if (try element.hasAttribute(comptime .wrap("download"), frame)) {
-                log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
-                return;
-            }
-
-            const target_frame = blk: {
-                const target_name = anchor.getTarget();
-                if (target_name.len == 0) {
-                    break :blk target.ownerFrame(frame);
-                }
-                break :blk frame.resolveTargetFrame(target_name) orelse {
-                    log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-                    return;
-                };
-            };
-
-            try element.focus(frame);
-            try frame.scheduleNavigation(href, .{
-                .reason = .script,
-                .kind = .{ .push = null },
-            }, .{ .anchor = target_frame });
+            return followLink(frame, target, element, href, anchor.getTarget());
         },
         .input => {
             const input = html_element.subtype(Element.Html.Input);
@@ -389,6 +382,12 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
             // behavior is to run the synthetic click activation steps on the
             // labeled control. Mirrors Chrome's HTMLLabelElement::DefaultEventHandler.
             const control = label.getControl(frame) orelse return;
+            if (control.asNode().contains(event_target)) {
+                // label is the only control that synthesizes another click, so
+                // we need to guard against that activation re-triggering the
+                // label (into an infinite loop)
+                return;
+            }
             const control_html = control.is(Element.Html) orelse return;
             try control_html.click(frame);
         },
@@ -412,6 +411,41 @@ pub fn handleClick(frame: *Frame, target: *Node) !void {
         },
         else => {},
     }
+}
+
+// Follow a link on activation. Shared by HTML <a> and SVG <a>.
+fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8, target_name: []const u8) !void {
+    if (href.len == 0) {
+        return;
+    }
+
+    if (std.mem.startsWith(u8, href, "javascript:")) {
+        // Navigating to a javascript: URL evaluates the script in the
+        // node's frame as a queued task. (A string completion value
+        // would replace the document; we ignore results.)
+        return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
+    }
+
+    if (try element.hasAttribute(comptime .wrap("download"), frame)) {
+        log.warn(.browser, "a.download", .{ .type = frame._type, .url = frame.url });
+        return;
+    }
+
+    const target_frame = blk: {
+        if (target_name.len == 0) {
+            break :blk target.ownerFrame(frame);
+        }
+        break :blk frame.resolveTargetFrame(target_name) orelse {
+            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
+            return;
+        };
+    };
+
+    try element.focus(frame);
+    try frame.scheduleNavigation(href, .{
+        .reason = .script,
+        .kind = .{ .push = null },
+    }, .{ .anchor = target_frame });
 }
 
 pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
@@ -449,6 +483,25 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
+    if (event.getIsTrusted()) {
+        if ((key.isPrintable() or key == .Enter) and keyboard_event.getCtrlKey() == false and keyboard_event.getMetaKey() == false) {
+            // Fire a keypress for a printable (or Enter) keydown when ctrl/meta
+            // aren't pressed
+            if (try dispatchKeypress(frame, target, keyboard_event)) {
+                return;
+            }
+        }
+
+        if (key == .Enter) {
+            if (target.is(Element)) |element| {
+                if (enterActivates(element)) {
+                    // Enter generates a button-like "click" for  some elements
+                    return dispatchKeyboardClick(frame, element);
+                }
+            }
+        }
+    }
+
     if (target.is(Element.Html.Input)) |input| {
         if (key == .Enter) {
             return frame.submitForm(input.asElement(), input.getForm(frame), .{});
@@ -477,6 +530,91 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         // zig fmt: on
         return textarea.innerInsert(append, frame);
     }
+}
+
+pub fn handleKeyup(frame: *Frame, target: *Node, event: *Event) !void {
+    if (event.getIsTrusted() == false) {
+        return;
+    }
+    const keyboard_event = event.is(KeyboardEvent) orelse return;
+    const key = keyboard_event.getKey();
+
+    if (key.isPrintable() == false or std.mem.eql(u8, key.asString(), " ") == false) {
+        return;
+    }
+    const element = target.is(Element) orelse return;
+    if (spaceActivates(element)) {
+        // on keyup, for a trusted event and on specific element types, space
+        // triggers a click-like event
+        return dispatchKeyboardClick(frame, element);
+    }
+}
+
+// Dispatch keypress mirroring `keydown`'s key and modifiers; returns true when
+// a listener canceled it.
+fn dispatchKeypress(frame: *Frame, target: *Node, keydown: *KeyboardEvent) !bool {
+    const event = (try KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .key = keydown.getKey().asString(),
+        .ctrlKey = keydown.getCtrlKey(),
+        .shiftKey = keydown.getShiftKey(),
+        .altKey = keydown.getAltKey(),
+        .metaKey = keydown.getMetaKey(),
+    }, frame)).asEvent();
+
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer _ = event.releaseRef(frame._page);
+
+    try frame._event_manager.dispatch(target.asEventTarget(), event);
+    return event._prevent_default;
+}
+
+// keydown+enter or keyup+space trigger this syntthetic pointer event (under
+// specific conditions, see handleKeydown and handleKeyup).
+fn dispatchKeyboardClick(frame: *Frame, element: *Element) !void {
+    const event = try PointerEvent.initTrusted("click", .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .pointerId = -1,
+    }, frame);
+    try frame._event_manager.dispatch(element.asEventTarget(), event.asEvent());
+}
+
+// elements where enter on a keydown should dispatch a click-click event
+fn enterActivates(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    if (html_element._type == .button) {
+        return true;
+    }
+    if (html_element._type == .anchor) {
+        return element.getAttributeSafe(comptime .wrap("href")) != null;
+    }
+    if (element.is(Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .button, .submit, .reset, .image => true,
+            else => false,
+        };
+    }
+    return false;
+}
+
+// elements where space on a keyup should dispatch a click-click event
+fn spaceActivates(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    if (html_element._type == .button) {
+        return true;
+    }
+    if (element.is(Element.Html.Input)) |input| {
+        return switch (input._input_type) {
+            .button, .submit, .reset, .image, .checkbox, .radio => true,
+            else => false,
+        };
+    }
+    return false;
 }
 
 // Sequential focus navigation: move `document.activeElement` to the next (Tab)

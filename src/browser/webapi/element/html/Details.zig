@@ -1,3 +1,5 @@
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -9,20 +11,17 @@ const Details = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Details) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Details) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Details) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getOpen(self: *const Details) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
 
 pub fn setOpen(self: *Details, open: bool, frame: *Frame) !void {
@@ -33,12 +32,8 @@ pub fn setOpen(self: *Details, open: bool, frame: *Frame) !void {
     }
 }
 
-pub fn getName(self: *const Details) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *Details, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
+pub fn getOpen(self: *const Details) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
 
 pub const JsApi = struct {
@@ -50,8 +45,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const open = bridge.accessor(Details.getOpen, Details.setOpen, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(Details.getName, Details.setName, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Details);
+
+    pub const open = reflect.boolean("open");
+    pub const name = reflect.string("name");
 };
 
 const testing = @import("../../../../testing.zig");

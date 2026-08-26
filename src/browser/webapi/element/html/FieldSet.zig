@@ -1,3 +1,5 @@
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
@@ -8,33 +10,14 @@ const FieldSet = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *FieldSet) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *FieldSet) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getDisabled(self: *FieldSet) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
-pub fn setDisabled(self: *FieldSet, value: bool, frame: *Frame) !void {
-    if (value) {
-        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
-    } else {
-        try self.asElement().removeAttribute(comptime .wrap("disabled"), frame);
-    }
-}
-
-pub fn getName(self: *FieldSet) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
-}
-
-pub fn setName(self: *FieldSet, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {
@@ -46,8 +29,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const disabled = bridge.accessor(FieldSet.getDisabled, FieldSet.setDisabled, .{ .ce_reactions = true });
-    pub const name = bridge.accessor(FieldSet.getName, FieldSet.setName, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(FieldSet);
+
+    pub const disabled = reflect.boolean("disabled");
+    pub const name = reflect.string("name");
 };
 
 const testing = @import("../../../../testing.zig");

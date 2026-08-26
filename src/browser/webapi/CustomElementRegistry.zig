@@ -181,7 +181,9 @@ fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame
         return Custom.checkAndAttachBuiltIn(element, frame);
     };
 
-    if (custom._definition != null) return;
+    if (custom._definition != null or custom._upgrade_failed) {
+        return;
+    }
 
     const name = custom._tag_name.str();
     const definition = self._definitions.get(name) orelse return;
@@ -198,18 +200,48 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
 
     const node = custom.asNode();
     const prev_upgrading = frame._upgrading_element;
+    const prev_consumed = frame._upgrading_consumed;
     frame._upgrading_element = node;
-    defer frame._upgrading_element = prev_upgrading;
+    frame._upgrading_consumed = false;
+    defer {
+        frame._upgrading_element = prev_upgrading;
+        frame._upgrading_consumed = prev_consumed;
+    }
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    var caught: js.TryCatch.Caught = undefined;
-    _ = ls.toLocal(definition.constructor).newInstance(&caught) catch |err| {
-        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
+    const local = &ls.local;
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    const object = ls.toLocal(definition.constructor).newInstanceThrow() catch |err| {
+        if (err == error.ExecutionTerminated) {
+            custom._definition = null;
+            return err;
+        }
+        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
+        upgradeFailed(custom);
+        if (try_catch.exceptionValue()) |exc| {
+            frame.window.reportError(exc, frame) catch {};
+        }
         return error.CustomElementUpgradeFailed;
     };
+
+    const same = if (object.toZig(*Node)) |result| result == node else |_| false;
+    if (!same) {
+        // the construction result must be the element being upgraded.
+        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .reason = "constructor returned another value" });
+        upgradeFailed(custom);
+        const exc: js.Value = .{
+            .local = local,
+            .handle = local.isolate.createTypeError("custom element constructor must return the upgraded element"),
+        };
+        frame.window.reportError(exc, frame) catch {};
+        return error.CustomElementUpgradeFailed;
+    }
 
     // Enqueue attributeChangedCallback for existing observed attributes
     const element = custom.asElement();
@@ -225,6 +257,11 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
             log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
         };
     }
+}
+
+fn upgradeFailed(custom: *Custom) void {
+    custom._definition = null;
+    custom._upgrade_failed = true;
 }
 
 fn validateName(name: []const u8) !void {
@@ -288,5 +325,6 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: CustomElementRegistry" {
+    testing.expectLog(&.{ .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js, .js });
     try testing.htmlRunner("custom_elements", .{});
 }

@@ -143,7 +143,7 @@ pub fn init(
 
     const factory = frame._factory;
     const leaf = try Factory.chainedWithAllocator(arena, .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .worker_global_scope },
         WorkerGlobalScope{
             .url = url,
             .arena = arena,
@@ -173,7 +173,6 @@ pub fn init(
     });
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
-    self._proto._type = .{ .worker_global_scope = self };
 
     self._http_owner = .init(&frame._page.blob_urls, &self.origin);
 
@@ -262,11 +261,7 @@ pub fn headersForRequest(self: *WorkerGlobalScope, transfer: *HttpClient.Transfe
 
 pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
-
-    if (!std.mem.startsWith(u8, url, current_origin)) {
-        return false;
-    }
-    return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
+    return URL.isSameOrigin(url, current_origin);
 }
 
 pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {

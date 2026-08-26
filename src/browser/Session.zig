@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
+const Config = @import("../Config.zig");
 
 const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
@@ -115,6 +116,10 @@ _console_capture: bool = false,
 // (synchronous fetch + parse + register on `document.styleSheets`).
 load_external_stylesheets: bool = false,
 
+// Sub-resources to actually request. Off by default: a driver that only
+// reads the DOM shouldn't pay for bytes it never looks at.
+load_resources: Config.LoadResources = .{},
+
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
 /// ticks; once `check` returns true the wait returns `error.Cancelled`.
 /// The agent installs this so SIGINT can abort an in-flight tool call
@@ -161,10 +166,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     errdefer arena.release();
 
     const navigation = try Factory.chainedWithAllocator(arena.allocator(), .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .navigation },
         Navigation{ ._proto = undefined },
     });
-    navigation._proto._type = .{ .navigation = navigation };
 
     self.* = .{
         .arena = arena,
@@ -181,6 +185,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .worker_loading_enabled = !browser.app.config.disableWorkers(),
         ._console_messages = .init(allocator),
         .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
+        .load_resources = browser.app.config.loadResources(),
     };
     errdefer self._console_messages.deinit();
 }
@@ -598,8 +603,8 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
             continue;
         };
 
-        if (qn.is_about_blank) {
-            // Defer about:blank to second pass
+        if (qn.is_about_something) {
+            // Defer about:blank or about:srcdoc to second pass
             try about_blank_queue.append(self.arena.allocator(), frame);
             continue;
         }
@@ -637,7 +642,7 @@ fn processPageQueuedNavigation(self: *Session, page: *Page) !void {
     while (i < new_navigations.items.len) {
         const frame = new_navigations.items[i];
         if (frame._queued_navigation) |qn| {
-            if (qn.is_about_blank) {
+            if (qn.is_about_something) {
                 log.warn(.frame, "recursive about blank", .{});
                 _ = page.queued_navigation.swapRemove(i);
                 continue;
@@ -783,7 +788,7 @@ fn processRootQueuedNavigation(self: *Session, page: *Page) !void {
     // Synthetic navigations (about:blank, blob:) commit instantly — no HTTP,
     // so there is no in-flight window to worry about. Use the optimized
     // immediate-swap path for them.
-    const is_synthetic = qn.is_about_blank or std.mem.startsWith(u8, qn.url, "blob:");
+    const is_synthetic = qn.is_about_something or std.mem.startsWith(u8, qn.url, "blob:");
 
     // The qn arena is consumed here regardless of success — frame.navigate
     // dupes the URL into the page's own arena, so we can release the qn

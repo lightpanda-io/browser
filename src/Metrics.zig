@@ -34,6 +34,7 @@ arena_miss: CounterEnum("size", @import("ArenaPool.zig").BucketSize) = .{},
 arena_inflight: GaugeEnum("size", @import("ArenaPool.zig").BucketSize) = .{},
 arena_memory_bytes: Gauge = .{},
 navigate: CounterEnum("type", @import("telemetry/telemetry.zig").Event.Navigate.Context) = .{},
+js_heap_physical_bytes: Gauge = .{},
 js_heap_size_bytes: Histogram(&.{
     4 * 1024 * 1024,
     8 * 1024 * 1024,
@@ -72,6 +73,18 @@ http_response_size_bytes: Histogram(&.{
     2 * 1024 * 1024,
     4 * 1024 * 1024,
 }) = .{},
+http_navigation_delay_ms: Histogram(&.{
+    10,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    30000,
+}) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
 
@@ -91,6 +104,7 @@ const help = .{
     .arena_inflight = "Arenas currently checked out of the pool. Above the bucket's max, every acquisition is a miss and every release is discarded",
     .arena_memory_bytes = "Backing memory held by pooled arenas, including capacity retained on the free list",
     .navigate = "Navigations by initiating frame type",
+    .js_heap_physical_bytes = "V8 heap physical size summed over every live isolate (one per CDP connection).",
     .js_heap_size_bytes = "V8 heap physical size, sampled when a page is closed",
     .http_requests = "HTTP requests submitted, by dispatch mode (excludes internal requests like robots.txt)",
     .http_status = "Final HTTP response status category (redirects counted once, at the final hop)",
@@ -99,6 +113,7 @@ const help = .{
     .http_redirects = "HTTP redirect hops followed",
     .http_duration_ms = "HTTP request wall-clock duration in milliseconds",
     .http_response_size_bytes = "HTTP response body size in bytes",
+    .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
 };
@@ -158,6 +173,13 @@ const Gauge = struct {
 
     pub fn decrBy(self: *Gauge, n: usize) void {
         _ = @atomicRmw(isize, &self.value, .Sub, @intCast(n), .monotonic);
+    }
+
+    // For callers that track an absolute value and report the change since
+    // their last report. There's no set(): the gauge is a sum over threads,
+    // so a caller can only move its own contribution.
+    pub fn add(self: *Gauge, n: i64) void {
+        _ = @atomicRmw(isize, &self.value, .Add, @intCast(n), .monotonic);
     }
 
     fn write(self: *const Gauge, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {

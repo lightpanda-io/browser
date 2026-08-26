@@ -19,6 +19,7 @@
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -29,12 +30,12 @@ const String = lp.String;
 const Heading = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _tag_name: String,
 _tag: Element.Tag,
 
 pub fn asElement(self: *Heading) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Heading) *Node {
     return self.asElement().asNode();
@@ -48,4 +49,7 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(Heading);
+    pub const @"align" = reflect.string("align");
 };

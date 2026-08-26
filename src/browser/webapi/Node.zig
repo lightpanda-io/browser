@@ -45,6 +45,7 @@ const Node = @This();
 pub const Proto = EventTarget;
 
 _type: Type,
+_flags: Flags = .{}, // Fits in existing struct padding.
 _parent: ?*Node = null,
 // The first child's `_prev` points at the LAST child (keeping lastChild
 // O(1)); the last child's `_next` is null. A detached node has null links.
@@ -66,6 +67,11 @@ pub const Type = enum(u8) {
     document_type,
     attribute,
     document_fragment,
+};
+
+pub const Flags = packed struct(u8) {
+    assigned_slot: bool = false,
+    _unused: u7 = 0,
 };
 
 pub fn Subtype(comptime tag: Type) type {
@@ -393,10 +399,7 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
 
     frame.domChanged();
 
-    // If the child is currently connected, and if its new parent is connected,
-    // then we can remove + add a bit more efficiently (we don't have to fully
-    // disconnect then reconnect)
-    const child_connected = child.isConnected();
+    const previous_root = child.getRootNode(.{});
 
     // Check if we're adopting the node to a different document
     const child_owner = child.ownerDocument(frame);
@@ -404,12 +407,8 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     if (child._parent) |parent| {
-        // we can signal removeNode that the child will remain connected
-        // (when it's appended to self) so that it can be a bit more efficient.
-        // But on cross-document moves the child must fully disconnect from the
-        // source document (firing disconnectedCallback) before adoption.
         frame.removeNode(parent, child, .{
-            .will_be_reconnected = self.isConnected() and !adopting_to_new_document,
+            .reconnect_to = if (adopting_to_new_document) null else self,
         });
     }
 
@@ -419,7 +418,7 @@ pub fn appendChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     }
 
     try frame.appendNode(self, child, .{
-        .child_already_connected = child_connected,
+        .previous_root = previous_root,
         .adopting_to_new_document = adopting_to_new_document,
     });
     return child;
@@ -464,7 +463,7 @@ pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFaile
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            try writer.writeAll(text._proto._data.str());
+            try writer.writeAll(text.asCData()._data.str());
         }
     }
 }
@@ -476,7 +475,7 @@ pub fn childTextContentLen(self: *Node) usize {
     var it = self.childrenIterator();
     while (it.next()) |child| {
         if (child.is(CData.Text)) |text| {
-            len += text._proto._data.str().len;
+            len += text.asCData()._data.str().len;
         }
     }
     return len;
@@ -636,15 +635,15 @@ pub fn isEqualChildren(a: *Node, b: *Node) bool {
     return a_count == b_count;
 }
 
+// The shadow root whose tree this node belongs to, or null when it belongs to
+// a document tree or a detached one. Inclusive: a shadow root is in its own
+// tree.
+pub fn containingShadowRoot(self: *Node) ?*ShadowRoot {
+    return self.getRootNode(.{}).is(ShadowRoot);
+}
+
 pub fn isInShadowTree(self: *Node) bool {
-    var node = self._parent;
-    while (node) |n| {
-        if (n.is(ShadowRoot) != null) {
-            return true;
-        }
-        node = n._parent;
-    }
-    return false;
+    return self.containingShadowRoot() != null;
 }
 
 pub fn isConnected(self: *const Node) bool {
@@ -811,7 +810,7 @@ pub fn removeChild(self: *Node, child: *Node, frame: *Frame) !*Node {
     while (it.next()) |n| {
         if (n == child) {
             frame.domChanged();
-            frame.removeNode(self, child, .{ .will_be_reconnected = false });
+            frame.removeNode(self, child, .{ .reconnect_to = null });
             return child;
         }
     }
@@ -850,7 +849,7 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
         return new_node;
     }
 
-    const child_already_connected = new_node.isConnected();
+    const previous_root = new_node.getRootNode(.{});
 
     // Check if we're adopting the node to a different document
     const child_owner = new_node.ownerDocument(frame);
@@ -858,9 +857,10 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
     const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     frame.domChanged();
-    const will_be_reconnected = self.isConnected() and !adopting_to_new_document;
     if (new_node._parent) |parent| {
-        frame.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
+        frame.removeNode(parent, new_node, .{
+            .reconnect_to = if (adopting_to_new_document) null else self,
+        });
     }
 
     // Adopt the node tree if moving between documents
@@ -873,7 +873,7 @@ fn insertBeforeInner(self: *Node, new_node: *Node, ref_node_: ?*Node, frame: *Fr
         new_node,
         .{ .before = ref_node },
         .{
-            .child_already_connected = child_already_connected,
+            .previous_root = previous_root,
             .adopting_to_new_document = adopting_to_new_document,
         },
     );
@@ -894,16 +894,16 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         // followed by an addition record.
         const prev = old_child.previousSibling();
         const next = old_child.nextSibling();
-        const was_connected = old_child.isConnected();
-        frame.removeNode(self, old_child, .{ .will_be_reconnected = was_connected, .notify_observers = false });
+        const previous_root = old_child.getRootNode(.{});
+        frame.removeNode(self, old_child, .{ .reconnect_to = self, .notify_observers = false });
         if (next) |reference| {
             try frame.insertNodeRelative(self, old_child, .{ .before = reference }, .{
-                .child_already_connected = was_connected,
+                .previous_root = previous_root,
                 .notify_observers = false,
             });
         } else {
             try frame.appendNode(self, old_child, .{
-                .child_already_connected = was_connected,
+                .previous_root = previous_root,
                 .notify_observers = false,
             });
         }
@@ -926,15 +926,16 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         reference = new_child.nextSibling();
     }
 
-    const child_already_connected = new_child.isConnected();
+    const previous_root = new_child.getRootNode(.{});
     const child_owner = new_child.ownerDocument(frame);
     const parent_owner = self.ownerDocument(frame) orelse self.as(Document);
     const adopting = child_owner != null and child_owner.? != parent_owner;
-    const will_be_reconnected = self.isConnected() and !adopting;
 
     if (new_child.is(DocumentFragment) == null) {
         if (new_child._parent) |previous_parent| {
-            frame.removeNode(previous_parent, new_child, .{ .will_be_reconnected = will_be_reconnected });
+            frame.removeNode(previous_parent, new_child, .{
+                .reconnect_to = if (adopting) null else self,
+            });
         }
         if (adopting) {
             try frame.adoptNodeTree(new_child, child_owner.?, parent_owner);
@@ -953,7 +954,7 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
         }
     }
 
-    frame.removeNode(self, old_child, .{ .will_be_reconnected = false, .notify_observers = false });
+    frame.removeNode(self, old_child, .{ .reconnect_to = null, .notify_observers = false });
 
     if (new_child.is(DocumentFragment)) |_| {
         try frame.moveAllChildren(new_child, self, reference, .silent_parent);
@@ -963,14 +964,14 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, frame: *Fra
             new_child,
             .{ .before = ref },
             .{
-                .child_already_connected = child_already_connected,
+                .previous_root = previous_root,
                 .adopting_to_new_document = adopting,
                 .notify_observers = false,
             },
         );
     } else {
         try frame.appendNode(self, new_child, .{
-            .child_already_connected = child_already_connected,
+            .previous_root = previous_root,
             .adopting_to_new_document = adopting,
             .notify_observers = false,
         });
@@ -1049,21 +1050,23 @@ pub fn moveBefore(self: *Node, node_val: js.Value, child_val: js.Value, frame: *
 
     frame.domChanged();
 
-    // selfand node share a root, so the connectedness won't change. This API
-    // should appear atomic as much as possible. We can skip the id-map
-    // management (because it won't change) and custom elements shouldn't fire
-    // disconnect/connected callbacks. But MutationObservers and ranges still
-    // fire
+    // self and node share a *composed* root, so the connectedness won't
+    // change — but the move can still cross tree scopes (document <->
+    // shadow), moving ids between maps. This API should appear atomic as much
+    // as possible: custom elements don't fire disconnected/connected
+    // callbacks (they get connectedMoveCallback below). But MutationObservers
+    // and ranges still fire.
     const connected = node.isConnected();
+    const previous_root = node.getRootNode(.{});
 
     if (node._parent) |old_parent| {
-        frame.removeNode(old_parent, node, .{ .will_be_reconnected = connected });
+        frame.removeNode(old_parent, node, .{ .reconnect_to = self });
     }
 
     if (ref) |r| {
-        try frame.insertNodeRelative(self, node, .{ .before = r }, .{ .child_already_connected = connected });
+        try frame.insertNodeRelative(self, node, .{ .before = r }, .{ .previous_root = previous_root });
     } else {
-        try frame.appendNode(self, node, .{ .child_already_connected = connected });
+        try frame.appendNode(self, node, .{ .previous_root = previous_root });
     }
 
     if (connected) {
@@ -1209,6 +1212,10 @@ const CloneError = error{
     ExecutionTerminated,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
+    if (self.is(ShadowRoot) != null) {
+        return error.NotSupported;
+    }
+
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => {
@@ -1389,8 +1396,8 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
             continue;
         };
 
-        if (text_node._proto.getData().len == 0) {
-            frame.removeNode(self, current_node, .{ .will_be_reconnected = false });
+        if (text_node.asCData().getData().len == 0) {
+            frame.removeNode(self, current_node, .{ .reconnect_to = null });
             child = next_node;
             continue;
         }
@@ -1405,9 +1412,9 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), fra
 
                     const to_remove = node_to_merge;
                     next_node = node_to_merge.nextSibling();
-                    frame.removeNode(self, to_remove, .{ .will_be_reconnected = false });
+                    frame.removeNode(self, to_remove, .{ .reconnect_to = null });
                 }
-                text_node._proto._data = try frame.dupeSSO(buffer.items);
+                text_node.asCData()._data = try frame.dupeSSO(buffer.items);
                 buffer.clearRetainingCapacity();
             }
         }
@@ -1556,14 +1563,13 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
     // Append new children
-    const parent_is_connected = self.isConnected();
     for (children_to_add.items) |child| {
-        var child_connected = false;
+        var previous_root: ?*Node = null;
         if (child._parent) |previous_parent| {
-            child_connected = child.isConnected();
-            frame.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+            previous_root = child.getRootNode(.{});
+            frame.removeNode(previous_parent, child, .{ .reconnect_to = self });
         }
-        try frame.appendNode(self, child, .{ .child_already_connected = child_connected, .notify_observers = false });
+        try frame.appendNode(self, child, .{ .previous_root = previous_root, .notify_observers = false });
     }
 
     if (notify and (removed.items.len > 0 or children_to_add.items.len > 0)) {
@@ -1581,7 +1587,7 @@ fn removeAllChildrenCollecting(self: *Node, notify: bool, frame: *Frame) !std.Ar
         if (notify) {
             try removed.append(frame.call_arena, child);
         }
-        frame.removeNode(self, child, .{ .will_be_reconnected = false, .notify_observers = false });
+        frame.removeNode(self, child, .{ .reconnect_to = null, .notify_observers = false });
     }
     return removed;
 }
@@ -1692,6 +1698,14 @@ pub fn unlink(self: *Node, child: *Node) void {
     }
     child._next = null;
     child._prev = null;
+}
+
+pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
+    // optimized with a flag because this is probed for every hop of every event path
+    if (!self._flags.assigned_slot) {
+        return null;
+    }
+    return frame._assigned_slots.get(self);
 }
 
 pub const JsApi = struct {
@@ -1866,4 +1880,12 @@ pub const NodeOrText = union(enum) {
 const testing = @import("../../testing.zig");
 test "WebApi: Node" {
     try testing.htmlRunner("node", .{});
+}
+
+test "Node: text chain slot size" {
+    // Guard against accidental growth: new Node fields (e.g. _flags) must fit
+    // in existing padding. Debug is larger from the _proto_canary fields.
+    const Text = @import("cdata/Text.zig");
+    const slot = comptime Factory.chainOffsetOf(Text, Text) + @sizeOf(Text);
+    try testing.expectEqual(if (comptime lp.IS_DEBUG) 104 else 73, slot);
 }

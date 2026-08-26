@@ -122,8 +122,8 @@ pub fn getAll(self: *const URLSearchParams, name: []const u8, exec: *const Execu
     return self._params.getAll(exec.local_arena, name);
 }
 
-pub fn has(self: *const URLSearchParams, name: []const u8) bool {
-    return self._params.has(name);
+pub fn has(self: *const URLSearchParams, name: []const u8, value: ?[]const u8) bool {
+    return self._params.has(name, value);
 }
 
 pub fn set(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
@@ -162,7 +162,10 @@ pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
 pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !void {
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
-    for (self._params._entries.items) |entry| {
+    // the callback can mutate the list
+    var i: usize = 0;
+    while (i < self._params._entries.items.len) : (i += 1) {
+        const entry = self._params._entries.items[i];
         cb.call(void, .{ entry.value.str(), entry.name.str(), self }) catch |err| {
             // this is a non-JS error
             log.warn(.js, "URLSearchParams.forEach", .{ .err = err });
@@ -171,11 +174,59 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
 }
 
 pub fn sort(self: *URLSearchParams) void {
+    // std.mem.sort is stable (as required by the spec)
     std.mem.sort(KeyValueList.Entry, self._params._entries.items, {}, struct {
         fn cmp(_: void, a: KeyValueList.Entry, b: KeyValueList.Entry) bool {
-            return std.mem.order(u8, a.name.str(), b.name.str()) == .lt;
+            return utf16Order(a.name.str(), b.name.str()) == .lt;
         }
     }.cmp);
+}
+
+fn utf16Order(a: []const u8, b: []const u8) std.math.Order {
+    var ia: usize = 0;
+    var ib: usize = 0;
+    var pending_a: ?u16 = null;
+    var pending_b: ?u16 = null;
+    while (true) {
+        const ua = nextUtf16Unit(a, &ia, &pending_a) orelse {
+            return if (ib < b.len or pending_b != null) .lt else .eq;
+        };
+        const ub = nextUtf16Unit(b, &ib, &pending_b) orelse return .gt;
+        if (ua != ub) {
+            return if (ua < ub) .lt else .gt;
+        }
+    }
+}
+
+fn nextUtf16Unit(s: []const u8, i: *usize, pending: *?u16) ?u16 {
+    if (pending.*) |unit| {
+        pending.* = null;
+        return unit;
+    }
+    if (i.* >= s.len) {
+        return null;
+    }
+    // Invalid UTF-8 (e.g. raw bytes from an unpaired percent-escape) compares
+    // as U+FFFD, matching how the bytes surface to JS.
+    const seq_len = std.unicode.utf8ByteSequenceLength(s[i.*]) catch {
+        i.* += 1;
+        return 0xFFFD;
+    };
+    if (i.* + seq_len > s.len) {
+        i.* = s.len;
+        return 0xFFFD;
+    }
+    const cp = std.unicode.utf8Decode(s[i.* .. i.* + seq_len]) catch {
+        i.* += 1;
+        return 0xFFFD;
+    };
+    i.* += seq_len;
+    if (cp < 0x10000) {
+        return @intCast(cp);
+    }
+    const c = cp - 0x10000;
+    pending.* = @intCast(0xDC00 + (c & 0x3FF));
+    return @intCast(0xD800 + (c >> 10));
 }
 
 fn paramsFromArray(allocator: Allocator, array: js.Array) !KeyValueList {
@@ -264,16 +315,11 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     var in_i: usize = 0;
     while (in_i < value.len) {
         const b = value[in_i];
-        if (b == '%') {
-            if (in_i + 2 >= value.len or !std.ascii.isHex(value[in_i + 1]) or !std.ascii.isHex(value[in_i + 2])) {
-                return error.InvalidEscapeSequence;
-            }
+        if (b == '%' and isEscapeTriplet(value, in_i)) {
             in_i += 3;
             unescaped_len -= 2;
-        } else if (b == '+') {
-            has_plus = true;
-            in_i += 1;
         } else {
+            has_plus = has_plus or b == '+';
             in_i += 1;
         }
     }
@@ -293,7 +339,7 @@ fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
     in_i = 0;
     for (0..unescaped_len) |i| {
         const b = value[in_i];
-        if (b == '%') {
+        if (b == '%' and isEscapeTriplet(value, in_i)) {
             out[i] = decodeHex(value[in_i + 1]) << 4 | decodeHex(value[in_i + 2]);
             in_i += 3;
         } else if (b == '+') {
@@ -346,6 +392,11 @@ pub const Iterator = struct {
         return .{ e.name.str(), e.value.str() };
     }
 };
+
+// True when value[i] starts a valid %XX escape
+fn isEscapeTriplet(value: []const u8, i: usize) bool {
+    return i + 2 < value.len and std.ascii.isHex(value[i + 1]) and std.ascii.isHex(value[i + 2]);
+}
 
 const GenericIterator = @import("../collections/iterator.zig").Entry;
 pub const KeyIterator = GenericIterator(Iterator, "0");

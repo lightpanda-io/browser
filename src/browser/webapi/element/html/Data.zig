@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 
@@ -27,22 +29,15 @@ const Data = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Data) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 
 pub fn asNode(self: *Data) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getValue(self: *Data) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("value")) orelse "";
-}
-
-pub fn setValue(self: *Data, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
 pub const JsApi = struct {
@@ -54,5 +49,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const value = bridge.accessor(Data.getValue, Data.setValue, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Data);
+
+    pub const value = reflect.string("value");
 };

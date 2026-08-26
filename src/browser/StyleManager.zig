@@ -33,7 +33,6 @@ const SelectorList = @import("webapi/selector/List.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
-const CSSStyleProperty = @import("webapi/css/CSSStyleDeclaration.zig").Property;
 
 const log = lp.log;
 const String = lp.String;
@@ -573,7 +572,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 // Check if an element is hidden based on options.
 // By default only checks display:none.
 // Walks up the tree to check ancestors.
-pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions) bool {
+pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
 
     var current: ?*Element = el;
@@ -590,7 +589,7 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
             }
         }
 
-        const hidden = self.isElementHidden(elem, options);
+        const hidden = self.isElementHidden(elem, options, access);
 
         // Store in cache
         if (cache) |c| {
@@ -611,18 +610,18 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
 /// Computed display:none for a single element (own property, no ancestor walk).
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements"
 /// via `isElementHidden`.
-pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
+pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-    return self.isElementHidden(el, .{});
+    return self.isElementHidden(el, .{}, access);
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
 /// rule — the UA stylesheet's hidden elements (<head>, <script>, [hidden], …)
 /// are NOT counted, so document scaffolding is preserved. Used by the HTML
 /// dump's "invisible" strip mode.
-pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
+pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-    return self.isElementHidden(el, .{ .ua_display_none = false });
+    return self.isElementHidden(el, .{ .ua_display_none = false }, access);
 }
 
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
@@ -644,6 +643,9 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
         }
     }
 
+    // dialog:not([open]) { display: none }
+    if (tag == .dialog and !el.hasAttributeSafe(comptime .wrap("open"))) return true;
+
     // details:not([open]) > *:not(summary) { display: none }
     if (tag != .summary) {
         if (el.parentElement()) |parent| {
@@ -664,7 +666,7 @@ pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
     var current: ?*Element = el;
     while (current) |elem| {
-        if (self.isElementHidden(elem, .{ .check_display = false, .check_visibility = true })) {
+        if (self.isElementHidden(elem, .{ .check_display = false, .check_visibility = true }, .materialize)) {
             return true;
         }
         current = elem.parentElement();
@@ -673,7 +675,7 @@ pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
 }
 
 /// Check if a single element (not ancestors) is hidden.
-fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
+fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
     // Track best match per property (value + priority)
     // Initialize priority to INLINE_PRIORITY for properties we don't care about - this makes
     // the loop naturally skip them since no stylesheet rule can have priority >= INLINE_PRIORITY
@@ -688,8 +690,8 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
-        if (getInlineStyleProperty(el, comptime .wrap("display"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("none"))) {
+        if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
+            if (std.ascii.eqlIgnoreCase(value, "none")) {
                 return true; // Early exit for hiding value
             }
             display_none = false;
@@ -701,8 +703,8 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_visibility) {
-        if (getInlineStyleProperty(el, comptime .wrap("visibility"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("hidden")) or property._value.eql(comptime .wrap("collapse"))) {
+        if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
+            if (std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse")) {
                 return true;
             }
             visibility_hidden = false;
@@ -716,8 +718,8 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (options.check_opacity) {
-        if (getInlineStyleProperty(el, comptime .wrap("opacity"), self.frame)) |property| {
-            if (property._value.eql(comptime .wrap("0"))) {
+        if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
+            if (std.ascii.eqlIgnoreCase(value, "0")) {
                 return true;
             }
             opacity_zero = false;
@@ -871,8 +873,8 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     const frame = self.frame;
 
     // Check inline style first
-    if (getInlineStyleProperty(el, .wrap("pointer-events"), frame)) |property| {
-        if (property._value.eql(comptime .wrap("none"))) {
+    if (inlineValue(el, .wrap("pointer-events"), .materialize, frame)) |value| {
+        if (std.ascii.eqlIgnoreCase(value, "none")) {
             return true;
         }
         return false;
@@ -1046,19 +1048,19 @@ fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties 
     const decl = style.asCSSStyleDeclaration();
 
     if (decl.findProperty(comptime .wrap("display"))) |property| {
-        props.display_none = property._value.eql(comptime .wrap("none"));
+        props.display_none = property._value.eqlSliceIgnoreCase("none");
     }
 
     if (decl.findProperty(comptime .wrap("visibility"))) |property| {
-        props.visibility_hidden = property._value.eql(comptime .wrap("hidden")) or property._value.eql(comptime .wrap("collapse"));
+        props.visibility_hidden = property._value.eqlSliceIgnoreCase("hidden") or property._value.eqlSliceIgnoreCase("collapse");
     }
 
     if (decl.findProperty(comptime .wrap("opacity"))) |property| {
-        props.opacity_zero = property._value.eql(comptime .wrap("0"));
+        props.opacity_zero = property._value.eqlSliceIgnoreCase("0");
     }
 
     if (decl.findProperty(.wrap("pointer-events"))) |property| {
-        props.pointer_events_none = property._value.eql(comptime .wrap("none"));
+        props.pointer_events_none = property._value.eqlSliceIgnoreCase("none");
     }
 
     return props;
@@ -1191,16 +1193,67 @@ const CheckVisibilityOptions = struct {
 // its field max, so a real rule can never pack to all-ones.
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
-fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*CSSStyleProperty {
-    const style = frame._element_styles.get(el) orelse blk: {
-        // No JS-set style object and no style attribute -> nothing inline to read.
-        if (el.getAttributeSafe(comptime .wrap("style")) == null) return null;
-        break :blk el.getOrCreateStyle(frame) catch |err| {
-            log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-            return null;
-        };
-    };
-    return style.asCSSStyleDeclaration().findProperty(property_name);
+/// How a probe reads an element's inline `style=` attribute.
+pub const InlineAccess = enum {
+    /// Parse the attribute into the element's CSSStyleProperties (the object
+    /// `el.style` hands out) and keep it, so repeat probes on the same element
+    /// cost a list lookup. Layout reads that object directly (getElementAxis,
+    /// horizontalPosition), so every JS-reachable path must materialize.
+    materialize,
+    /// Fold the attribute text on each call; allocates nothing. For
+    /// Zig-initiated tooling that walks the whole document once per turn
+    /// (markdown, dump, tree), where pinning a parsed declaration list in the
+    /// page arena for every inline-styled element outlives its use. An
+    /// object JS already created is still read.
+    scan,
+};
+
+// `frame` is the StyleManager's frame, which callers guarantee is el's owner
+// frame (el.ownerFrame) — the map where the materialized style lives.
+fn inlineValue(el: *Element, property_name: String, comptime access: InlineAccess, frame: *Frame) ?[]const u8 {
+    if (!el._flags.has_inline_style) {
+        // Neither a style object nor a style attribute; skip both lookups.
+        return null;
+    }
+    if (el.getStyle(frame)) |style| {
+        return styleValue(style, property_name);
+    }
+    // No JS-set style object and no style attribute -> nothing inline to read.
+    const attr = el.getAttributeSafe(comptime .wrap("style")) orelse return null;
+    switch (access) {
+        .materialize => {
+            const style = el.getOrCreateStyle(frame) catch |err| {
+                log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
+                return null;
+            };
+            return styleValue(style, property_name);
+        },
+        .scan => return scanInlineValue(attr, property_name.str()),
+    }
+}
+
+fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
+    const property = style.asCSSStyleDeclaration().findProperty(property_name) orelse return null;
+    return property._value.str();
+}
+
+// Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
+// materialized object was built from.
+fn scanInlineValue(attr: []const u8, property_name: []const u8) ?[]const u8 {
+    var value: ?[]const u8 = null;
+    var important = false;
+    var it = CssParser.parseDeclarationsList(attr);
+    while (it.next()) |declaration| {
+        if (std.ascii.eqlIgnoreCase(declaration.name, property_name) == false) {
+            continue;
+        }
+        if (important and declaration.important == false) {
+            continue;
+        }
+        value = declaration.value;
+        important = declaration.important;
+    }
+    return value;
 }
 
 /// Resolved value of an element's inline `style=` declaration for `property_name`,
@@ -1208,8 +1261,7 @@ fn getInlineStyleProperty(el: *Element, property_name: String, frame: *Frame) ?*
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
-    const property = getInlineStyleProperty(el, property_name, self.frame) orelse return null;
-    return property._value.str();
+    return inlineValue(el, property_name, .materialize, self.frame);
 }
 
 /// Bounds computedFontSize's ancestor recursion (the parent walk and
@@ -1430,4 +1482,40 @@ test "StyleManager: packed priority bounds" {
 
     // Real layer ranks fit the 12 rank bits below the unlayered sentinel.
     try testing.expect(MAX_LAYERS < UNLAYERED_RANK);
+}
+
+test "StyleManager: inlineValue: scan matches materialize" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<i style="display:none"></i>
+        \\<i style="color:red; DISPLAY : none !important ; display:block"></i>
+        \\<i style="display:block;display:none"></i>
+        \\<i style="display: none; display: /* c */ block"></i>
+        \\<i style="visibility:hidden"></i>
+        \\<i style="display:"></i>
+        \\<i></i>
+    );
+    const expected = [_]?[]const u8{ "none", "none", "none", "block", null, null, null };
+
+    var i: usize = 0;
+    var child = div.asNode().firstChild();
+    while (child) |node| : (child = node.nextSibling()) {
+        const el = node.is(Element) orelse continue;
+        const scanned = inlineValue(el, comptime .wrap("display"), .scan, frame);
+        // scanning never creates the style object
+        try testing.expectEqual(null, el.getStyle(frame));
+        const materialized = inlineValue(el, comptime .wrap("display"), .materialize, frame);
+        if (expected[i]) |value| {
+            try testing.expectEqual(value, scanned);
+            try testing.expectEqual(value, materialized);
+        } else {
+            try testing.expectEqual(null, scanned);
+            try testing.expectEqual(null, materialized);
+        }
+        i += 1;
+    }
+    try testing.expectEqual(expected.len, i);
 }

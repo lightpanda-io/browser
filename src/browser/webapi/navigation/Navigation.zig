@@ -216,7 +216,7 @@ pub fn pushEntry(
     const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
 
     const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .navigation_history_entry },
         NavigationHistoryEntry{
             ._proto = undefined,
             ._id = id_str,
@@ -225,7 +225,6 @@ pub fn pushEntry(
             ._state = state,
         },
     });
-    entry._proto._type = .{ .navigation_history_entry = entry };
 
     // we don't always have a current entry...
     const previous = if (self._entries.items.len > 0) self.getCurrentEntry() else null;
@@ -263,7 +262,7 @@ pub fn replaceEntry(
     const id_str = try std.fmt.allocPrint(arena.allocator(), "{d}", .{id});
 
     const entry = try Factory.chainedWithAllocator(arena.allocator(), .{
-        EventTarget{ ._type = undefined },
+        EventTarget{ ._type = .navigation_history_entry },
         NavigationHistoryEntry{
             ._proto = undefined,
             ._id = id_str,
@@ -272,7 +271,6 @@ pub fn replaceEntry(
             ._state = state,
         },
     });
-    entry._proto._type = .{ .navigation_history_entry = entry };
 
     const old_entry = self._entries.items[self._index];
     self._entries.items[self._index] = entry;
@@ -298,9 +296,9 @@ pub fn replaceEntry(
 }
 
 const NavigateOptions = struct {
-    state: ?js.Value = null,
-    info: ?js.Value = null,
     history: ?[]const u8 = null,
+    info: ?js.Value = null,
+    state: ?js.Value = null,
 };
 
 pub fn navigateInner(
@@ -417,8 +415,8 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
 }
 
 pub const ReloadOptions = struct {
-    state: ?js.Value = null,
     info: ?js.Value = null,
+    state: ?js.Value = null,
 };
 
 pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !NavigationReturn {

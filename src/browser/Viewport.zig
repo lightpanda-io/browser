@@ -20,6 +20,7 @@ const Viewport = @This();
 
 width: u32,
 height: u32,
+scale: f32 = 1.0, // for screenshot raster
 
 pub const default = Viewport{
     .width = 1920,

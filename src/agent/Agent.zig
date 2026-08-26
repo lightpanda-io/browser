@@ -798,13 +798,11 @@ fn handleStream(self: *Agent, rest: []const u8) void {
 fn handleSearchEngine(self: *Agent, rest: []const u8) void {
     self.setEnumOption("searchEngine", &browser_tools.search_engine, rest);
     const selected = std.meta.stringToEnum(browser_tools.SearchEngine, rest) orelse return;
-    const env_var: [:0]const u8 = switch (selected) {
-        .tavily => "TAVILY_API_KEY",
-        .brave => "BRAVE_API_KEY",
-        .auto, .duckduckgo => return,
-    };
-    if (std.c.getenv(env_var) == null) {
-        self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{env_var});
+    const key = browser_tools.searchKeyStatus(selected) orelse return;
+    switch (key.state) {
+        .set => {},
+        .keyless => self.terminal.printInfo("{s} is not set; using the keyless endpoint (rate-limited per client IP)", .{key.env_var}),
+        .missing => self.terminal.printWarning("{s} is not set; the search tool will fail until you export it", .{key.env_var}),
     }
 }
 
@@ -1591,7 +1589,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
                 .{},
             ),
             .searchEngine => self.terminal.printInfo(
-                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' tries Brave then Tavily (when their API keys are set) and falls back to the DuckDuckGo scrape; an explicit engine is used alone. Bare /searchEngine prints the engine.",
+                "/searchEngine " ++ Config.tagHint(browser_tools.SearchEngine) ++ " — set the web search engine behind the search tool (currently: {s}); saved to {s}. 'auto' " ++ browser_tools.search_cascade_prose ++ "; an explicit engine is used alone. Bare /searchEngine prints the engine.",
                 .{ @tagName(browser_tools.search_engine), settings.remembered_path },
             ),
         }
@@ -1627,7 +1625,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
-            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), @errorName(err) }) catch "tool failed",
+            else => std.fmt.allocPrint(arena, "{s} failed: {s}", .{ tc.name(), browser_tools.errorMessage(err) }) catch "tool failed",
         },
         .is_error = true,
     };
@@ -2283,7 +2281,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     const outcome: zenai.provider.Client.ToolHandler.Result = if (self.callTool(allocator, tool_name, arguments)) |result|
         .{ .content = capToolOutput(allocator, tool_name, result.text), .is_error = result.is_error }
     else |err|
-        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{@errorName(err)}) catch "Error: tool execution failed", .is_error = true };
+        .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed", .is_error = true };
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);

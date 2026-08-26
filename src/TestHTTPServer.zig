@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const posix = std.posix;
 const sys_net = @import("sys/net.zig");
 const URL = @import("browser/URL.zig");
 
@@ -76,6 +77,10 @@ pub fn run(self: *TestHTTPServer, wg: *lp.WaitGroup) !void {
 fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
     defer conn.close(lp.io);
 
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        posix.setsockopt(conn.socket.handle, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1))) catch {};
+    }
+
     var req_buf: [2048]u8 = undefined;
     var conn_reader = conn.reader(lp.io, &req_buf);
     var conn_writer = conn.writer(lp.io, &req_buf);
@@ -93,7 +98,7 @@ fn handleConnection(self: *TestHTTPServer, conn: std.Io.net.Stream) !void {
 
         self.handler(&req) catch |err| {
             switch (err) {
-                error.BrokenPipe => {},
+                error.BrokenPipe, error.WriteFailed => {},
                 else => {
                     std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
                     req.respond("server error", .{ .status = .internal_server_error }) catch {};

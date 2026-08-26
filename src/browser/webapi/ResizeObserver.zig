@@ -162,11 +162,13 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         obs.connected = connected;
 
         const width, const height = blk: {
-            if (!connected or !target.checkVisibilityCached(&visibility_cache, frame)) {
+            if (!connected or !target.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
                 break :blk .{ 0, 0 };
             }
-            const dims = target.getElementDimensions(frame);
-            break :blk .{ dims.width, dims.height };
+            break :blk .{
+                target.getElementAxis(frame, .width).value,
+                target.getElementAxis(frame, .height).value,
+            };
         };
 
         if (width == obs.last_width and height == obs.last_height) {
@@ -183,7 +185,7 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         return;
     }
 
-    var caught: js.TryCatch.Caught = undefined;
+    var caught: js.TryCatch.Caught = .{};
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

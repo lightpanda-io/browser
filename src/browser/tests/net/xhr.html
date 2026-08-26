@@ -563,3 +563,32 @@
     await state2.done(() => testing.expectEqual(200, req.status));
   }
 </script>
+
+<script id=xhr_request_headers type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => state.resolve();
+    req.open('GET', 'http://127.0.0.1:9582/echo_headers');
+    req.setRequestHeader('Accept-Language', 'fr');
+    req.setRequestHeader('X-Multi', 'a');
+    req.setRequestHeader('X-Multi', 'b');
+    req.setRequestHeader('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)');
+    req.setRequestHeader('Sec-Ch-Ua', '"Chromium";v="140"');
+    req.send();
+
+    await state.done(() => {
+      const got = {};
+      for (const line of req.responseText.trim().split('\n')) {
+        const sep = line.indexOf(': ');
+        got[line.slice(0, sep).toLowerCase()] = line.slice(sep + 2);
+      }
+      testing.expectEqual('fr', got['accept-language']);
+      testing.expectEqual('a, b', got['x-multi']);
+      testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
+      testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
+      testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
+      testing.expectEqual(false, got['sec-ch-ua'].includes('Chromium'));
+    });
+  }
+</script>

@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 
@@ -25,7 +27,8 @@ const Comment = @This();
 
 pub const Proto = CData;
 
-_proto: *CData,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *CData else void = undefined,
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Comment {
     const node = try Frame.node_factory.createComment(frame, if (str) |s| s.value else "");

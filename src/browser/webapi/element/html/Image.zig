@@ -1,14 +1,24 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
+const log = lp.log;
+const String = lp.String;
+
 const Image = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+
+_generation: u32 = 0,
+// Per spec, false only while a fetch is in flight.
+_complete: bool = true,
+
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
     const node = try Frame.node_factory.createElementNS(frame, .html, "img", null);
@@ -26,10 +36,10 @@ pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
 }
 
 pub fn asElement(self: *Image) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Image) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
@@ -45,49 +55,7 @@ pub fn getSrc(self: *const Image, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
-    // No need to check if `Image` is connected to DOM; this is a special case.
-    return self.imageAddedCallback(frame);
-}
-
-pub fn getAlt(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
-}
-
-pub fn setAlt(self: *Image, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), frame);
-}
-
-pub fn getWidth(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse return 0;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
-}
-
-pub fn setWidth(self: *Image, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), frame);
-}
-
-pub fn getHeight(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 0;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
-}
-
-pub fn setHeight(self: *Image, value: u32, frame: *Frame) !void {
-    const str = try std.fmt.allocPrint(frame.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), frame);
-}
-
-pub fn getCrossOrigin(self: *const Image) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
-}
-
-pub fn setCrossOrigin(self: *Image, value: ?[]const u8, frame: *Frame) !void {
-    if (value) |v| {
-        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), frame);
-    }
-    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), frame);
+    return self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
@@ -110,27 +78,37 @@ pub fn getNaturalHeight(_: *const Image) u32 {
     return 0;
 }
 
-pub fn getComplete(_: *const Image) bool {
-    // Per spec, complete is true when: no src/srcset, src is empty,
-    // image is fully available, or image is broken (with no pending request).
-    // Since we never fetch images, they are in the "broken" state, which has
-    // complete=true. This is consistent with naturalWidth/naturalHeight=0.
-    return true;
+pub fn getComplete(self: *const Image) bool {
+    return self._complete;
 }
 
-/// Used in `Page.nodeIsReady`.
+/// The one funnel for "this element's src became current": parser-created
+/// images, `img.src = ...` and `setAttribute`/`removeAttribute("src")` all
+/// land here.
 pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
-    // if we're planning on navigating to another frame, don't trigger load event.
+    // if we're planning on navigating to another frame, don't trigger a load event
+    // or start fetching a resource.
     if (frame.isGoingAway()) {
         return;
     }
+
+    self._generation +%= 1;
+    self._complete = true;
 
     const element = self.asElement();
     // Exit if src not set.
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) return;
 
-    try frame.queueLoad(self._proto);
+    // If image loading not desired, we just do fake "load" event.
+    if (frame._session.load_resources.image == false) {
+        return frame.queueLoad(Factory.protoOf(self));
+    }
+
+    Frame.resource_load.image(frame, self, src) catch |err| {
+        log.warn(.http, "image fetch", .{ .err = err, .src = src });
+        return frame.queueElementEvent(Factory.protoOf(self), .@"error");
+    };
 }
 
 pub const JsApi = struct {
@@ -146,11 +124,26 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Image.constructor, .{});
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{ .ce_reactions = true });
     pub const currentSrc = bridge.accessor(Image.getSrc, null, .{});
-    pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{ .ce_reactions = true });
-    pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{ .ce_reactions = true });
-    pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{ .ce_reactions = true });
-    pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{ .ce_reactions = true });
+    pub const alt = reflect.string("alt");
+    pub const width = reflect.unsignedLong("width", .{});
+    pub const height = reflect.unsignedLong("height", .{});
+    pub const crossOrigin = reflect.enumerated("crossorigin", &.{ "anonymous", "use-credentials" }, .{ .missing = null, .nullable = true, .invalid = "anonymous" });
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Image);
+    pub const srcset = reflect.string("srcset");
+    pub const useMap = reflect.string("usemap");
+    pub const isMap = reflect.boolean("ismap");
+    pub const referrerPolicy = reflect.referrerPolicy();
+    pub const decoding = reflect.enumerated("decoding", &.{ "async", "sync", "auto" }, .{ .missing = "auto" });
+    // Obsolete
+    pub const name = reflect.string("name");
+    pub const lowsrc = reflect.url("lowsrc");
+    pub const @"align" = reflect.string("align");
+    pub const hspace = reflect.unsignedLong("hspace", .{});
+    pub const vspace = reflect.unsignedLong("vspace", .{});
+    pub const longDesc = reflect.url("longdesc");
+    pub const border = reflect.stringNullToEmpty("border");
+
     pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
     pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
     pub const complete = bridge.accessor(Image.getComplete, null, .{});
@@ -161,9 +154,29 @@ pub const Build = struct {
         const self = node.as(Image);
         return self.imageAddedCallback(frame);
     }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+        return element.as(Image).imageAddedCallback(frame);
+    }
+
+    // Removing the src leaves no request to make, but any in-flight one still
+    // has to be invalidated.
+    pub fn attributeRemove(element: *Element, name: String, frame: *Frame) !void {
+        if (!name.eql(comptime .wrap("src"))) {
+            return;
+        }
+        return element.as(Image).imageAddedCallback(frame);
+    }
 };
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Image" {
     try testing.htmlRunner("element/html/image.html", .{});
+}
+
+test "WebApi: HTML.Image fetch" {
+    try testing.htmlRunner("element/html/image_fetch.html", .{ .load_resources = .{ .image = true } });
 }

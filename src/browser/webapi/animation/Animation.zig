@@ -84,12 +84,20 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 
     // Schedule the transition from .running => .finished in 10ms.
     self.acquireRef();
+    errdefer self.releaseRef(frame._page);
     try frame.js.scheduler.add(
         self,
         Animation.update,
         10,
-        .{ .name = "animation.update" },
+        .{ .name = "animation.update", .finalizer = Animation.cancelled },
     );
+}
+
+// The scheduler drops pending tasks when the context is torn down. `update`
+// and `cancelled` are mutually exclusive, so play()'s ref is released once.
+fn cancelled(ctx: *anyopaque) void {
+    const self: *Animation = @ptrCast(@alignCast(ctx));
+    self.releaseRef(self._frame._page);
 }
 
 pub fn pause(self: *Animation) void {

@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -24,10 +26,11 @@ const HtmlElement = @import("../Html.zig");
 const HR = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *HR) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *HR) *Node {
     return self.asElement().asNode();
@@ -41,4 +44,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    const reflect = Element.Reflect(HR);
+    pub const noShade = reflect.boolean("noshade");
+    pub const width = reflect.string("width");
+    pub const size = reflect.string("size");
+    pub const color = reflect.string("color");
+    pub const @"align" = reflect.string("align");
 };

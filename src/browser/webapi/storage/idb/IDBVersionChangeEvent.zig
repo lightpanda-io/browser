@@ -34,8 +34,8 @@ _old_version: u64,
 _new_version: ?u64,
 
 const IDBVersionChangeEventOptions = struct {
-    oldVersion: u64 = 0,
     newVersion: ?u64 = null,
+    oldVersion: u64 = 0,
 };
 
 const Options = Event.inheritOptions(IDBVersionChangeEvent, IDBVersionChangeEventOptions);

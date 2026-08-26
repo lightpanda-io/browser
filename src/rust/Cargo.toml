@@ -1,0 +1,18 @@
+# One workspace, one staticlib: Rust bundles libstd into every staticlib, so
+# two of them in the same binary collide (duplicate symbols, two allocators).
+# Domain crates are rlibs; `ffi` links them all into the single archive Zig
+# consumes.
+[workspace]
+resolver = "2"
+members = ["ffi", "html5ever", "render"]
+
+# Debug builds keep our own crates unoptimized but optimize dependencies
+# (parley/tiny-skia/png are 10x slower when not optimized).
+[profile.dev.package."*"]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

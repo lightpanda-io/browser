@@ -364,7 +364,7 @@ pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
                 // records browsers do (one for the split-off node, one for
                 // the inserted node).
                 const second = try t.splitText(offset, frame);
-                _ = try parent.insertBefore(node, second._proto.asNode(), frame);
+                _ = try parent.insertBefore(node, second.asCData().asNode(), frame);
             } else {
                 _ = try parent.insertBefore(node, container.nextSibling(), frame);
             }
@@ -708,8 +708,8 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Fr
     // Keep removing first child until temp element is empty
     const fragment_node = fragment.asNode();
     while (temp_node.firstChild()) |child| {
-        frame.removeNode(temp_node, child, .{ .will_be_reconnected = true });
-        try frame.appendNode(fragment_node, child, .{ .child_already_connected = false });
+        frame.removeNode(temp_node, child, .{ .reconnect_to = fragment_node });
+        try frame.appendNode(fragment_node, child, .{});
     }
 
     return fragment;

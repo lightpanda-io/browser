@@ -68,7 +68,7 @@ pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: 
 
     const event_ptr = chain.get(0);
     event_ptr.* = .{
-        ._type = unionInit(EventTarget.Type, chain.get(1)),
+        ._type = typeInit(EventTarget, chain.get(1)),
     };
     chain.setLeaf(1, child);
 
@@ -323,7 +323,9 @@ pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
 
     // only the CDATASection chain has a middle here (its Text)
     inline for (3..types.len - 1) |i| {
-        chain.set(i, .{ ._proto = chain.get(i - 1) });
+        const ptr = chain.get(i);
+        ptr.* = .{};
+        setProto(ptr, chain.get(i - 1));
     }
     chain.setLeaf(types.len - 1, leaf);
     return cd_ptr;

@@ -1,5 +1,7 @@
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -10,21 +12,14 @@ const Label = @This();
 
 pub const Proto = HtmlElement;
 
-_proto: *HtmlElement,
+_pad: bool = false,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn asElement(self: *Label) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Label) *Node {
     return self.asElement().asNode();
-}
-
-pub fn getHtmlFor(self: *Label) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("for")) orelse "";
-}
-
-pub fn setHtmlFor(self: *Label, value: []const u8, frame: *Frame) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("for"), .wrap(value), frame);
 }
 
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
@@ -140,7 +135,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const htmlFor = bridge.accessor(Label.getHtmlFor, Label.setHtmlFor, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Label);
+
+    pub const htmlFor = reflect.string("for");
     pub const control = bridge.accessor(Label.getControl, null, .{});
 };
 

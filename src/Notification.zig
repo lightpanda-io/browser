@@ -223,6 +223,7 @@ pub const FrameLoaded = struct {
 
 pub const RequestStart = struct {
     transfer: *Transfer,
+    redirect_response: bool = false,
 };
 
 pub const RequestIntercept = struct {
@@ -341,6 +342,8 @@ pub const ConsoleMessageType = enum {
     @"error",
     fatal,
     trace,
+    dir,
+    dirxml,
 };
 
 pub const ConsoleMessage = struct {

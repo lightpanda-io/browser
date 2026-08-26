@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<script src="./testing.js"></script>
+
+<script id=geo_shape>
+  testing.expectTrue('geolocation' in navigator);
+  testing.expectTrue(navigator.geolocation === navigator.geolocation);
+  testing.expectEqual('function', typeof navigator.geolocation.getCurrentPosition);
+  testing.expectEqual('function', typeof navigator.geolocation.watchPosition);
+  testing.expectEqual('function', typeof navigator.geolocation.clearWatch);
+  testing.expectEqual(1, GeolocationPositionError.PERMISSION_DENIED);
+  testing.expectEqual(2, GeolocationPositionError.POSITION_UNAVAILABLE);
+  testing.expectEqual(3, GeolocationPositionError.TIMEOUT);
+</script>
+
+<script id=geo_no_permission type=module>
+  {
+    // nothing granted the permission (only CDP can), so this is the denied path
+    const state = await testing.async();
+    let called = false;
+    navigator.geolocation.getCurrentPosition(
+      () => { called = true; testing.fail('should not succeed without a grant'); state.resolve(); },
+      (err) => { called = true; state.resolve(err); }
+    );
+    // never delivered on the stack that registered it
+    testing.expectFalse(called);
+    state.done((err) => {
+      testing.expectEqual(1, err.code);
+      testing.expectEqual('User denied Geolocation', err.message);
+    });
+  }
+</script>
+
+<script id=geo_watch type=module>
+  {
+    const state = await testing.async();
+    const id = navigator.geolocation.watchPosition(
+      () => { testing.fail('should not succeed without a grant'); state.resolve(); },
+      (err) => { state.resolve(err); }
+    );
+    testing.expectTrue(id > 0);
+    state.done((err) => {
+      testing.expectEqual(1, err.code);
+      // clearing a watch that already delivered is a no-op, not an error
+      navigator.geolocation.clearWatch(id);
+    });
+  }
+</script>
+
+<script id=geo_clear_watch type=module>
+  {
+    const state = await testing.async();
+    let watched = false;
+    const id = navigator.geolocation.watchPosition(
+      () => { watched = true; },
+      () => { watched = true; }
+    );
+    navigator.geolocation.clearWatch(id);
+
+    // registered after the watch, so it can only run once the watch would have
+    testing.expectFalse(watched);
+    navigator.geolocation.getCurrentPosition(
+      () => { state.resolve(); },
+      () => { state.resolve(); }
+    );
+    state.done(() => { testing.expectFalse(watched); });
+  }
+</script>

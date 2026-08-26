@@ -16,8 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
@@ -29,7 +31,7 @@ const HtmlElement = @import("../Html.zig");
 const Link = @This();
 
 pub const Proto = HtmlElement;
-_proto: *HtmlElement,
+_proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 // Cached CSSStyleSheet for an external `rel=stylesheet` once
 // `Frame.loadExternalStylesheet` has registered it. Re-fetches (href
 // mutated on a connected link) reuse this sheet via `replaceSync` so the
@@ -38,10 +40,10 @@ _proto: *HtmlElement,
 _sheet: ?*@import("../../css/CSSStyleSheet.zig") = null,
 
 pub fn asElement(self: *Link) *Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asConstElement(self: *const Link) *const Element {
-    return self._proto.asElement();
+    return Factory.protoOf(self).asElement();
 }
 pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();
@@ -73,122 +75,12 @@ pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
 }
 
-pub fn getAs(self: *const Link) []const u8 {
-    const valid_as = [_][]const u8{
-        "fetch",
-        "audio",
-        "document",
-        "embed",
-        "font",
-        "image",
-        "manifest",
-        "object",
-        "report",
-        "script",
-        "sharedworker",
-        "style",
-        "track",
-        "video",
-        "worker",
-        "xslt",
-    };
-    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(comptime .wrap("as")), &valid_as, "", "").?;
-}
-
-pub fn setAs(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), frame);
-}
-
-pub fn getReferrerPolicy(self: *const Link) []const u8 {
-    const valid_referrer_policy = [_][]const u8{
-        "",
-        "no-referrer",
-        "no-referrer-when-downgrade",
-        "same-origin",
-        "origin",
-        "strict-origin",
-        "origin-when-cross-origin",
-        "strict-origin-when-cross-origin",
-        "unsafe-url",
-    };
-    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(.wrap("referrerpolicy")), &valid_referrer_policy, "", "").?;
-}
-
-pub fn setReferrerPolicy(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(.wrap("referrerpolicy"), .wrap(value), frame);
-}
-
 pub fn getMedia(self: *Link) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
 }
 
 pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
-}
-
-pub fn getCrossOrigin(self: *const Link) ?[]const u8 {
-    const valid_cross_origin = [_][]const u8{
-        "anonymous", "use-credentials",
-    };
-    return HtmlElement.reflectEnumerated(self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin")), &valid_cross_origin, null, "anonymous");
-}
-
-pub fn setCrossOrigin(self: *Link, value: ?[]const u8, frame: *Frame) !void {
-    // Nullable reflection: a null (or undefined) value removes the attribute;
-    // otherwise the content attribute mirrors the value verbatim and the
-    // getter canonicalizes it.
-    if (value) |v| {
-        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), frame);
-    }
-    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), frame);
-}
-
-pub fn getCharset(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("charset")) orelse "";
-}
-
-pub fn setCharset(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), frame);
-}
-
-pub fn getHreflang(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("hreflang")) orelse "";
-}
-
-pub fn setHreflang(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("hreflang"), .wrap(value), frame);
-}
-
-pub fn getIntegrity(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("integrity")) orelse "";
-}
-
-pub fn setIntegrity(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("integrity"), .wrap(value), frame);
-}
-
-pub fn getType(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
-}
-
-pub fn setType(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), frame);
-}
-
-pub fn getRev(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("rev")) orelse "";
-}
-
-pub fn setRev(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("rev"), .wrap(value), frame);
-}
-
-pub fn getTarget(self: *const Link) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("target")) orelse "";
-}
-
-pub fn setTarget(self: *Link, value: []const u8, frame: *Frame) !void {
-    return self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), frame);
 }
 
 pub fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
@@ -232,26 +124,26 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     if (std.mem.eql(u8, rel, "preload")) {
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.scriptHint(frame, self._proto, href)) {
+            if (Frame.preload.scriptHint(frame, Factory.protoOf(self), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(self._proto);
+        return frame.queueLoad(Factory.protoOf(self));
     }
 
     if (std.mem.eql(u8, rel, "modulepreload")) {
         // "as" defaults to script in this case
         const as = element.getAttributeSafe(comptime .wrap("as")) orelse "";
         if (as.len == 0 or std.ascii.eqlIgnoreCase(as, "script")) {
-            if (Frame.preload.moduleHint(frame, self._proto, href)) {
+            if (Frame.preload.moduleHint(frame, Factory.protoOf(self), href)) {
                 // load/error fires when the fetch settles
                 return;
             }
         }
         // synthetic load, fires next tick
-        return frame.queueLoad(self._proto);
+        return frame.queueLoad(Factory.protoOf(self));
     }
 }
 
@@ -264,18 +156,21 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const as = bridge.accessor(Link.getAs, Link.setAs, .{ .ce_reactions = true });
+    const reflect = Element.Reflect(Link);
+    pub const nonce = reflect.string("nonce");
+
+    pub const as = reflect.enumerated("as", &.{ "fetch", "audio", "document", "embed", "font", "image", "manifest", "object", "report", "script", "sharedworker", "style", "track", "video", "worker", "xslt" }, .{});
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{ .ce_reactions = true });
     pub const media = bridge.accessor(Link.getMedia, Link.setMedia, .{ .ce_reactions = true });
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{ .ce_reactions = true });
-    pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{ .ce_reactions = true });
-    pub const referrerPolicy = bridge.accessor(Link.getReferrerPolicy, Link.setReferrerPolicy, .{ .ce_reactions = true });
-    pub const charset = bridge.accessor(Link.getCharset, Link.setCharset, .{ .ce_reactions = true });
-    pub const hreflang = bridge.accessor(Link.getHreflang, Link.setHreflang, .{ .ce_reactions = true });
-    pub const integrity = bridge.accessor(Link.getIntegrity, Link.setIntegrity, .{ .ce_reactions = true });
-    pub const @"type" = bridge.accessor(Link.getType, Link.setType, .{ .ce_reactions = true });
-    pub const rev = bridge.accessor(Link.getRev, Link.setRev, .{ .ce_reactions = true });
-    pub const target = bridge.accessor(Link.getTarget, Link.setTarget, .{ .ce_reactions = true });
+    pub const crossOrigin = reflect.enumerated("crossorigin", &.{ "anonymous", "use-credentials" }, .{ .missing = null, .nullable = true, .invalid = "anonymous" });
+    pub const referrerPolicy = reflect.referrerPolicy();
+    pub const charset = reflect.string("charset");
+    pub const hreflang = reflect.string("hreflang");
+    pub const integrity = reflect.string("integrity");
+    pub const @"type" = reflect.string("type");
+    pub const rev = reflect.string("rev");
+    pub const target = reflect.string("target");
     pub const relList = bridge.accessor(Link.getRelList, null, .{ .null_as_undefined = true });
     pub const sizes = bridge.accessor(Link.getSizes, null, .{ .null_as_undefined = true });
 };

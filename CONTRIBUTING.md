@@ -12,9 +12,12 @@ See [AGENTS.md](AGENTS.md) for the full set of test, formatting, and code conven
 ### Skip the V8 source build
 
 By default the build compiles V8 from source, which takes several minutes. Run
-`make download-v8` once to fetch the matching prebuilt archive from the
+`make download-v8` once to fetch the matching prebuilt libraries from the
 [`zig-v8-fork`](https://github.com/lightpanda-io/zig-v8-fork/releases) releases
-instead; later `make build` / `make test` pick it up automatically.
+instead; later `make build` / `make test` pick them up automatically. On Linux
+x86_64 this includes the shared flavor (`libc_v8.so`) used by `-Ddev_fast`
+builds (defaults to true). Pass `-Ddev_fast=false` to get a static-V8 debug
+build instead.
 
 ## Before opening a PR
 

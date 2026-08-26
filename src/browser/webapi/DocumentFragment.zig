@@ -154,7 +154,10 @@ pub fn moveBefore(self: *DocumentFragment, node: js.Value, child: js.Value, fram
 
 pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Frame) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{ .shadow = .complete }, writer, frame);
+    // Fragment serialization never includes nested shadow trees — a host
+    // inside this fragment (or shadow root) serializes only its light
+    // children, exactly like Element.innerHTML.
+    return dump.children(self.asNode(), .{ .shadow = .skip }, writer, frame);
 }
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
@@ -173,13 +176,10 @@ pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node 
     const fragment_node = fragment.asNode();
 
     if (deep) {
-        const node = self.asNode();
-        const self_is_connected = node.isConnected();
-
-        var child_it = node.childrenIterator();
+        var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
             if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
-                try frame.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+                try frame.appendNode(fragment_node, cloned_child, .{});
             }
         }
     }
