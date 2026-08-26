@@ -375,8 +375,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .status = self._response_status,
         .len = self._response_data.items.len,
     });
-
-    self.releaseSelfRef();
 }
 
 // https://xhr.spec.whatwg.org/#the-upload-attribute
