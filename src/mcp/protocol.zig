@@ -113,15 +113,30 @@ pub const ToolsCapability = struct {
     listChanged: ?bool = null,
 };
 
+/// Advisory hints for clients (e.g. auto-approving read-only calls).
+/// Defaults are the spec's: assume the worst when unset.
+pub const ToolAnnotations = struct {
+    readOnlyHint: bool = false,
+    destructiveHint: bool = true,
+    idempotentHint: bool = false,
+    openWorldHint: bool = true,
+};
+
 pub const Tool = struct {
     name: []const u8,
+    title: ?[]const u8 = null,
     description: ?[]const u8 = null,
     inputSchema: []const u8,
+    annotations: ?ToolAnnotations = null,
 
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("name");
         try jw.write(self.name);
+        if (self.title) |t| {
+            try jw.objectField("title");
+            try jw.write(t);
+        }
         if (self.description) |d| {
             try jw.objectField("description");
             try jw.write(d);
@@ -130,6 +145,10 @@ pub const Tool = struct {
         _ = try jw.beginWriteRaw();
         try jw.writer.writeAll(self.inputSchema);
         jw.endWriteRaw();
+        if (self.annotations) |a| {
+            try jw.objectField("annotations");
+            try jw.write(a);
+        }
         try jw.endObject();
     }
 };
@@ -314,4 +333,20 @@ test "MCP.protocol - Tool serialization" {
     try std.json.Stringify.value(t, .{}, &aw.writer);
 
     try testing.expectString("{\"name\":\"test\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"foo\":{\"type\":\"string\"}}}}", aw.written());
+}
+
+test "MCP.protocol - Tool serialization with title and annotations" {
+    const t = Tool{
+        .name = "test",
+        .title = "Test",
+        .inputSchema = "{}",
+        .annotations = .{ .readOnlyHint = true, .destructiveHint = false },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    defer aw.deinit();
+
+    try std.json.Stringify.value(t, .{}, &aw.writer);
+
+    try testing.expectString("{\"name\":\"test\",\"title\":\"Test\",\"inputSchema\":{},\"annotations\":{\"readOnlyHint\":true,\"destructiveHint\":false,\"idempotentHint\":false,\"openWorldHint\":true}}", aw.written());
 }
