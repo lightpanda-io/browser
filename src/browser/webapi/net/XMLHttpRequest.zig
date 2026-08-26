@@ -353,10 +353,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     self._response_url = self._url;
     self._response_len = resp.body.items.len;
 
-    // TODO: Headers.
-    self._response_headers = .empty;
-    self._response_mime = null;
-
     try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
 
     var ls: js.Local.Scope = undefined;
