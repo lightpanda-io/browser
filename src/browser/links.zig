@@ -18,12 +18,11 @@
 
 const std = @import("std");
 
+const AXNode = @import("../cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const Frame = @import("Frame.zig");
 const Selector = @import("webapi/selector/Selector.zig");
-const TreeWalker = @import("webapi/TreeWalker.zig");
-const interactive = @import("interactive.zig");
 const log = @import("../lightpanda.zig").log;
 
 const Allocator = std.mem.Allocator;
@@ -59,18 +58,18 @@ pub fn registerNodes(links: []Link, registry: anytype) !void {
 }
 
 /// Collect the visible links (anchor tags with an href) under `root`, one
-/// entry per resolved href.
+/// entry per resolved href. `text` is the accessible name, the same one the
+/// semantic tree reports for the node.
 pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
-    var links: std.ArrayList(Link) = .empty;
-    var by_href: std.StringHashMapUnmanaged(usize) = .empty;
+    var links: std.StringArrayHashMapUnmanaged(Link) = .empty;
     var visibility_cache: Element.VisibilityCache = .empty;
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
         defer list.deinit(frame._page);
 
         for (list._nodes) |node| {
-            const el = node.is(Element) orelse continue;
             const anchor = node.is(Element.Html.Anchor) orelse continue;
+            const el = anchor.asElement();
             if (!el.checkVisibilityCached(&visibility_cache, frame, .scan)) continue;
 
             const href = anchor.getHref(frame) catch |err| {
@@ -79,40 +78,23 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
             };
             if (href.len == 0) continue;
 
-            const text = linkText(el, arena);
-            if (by_href.get(href)) |i| {
-                if (links.items[i].text == null) links.items[i].text = text;
+            const gop = try links.getOrPut(arena, href);
+            if (gop.found_existing) {
+                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena);
                 continue;
             }
-            try by_href.put(arena, href, links.items.len);
-            try links.append(arena, .{
+            gop.value_ptr.* = .{
                 .node = node,
-                .text = text,
+                .text = try AXNode.fromNode(node).getName(frame, arena),
                 .href = href,
-            });
+            };
         }
     } else |err| {
         log.err(.app, "query links failed", .{ .err = err });
         return err;
     }
 
-    return links.items;
-}
-
-// Same fallbacks markdown uses for an anchor without text.
-fn linkText(el: *Element, arena: Allocator) ?[]const u8 {
-    if (interactive.getTextContent(el.asNode(), arena) catch null) |text| return text;
-    if (el.getAttributeSafe(comptime .wrap("aria-label"))) |label| return label;
-    if (el.getAttributeSafe(comptime .wrap("title"))) |title| return title;
-
-    var tw: TreeWalker.FullExcludeSelf = .init(el.asNode(), .{});
-    while (tw.next()) |child| {
-        const img = child.is(Element) orelse continue;
-        if (img.getTag() != .img) continue;
-        const alt = img.getAttributeSafe(comptime .wrap("alt")) orelse continue;
-        if (alt.len > 0) return alt;
-    }
-    return null;
+    return links.values();
 }
 
 const testing = @import("../testing.zig");
