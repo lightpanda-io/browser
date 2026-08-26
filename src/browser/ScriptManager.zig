@@ -392,27 +392,38 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     self.base.is_evaluating = true;
     defer self.base.endEvaluationWindow(was_evaluating);
 
-    errdefer self.base.scriptList(script).remove(&script.node);
-    try frame.makeRequest(.{
-        .ctx = script,
-        .url = remote_url,
-        .method = .GET,
-        .frame_id = frame._frame_id,
-        .loader_id = frame._loader_id,
-        .cookie_jar = &frame._session.cookie_jar,
-        .cookie_origin = frame.url,
-        .resource_type = .script,
-        .notification = frame._session.notification,
-        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
-        .header_callback = Script.headerCallback,
-        .data_callback = Script.dataCallback,
-        .done_callback = Script.doneCallback,
-        .error_callback = Script.errorCallback,
-        // Nothing holds the transfer; teardown cleanup runs through
-        // the manager's script lists.
-        .shutdown_callback = HttpClient.noopShutdown,
-    });
+    const transfer = blk: {
+        errdefer self.base.scriptList(script).remove(&script.node);
+        const transfer = try frame.newRequest(.{
+            .ctx = script,
+            .url = remote_url,
+            .method = .GET,
+            .frame_id = frame._frame_id,
+            .loader_id = frame._loader_id,
+            .cookie_jar = &frame._session.cookie_jar,
+            .cookie_origin = frame.url,
+            .resource_type = .script,
+            .notification = frame._session.notification,
+            .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+            .header_callback = Script.headerCallback,
+            .data_callback = Script.dataCallback,
+            .done_callback = Script.doneCallback,
+            .error_callback = Script.errorCallback,
+            // Nothing holds the transfer; teardown cleanup runs through
+            // the manager's script lists.
+            .shutdown_callback = HttpClient.noopShutdown,
+        });
+        errdefer transfer.deinit();
+        try frame.headersForRequest(transfer);
+        break :blk transfer;
+    };
+
+    // Point of no return: submit() consumes the transfer, and on a synchronous
+    // failure fires Script.errorCallback, which removes the node and deinits
+    // the script (freeing our arena). Its error is already delivered there
+    // (same as Fetch), so there's nothing left for us to unwind.
     handover = true;
+    transfer.submit() catch {};
 }
 
 // A <script> with no src. Runs synchronously right now, except an inline
@@ -627,4 +638,35 @@ test "ScriptManager: waitForPreload stops when teardown is pending" {
     defer client.inbox.pop().?.deinit();
 
     try testing.expect(sm.waitForPreload(url) == null);
+}
+
+// Production crash (release overflow on unrelated pooled objects): a
+// synchronous submit() failure fires Script.errorCallback, which deinits the
+// script and releases its arena, and then returns the error, so addFromElement's
+// errdefer released the same arena again — a pooled-arena double release.
+test "ScriptManager: async script whose submit fails synchronously releases its arena once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const client = frame._script_manager.base.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    // Script.errorCallback logs the fetch error.
+    testing.expectLog(&.{.http});
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // A dynamically inserted external script is async, the mode whose
+    // errorCallback tears the script down itself. On the unfixed code the
+    // second release trips ArenaPool.release's double-release assert from
+    // inside this eval — that assert is the test's real check.
+    try ls.local.eval(
+        \\const s = document.createElement('script');
+        \\s.src = 'http://127.0.0.1:9582/fails-at-submit.js';
+        \\document.head.appendChild(s);
+    , null);
 }
