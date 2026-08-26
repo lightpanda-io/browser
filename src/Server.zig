@@ -908,8 +908,10 @@ test "Client: http handshake host" {
 
     for ([_][]const u8{
         "rebind.evil.com:9583",
-        // Not even the name that resolves to loopback on every machine.
-        "localhost:9583",
+        // Only the exact `localhost:<port>` form is allowed.
+        "localhost",
+        "LOCALHOST:9583",
+        "localhost.evil.com:9583",
     }) |host| {
         var buf: [256]u8 = undefined;
         try assertHTTPError(
@@ -917,6 +919,16 @@ test "Client: http handshake host" {
             "Host not allowed",
             try std.fmt.bufPrint(&buf, with_host, .{host}),
         );
+    }
+
+    // `localhost:<port>` is hardwired to loopback by browsers, no DNS
+    // lookup involved, so it gets through like an IP literal.
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        var buf: [256]u8 = undefined;
+        const res = try c.httpRequest(try std.fmt.bufPrint(&buf, with_host, .{"localhost:9583"}));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 101 Switching Protocols\r\n"));
     }
 }
 

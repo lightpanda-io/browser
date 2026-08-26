@@ -395,9 +395,17 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
         return request.respond("", .{ .status = .expectation_failed, .keep_alive = false });
     }
 
-    // Read the session header and keep_alive before the body reader
-    // invalidates the head's string memory.
-    const session_id = try sessionHeader(arena, request);
+    if (method == .POST and !isJsonContentType(request.head.content_type)) {
+        return request.respond("", .{ .status = .unsupported_media_type, .keep_alive = false });
+    }
+
+    // Read the headers and keep_alive before the body reader invalidates
+    // the head's string memory.
+    const session_id = checkHeaders(arena, request) catch |err| switch (err) {
+        error.ForbiddenOrigin => return request.respond("Origin not allowed\n", .{ .status = .forbidden, .keep_alive = false }),
+        error.ForbiddenHost => return request.respond("Host not allowed, connect to the MCP endpoint by IP address or localhost\n", .{ .status = .forbidden, .keep_alive = false }),
+        else => return err,
+    };
     const keep_alive = request.head.keep_alive;
 
     var body_buf: [8 * 1024]u8 = undefined;
@@ -431,15 +439,60 @@ fn serve(self: *HttpServer, out: *std.Io.Writer, arena: std.mem.Allocator, reque
     });
 }
 
-/// Duplicate the `Mcp-Session-Id` request header into `arena`, or null.
-fn sessionHeader(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[]const u8 {
+/// One pass over the request headers: duplicate `Mcp-Session-Id` into
+/// `arena` (or null) and enforce the same browser-vector policy as the CDP
+/// handshake (see `cdp.Connection.upgrade`).
+fn checkHeaders(arena: std.mem.Allocator, request: *std.http.Server.Request) !?[]const u8 {
+    var session_id: ?[]const u8 = null;
     var it = request.iterateHeaders();
     while (it.next()) |header| {
-        if (std.ascii.eqlIgnoreCase(header.name, "mcp-session-id")) {
-            return try arena.dupe(u8, header.value);
+        const key = header.name;
+        const value = header.value;
+        if (std.ascii.eqlIgnoreCase(key, "mcp-session-id")) {
+            session_id = try arena.dupe(u8, value);
+        } else if (std.ascii.eqlIgnoreCase(key, "origin")) {
+            log.warn(.mcp, "rejected request origin", .{
+                .origin = value[0..@min(value.len, 64)],
+            });
+            return error.ForbiddenOrigin;
+        } else if (std.ascii.eqlIgnoreCase(key, "host")) {
+            const is_allowed = blk: {
+                // allow literal localhost
+                if (std.mem.startsWith(u8, value, "localhost:")) {
+                    break :blk true;
+                }
+
+                _ = std.Io.net.IpAddress.parseLiteral(value) catch break :blk false;
+                break :blk true;
+            };
+
+            if (!is_allowed) {
+                log.warn(.mcp, "rejected request host", .{
+                    .host = value[0..@min(value.len, 64)],
+                    .hint = "connect to the MCP endpoint by IP address or localhost",
+                });
+                return error.ForbiddenHost;
+            }
         }
     }
-    return null;
+    return session_id;
+}
+
+/// `application/json`, case-insensitive, ignoring parameters (`; charset=`).
+fn isJsonContentType(content_type: ?[]const u8) bool {
+    const ct = content_type orelse return false;
+    const end = std.mem.indexOfScalar(u8, ct, ';') orelse ct.len;
+    const media_type = std.mem.trim(u8, ct[0..end], " \t");
+    return std.ascii.eqlIgnoreCase(media_type, "application/json");
+}
+
+test "HttpServer - content type must be application/json" {
+    try std.testing.expect(isJsonContentType("application/json"));
+    try std.testing.expect(isJsonContentType("Application/JSON; charset=utf-8"));
+    try std.testing.expect(isJsonContentType("application/json ;charset=utf-8"));
+    try std.testing.expect(!isJsonContentType("text/plain"));
+    try std.testing.expect(!isJsonContentType("application/x-www-form-urlencoded"));
+    try std.testing.expect(!isJsonContentType(null));
 }
 
 test "HttpServer - initialize is detected for session minting" {
