@@ -37,6 +37,7 @@ const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Console = @import("../webapi/Console.zig");
+const Cookie = @import("../webapi/storage/Cookie.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -129,6 +130,14 @@ pub fn messagePorts(self: *const Execution) *std.DoublyLinkedList {
 pub fn origin(self: *const Execution) ?[]const u8 {
     return switch (self.js.global) {
         inline else => |g| g.origin,
+    };
+}
+
+// a Worker's is its own URL; `Frame` prefers its ancestor chain.
+pub fn siteForCookies(self: *const Execution) Cookie.SiteForCookies {
+    return switch (self.js.global) {
+        .frame => |frame| frame.siteForCookies(),
+        .worker => |worker| .{ .url = worker.url },
     };
 }
 

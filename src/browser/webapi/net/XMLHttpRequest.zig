@@ -320,7 +320,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .loader_id = exec.loaderId(),
         .body = self._request_body,
         .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.url.*,
+        .cookie_origin = exec.siteForCookies(),
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
         .notification = session.notification,

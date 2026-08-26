@@ -259,7 +259,7 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
         try exec.session.cookie_jar.forRequest(resolved_url, &buf.writer, .{
             .is_http = true,
             .is_navigation = false,
-            .origin_url = exec.url.*,
+            .origin_url = exec.siteForCookies(),
         });
         if (buf.written().len > 0) {
             try buf.writer.writeByte(0);

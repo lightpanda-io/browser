@@ -109,7 +109,7 @@ fn makeTestTransfer(arena: *lp.Arena, client: *HttpClient, id: u32) !*Transfer {
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = HttpClient.noopShutdown,

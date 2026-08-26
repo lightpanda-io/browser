@@ -43,6 +43,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
+const Cookie = @import("webapi/storage/Cookie.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
@@ -603,10 +604,27 @@ fn referrerSource(self: *const Frame) [:0]const u8 {
     var frame = self;
     while (std.mem.startsWith(u8, frame.url, "about:")) {
         // about:blank and about:srcdoc documents aren't valid referrer sources,
-        // use the parents
+        // use the parents.
         frame = frame.parent orelse return frame.url;
     }
     return frame.url;
+}
+
+// RFC 6265bis "site for cookies" for SameSite checks on requests this frame does.
+pub fn siteForCookies(self: *const Frame) Cookie.SiteForCookies {
+    const own_url = self.referrerSource();
+    const own_host = URL.getHostname(own_url);
+    var frame: *const Frame = self;
+    while (frame.parent) |parent| : (frame = parent) {
+        const parent_host = URL.getHostname(parent.url);
+        if (parent_host.len == 0) {
+            continue;
+        }
+        if (Cookie.areHostsSameSite(parent_host, own_host) == false) {
+            return .none;
+        }
+    }
+    return .{ .url = own_url };
 }
 
 pub fn getTitle(self: *Frame) !?[]const u8 {
@@ -841,7 +859,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .skip_cache = self.parent == null,
         .throttle = self.parent == null,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = opts.initiator_url orelse self.url,
+        .cookie_origin = opts.initiator_url orelse .{ .url = self.url },
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = frameHeaderDoneCallback,
@@ -1039,8 +1057,20 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             nav_opts.referer = try referrer.compute(arena.allocator(), originator.referrer_policy, referrer_source, resolved_url);
             nav_opts.referrer_policy = originator.referrer_policy;
         }
-        if (nav_opts.initiator_url == null) {
-            nav_opts.initiator_url = try arena.dupeZ(u8, referrer_source);
+    }
+    if (nav_opts.initiator_url == null) {
+        if (target.parent) |parent| {
+            // A subframe navigation's SameSite initiator is the frame's whole
+            // ancestor chain, not the document that triggered the navigation.
+            if (std.mem.startsWith(u8, parent.referrerSource(), "http")) {
+                nav_opts.initiator_url = switch (parent.siteForCookies()) {
+                    .none => .none,
+                    .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+                };
+            }
+        } else if (std.mem.startsWith(u8, referrer_source, "http")) {
+            // Top-level navigation.
+            nav_opts.initiator_url = .{ .url = try arena.dupeZ(u8, referrer_source) };
         }
     }
     if (nav_opts.initiator_origin == null) {
@@ -1981,17 +2011,15 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     self.child_frames_sorted = false;
 
     // Iframe's initial src request carries the parent's URL as Referer
-    // (subject to the parent's Referrer-Policy) and as the SameSite
-    // initiator. When this frame is itself an about: document, the nearest
-    // ancestor's URL is the referrer source. Parent frame outlives this
-    // navigate() call, so the slice is safe; navigate dupes what it keeps.
+    // (subject to the parent's Referrer-Policy). The SameSite initiator is
+    // the parent's ancestor chain.
     const referrer_source = self.referrerSource();
-    const parent_url: ?[:0]const u8 = if (std.mem.startsWith(u8, referrer_source, "http")) referrer_source else null;
+    const initiator_url: ?Cookie.SiteForCookies = if (std.mem.startsWith(u8, referrer_source, "http")) self.siteForCookies() else null;
     new_frame.navigate(url, .{
         .reason = .initialFrameNavigation,
         .referer = try referrer.compute(self.call_arena, self.referrer_policy, referrer_source, url),
         .referrer_policy = self.referrer_policy,
-        .initiator_url = parent_url,
+        .initiator_url = initiator_url,
         .initiator_origin = self.origin,
     }) catch |err| {
         // extra defensive..maybe navigate added a new frame, and the index it
@@ -2346,7 +2374,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
+        .cookie_origin = self.siteForCookies(),
         .resource_type = .stylesheet,
         .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
@@ -3362,11 +3390,14 @@ pub const NavigateOpts = struct {
     // can recompute the header. null (e.g. a CDP-supplied referrer) leaves
     // the Referer untouched across redirects.
     referrer_policy: ?referrer.Policy = null,
-    // The URL of the document that initiated this navigation, used as the
-    // "site for cookies" when computing SameSite. Distinct from `referer`
+    // The "site for cookies" of the document that initiated this navigation,
+    // used when computing SameSite: for a subframe, the whole ancestor
+    // chain's site (or .none when that chain crosses sites); for a top-level
+    // navigation, the initiating document's URL. Distinct from `referer`
     // because a Referrer-Policy can suppress the Referer header without
-    // affecting SameSite (which always considers the real initiator).
-    initiator_url: ?[:0]const u8 = null,
+    // affecting SameSite (which always considers the real initiator). null
+    // means browser-initiated, which cookie lookup treats as same-site.
+    initiator_url: ?Cookie.SiteForCookies = null,
     initiator_origin: ?[]const u8 = null,
     force: bool = false,
     kind: NavigationKind = .{ .push = null },
@@ -3799,6 +3830,45 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: siteForCookies" {
+    var top: Frame = undefined;
+    top.parent = null;
+    top.url = "http://attacker.example/attacker-nested";
+
+    var middle: Frame = undefined;
+    middle.parent = &top;
+    middle.url = "http://victim.example/nested-middle";
+
+    var inner: Frame = undefined;
+    inner.parent = &middle;
+    inner.url = "http://victim.example/inner";
+
+    // A top-level document is its own site.
+    try testing.expectEqual("http://attacker.example/attacker-nested", top.siteForCookies().url);
+
+    // Cross-site with the top-level document: no site for cookies — for the
+    // directly-embedded frame and for the same-site-with-parent frame nested
+    // under it alike.
+    try testing.expectEqual(true, middle.siteForCookies() == .none);
+    try testing.expectEqual(true, inner.siteForCookies() == .none);
+
+    // A fully same-site chain (subdomains included) keeps its site.
+    top.url = "http://victim.example/";
+    middle.url = "http://sub.victim.example/nested-middle";
+    try testing.expectEqual("http://victim.example/inner", inner.siteForCookies().url);
+    try testing.expectEqual("http://sub.victim.example/nested-middle", middle.siteForCookies().url);
+
+    // about: documents inherit their creator's origin: transparent as an
+    // ancestor, and judged through their nearest real ancestor themselves.
+    middle.url = "about:blank";
+    try testing.expectEqual("http://victim.example/inner", inner.siteForCookies().url);
+    try testing.expectEqual("http://victim.example/", middle.siteForCookies().url);
+
+    top.url = "http://attacker.example/";
+    try testing.expectEqual(true, inner.siteForCookies() == .none);
+    try testing.expectEqual("http://attacker.example/", middle.siteForCookies().url);
 }
 
 test "Frame: static immediate meta refresh navigates" {

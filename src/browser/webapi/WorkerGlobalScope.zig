@@ -423,7 +423,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .document_frame_id = self._frame._frame_id,
         .loader_id = self._loader_id,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
+        .cookie_origin = .{ .url = self.url },
         .resource_type = .script,
         .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
