@@ -182,16 +182,33 @@ fn walkInteractive(
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
+    if (root.is(Element)) |root_el| {
+        // root is outside of the tree walk, so check its visibility upfront.
+        if (!root_el.checkVisibilityCached(null, frame, .scan)) {
+            return &.{};
+        }
+    }
+
     var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
-        const html_el = el.is(Element.Html) orelse continue;
 
-        // Skip non-visual elements that are never user-interactive.
         switch (el.getTag()) {
-            .script, .style, .link, .meta, .head, .noscript, .template => continue,
+            .script, .style, .link, .meta, .head, .noscript, .template => {
+                // Skip non-visual elements (and their children) that are never
+                // user-interactive.
+                tw.skipChildren();
+                continue;
+            },
             else => {},
         }
+
+        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+            tw.skipChildren();
+            continue;
+        }
+
+        const html_el = el.is(Element.Html) orelse continue;
 
         const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
 
@@ -662,4 +679,19 @@ test "browser.interactive: mixed elements" {
     );
     defer testing.test_session.closeAllPages();
     try testing.expectEqual(4, elements.len);
+}
+
+test "browser.interactive: hidden elements are skipped" {
+    const elements = try testInteractive(
+        \\<button style="display:none">Inline</button>
+        \\<button hidden>Attribute</button>
+        \\<div style="display:none"><a href="/x">Ancestor</a><input type="text"></div>
+        \\<div hidden><button>Ancestor attribute</button></div>
+        \\<svg style="display:none"><foreignObject><button>Foreign</button></foreignObject></svg>
+        \\<button>Visible</button>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual("button", elements[0].tag_name);
+    try testing.expectEqual("Visible", elements[0].name.?);
 }
