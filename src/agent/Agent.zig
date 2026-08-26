@@ -1325,9 +1325,12 @@ fn metaTurn(self: *Agent, arena: std.mem.Allocator, system: []const u8, user_msg
 /// and sway the judgment — forcing a call to `tool`, the answer coming back
 /// as its schema-shaped arguments (duped into `arena`) instead of free text.
 fn soloToolTurn(self: *Agent, arena: std.mem.Allocator, system: []const u8, user_msg: []const u8, tool: ProviderTool, max_tokens: i32, effort: Config.Effort) MetaTurnError!std.json.Value {
+    // The list itself is gpa-owned: `runTools` grows it with `self.allocator`
+    // as it appends the turn's messages. Their contents live in `arena`.
     var messages: std.ArrayList(zenai.provider.Message) = .empty;
-    try messages.append(arena, .{ .role = .system, .content = system });
-    try messages.append(arena, .{ .role = .user, .content = user_msg });
+    defer messages.deinit(self.allocator);
+    try messages.append(self.allocator, .{ .role = .system, .content = system });
+    try messages.append(self.allocator, .{ .role = .user, .content = user_msg });
     var result = try self.runMetaTurn(&messages, arena, .{
         .max_tokens = max_tokens,
         .effort = effort,
