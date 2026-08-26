@@ -1706,7 +1706,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     try transfer.materializeResponse(msg.conn, .{});
 
     // Validate the headers for the response with CORS.
-    if (transfer._cors_cross_origin) {
+    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
         CorsGate.validateResponse(transfer) catch |err| {
             self.removeConn(msg.conn);
             transfer._conn = null;

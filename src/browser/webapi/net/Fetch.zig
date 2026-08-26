@@ -178,7 +178,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     // no-cors mode: regardless of what the server returned, JS only ever sees
     // an opaque response — status 0, no headers, no body, url "".
-    if (self._no_cors) {
+    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
         res._status = 0;
         res._status_text = "";
         res._url = "";
