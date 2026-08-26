@@ -730,7 +730,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: XHR" {
-    testing.expectLog(&.{ .http, .http });
+    testing.expectLog(&.{ .http, .http, .http });
     try testing.htmlRunner("net/xhr.html", .{});
 }
 
