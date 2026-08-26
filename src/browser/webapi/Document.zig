@@ -916,7 +916,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(&visibility_cache, frame)) {
+            if (element.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;

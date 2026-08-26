@@ -271,6 +271,29 @@
   }
 </script>
 
+<script id="ua_closed_dialog_is_hidden">
+  {
+    // dialog:not([open]) { display: none }
+    const dialog = document.createElement('dialog');
+    const child = document.createElement('p');
+    dialog.appendChild(child);
+    document.body.appendChild(dialog);
+
+    testing.expectEqual(false, dialog.checkVisibility());
+    testing.expectEqual(false, child.checkVisibility());
+    testing.expectEqual('none', window.getComputedStyle(dialog).display);
+
+    dialog.show();
+    testing.expectEqual(true, dialog.checkVisibility());
+    testing.expectEqual(true, child.checkVisibility());
+
+    dialog.close();
+    testing.expectEqual(false, dialog.checkVisibility());
+
+    dialog.remove();
+  }
+</script>
+
 <script id="hidden_attribute_propagates_through_check_visibility">
   {
     // [hidden] { display: none } applies to the element itself...

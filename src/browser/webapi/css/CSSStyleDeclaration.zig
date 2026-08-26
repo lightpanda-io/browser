@@ -84,7 +84,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         if (self._element) |element| {
             const style_manager = &element.ownerFrame(frame)._style_manager;
             if (wrapped.eql(comptime .wrap("display"))) {
-                if (style_manager.hasDisplayNone(element)) return "none";
+                if (style_manager.hasDisplayNone(element, .materialize)) return "none";
             } else if (wrapped.eql(comptime .wrap("visibility"))) {
                 if (style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
             }
@@ -122,7 +122,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame)) {
+    if (!element.checkVisibilityCached(null, frame, .materialize)) {
         return "auto";
     }
     const value = switch (dimension) {

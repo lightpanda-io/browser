@@ -1128,7 +1128,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
 
     // Per HTML spec §6.4.4, an element must be "being rendered" (not
     // display:none on self or any ancestor) to be focusable.
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return;
     }
 
@@ -1329,8 +1329,8 @@ pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: 
     return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache);
 }
 
-pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame) bool {
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, cache, .{});
+pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
+    return !self.ownerFrame(frame)._style_manager.isHidden(self, cache, .{}, access);
 }
 
 // The element's own display:none only, no ancestor walk. For a child or
@@ -1338,7 +1338,7 @@ pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *F
 // answer: they share the visible ancestor chain — and the owner frame, which
 // the caller resolves once rather than per element.
 fn isVisibleSelf(self: *Element, style_manager: *StyleManager) bool {
-    return !style_manager.hasDisplayNone(self);
+    return !style_manager.hasDisplayNone(self, .materialize);
 }
 
 const CheckVisibilityOpts = struct {
@@ -1352,7 +1352,7 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     return !self.ownerFrame(frame)._style_manager.isHidden(self, null, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
-    });
+    }, .materialize);
 }
 
 pub const Axis = enum {
@@ -1398,14 +1398,14 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
 // width / height treshold is reached. If the size isn't explicit, we fallback
 // to the content size.
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
     return self.boxAxis(frame, .width);
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
     return self.boxAxis(frame, .height);
@@ -1436,7 +1436,7 @@ pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
 // getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
 // only materialized at the JS boundary.
 pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return .{};
     }
     return self.boundingClientRectValuesForVisible(frame);
@@ -1453,7 +1453,7 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return &.{};
     }
     const rects = try frame.local_arena.alloc(*DOMRect, 1);
@@ -1505,7 +1505,7 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
 
@@ -1522,7 +1522,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
 
@@ -1590,21 +1590,21 @@ pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame)) {
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
     return self.horizontalPosition(frame);
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
-    if (!self.asNode().isConnected() or !self.checkVisibilityCached(null, frame)) {
+    if (!self.asNode().isConnected() or !self.checkVisibilityCached(null, frame, .materialize)) {
         return null;
     }
 

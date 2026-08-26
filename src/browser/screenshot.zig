@@ -556,13 +556,13 @@ const Builder = struct {
             .anchor => {
                 const href = el.getAttributeSafe(comptime .wrap("href"));
                 const label = el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
-                const info = markdown.analyzeContent(el.asNode());
+                const info = markdown.analyzeContent(el.asNode(), self.frame);
                 if (!info.has_visible and label == null) return;
 
                 // Same split as markdown: an anchor wrapping blocks, or one
                 // sitting among element-only siblings (nav bars, post lists),
                 // gets its own tight block instead of flowing inline.
-                const standalone = info.has_block or markdown.isStandaloneAnchor(el);
+                const standalone = info.has_block or markdown.isStandaloneAnchor(el, self.frame);
                 if (standalone) {
                     try self.closeBlock();
                     self.tight += 1;

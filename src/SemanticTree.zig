@@ -131,7 +131,7 @@ fn walk(
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame)) {
+        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame, .scan)) {
             return;
         }
 
