@@ -27,6 +27,7 @@ const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
 const Blob = @import("webapi/Blob.zig");
+const Element = @import("webapi/Element.zig");
 const WebDriver = @import("webapi/WebDriver.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
@@ -113,6 +114,9 @@ queued_queued_navigation: std.ArrayList(*Frame) = .empty,
 frame: Frame,
 
 input_modifiers: if (lp.build_config.wpt_extensions) WebDriver.Modifiers else struct {} = .{},
+
+// The element the synthetic pointer is currently over
+input_hover_target: ?*Element = null,
 
 // Popup Frames opened by window.open. They are top-level browsing contexts
 // (parent == null, no iframe element) but share this Page's factory, arena,
