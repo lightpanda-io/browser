@@ -1641,13 +1641,10 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
 }
 
 /// `browser_tools.call` plus the session-baseline note owed on a successful
-/// extract, shared by both dispatch paths. The note runs on the uncapped
-/// result — a truncated one parses as malformed and records nothing.
+/// extract, shared by both dispatch paths.
 fn callTool(self: *Agent, arena: std.mem.Allocator, tool_name: []const u8, args: ?std.json.Value) browser_tools.ToolError!browser_tools.ToolResult {
     const result = try browser_tools.call(arena, self.session, &self.node_registry, tool_name, args);
-    if (!result.is_error and std.mem.eql(u8, tool_name, @tagName(BrowserTool.extract))) {
-        self.baseline.noteExtractResult(arena, result.text) catch {};
-    }
+    if (result.fields) |fields| self.baseline.noteExtractFields(fields) catch {};
     return result;
 }
 
@@ -1928,6 +1925,7 @@ fn judgedFinding(self: *Agent, arena: std.mem.Allocator, path: []const u8, facts
             self.terminal.printInfo("Output has empty fields, but the model judged the run consistent: {s}", .{verdict.reason});
             return null;
         }
+        self.terminal.printInfo("The model judged the run broken: {s}", .{verdict.reason});
         return .{
             .failure = .{
                 .kind = suspicion.failure.kind,

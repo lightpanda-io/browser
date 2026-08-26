@@ -53,14 +53,9 @@ pub fn reset(self: *Baseline) void {
     _ = self.arena.reset(.retain_capacity);
 }
 
-/// Tally one successful extract result (the tool's JSON output). `scratch`
-/// only holds the parse — tallies land in the baseline's own arena. Malformed
-/// output records nothing — this is best-effort telemetry.
-pub fn noteExtractResult(self: *Baseline, scratch: std.mem.Allocator, result_text: []const u8) error{OutOfMemory}!void {
-    const parsed = (try extract.parseJsonLenient(scratch, result_text)) orelse return;
-    for (try extract.classifyExtractFields(scratch, parsed)) |fc| {
-        try self.bump(fc.field, !fc.empty);
-    }
+/// Tally one successful extract's fields, as classified by the tool.
+pub fn noteExtractFields(self: *Baseline, fields: []const extract.ExtractField) error{OutOfMemory}!void {
+    for (fields) |fc| try self.bump(fc.field, !fc.empty);
 }
 
 fn bump(self: *Baseline, field: []const u8, nonempty: bool) error{OutOfMemory}!void {
@@ -132,12 +127,16 @@ test "baseline: note and serialize tally per-field data presence" {
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const scratch = arena.allocator();
 
-    try baseline.noteExtractResult(scratch, "{\"stories\":[{\"title\":\"a\"}],\"empty_list\":[],\"scalar\":\"x\"}");
-    try baseline.noteExtractResult(scratch, "{\"stories\":[],\"empty_list\":[]}");
-    // Malformed results record nothing.
-    try baseline.noteExtractResult(scratch, "not json");
+    try baseline.noteExtractFields(&.{
+        .{ .field = "stories", .empty = false },
+        .{ .field = "empty_list", .empty = true },
+        .{ .field = "scalar", .empty = false },
+    });
+    try baseline.noteExtractFields(&.{
+        .{ .field = "stories", .empty = true },
+        .{ .field = "empty_list", .empty = true },
+    });
 
     const line = (try baseline.serialize(arena.allocator())).?;
     try std.testing.expectEqualStrings(

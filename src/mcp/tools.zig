@@ -305,7 +305,7 @@ fn buildRunReport(
             report.source = try reportSource(arena, script_error.source, collector.env_pairs);
         },
         .facts => |facts| {
-            report.returned = facts.returned;
+            report.returned = try lp.replay.returned(arena, facts);
             report.extracts = facts.extract_stats;
             if (lp.replay.suspicionOf(arena, facts)) |suspicion| {
                 report.status = .suspicious;

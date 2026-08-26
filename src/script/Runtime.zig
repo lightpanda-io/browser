@@ -276,15 +276,6 @@ fn setObjectProperty(
     if (!out.has_value or !out.value) return error.RuntimeInitFailed;
 }
 
-/// The value a script ran to completion with.
-pub const Completion = struct {
-    /// Display form of the returned value: objects and arrays as JSON.
-    text: []const u8,
-    /// True when the value carries no data — null, "", or an array/object all
-    /// of whose members are empty.
-    empty: bool,
-};
-
 /// A script run's outcome. `err` is a formatted JS compile/runtime exception.
 /// All slices are allocated in this runtime's call arena and valid until
 /// deinit or the next run.
@@ -294,8 +285,10 @@ pub const RunResult = union(enum) {
 };
 
 pub const Ok = struct {
-    /// The value the script returned; null when it returned `undefined`.
-    completion: ?Completion,
+    /// Display text of the value the script returned — objects and arrays as
+    /// JSON, so what the model sees is what a replay judges. Null when it
+    /// returned `undefined` or the display form couldn't be computed.
+    completion: ?[]const u8,
     /// Per-(schema, field) extract tallies for the run.
     extract_stats: []const extract.ExtractStat,
 };
@@ -363,7 +356,7 @@ pub fn runSource(self: *Runtime, source: []const u8, name: []const u8) RunError!
     return self.runOk(try self.completion(context, completion_value));
 }
 
-fn runOk(self: *Runtime, completion_value: ?Completion) RunResult {
+fn runOk(self: *Runtime, completion_value: ?[]const u8) RunResult {
     return .{ .ok = .{
         .completion = completion_value,
         .extract_stats = self.extract_stats.items,
@@ -397,10 +390,10 @@ fn errorMessage(self: *Runtime, context: *const v8.Context, reason: *const v8.Va
 
 /// Echo a script's output — the value it `return`s from the async wrapper, so a
 /// script ending in `return page.extract(...)` prints without `console.log` —
-/// and hand it back to the caller. `undefined` — no `return`, or a bare
-/// trailing expression — stays silent and yields null, as does a value whose
-/// display form can't be computed.
-fn completion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) error{OutOfMemory}!?Completion {
+/// and hand its display text back to the caller. `undefined` — no `return`, or
+/// a bare trailing expression — stays silent and yields null, as does a value
+/// whose display form can't be computed.
+fn completion(self: *Runtime, context: *const v8.Context, value: *const v8.Value) error{OutOfMemory}!?[]const u8 {
     if (v8.v8__Value__IsUndefined(value)) return null;
 
     const arena = self.call_arena.allocator();
@@ -409,23 +402,7 @@ fn completion(self: *Runtime, context: *const v8.Context, value: *const v8.Value
         error.JsException => return null,
     };
     self.writeConsoleLine(.log, text);
-    return .{ .text = text, .empty = self.isEmptyValue(value, text) };
-}
-
-/// Whether a completion value carries no data. `text` is the value's display
-/// form: JSON for objects and arrays (a fallback coercion — function, circular
-/// reference — won't parse and counts as data), plain coercion otherwise.
-fn isEmptyValue(self: *Runtime, value: *const v8.Value, text: []const u8) bool {
-    if (v8.v8__Value__IsNull(value)) return true;
-    if (v8.v8__Value__IsObject(value)) {
-        // Scratch arena: the parse tree is as large as the extract output and
-        // must not sit in the call arena until the next run.
-        var arena_state: std.heap.ArenaAllocator = .init(self.allocator);
-        defer arena_state.deinit();
-        const parsed = (extract.parseJsonLenient(arena_state.allocator(), text) catch return false) orelse return false;
-        return extract.jsonIsEmpty(parsed);
-    }
-    return text.len == 0;
+    return text;
 }
 
 /// Unwrap a callback's info handle and its `External` payload (the `*T` passed
@@ -523,39 +500,32 @@ fn invoke(self: *Runtime, tool: BrowserTool, info: *const v8.FunctionCallbackInf
     const result = self.callTool(arena, tool, args) catch |err| switch (err) {
         error.OutOfMemory => return self.throwError("out of memory"),
     };
+    if (result.is_error) return self.throwError(result.text);
 
-    switch (result) {
-        .ok => |text| switch (tool) {
-            .extract => {
-                const parsed = extract.parseJsonLenient(arena, text) catch |err| switch (err) {
-                    error.OutOfMemory => return self.throwError("out of memory"),
-                };
-                // Recording happens after `callTool` returns, so a re-entrant
-                // extract (via a `toJSON` during argument marshalling) tallies
-                // inner-then-outer; the map is append-only. Failed extracts
-                // threw above and are intentionally not counted.
-                if (parsed) |p| {
-                    self.recordExtractStats(arena, args, p) catch
-                        return self.throwError("out of memory");
-                }
-                self.setReturnJson(context, info, text);
-            },
-            else => self.setReturnString(info, text),
+    switch (tool) {
+        .extract => {
+            // Recording happens after `callTool` returns, so a re-entrant
+            // extract (via a `toJSON` during argument marshalling) tallies
+            // inner-then-outer; the map is append-only. Failed extracts
+            // threw above and are intentionally not counted.
+            if (result.fields) |fields| {
+                self.recordExtractStats(args, fields) catch
+                    return self.throwError("out of memory");
+            }
+            self.setReturnJson(context, info, result.text);
         },
-        .fail => |message| self.throwError(message),
+        else => self.setReturnString(info, result.text),
     }
 }
 
 /// Tally each top-level field of an extract result; callers judge what the
 /// tallies mean.
-fn recordExtractStats(self: *Runtime, arena: std.mem.Allocator, args: ?std.json.Value, result: std.json.Value) error{OutOfMemory}!void {
+fn recordExtractStats(self: *Runtime, args: ?std.json.Value, fields: []const extract.ExtractField) error{OutOfMemory}!void {
     const schema = switch ((args orelse return).object.get("schema") orelse return) {
         .string => |s| s,
         else => return,
     };
-    for (try extract.classifyExtractFields(arena, result)) |fc| {
-        try self.bumpExtractStat(schema, fc.field, fc.empty);
-    }
+    for (fields) |fc| try self.bumpExtractStat(schema, fc.field, fc.empty);
 }
 
 fn bumpExtractStat(self: *Runtime, schema: []const u8, field: []const u8, is_empty: bool) error{OutOfMemory}!void {
@@ -796,28 +766,24 @@ fn writeConsoleLine(self: *Runtime, method: ConsoleMethod, line: []const u8) voi
     writer.interface.flush() catch return;
 }
 
-const PrimitiveResult = union(enum) {
-    ok: []const u8,
-    fail: []const u8,
-};
-
+/// Operational failures come back in-band (`is_error`), like a JS-level one.
 fn callTool(
     self: *Runtime,
     arena: std.mem.Allocator,
     tool: BrowserTool,
     args: ?std.json.Value,
-) error{OutOfMemory}!PrimitiveResult {
+) error{OutOfMemory}!browser_tools.ToolResult {
     self.session.browser.env.isolate.enter();
     defer self.session.browser.env.isolate.exit();
 
-    const result = browser_tools.call(arena, self.session, self.registry, @tagName(tool), args) catch |err| switch (err) {
+    return browser_tools.call(arena, self.session, self.registry, @tagName(tool), args) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.FrameNotLoaded => return .{ .fail = "no page loaded - run page.goto(url) first" },
-        else => return .{ .fail = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory },
+        error.FrameNotLoaded => return .{ .text = "no page loaded - run page.goto(url) first", .is_error = true },
+        else => return .{
+            .text = std.fmt.allocPrint(arena, "{s} failed: {s}", .{ @tagName(tool), @errorName(err) }) catch return error.OutOfMemory,
+            .is_error = true,
+        },
     };
-
-    if (result.is_error) return .{ .fail = result.text };
-    return .{ .ok = result.text };
 }
 
 const BuildArgsError = error{
@@ -1627,7 +1593,7 @@ test "agent script runtime: top-level await runs in an async wrapper" {
     try testing.expectString("42\n", sink.written());
 }
 
-test "agent script runtime: completion value emptiness" {
+test "agent script runtime: completion is the returned value's display text" {
     defer testing.reset();
 
     var registry = CDPNode.Registry.init(testing.allocator);
@@ -1636,26 +1602,20 @@ test "agent script runtime: completion value emptiness" {
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
     defer runtime.deinit();
 
-    const cases = [_]struct { source: []const u8, empty: bool }{
-        // The shapes a stale extract selector produces: an empty list, or rows
-        // whose every field missed.
-        .{ .source = "return [];", .empty = true },
-        .{ .source = "return {};", .empty = true },
-        .{ .source = "return null;", .empty = true },
-        .{ .source = "return { stories: [] };", .empty = true },
-        .{ .source = "return [{ id: null, title: \"\" }];", .empty = true },
-        .{ .source = "return [{ id: null, title: \"HN\" }];", .empty = false },
-        .{ .source = "return \"text\";", .empty = false },
-        .{ .source = "return 0;", .empty = false },
-        .{ .source = "return false;", .empty = false },
+    const cases = [_]struct { source: []const u8, text: []const u8 }{
+        .{ .source = "return [];", .text = "[]" },
+        .{ .source = "return { stories: [] };", .text = "{\"stories\":[]}" },
+        .{ .source = "return null;", .text = "null" },
+        .{ .source = "return \"text\";", .text = "text" },
+        .{ .source = "return 0;", .text = "0" },
     };
     for (cases) |case| {
-        const result = try runtime.runSource(case.source, "agent-runtime-emptiness.js");
-        try testing.expectEqual(case.empty, result.ok.completion.?.empty);
+        const result = try runtime.runSource(case.source, "agent-runtime-completion.js");
+        try testing.expectString(case.text, result.ok.completion.?);
     }
 
-    // No `return` — nothing to classify, nothing to heal.
-    const silent = try runtime.runSource("const x = 1;", "agent-runtime-emptiness.js");
+    // No `return` — nothing to judge, nothing to heal.
+    const silent = try runtime.runSource("const x = 1;", "agent-runtime-completion.js");
     try testing.expectEqual(null, silent.ok.completion);
 }
 

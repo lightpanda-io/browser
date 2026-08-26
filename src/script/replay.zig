@@ -27,24 +27,38 @@ const ScriptRuntime = lp.Runtime;
 const extract = @import("extract.zig");
 const string = @import("../string.zig");
 
-/// What a completed run returned, as far as classification cares.
-pub const Returned = union(enum) {
+/// What a completed run returned, judged from its display text — what the
+/// model saw is what is judged. Computed on demand by `returned`, so a plain
+/// replay never parses its result.
+pub const Returned = enum {
     /// No `return`, or a value whose display form couldn't be computed.
     none,
     /// A value carrying data.
     data,
-    /// A deep-empty value, carrying its capped display text.
-    empty: []const u8,
+    /// A deep-empty value.
+    empty,
 };
 
 /// Facts about a run that completed without throwing — suspicion is judged by
 /// the model, never here. Duped into the caller's arena — the runtime dies
 /// with the run.
 pub const RunFacts = struct {
-    returned: Returned,
+    /// Display text of the returned value — uncapped, so `returned` judges the
+    /// whole value; null when the run returned nothing.
+    completion: ?[]const u8,
     extract_stats: []const extract.ExtractStat,
     source: []const u8,
 };
+
+/// `allocator` only backs the throwaway parse; nothing is retained. Non-JSON
+/// display text (a function, a circular object's fallback coercion) counts as
+/// data.
+pub fn returned(allocator: std.mem.Allocator, facts: RunFacts) error{OutOfMemory}!Returned {
+    const text = facts.completion orelse return .none;
+    if (text.len == 0) return .empty;
+    const parsed = (try extract.parseJsonLenient(allocator, text)) orelse return .data;
+    return if (extract.jsonIsEmpty(parsed)) .empty else .data;
+}
 
 /// The failure with the text that produced it. `source` is the exact text
 /// that ran, so a heal diagnoses what actually failed instead of re-reading a
@@ -71,17 +85,11 @@ pub fn classifyRun(arena: std.mem.Allocator, result: ScriptRuntime.RunResult, so
             .failure = .{ .kind = .threw, .detail = try arena.dupe(u8, message) },
             .source = source,
         } },
-        .ok => |ok| {
-            const returned: Returned = if (ok.completion) |c|
-                (if (c.empty) .{ .empty = try capDetail(arena, c.text) } else .data)
-            else
-                .none;
-            return .{ .facts = .{
-                .returned = returned,
-                .extract_stats = try dupeExtractStats(arena, ok.extract_stats),
-                .source = source,
-            } };
-        },
+        .ok => |ok| return .{ .facts = .{
+            .completion = if (ok.completion) |c| try arena.dupe(u8, c) else null,
+            .extract_stats = try dupeExtractStats(arena, ok.extract_stats),
+            .source = source,
+        } },
     }
 }
 
@@ -102,9 +110,8 @@ fn dupeExtractStats(arena: std.mem.Allocator, stats: []const extract.ExtractStat
 /// result (hundreds of all-null rows) would otherwise bloat the LLM turn.
 const detail_max_bytes: usize = 2048;
 
-/// `text` may live in a runtime arena that dies before the caller's report.
-fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
-    return string.capBytesOwned(arena, text, detail_max_bytes);
+fn capDetail(arena: std.mem.Allocator, text: []const u8) []const u8 {
+    return string.capBytes(arena, text, detail_max_bytes);
 }
 
 /// A finding worth a verdict, not yet confirmed: the return value was
@@ -112,11 +119,11 @@ fn capDetail(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}![]co
 /// scalar or list, baseline or not. Whether that is breakage or legitimate
 /// sparseness is the model's judgment, not encoded here.
 pub fn suspicionOf(arena: std.mem.Allocator, facts: RunFacts) ?ScriptError {
-    switch (facts.returned) {
-        .empty => |text| return .{
+    switch (returned(arena, facts) catch return null) {
+        .empty => return .{
             .failure = .{
                 .kind = .empty,
-                .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{text}) catch return null,
+                .detail = std.fmt.allocPrint(arena, "its return value carries no data: {s}", .{capDetail(arena, facts.completion.?)}) catch return null,
             },
             .source = facts.source,
         },
@@ -138,7 +145,7 @@ fn dryExtractsFinding(arena: std.mem.Allocator, source: []const u8, stats: []con
         }
         // `stat.field` already lives in `arena` (facts were duped into it).
         try fields.append(arena, stat.field);
-        const schema = try capDetail(arena, stat.schema);
+        const schema = capDetail(arena, stat.schema);
         if (stat.field.len != 0) {
             try aw.writer.print("- the \"{s}\" field in extract({s}) came back empty", .{ stat.field, schema });
         } else {
@@ -209,7 +216,7 @@ pub const ConsoleLine = struct {
 pub const RunReport = struct {
     status: Status,
     path: []const u8,
-    returned: std.meta.Tag(Returned) = .none,
+    returned: Returned = .none,
     extracts: []const extract.ExtractStat = &.{},
     failure: ?WireFailure = null,
     console: []const ConsoleLine = &.{},
@@ -224,8 +231,25 @@ pub const RunReport = struct {
 
 const testing = @import("../testing.zig");
 
-pub fn testFacts(returned: Returned, stats: []const extract.ExtractStat) RunFacts {
-    return .{ .returned = returned, .extract_stats = stats, .source = "" };
+pub fn testFacts(completion: ?[]const u8, stats: []const extract.ExtractStat) RunFacts {
+    return .{ .completion = completion, .extract_stats = stats, .source = "" };
+}
+
+test "returned: judges the display text; numbers and booleans are data" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    // The shapes a stale extract selector produces: an empty list, or rows
+    // whose every field missed.
+    const empty = [_][]const u8{ "[]", "{}", "null", "{\"stories\":[]}", "[{\"id\":null,\"title\":\"\"}]", "" };
+    for (empty) |text| try std.testing.expectEqual(Returned.empty, try returned(aa, testFacts(text, &.{})));
+
+    // Plain strings display without quotes, so they aren't JSON — still data.
+    const data = [_][]const u8{ "[{\"id\":null,\"title\":\"HN\"}]", "text", "0", "false", "[object Object]" };
+    for (data) |text| try std.testing.expectEqual(Returned.data, try returned(aa, testFacts(text, &.{})));
+
+    try std.testing.expectEqual(Returned.none, try returned(aa, testFacts(null, &.{})));
 }
 
 test "suspicionOf: any all-empty field is suspect, none is not" {
@@ -236,21 +260,23 @@ test "suspicionOf: any all-empty field is suspect, none is not" {
     const sparse: []const extract.ExtractStat = &.{
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 3 },
     };
-    try std.testing.expectEqual(null, suspicionOf(aa, testFacts(.data, sparse)));
+    try std.testing.expectEqual(null, suspicionOf(aa, testFacts("[1]", sparse)));
 
     // Scalar all-empty is suspect too — judgment belongs to the model now.
     const dry_scalar: []const extract.ExtractStat = &.{
         .{ .schema = "{}", .field = "title", .calls = 3, .nonempty = 0 },
     };
-    const s = suspicionOf(aa, testFacts(.data, dry_scalar)).?;
+    const s = suspicionOf(aa, testFacts("[1]", dry_scalar)).?;
     try std.testing.expectEqual(WireFailure.Kind.dry_extracts, s.failure.kind);
     try std.testing.expectEqual(1, s.failure.dry_fields.len);
 
-    const empty_facts = testFacts(.{ .empty = "[]" }, &.{});
-    try std.testing.expectEqual(WireFailure.Kind.empty, suspicionOf(aa, empty_facts).?.failure.kind);
+    const empty_facts = testFacts("[]", &.{});
+    const e = suspicionOf(aa, empty_facts).?;
+    try std.testing.expectEqual(WireFailure.Kind.empty, e.failure.kind);
+    try std.testing.expect(std.mem.endsWith(u8, e.failure.detail, ": []"));
 }
 
-test "classifyRun: maps err to threw, completion emptiness to returned" {
+test "classifyRun: maps err to threw, dupes the completion text" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -260,21 +286,21 @@ test "classifyRun: maps err to threw, completion emptiness to returned" {
     try std.testing.expectEqualStrings("boom at line 2", threw.script_error.failure.detail);
     try std.testing.expectEqualStrings("return 1;", threw.script_error.source);
 
-    const empty = try classifyRun(aa, .{ .ok = .{
-        .completion = .{ .text = "[]", .empty = true },
-        .extract_stats = &.{},
-    } }, "return [];");
-    try std.testing.expectEqualStrings("[]", empty.facts.returned.empty);
+    const text: []const u8 = "[]";
+    const empty = try classifyRun(aa, .{ .ok = .{ .completion = text, .extract_stats = &.{} } }, "return [];");
+    try std.testing.expectEqualStrings("[]", empty.facts.completion.?);
+    try std.testing.expect(empty.facts.completion.?.ptr != text.ptr);
+    try std.testing.expectEqual(Returned.empty, try returned(aa, empty.facts));
 
     const data = try classifyRun(aa, .{ .ok = .{
-        .completion = .{ .text = "[1]", .empty = false },
+        .completion = "[1]",
         .extract_stats = &.{.{ .schema = "{}", .field = "a", .calls = 1, .nonempty = 1 }},
     } }, "return [1];");
-    try std.testing.expectEqual(Returned.data, data.facts.returned);
+    try std.testing.expectEqual(Returned.data, try returned(aa, data.facts));
     try std.testing.expectEqual(1, data.facts.extract_stats.len);
 
     const none = try classifyRun(aa, .{ .ok = .{ .completion = null, .extract_stats = &.{} } }, "1;");
-    try std.testing.expectEqual(Returned.none, none.facts.returned);
+    try std.testing.expectEqual(Returned.none, try returned(aa, none.facts));
 }
 
 test "RunReport serializes to the wire shape" {

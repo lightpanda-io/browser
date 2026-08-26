@@ -64,7 +64,7 @@ pub fn validationOutcome(arena: std.mem.Allocator, path: []const u8, script: []c
 fn cureFailure(arena: std.mem.Allocator, first: WireFailure, facts: RunFacts) error{OutOfMemory}!?[]const u8 {
     switch (first.kind) {
         .threw => return null,
-        .empty => return if (facts.returned == .data)
+        .empty => return if ((try replay.returned(arena, facts)) == .data)
             null
         else
             "The revised script ran, but still returns no data (or no longer returns anything) — the original returned a value.",
@@ -217,7 +217,7 @@ test "validationOutcome: failed run and uncured facts never reach the commit" {
     } });
     try std.testing.expectEqualStrings("boom at line 2", failed.failed_run);
 
-    const still_dry: replay.Classified = .{ .facts = testFacts(.data, &.{
+    const still_dry: replay.Classified = .{ .facts = testFacts("[1]", &.{
         .{ .schema = "{}", .field = "comments", .calls = 3, .nonempty = 0 },
     }) };
     const uncured = try validationOutcome(aa, "s.js", "return 1;", dry, still_dry);
@@ -237,10 +237,10 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 3 },
         .{ .schema = "[]", .field = "", .calls = 1, .nonempty = 1 },
     };
-    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts(.data, cured_stats)));
+    try std.testing.expectEqual(null, try cureFailure(aa, dry, testFacts("[1]", cured_stats)));
 
     // Fix-by-deletion: the dry field is simply gone from the revised run.
-    const deleted = (try cureFailure(aa, dry, testFacts(.data, cured_stats[1..]))).?;
+    const deleted = (try cureFailure(aa, dry, testFacts("[1]", cured_stats[1..]))).?;
     try std.testing.expect(std.mem.indexOf(u8, deleted, "\"comments\"") != null);
 
     // Still dry counts as uncured.
@@ -248,14 +248,14 @@ test "cureFailure: running clean is not a cure" {
         .{ .schema = "{}", .field = "comments", .calls = 5, .nonempty = 0 },
         cured_stats[1],
     };
-    try std.testing.expect((try cureFailure(aa, dry, testFacts(.data, still_dry_stats))) != null);
+    try std.testing.expect((try cureFailure(aa, dry, testFacts("[1]", still_dry_stats))) != null);
 
     // .empty is cured only by a data-carrying return.
     const empty: WireFailure = .{ .kind = .empty };
-    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts(.data, &.{})));
-    try std.testing.expect((try cureFailure(aa, empty, testFacts(.none, &.{}))) != null);
+    try std.testing.expectEqual(null, try cureFailure(aa, empty, testFacts("[1]", &.{})));
+    try std.testing.expect((try cureFailure(aa, empty, testFacts(null, &.{}))) != null);
 
     // .threw needs nothing beyond running clean.
     const threw: WireFailure = .{ .kind = .threw };
-    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(.none, &.{})));
+    try std.testing.expectEqual(null, try cureFailure(aa, threw, testFacts(null, &.{})));
 }

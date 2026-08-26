@@ -75,7 +75,8 @@ pub fn classifyExtractFields(arena: std.mem.Allocator, result: std.json.Value) e
 }
 
 /// Null, "", and arrays/objects all of whose members are empty carry no data;
-/// numbers and booleans always do (0 and false are answers).
+/// numbers and booleans always do (0 and false are answers). The one emptiness
+/// rule: extract fields and script return values are both judged by it.
 pub fn jsonIsEmpty(value: std.json.Value) bool {
     switch (value) {
         .null => return true,
@@ -90,5 +91,20 @@ pub fn jsonIsEmpty(value: std.json.Value) bool {
             } else true;
         },
         else => return false,
+    }
+}
+
+test "jsonIsEmpty: all-empty containers are empty, numbers and booleans are data" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const empty = [_][]const u8{ "null", "\"\"", "[]", "{}", "[{\"a\":null}]", "{\"a\":[\"\"],\"b\":{}}" };
+    for (empty) |text| {
+        try std.testing.expect(jsonIsEmpty(try std.json.parseFromSliceLeaky(std.json.Value, aa, text, .{})));
+    }
+    const data = [_][]const u8{ "0", "false", "\"x\"", "[0]", "{\"a\":[null,1]}" };
+    for (data) |text| {
+        try std.testing.expect(!jsonIsEmpty(try std.json.parseFromSliceLeaky(std.json.Value, aa, text, .{})));
     }
 }

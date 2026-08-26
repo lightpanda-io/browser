@@ -782,6 +782,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// Set only by a successful `extract`: each top-level result field and
+    /// whether it carried data, so consumers tally without re-parsing `text`.
+    fields: ?[]const lp.extract.ExtractField = null,
 };
 
 pub const GotoParams = struct {
@@ -924,7 +927,11 @@ pub fn extract(
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null);
-    return runEval(arena, page, script, null);
+    const result = try runEval(arena, page, script, null);
+    if (result.is_error) return result;
+    const parsed = (try lp.extract.parseJsonLenient(arena, result.text)) orelse
+        return .{ .text = "extract: walker produced non-JSON output", .is_error = true };
+    return .{ .text = result.text, .fields = try lp.extract.classifyExtractFields(arena, parsed) };
 }
 
 // The schema literal is spliced between prefix and suffix verbatim — a format
@@ -1499,7 +1506,7 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNod
             error.OutOfMemory => return ToolError.OutOfMemory,
             error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
         };
-        return .{ .text = "" };
+        return .{ .text = "", .fields = result.fields };
     };
 
     return result;
