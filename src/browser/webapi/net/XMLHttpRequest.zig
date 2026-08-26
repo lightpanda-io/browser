@@ -434,6 +434,11 @@ pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
 }
 
 pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execution) !void {
+    const rt: ResponseType = if (value.len == 0)
+        .default
+    else
+        std.meta.stringToEnum(ResponseType, value) orelse return;
+
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
     }
@@ -447,10 +452,8 @@ pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Ex
         return;
     }
 
-    if (std.meta.stringToEnum(ResponseType, value)) |rt| {
-        if (rt != .default) {
-            self._response_type = rt;
-        }
+    if (rt != .default) {
+        self._response_type = rt;
     }
 }
 
