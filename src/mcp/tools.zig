@@ -29,12 +29,16 @@ const browser_tool_list = blk: {
 
 const read_only: protocol.ToolAnnotations = .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true, .openWorldHint = false };
 
-/// Exhaustive so a new tool must classify itself. Navigation is an HTTP GET,
-/// so tools that only navigate and read stay read-only; they are open-world.
+/// Exhaustive so a new tool must classify itself. Read-only means the call
+/// cannot change page or session state: navigation writes cookies and
+/// storage, and waiting lets page scripts run, so neither qualifies.
 fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
     return switch (tool) {
-        .nodeDetails, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv, .extract, .waitForSelector, .waitForScript, .waitForState => read_only,
-        .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .readOnlyHint = true, .destructiveHint = false, .idempotentHint = true },
+        .nodeDetails, .findElement, .getUrl, .getCookies, .getEnv, .extract => read_only,
+        // Drains the buffer: a second call returns something else.
+        .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
+        .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
+        .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .scroll => .{ .destructiveHint = false, .openWorldHint = false },
@@ -303,7 +307,7 @@ test "MCP - tools/list carries titles and annotations" {
     const Expect = struct { name: []const u8, title: []const u8, read_only: bool, destructive: bool };
     const expected = [_]Expect{
         .{ .name = "getUrl", .title = "Show the current page URL", .read_only = true, .destructive = false },
-        .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = true, .destructive = false },
+        .{ .name = "markdown", .title = "Render the page or a subtree as markdown", .read_only = false, .destructive = false },
         .{ .name = "click", .title = "Click an element", .read_only = false, .destructive = true },
         .{ .name = "save", .title = "Save the session as an agent script", .read_only = false, .destructive = true },
         .{ .name = "session_list", .title = "List browser sessions", .read_only = true, .destructive = false },
