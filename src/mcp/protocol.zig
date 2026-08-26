@@ -6,7 +6,20 @@ pub const Version = enum {
     @"2025-06-18",
     @"2025-11-25",
 
-    pub const default: Version = .@"2024-11-05";
+    pub const latest: Version = .@"2025-11-25";
+
+    /// The client's version when we support it, else the newest we do.
+    pub fn negotiate(params: ?std.json.Value) Version {
+        const obj = switch (params orelse return .latest) {
+            .object => |o| o,
+            else => return .latest,
+        };
+        const requested = switch (obj.get("protocolVersion") orelse return .latest) {
+            .string => |s| s,
+            else => return .latest,
+        };
+        return std.meta.stringToEnum(Version, requested) orelse .latest;
+    }
 };
 
 pub const Request = struct {
