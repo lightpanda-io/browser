@@ -85,7 +85,7 @@ fn expireImages(self: *Conversation) void {
         const results = msg.tool_results orelse continue;
         var stripped: ?[]zenai.provider.ToolResult = null;
         for (results, 0..) |res, n| {
-            if (!hasImage(res.parts orelse continue)) continue;
+            if (!zenai.provider.hasImage(res.parts orelse continue)) continue;
             if (budget > 0) {
                 budget -= 1;
                 continue;
@@ -97,11 +97,6 @@ fn expireImages(self: *Conversation) void {
         }
         if (stripped) |s| msg.tool_results = s;
     }
-}
-
-fn hasImage(parts: []const zenai.provider.ContentPart) bool {
-    for (parts) |part| if (part == .image) return true;
-    return false;
 }
 
 /// Cap history growth: expire stale images, then once history exceeds
