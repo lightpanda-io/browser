@@ -1361,3 +1361,41 @@
     testing.expectEqual('sc:///', url.href);
   }
 </script>
+
+<script id=searchParamsQuerySync>
+{
+  // Accessing searchParams must not rewrite the query...
+  const url = new URL('http://www.example.com/?a=b,c');
+  url.searchParams;
+  testing.expectEqual('http://www.example.com/?a=b,c', url.toString());
+  testing.expectEqual('?a=b,c', url.search);
+  testing.expectEqual('a=b%2Cc', url.searchParams.toString());
+
+  // ...but mutations push the serialized list into it.
+  url.searchParams.append('x', 'y');
+  testing.expectEqual('http://www.example.com/?a=b%2Cc&x=y', url.toString());
+
+  // Deleting the last param drops the '?'.
+  const url2 = new URL('http://example.com/?p1&p2');
+  url2.searchParams.delete('p1');
+  url2.searchParams.delete('p2');
+  testing.expectEqual('http://example.com/', url2.href);
+  testing.expectEqual('', url2.search);
+
+  // A double-'?' query reads back raw via url.search.
+  const url3 = new URL('http://example.org/file??a=b&c=d');
+  testing.expectEqual('??a=b&c=d', url3.search);
+  testing.expectEqual('%3Fa=b&c=d', url3.searchParams.toString());
+
+  // set() keeps the first entry's position when pushing back.
+  const url4 = new URL('http://example.org/file?e=f&g=h');
+  const sp = url4.searchParams;
+  sp.append('i', ' j ');
+  sp.set('e', 'updated');
+  testing.expectEqual('?e=updated&g=h&i=+j+', url4.search);
+
+  // search setter still propagates into an existing searchParams.
+  url4.search = 'n=1';
+  testing.expectEqual('n=1', sp.toString());
+}
+</script>
