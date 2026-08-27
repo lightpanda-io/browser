@@ -46,6 +46,24 @@ pub const Opts = struct {
     };
 };
 
+// Parsed fonts, shaping scratch and the glyph cache, on the Rust side. One
+// per Browser, created on the first screenshot.
+pub const Renderer = opaque {
+    pub fn deinit(self: *Renderer) void {
+        lp_render_free(self);
+    }
+};
+
+fn rendererFor(frame: *Frame) !*Renderer {
+    const browser = frame._session.browser;
+    if (browser.renderer) |r| {
+        return r;
+    }
+    const r = lp_render_new() orelse return error.RendererInit;
+    browser.renderer = r;
+    return r;
+}
+
 pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
     const prepared = try prepare(arena, node, opts, frame);
     return prepared.write(writer);
@@ -71,12 +89,17 @@ pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepar
     };
     try builder.render(node);
     try builder.closeBlock();
-    return .{ .blocks = builder.blocks.items, .opts = opts };
+    return .{
+        .opts = opts,
+        .blocks = builder.blocks.items,
+        .renderer = try rendererFor(frame),
+    };
 }
 
 pub const Prepared = struct {
     opts: Opts,
     blocks: []const LpBlock,
+    renderer: *Renderer,
 
     pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
         return self.render(writer, 0);
@@ -87,7 +110,7 @@ pub const Prepared = struct {
         const clip = opts.clip orelse Opts.Clip{ .x = 0, .y = 0, .width = 0, .height = 0 };
         var content_height: u32 = 0;
         var sink: Sink = .{ .writer = writer };
-        const rc = lp_render_png(self.blocks.ptr, self.blocks.len, .{
+        const rc = lp_render_png(self.renderer, self.blocks.ptr, self.blocks.len, .{
             .width = opts.width,
             .height = opts.height,
             .clip_x = clip.x,
@@ -194,10 +217,69 @@ const RC_NO_RASTER: i32 = 3;
 const RC_ENCODE_FAILED: i32 = 4;
 const RC_PANIC: i32 = 5;
 
+// What the Rust side reports about the mirror above; see the "rust abi" test.
+const LpAbi = extern struct {
+    size: u32,
+
+    span_size: u32,
+    span_align: u32,
+    span_text: u32,
+    span_len: u32,
+    span_flags: u32,
+    span_color: u32,
+
+    block_size: u32,
+    block_align: u32,
+    block_spans: u32,
+    block_spans_len: u32,
+    block_marker: u32,
+    block_marker_len: u32,
+    block_kind: u32,
+    block_level: u32,
+    block_list_depth: u32,
+    block_quote_depth: u32,
+    block_flags: u32,
+
+    opts_size: u32,
+    opts_align: u32,
+    opts_width: u32,
+    opts_height: u32,
+    opts_clip_x: u32,
+    opts_clip_y: u32,
+    opts_clip_w: u32,
+    opts_clip_h: u32,
+    opts_scale: u32,
+    opts_flags: u32,
+
+    span_bold: u32,
+    span_italic: u32,
+    span_underline: u32,
+    span_mono: u32,
+    span_strike: u32,
+    span_has_color: u32,
+
+    block_heading: u32,
+    block_pre: u32,
+    block_rule: u32,
+    block_tight: u32,
+
+    render_measure_only: u32,
+
+    rc_ok: u32,
+    rc_write_refused: u32,
+    rc_invalid: u32,
+    rc_no_raster: u32,
+    rc_encode_failed: u32,
+    rc_panic: u32,
+};
+
 const LINK_COLOR: u32 = 0x1a0dab;
 const MUTED_COLOR: u32 = 0x6b6b6b;
 
+extern "c" fn lp_render_new() ?*Renderer;
+extern "c" fn lp_render_free(r: *Renderer) void;
 extern "c" fn lp_render_png(
+    r: *Renderer,
     blocks: [*]const LpBlock,
     blocks_len: usize,
     opts: LpRenderOpts,
@@ -205,6 +287,7 @@ extern "c" fn lp_render_png(
     ctx: *anyopaque,
     write: *const fn (ctx: *anyopaque, data: [*]const u8, len: usize) callconv(.c) bool,
 ) i32;
+extern "c" fn lp_render_abi(out: *LpAbi) void;
 
 const Builder = struct {
     frame: *Frame,
@@ -641,6 +724,76 @@ const Builder = struct {
 };
 
 const testing = @import("../testing.zig");
+test "browser.screenshot: rust abi matches" {
+    var got: LpAbi = undefined;
+    lp_render_abi(&got);
+
+    const expected: LpAbi = .{
+        .size = @sizeOf(LpAbi),
+
+        .span_size = @sizeOf(LpSpan),
+        .span_align = @alignOf(LpSpan),
+        .span_text = @offsetOf(LpSpan, "text"),
+        .span_len = @offsetOf(LpSpan, "len"),
+        .span_flags = @offsetOf(LpSpan, "flags"),
+        .span_color = @offsetOf(LpSpan, "color"),
+
+        .block_size = @sizeOf(LpBlock),
+        .block_align = @alignOf(LpBlock),
+        .block_spans = @offsetOf(LpBlock, "spans"),
+        .block_spans_len = @offsetOf(LpBlock, "spans_len"),
+        .block_marker = @offsetOf(LpBlock, "marker"),
+        .block_marker_len = @offsetOf(LpBlock, "marker_len"),
+        .block_kind = @offsetOf(LpBlock, "kind"),
+        .block_level = @offsetOf(LpBlock, "level"),
+        .block_list_depth = @offsetOf(LpBlock, "list_depth"),
+        .block_quote_depth = @offsetOf(LpBlock, "quote_depth"),
+        .block_flags = @offsetOf(LpBlock, "flags"),
+
+        .opts_size = @sizeOf(LpRenderOpts),
+        .opts_align = @alignOf(LpRenderOpts),
+        .opts_width = @offsetOf(LpRenderOpts, "width"),
+        .opts_height = @offsetOf(LpRenderOpts, "height"),
+        .opts_clip_x = @offsetOf(LpRenderOpts, "clip_x"),
+        .opts_clip_y = @offsetOf(LpRenderOpts, "clip_y"),
+        .opts_clip_w = @offsetOf(LpRenderOpts, "clip_w"),
+        .opts_clip_h = @offsetOf(LpRenderOpts, "clip_h"),
+        .opts_scale = @offsetOf(LpRenderOpts, "scale"),
+        .opts_flags = @offsetOf(LpRenderOpts, "flags"),
+
+        .span_bold = SPAN_BOLD,
+        .span_italic = SPAN_ITALIC,
+        .span_underline = SPAN_UNDERLINE,
+        .span_mono = SPAN_MONO,
+        .span_strike = SPAN_STRIKE,
+        .span_has_color = SPAN_HAS_COLOR,
+
+        .block_heading = @intFromEnum(LpBlock.Kind.heading),
+        .block_pre = @intFromEnum(LpBlock.Kind.pre),
+        .block_rule = @intFromEnum(LpBlock.Kind.rule),
+        .block_tight = BLOCK_TIGHT,
+
+        .render_measure_only = RENDER_MEASURE_ONLY,
+
+        .rc_ok = @intCast(RC_OK),
+        .rc_write_refused = @intCast(RC_WRITE_REFUSED),
+        .rc_invalid = @intCast(RC_INVALID),
+        .rc_no_raster = @intCast(RC_NO_RASTER),
+        .rc_encode_failed = @intCast(RC_ENCODE_FAILED),
+        .rc_panic = @intCast(RC_PANIC),
+    };
+
+    // Size first: a field present on only one side of LpAbi itself shifts
+    // everything after it, and the per-field loop would just report noise.
+    try testing.expectEqual(expected.size, got.size);
+    inline for (@typeInfo(LpAbi).@"struct".fields) |f| {
+        testing.expectEqual(@field(expected, f.name), @field(got, f.name)) catch |err| {
+            std.debug.print("rust/zig abi mismatch on {s}\n", .{f.name});
+            return err;
+        };
+    }
+}
+
 test "browser.screenshot: png signature and dimensions" {
     defer testing.test_session.closeAllPages();
     const out = try testPng("<h1>Title</h1><p>Hello <b>world</b> <a href='/x'>link</a></p>", 640);
