@@ -35,6 +35,7 @@ const App = @import("../App.zig");
 const sys_net = @import("../sys/net.zig");
 
 const Server = @import("Server.zig");
+const Transport = @import("Transport.zig");
 const router = @import("router.zig");
 
 const log = lp.log;
@@ -379,6 +380,10 @@ fn handleConn(self: *HttpServer, socket: posix.socket_t) void {
         _ = arena.reset(.retain_capacity);
         out.clearRetainingCapacity();
         self.serve(&out.writer, arena.allocator(), &request) catch return;
+        if (out.writer.buffer.len > Transport.large_response) {
+            out.deinit();
+            out = .init(self.allocator);
+        }
         if (!request.head.keep_alive or http_server.reader.state == .closing) return;
     }
 }
