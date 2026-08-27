@@ -49,11 +49,13 @@ pub fn main(init: std.process.Init) !void {
     run(gpa, main_arena, init.minimal.args) catch |err| {
         if (err == error.UserCancelled) std.process.exit(130);
         // error.AgentFailed: the agent thread reported the failure in-context.
+        // error.PageFailed: fetch already logged every failing url.
         // lp.Agent.UserError: a user-facing message was already printed.
-        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        if (err == error.AgentFailed or err == error.PageFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        // curl's code for --fail on an HTTP error, also already reported per url.
+        if (err == error.HttpError) std.process.exit(22);
         log.fatal(.app, "exit", .{ .err = err });
-        // curl's code for --fail on an HTTP error.
-        std.process.exit(if (err == error.HttpError) 22 else 1);
+        std.process.exit(1);
     };
 }
 
@@ -378,6 +380,8 @@ fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetc
 
     lp.fetch(app, &browser, urls, fetch_opts) catch |err| {
         err_out.* = err;
+        // Both are already reported per url by fetch itself.
+        if (err == error.PageFailed or err == error.HttpError) return;
         log.fatal(.app, "fetch error", .{ .err = err, .url_count = urls.len });
     };
 }

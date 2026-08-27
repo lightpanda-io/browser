@@ -313,10 +313,6 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 continue;
             };
             const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
-            if (remaining == 0) {
-                err.* = error.Timeout;
-                continue;
-            }
             _ = runner.waitForSelector(frame._frame_id, selector, remaining) catch |e| {
                 err.* = e;
             };
@@ -331,10 +327,6 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
                 continue;
             };
             const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
-            if (remaining == 0) {
-                err.* = error.Timeout;
-                continue;
-            }
             runner.waitForScript(frame._frame_id, wait_script, remaining) catch |e| {
                 err.* = e;
             };
@@ -344,19 +336,41 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
     var http_error = false;
     for (pages.items, errors) |page, *err| {
         const frame = page.frame() orelse {
-            if (err.* == null) err.* = error.FrameClosed;
+            if (err.* == null) {
+                err.* = error.FrameClosed;
+            }
             continue;
         };
-        if (err.* == null) err.* = frame._last_navigate_error;
+        if (err.* == null) {
+            err.* = frame._last_navigate_error;
+        }
         if (frame._http_status) |status| {
-            if (status >= 400) http_error = true;
+            if (status >= 400) {
+                http_error = true;
+            }
         }
     }
 
     try writeResults(app, opts, pages.items, errors);
 
-    for (errors) |err| {
-        if (err) |e| return e;
+    var failed = false;
+    for (urls, pages.items, errors) |url, page, err| {
+        if (err) |e| {
+            failed = true;
+            log.err(.app, "page failed", .{ .url = url, .err = e });
+            continue;
+        }
+        if (!opts.fail_on_http_error) {
+            continue;
+        }
+        const frame = page.frame() orelse continue;
+        const status = frame._http_status orelse continue;
+        if (status >= 400) {
+            log.err(.app, "page http error", .{ .url = url, .status = status });
+        }
+    }
+    if (failed) {
+        return error.PageFailed;
     }
     if (opts.fail_on_http_error and http_error) {
         return error.HttpError;
@@ -386,14 +400,13 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
                 const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
                 defer arena.release();
 
-                if (screenshot.prepare(arena.allocator(), try dumpRoot(frame.?, opts.selector), .{
-                    .width = frame.?._page.getViewport().width,
-                }, frame.?)) |shot| {
+                if (prepareShot(arena.allocator(), frame.?, opts)) |shot| {
                     try writeJsonEnvelope(writer, frame, opts.dump_mode, shot, err.*);
-                    continue;
                 } else |e| {
                     if (err.* == null) err.* = e;
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, "", err.*);
                 }
+                continue;
             }
 
             var aw: std.Io.Writer.Allocating = .init(app.allocator);
@@ -423,6 +436,12 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
         }
     }
     try writer.flush();
+}
+
+fn prepareShot(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !screenshot.Prepared {
+    return screenshot.prepare(arena, try dumpRoot(frame, opts.selector), .{
+        .width = frame._page.getViewport().width,
+    }, frame);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
