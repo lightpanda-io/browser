@@ -28,6 +28,7 @@ const Mime = @import("../../Mime.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
+const Blob = @import("../Blob.zig");
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
@@ -91,6 +92,7 @@ const Response = union(enum) {
     json: js.Value.Global,
     document: *Node.Document,
     arraybuffer: js.ArrayBuffer,
+    blob: *Blob,
 };
 
 const ResponseType = enum {
@@ -99,6 +101,7 @@ const ResponseType = enum {
     json,
     document,
     arraybuffer,
+    blob,
 
     pub fn toString(self: ResponseType) []const u8 {
         return switch (self) {
@@ -120,11 +123,24 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
     return self;
 }
 
-pub fn deinit(self: *XMLHttpRequest, _: *Page) void {
+fn clearResponse(self: *XMLHttpRequest, page: *Page) void {
+    if (self._response) |res| {
+        switch (res) {
+            .blob => |b| b.releaseRef(page),
+            .json => |js_val| js_val.release(),
+            else => {},
+        }
+        self._response = null;
+    }
+}
+
+pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._http_transfer) |resp| {
         resp.abort(error.Abort);
         self._http_transfer = null;
     }
+
+    self.clearResponse(page);
 
     if (self._on_ready_state_change) |func| {
         func.release();
@@ -208,7 +224,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
 
     // Reset internal state. _override_mime intentionally survives open()
     // per https://xhr.spec.whatwg.org/#the-overridemimetype()-method.
-    self._response = null;
+    self.clearResponse(self._exec.page);
     self._response_xml = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
@@ -526,6 +542,13 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
             }
         },
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
+        .blob => blk: {
+            const mime = self._override_mime orelse self._response_mime;
+            const content_type = if (mime) |m| m.contentTypeString() else "";
+            const blob = try Blob.initFromBytes(data, content_type, exec);
+            blob.acquireRef();
+            break :blk .{ .blob = blob };
+        },
     };
 
     self._response = res;
@@ -557,7 +580,9 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     // With responseType "", only an XML final MIME type is parsed (an HTML
     // one yields null); absent a Content-Type it defaults to text/xml.
     const final: Mime = self._override_mime orelse self._response_mime orelse .{ .content_type = .text_xml };
-    if (!final.isXML()) return null;
+    if (!final.isXML()) {
+        return null;
+    }
 
     switch (exec.js.global) {
         .frame => |frame| {
