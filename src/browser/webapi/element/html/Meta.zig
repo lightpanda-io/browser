@@ -16,16 +16,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const lp = @import("lightpanda");
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Factory = @import("../../../Factory.zig");
+const referrer = @import("../../../referrer.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
+
 const HtmlElement = @import("../Html.zig");
-const referrer = @import("../../../referrer.zig");
 
 const String = lp.String;
 const Meta = @This();
@@ -127,6 +129,9 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
     if (seconds != 0) {
         // For now, we skip any meta refresh where the delay isn't 0. It isn't
         // clear if there's a "best" option in all cases for this.
+        lp.log.info(.browser, "ignoring meta refresh", .{
+            .hint = "Non-zero delay meta refresh are currently always ignored"
+        });
         return null;
     }
 
