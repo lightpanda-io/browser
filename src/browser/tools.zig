@@ -1361,7 +1361,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     if (args.path) |path| {
         if (!isPathSafe(path)) return .{ .text = unsafe_path_message, .is_error = true };
     } else if (!inline_image) {
-        return .{ .text = "pass `path`: this client cannot display an inline image", .is_error = true };
+        return .{ .text = "pass `path`: this client can't display images", .is_error = true };
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);

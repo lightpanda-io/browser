@@ -696,11 +696,12 @@ fn runRepl(self: *Agent) void {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
                 const result = self.runCommand(aa, cmd);
                 self.terminal.endTool();
-                self.printCommandResult(cmd, result);
+                const image = renderImage(aa, result);
+                self.printCommandResult(cmd, result, image);
                 if (!result.is_error) {
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
-                self.recordSlashToolCall(command_text, tc.name(), tc.args, result) catch |err| {
+                self.recordSlashToolCall(command_text, tc.name(), tc.args, result, image) catch |err| {
                     self.terminal.printWarning("LLM conversation out of sync (/{s}: {s}); next prompt may not see this action", .{ tc.name(), @errorName(err) });
                 };
             },
@@ -1488,8 +1489,8 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
+    const inline_image = self.ai_client != null or self.terminal.canShowImage();
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{ .inline_image = inline_image }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1504,7 +1505,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
 /// `printToolOutcome`, which lays down the green ● / red ● dot shared with the
 /// LLM tool-call path. Callers only invoke this for `.tool_call` commands (the
 /// comment/login/acceptCookies branches take other paths).
-fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
+fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult, image: ?Terminal.Image) void {
     const tc = switch (cmd) {
         .tool_call => |t| t,
         else => return,
@@ -1513,7 +1514,19 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
         self.printData(result.text);
         return;
     }
+    if (image) |img| return self.terminal.printToolImage(tc.name(), result.text, img);
     self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
+}
+
+/// Rendered once for both the terminal and the conversation. Null when the
+/// renderer failed, which it logs.
+fn renderImage(arena: std.mem.Allocator, result: browser_tools.ToolResult) ?Terminal.Image {
+    const prepared = result.image orelse return null;
+    return .{
+        .png_base64 = prepared.base64Alloc(arena) catch return null,
+        .width = prepared.opts.width,
+        .height = prepared.opts.height,
+    };
 }
 
 /// Re-indent JSON for the terminal; MCP keeps renderJson's compact form.
@@ -1595,6 +1608,7 @@ fn recordSlashToolCall(
     tool_name: []const u8,
     args: ?std.json.Value,
     result: browser_tools.ToolResult,
+    image: ?Terminal.Image,
 ) !void {
     if (self.ai_client == null) return;
     try self.conversation.ensureSystemPrompt();
@@ -1621,7 +1635,7 @@ fn recordSlashToolCall(
         .id = try ma.dupe(u8, tool_calls[0].id),
         .name = try ma.dupe(u8, tool_calls[0].name),
         .content = content,
-        .parts = if (result.image) |image| try imageParts(ma, content, &image) else null,
+        .parts = if (image) |img| try imageParts(ma, content, try ma.dupe(u8, img.png_base64)) else null,
         .is_error = result.is_error,
     };
 
@@ -1941,13 +1955,12 @@ fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8
     return .{
         .content = content,
         .is_error = result.is_error,
-        .parts = if (result.image) |image| try imageParts(allocator, content, &image) else null,
+        .parts = if (result.image) |image| try imageParts(allocator, content, image.base64Alloc(allocator) catch return error.InternalError) else null,
     };
 }
 
-fn imageParts(arena: std.mem.Allocator, text: []const u8, image: *const lp.screenshot.Prepared) browser_tools.ToolError![]const zenai.provider.ContentPart {
-    const data = image.base64Alloc(arena) catch return error.InternalError;
-    return try arena.dupe(zenai.provider.ContentPart, &.{ .{ .text = text }, .{ .image = .{ .data = data, .mime_type = "image/png" } } });
+fn imageParts(arena: std.mem.Allocator, text: []const u8, png_base64: []const u8) browser_tools.ToolError![]const zenai.provider.ContentPart {
+    return try arena.dupe(zenai.provider.ContentPart, &.{ .{ .text = text }, .{ .image = .{ .data = png_base64, .mime_type = "image/png" } } });
 }
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable model
