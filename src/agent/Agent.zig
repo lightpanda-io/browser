@@ -1488,7 +1488,8 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{}) catch |err| .{
+    // The terminal can't show an image, but the conversation can.
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1620,6 +1621,7 @@ fn recordSlashToolCall(
         .id = try ma.dupe(u8, tool_calls[0].id),
         .name = try ma.dupe(u8, tool_calls[0].name),
         .content = content,
+        .parts = if (result.image) |image| try imageParts(ma, content, &image) else null,
         .is_error = result.is_error,
     };
 
@@ -1922,14 +1924,10 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments, .{ .inline_image = true })) |result| blk: {
-        const content = capToolOutput(allocator, tool_name, result.text);
-        break :blk .{
-            .content = content,
-            .is_error = result.is_error,
-            .parts = if (result.image) |image| imageParts(allocator, content, &image) catch null else null,
-        };
-    } else |err| .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed", .is_error = true };
+    const outcome = self.toolOutcome(allocator, tool_name, arguments) catch |err| zenai.provider.Client.ToolHandler.Result{
+        .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed",
+        .is_error = true,
+    };
 
     self.terminal.agentToolDone(tool_name, args_str, !outcome.is_error);
     if (self.terminal.verbosity == .high) self.terminal.printToolOutcome(tool_name, outcome.content, outcome.is_error);
@@ -1937,11 +1935,19 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 }
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
-fn imageParts(allocator: std.mem.Allocator, text: []const u8, image: *const lp.screenshot.Prepared) ![]const zenai.provider.ContentPart {
-    const parts = try allocator.alloc(zenai.provider.ContentPart, 2);
-    parts[0] = .{ .text = text };
-    parts[1] = .{ .image = .{ .data = try image.base64Alloc(allocator), .mime_type = "image/png" } };
-    return parts;
+fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
+    const result = try browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments, .{ .inline_image = true });
+    const content = capToolOutput(allocator, tool_name, result.text);
+    return .{
+        .content = content,
+        .is_error = result.is_error,
+        .parts = if (result.image) |image| try imageParts(allocator, content, &image) else null,
+    };
+}
+
+fn imageParts(arena: std.mem.Allocator, text: []const u8, image: *const lp.screenshot.Prepared) browser_tools.ToolError![]const zenai.provider.ContentPart {
+    const data = image.base64Alloc(arena) catch return error.InternalError;
+    return try arena.dupe(zenai.provider.ContentPart, &.{ .{ .text = text }, .{ .image = .{ .data = data, .mime_type = "image/png" } } });
 }
 
 /// One-shot for `--list-models`: resolve provider+key, fetch chat-capable model
