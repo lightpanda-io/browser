@@ -92,7 +92,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     try frame.trackWorker(self);
 
     if (session.load_resources.worker == false) {
-        log.debug(.browser, "worker disabled", .{ .url = resolved_url });
+        log.warnDisabledWorker();
         return self;
     }
 

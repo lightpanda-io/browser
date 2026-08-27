@@ -1856,6 +1856,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         return;
     }
     if (self._session.load_resources.iframe == false) {
+        log.warnDisabledIFrame();
         iframe._executed = true;
         return;
     }
