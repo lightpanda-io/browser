@@ -28,9 +28,12 @@ const Slot = @import("webapi/element/html/Slot.zig");
 
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 const LimitedWriter = @import("../LimitedWriter.zig");
+const dump_html = @import("dump.zig");
+const Strip = dump_html.Opts.Strip;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
+    strip: Strip = .{},
 };
 
 const truncation_marker = LimitedWriter.truncation_marker;
@@ -148,6 +151,7 @@ const Context = struct {
     writer: *std.Io.Writer,
     frame: *Frame,
     root: *Node,
+    strip: Strip,
 
     // When there's a slot-attribute, we skip rendering, unless this flag has
     // bet set to true.
@@ -212,6 +216,7 @@ const Context = struct {
         const tag = el.getTag();
 
         if (el.asNode() != self.root and !isVisibleElement(el, self.frame)) return;
+        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return;
 
         if (!force_slot) {
             if (el.getAttributeSafe(comptime .wrap("slot")) != null) {
@@ -524,6 +529,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
             .writer = &lw.writer,
             .frame = frame,
             .root = node,
+            .strip = opts.strip,
         };
         ctx.render(node) catch |err| switch (err) {
             error.WriteFailed => {
@@ -543,6 +549,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
         .writer = writer,
         .frame = frame,
         .root = node,
+        .strip = opts.strip,
     };
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
@@ -855,6 +862,22 @@ test "browser.markdown: scoped dump of a hidden subtree still renders it" {
     try dump(modal, .{}, &aw.writer, frame);
 
     try testing.expectString("\ndialog text\n", aw.written());
+}
+
+test "browser.markdown: strip.ui drops images and other visual elements" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Text <img src=\"a.png\" alt=\"A\"> more<canvas>fallback</canvas></p>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{ .strip = .{ .ui = true } }, &aw.writer, frame);
+
+    try testing.expectString("\nText  more\n", aw.written());
 }
 
 test "browser.markdown: max_bytes leaves output untouched when under cap" {

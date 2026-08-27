@@ -49,8 +49,11 @@ pub fn main(init: std.process.Init) !void {
     run(gpa, main_arena, init.minimal.args) catch |err| {
         if (err == error.UserCancelled) std.process.exit(130);
         // error.AgentFailed: the agent thread reported the failure in-context.
+        // error.PageFailed: fetch already logged every failing url.
         // lp.Agent.UserError: a user-facing message was already printed.
-        if (err == error.AgentFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        if (err == error.AgentFailed or err == error.PageFailed or lp.Agent.isUserError(err)) std.process.exit(1);
+        // curl's code for --fail on an HTTP error, also already reported per url.
+        if (err == error.HttpError) std.process.exit(22);
         log.fatal(.app, "exit", .{ .err = err });
         std.process.exit(1);
     };
@@ -163,6 +166,19 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 });
             }
 
+            if (opts.dump == null and opts.dump_selector != null) {
+                log.fatal(.app, "--dump-selector needs --dump", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.dump == null and opts.dump_max_bytes != null) {
+                log.fatal(.app, "--dump-max-bytes needs --dump", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.dump_max_bytes != null and opts.dump != .html and opts.dump != .markdown) {
+                log.fatal(.app, "--dump-max-bytes needs text", .{ .dump = opts.dump, .allowed = "html, markdown" });
+                return error.InvalidArgument;
+            }
+
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
@@ -170,10 +186,13 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .inject_script = opts.inject_script,
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
+                .selector = opts.dump_selector,
+                .fail_on_http_error = opts.fail_on_http_error,
                 .dump = .{
                     .strip = opts.strip_mode,
                     .with_base = opts.with_base,
                     .with_frames = opts.with_frames,
+                    .max_bytes = opts.dump_max_bytes,
                 },
                 .json = opts.json,
             };
@@ -361,6 +380,8 @@ fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetc
 
     lp.fetch(app, &browser, urls, fetch_opts) catch |err| {
         err_out.* = err;
+        // Both are already reported per url by fetch itself.
+        if (err == error.PageFailed or err == error.HttpError) return;
         log.fatal(.app, "fetch error", .{ .err = err, .url_count = urls.len });
     };
 }

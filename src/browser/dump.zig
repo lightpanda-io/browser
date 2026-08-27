@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
+const LimitedWriter = @import("../LimitedWriter.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 const IFrame = @import("webapi/element/html/IFrame.zig");
@@ -28,6 +29,9 @@ pub const Opts = struct {
     with_frames: bool = false,
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
+    /// Soft cap: output is cut at a UTF-8 boundary and a truncation marker
+    /// appended.
+    max_bytes: ?u32 = null,
 
     pub const Strip = packed struct(u4) {
         js: bool = false,
@@ -59,6 +63,16 @@ pub const Opts = struct {
 };
 
 pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    if (opts.max_bytes == null) return rootUncapped(doc, opts, writer, frame);
+
+    var lw: LimitedWriter = .init(writer, opts.max_bytes);
+    rootUncapped(doc, opts, &lw.writer, frame) catch |err| {
+        if (!lw.truncated) return err;
+        try writer.writeAll(LimitedWriter.truncation_marker);
+    };
+}
+
+fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
     if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
         blk: {
             // Ideally we just render the doctype which is part of the document
@@ -80,11 +94,17 @@ pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: *Fra
         }
     }
 
-    return deep(doc.asNode(), opts, writer, frame);
+    return _deep(doc.asNode(), opts, false, writer, frame);
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
-    return _deep(node, opts, false, writer, frame);
+    if (opts.max_bytes == null) return _deep(node, opts, false, writer, frame);
+
+    var lw: LimitedWriter = .init(writer, opts.max_bytes);
+    _deep(node, opts, false, &lw.writer, frame) catch |err| {
+        if (!lw.truncated) return err;
+        try writer.writeAll(LimitedWriter.truncation_marker);
+    };
 }
 
 fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
@@ -111,7 +131,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         },
         .element => {
             const el = node.subtype(Node.Element);
-            if (shouldStripElement(el, opts, frame)) {
+            if (shouldStripElement(el, opts.strip, frame)) {
                 return;
             }
 
@@ -338,15 +358,15 @@ fn isVoidElement(el: *const Node.Element) bool {
     };
 }
 
-fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
+pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u4, @bitCast(opts.strip)) == 0) {
+    if (@as(u4, @bitCast(strip)) == 0) {
         return false;
     }
 
     const tag_name = el.getTagNameDump();
 
-    if (opts.strip.js) {
+    if (strip.js) {
         if (std.mem.eql(u8, tag_name, "script")) return true;
         if (std.mem.eql(u8, tag_name, "noscript")) return true;
 
@@ -364,7 +384,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         }
     }
 
-    if (opts.strip.css or opts.strip.ui) {
+    if (strip.css or strip.ui) {
         if (std.mem.eql(u8, tag_name, "style")) return true;
 
         if (std.mem.eql(u8, tag_name, "link")) {
@@ -374,7 +394,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         }
     }
 
-    if (opts.strip.ui) {
+    if (strip.ui) {
         if (std.mem.eql(u8, tag_name, "img")) return true;
         if (std.mem.eql(u8, tag_name, "picture")) return true;
         if (std.mem.eql(u8, tag_name, "video")) return true;
@@ -384,7 +404,7 @@ fn shouldStripElement(el: *Node.Element, opts: Opts, frame: *Frame) bool {
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
     }
 
-    if (opts.strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
+    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
         return true;
     }
 
@@ -497,6 +517,20 @@ test "dump: strip.ui removes css plus visual elements" {
         \\<!DOCTYPE html>
         \\<html><head><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: max_bytes truncates with a marker" {
+    var page = try testing.pageTest("dump.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try root(frame.window._document, .{ .max_bytes = 24 }, &aw.writer, frame);
+    try testing.expectString("<!DOCTYPE html>\n<html><h" ++ LimitedWriter.truncation_marker, aw.written());
+
+    aw.clearRetainingCapacity();
+    try deep(frame.window._document.asNode().lastChild().?, .{ .max_bytes = 6 }, &aw.writer, frame);
+    try testing.expectString("<html>" ++ LimitedWriter.truncation_marker, aw.written());
 }
 
 test "dump: strip.invisible removes author display:none elements" {
