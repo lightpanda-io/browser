@@ -169,9 +169,11 @@ Run `/save` to export one from your current session, then replay it with
 you can prototype with the LLM and ship the output to production without a
 model at runtime.
 
-It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Hugging Face, and
-local models via Ollama. You can also run without an LLM using `--no-llm`,
-which drops you into the REPL. See the
+It supports Anthropic, OpenAI, Gemini, Google Vertex AI, Mistral, Hugging
+Face, the [Vercel AI Gateway](https://vercel.com/ai-gateway) (one key for
+hundreds of models from every major lab), any OpenAI-compatible endpoint via
+`OPENAI_BASE_URL`, and local models via Ollama or llama.cpp. You can also run
+without an LLM using `--no-llm`, which drops you into the REPL. See the
 [agent documentation](https://lightpanda.io/docs/usage/agent) for the full
 reference.
 
@@ -181,8 +183,11 @@ reference.
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
 ./lightpanda run session.js                           # run a recorded script
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
+./lightpanda agent --list-models                      # models available for the detected provider
 VERTEX_API_KEY=... ./lightpanda agent --provider vertex             # Vertex AI, express mode
 GOOGLE_CLOUD_PROJECT=my-proj ./lightpanda agent --provider vertex   # Vertex AI, token via gcloud auth
+AI_GATEWAY_API_KEY=... ./lightpanda agent --provider vercel --model moonshotai/kimi-k2   # any model behind Vercel AI Gateway
+OPENAI_BASE_URL=https://my-gateway/v1 OPENAI_API_KEY=... ./lightpanda agent            # any OpenAI-compatible server
 ```
 
 ### Native MCP and skill
