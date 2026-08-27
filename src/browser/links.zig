@@ -80,12 +80,12 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
 
             const gop = try links.getOrPut(arena, href);
             if (gop.found_existing) {
-                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena);
+                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena, null);
                 continue;
             }
             gop.value_ptr.* = .{
                 .node = node,
-                .text = try AXNode.fromNode(node).getName(frame, arena),
+                .text = try AXNode.fromNode(node).getName(frame, arena, null),
                 .href = href,
             };
         }

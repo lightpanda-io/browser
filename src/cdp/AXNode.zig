@@ -707,7 +707,7 @@ pub const Writer = struct {
             if (!std.mem.eql(u8, needle, resolved.role)) return;
         }
 
-        const name = (try axn.getName(self.frame, self.temp_arena.allocator())) orelse "";
+        const name = (try axn.getName(self.frame, self.temp_arena.allocator(), self.label_index)) orelse "";
         if (filter.accessible_name) |needle| {
             if (!std.mem.eql(u8, needle, name)) return;
         }
@@ -932,7 +932,9 @@ const AXSource = enum(u8) {
     value, // input value
 };
 
-pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator) !?[]const u8 {
+/// `label_index` makes repeated `<label for>` lookups one document scan
+/// instead of one per element.
+pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, label_index: ?*Label.LabelByForIndex) !?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
@@ -959,7 +961,7 @@ pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator) !?[]co
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(null, w, frame, null);
+    const source = try self.writeName(null, w, frame, label_index);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -2036,7 +2038,7 @@ test "AXNode: getName name-from-content honors explicit role" {
     for (cases) |c| {
         const el = (try doc.querySelector(.wrap(c.selector), frame)).?;
         const axn = AXNode.fromNode(el.asNode());
-        const name = try axn.getName(frame, testing.allocator);
+        const name = try axn.getName(frame, testing.allocator, null);
         defer if (name) |n| testing.allocator.free(n);
 
         if (c.expected) |exp| {
