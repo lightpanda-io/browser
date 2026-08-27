@@ -28,7 +28,6 @@ const Viewport = @import("Viewport.zig");
 
 const Blob = @import("webapi/Blob.zig");
 const Element = @import("webapi/Element.zig");
-const WebDriver = @import("webapi/WebDriver.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const Allocator = std.mem.Allocator;
@@ -113,7 +112,7 @@ queued_queued_navigation: std.ArrayList(*Frame) = .empty,
 // The root Frame of this Page. Non-optional — a Page always has a root frame.
 frame: Frame,
 
-input_modifiers: if (lp.build_config.wpt_extensions) WebDriver.Modifiers else struct {} = .{},
+input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.zig").Modifiers else struct {} = .{},
 
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
