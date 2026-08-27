@@ -129,9 +129,7 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
     if (seconds != 0) {
         // For now, we skip any meta refresh where the delay isn't 0. It isn't
         // clear if there's a "best" option in all cases for this.
-        lp.log.info(.browser, "ignoring meta refresh", .{
-            .hint = "Non-zero delay meta refresh are currently always ignored"
-        });
+        lp.log.info(.browser, "ignoring meta refresh", .{ .hint = "Non-zero delay meta refresh are currently always ignored" });
         return null;
     }
 
