@@ -68,3 +68,43 @@ pub fn enterIsolate(self: *ToolSession) void {
 pub fn exitIsolate(self: *ToolSession) void {
     self.browser.env.isolate.exit();
 }
+
+const std = @import("std");
+const tools = @import("browser/tools.zig");
+const testing = @import("testing.zig");
+
+test "ToolSession: isolates interleave on one thread and tear down balanced" {
+    const arena = testing.arena_allocator;
+
+    var a: ToolSession = undefined;
+    try a.init(testing.test_app);
+    try loadBlank(&a);
+    a.exitIsolate();
+
+    var b: ToolSession = undefined;
+    try b.init(testing.test_app);
+    try loadBlank(&b);
+    b.exitIsolate();
+
+    a.enterIsolate();
+    try std.testing.expectEqualStrings("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag = 'a'")).text);
+    a.exitIsolate();
+
+    b.enterIsolate();
+    try std.testing.expectEqualStrings("undefined", (try tools.evalScript(arena, b.session, &b.registry, "String(globalThis.tag)")).text);
+    b.exitIsolate();
+
+    a.enterIsolate();
+    try std.testing.expectEqualStrings("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag")).text);
+    a.deinit();
+
+    b.enterIsolate();
+    b.deinit();
+}
+
+fn loadBlank(ts: *ToolSession) !void {
+    const page = try ts.session.createPage();
+    try page.navigate("about:blank", .{});
+    var runner = ts.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+}
