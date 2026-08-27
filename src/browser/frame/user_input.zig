@@ -314,7 +314,7 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
 
 fn deltaToScroll(d: f64) i32 {
     if (std.math.isNan(d)) return 0;
-    return @intFromFloat(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+    return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
 // callback when the "click" event reaches the frame.

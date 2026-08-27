@@ -537,8 +537,8 @@ fn getBoxModel(cmd: *CDP.Command) !void {
         .padding = zero,
         .border = zero,
         .margin = zero,
-        .width = @intFromFloat(rect.width),
-        .height = @intFromFloat(rect.height),
+        .width = @trunc(rect.width),
+        .height = @trunc(rect.height),
     } }, .{});
 }
 
