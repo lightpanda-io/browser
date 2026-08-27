@@ -1369,10 +1369,12 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
         return ToolError.InternalError;
 
     if (args.path) |path| {
-        const height = writePng(&prepared, path) catch |err| return .{
+        const content_height = writePng(&prepared, path) catch |err| return .{
             .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
             .is_error = true,
         };
+        // The renderer reports the content height; a fixed strip is its own height.
+        const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
         return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
 
