@@ -61,7 +61,7 @@ pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, fr
     return prepared.write(writer);
 }
 
-// get the height of the PNG if we were to render it.
+/// The height a render at `width` would have.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
     const prepared = try prepare(arena, node, .{ .width = width }, frame);
     return prepared.measure();
@@ -95,6 +95,16 @@ pub const Prepared = struct {
     pub fn measure(self: *const Prepared) std.Io.Writer.Error!u32 {
         var discard: std.Io.Writer.Discarding = .init(&.{});
         return self.render(&discard.writer, RENDER_MEASURE_ONLY);
+    }
+
+    /// Bound the render for a consumer with size limits. Layout reflows to
+    /// the width, so the height is measured after narrowing, and only when it
+    /// isn't already a fixed strip within the limit.
+    pub fn fit(self: *Prepared, max_width: u32, max_height: u32) std.Io.Writer.Error!void {
+        self.opts.width = @min(self.opts.width, max_width);
+        if (self.opts.height == 0 or self.opts.height > max_height) {
+            self.opts.height = @min(try self.measure(), max_height);
+        }
     }
 
     fn render(self: *const Prepared, writer: *std.Io.Writer, flags: u32) std.Io.Writer.Error!u32 {

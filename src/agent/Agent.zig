@@ -572,7 +572,6 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         error.UnsupportedAttachment, error.AttachmentReadFailed => return false,
         error.UserCancelled => {
             self.terminal.printInfo("Interrupted.", .{});
-            self.conversation.expireImages();
             self.conversation.prune();
             return false;
         },
@@ -594,7 +593,6 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
         else
             self.terminal.printInfo("(no response from model)", .{});
     }
-    self.conversation.expireImages();
     self.conversation.prune();
     return true;
 }
@@ -1491,7 +1489,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
     // The terminal can't show an image, but the conversation can.
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{ .inline_image = if (self.ai_client != null) .{} else null }) catch |err| .{
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1938,7 +1936,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
 
 /// The text plus the rendered PNG, for backends that can show the model an image.
 fn toolOutcome(self: *Agent, allocator: std.mem.Allocator, tool_name: []const u8, arguments: ?std.json.Value) browser_tools.ToolError!zenai.provider.Client.ToolHandler.Result {
-    const result = try browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments, .{ .inline_image = .{} });
+    const result = try browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments, .{ .inline_image = true });
     const content = capToolOutput(allocator, tool_name, result.text);
     return .{
         .content = content,
@@ -2064,6 +2062,7 @@ test {
     _ = save;
     _ = settings;
     _ = picker;
+    _ = Conversation;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
@@ -2117,8 +2116,4 @@ test "capToolOutput: extract is exempt from the default cap" {
 
     try std.testing.expectEqual(extract_output_max_bytes, toolOutputCap("extract"));
     try std.testing.expectEqual(tool_output_max_bytes, toolOutputCap("html"));
-}
-
-test {
-    std.testing.refAllDecls(Conversation);
 }

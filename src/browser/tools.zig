@@ -408,7 +408,7 @@ pub const Tool = enum {
                 ),
             },
             .screenshot => .{
-                .description = "Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file at full size and returns its location; without it, returns the image inline where the client can display one, at most 1280px wide and 4096px tall. Use it to see spatial layout; read content with `markdown`/`tree`.",
+                .description = std.fmt.comptimePrint("Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file at full size and returns its location; without it, returns the image inline where the client can display one, at most {d}px wide and {d}px tall. Use it to see spatial layout; read content with `markdown`/`tree`.", .{ inline_image_max_width, inline_image_max_height }),
                 .summary = "Screenshot of the page or a node",
                 .input_schema = minify(
                     \\{
@@ -848,15 +848,14 @@ const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarg
 
 /// What the caller can do with a result beyond its text.
 pub const CallOpts = struct {
-    /// Set when the caller can hand an image to a model; the limits keep a
-    /// screenshot within what models consume (and re-send every turn).
-    inline_image: ?InlineImage = null,
-
-    pub const InlineImage = struct {
-        max_width: u32 = 1280,
-        max_height: u32 = 4096,
-    };
+    /// The caller can hand an image to a model.
+    inline_image: bool = false,
 };
+
+// An inline screenshot is re-sent on every turn; keep it within what models
+// consume. Files written to `path` are full size.
+pub const inline_image_max_width = 1280;
+pub const inline_image_max_height = 4096;
 
 pub fn call(
     arena: std.mem.Allocator,
@@ -1349,7 +1348,7 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     return aw.written();
 }
 
-fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value, inline_image: ?CallOpts.InlineImage) ToolError!ToolResult {
+fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value, inline_image: bool) ToolError!ToolResult {
     const Params = struct {
         path: ?[]const u8 = null,
         selector: ?[]const u8 = null,
@@ -1361,7 +1360,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     const args = try parseArgsOrDefault(Params, arena, arguments);
     if (args.path) |path| {
         if (!isPathSafe(path)) return .{ .text = unsafe_path_message, .is_error = true };
-    } else if (inline_image == null) {
+    } else if (!inline_image) {
         return .{ .text = "pass `path`: this client cannot display an inline image", .is_error = true };
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
@@ -1377,13 +1376,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
         return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
 
-    // Layout reflows to the width, so measure after narrowing.
-    const limits = inline_image.?;
-    prepared.opts.width = @min(prepared.opts.width, limits.max_width);
-    const content_height = prepared.measure() catch return ToolError.InternalError;
-    if (prepared.opts.height == 0 or prepared.opts.height > limits.max_height) {
-        prepared.opts.height = @min(content_height, limits.max_height);
-    }
+    prepared.fit(inline_image_max_width, inline_image_max_height) catch return ToolError.InternalError;
     return .{
         .text = std.fmt.allocPrint(arena, "PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
         .image = prepared,

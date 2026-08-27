@@ -70,21 +70,32 @@ pub fn ensureSystemPrompt(self: *Conversation) !void {
     }
 }
 
+const image_dropped_note = " (image dropped from context; call the tool again to look)";
+
 /// Drop tool-result images older than the newest `image_keep`; their text
-/// stays, with a note so the model knows to look again.
-pub fn expireImages(self: *Conversation) void {
-    var kept: usize = 0;
+/// stays, with a note so the model knows to look again. Tool results are
+/// immutable, so a message that loses an image gets a re-homed copy.
+fn expireImages(self: *Conversation) void {
+    const arena = self.arena.allocator();
+    var budget: usize = image_keep;
     var i = self.messages.items.len;
     while (i > 0) {
         i -= 1;
-        for (self.messages.items[i].tool_results orelse continue) |*res| {
+        const msg = &self.messages.items[i];
+        const results = msg.tool_results orelse continue;
+        var stripped: ?[]zenai.provider.ToolResult = null;
+        for (results, 0..) |res, n| {
             if (!hasImage(res.parts orelse continue)) continue;
-            kept += 1;
-            if (kept <= image_keep) continue;
-            const result = @constCast(res);
-            result.parts = null;
-            result.content = std.fmt.allocPrint(self.arena.allocator(), "{s} (image dropped from context; call the tool again to look)", .{res.content}) catch res.content;
+            if (budget > 0) {
+                budget -= 1;
+                continue;
+            }
+            const copy = stripped orelse arena.dupe(zenai.provider.ToolResult, results) catch return;
+            stripped = copy;
+            copy[n].parts = null;
+            copy[n].content = std.mem.concat(arena, u8, &.{ res.content, image_dropped_note }) catch res.content;
         }
+        if (stripped) |s| msg.tool_results = s;
     }
 }
 
@@ -93,10 +104,12 @@ fn hasImage(parts: []const zenai.provider.ContentPart) bool {
     return false;
 }
 
-/// Cap history growth: once it exceeds `prune_high`, keep the system prompt plus
-/// the most recent `prune_keep` messages, snapped to a safe boundary so a
-/// tool_call isn't split from its result.
+/// Cap history growth: expire stale images, then once history exceeds
+/// `prune_high`, keep the system prompt plus the most recent `prune_keep`
+/// messages, snapped to a safe boundary so a tool_call isn't split from its
+/// result.
 pub fn prune(self: *Conversation) void {
+    self.expireImages();
     const msgs = self.messages.items;
     if (msgs.len <= prune_high) return;
     const tail_start = zenai.provider.safeTruncationStart(msgs, msgs.len - prune_keep) orelse return;
@@ -150,7 +163,7 @@ test "expireImages keeps the newest images and annotates the rest" {
     conv.expireImages();
 
     try std.testing.expect(conv.messages.items[0].tool_results.?[0].parts == null);
-    try std.testing.expectEqualStrings("shot 0 (image dropped from context; call the tool again to look)", conv.messages.items[0].tool_results.?[0].content);
+    try std.testing.expectEqualStrings("shot 0" ++ image_dropped_note, conv.messages.items[0].tool_results.?[0].content);
     try std.testing.expect(conv.messages.items[1].tool_results.?[0].parts == null);
     try std.testing.expect(conv.messages.items[2].tool_results.?[0].parts != null);
     try std.testing.expect(conv.messages.items[3].tool_results.?[0].parts != null);
