@@ -23,6 +23,7 @@ const Base64Writer = @import("../Base64Writer.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 const Frame = @import("Frame.zig");
+const Viewport = @import("Viewport.zig");
 const markdown = @import("markdown.zig");
 
 const Node = @import("webapi/Node.zig");
@@ -44,6 +45,15 @@ pub const Opts = struct {
         width: f32,
         height: f32,
     };
+
+    /// Height 0 renders the whole content instead of one viewport.
+    pub fn fromViewport(viewport: Viewport, full_page: bool) Opts {
+        return .{
+            .width = viewport.width,
+            .height = if (full_page) 0 else viewport.height,
+            .scale = viewport.scale,
+        };
+    }
 };
 
 pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {

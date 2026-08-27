@@ -167,6 +167,12 @@ pub const CallParams = struct {
     arguments: ?std.json.Value = null,
 };
 
+pub const ImageContent = struct {
+    type: []const u8 = "image",
+    data: @import("../browser/screenshot.zig").Prepared,
+    mimeType: []const u8 = "image/png",
+};
+
 pub fn TextContent(comptime T: type) type {
     return struct {
         type: []const u8 = "text",
