@@ -29,12 +29,12 @@ const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
 const Event = @import("../../Event.zig");
-const InputEvent = @import("../../event/InputEvent.zig");
 const ValidityState = @import("ValidityState.zig");
 const popover = @import("../popover.zig");
 const File = @import("../../File.zig");
 const FileList = @import("../../FileList.zig");
 const reflection = @import("../reflection.zig");
+const text_entry = @import("../text_entry.zig");
 
 const String = lp.String;
 
@@ -111,16 +111,6 @@ pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
     } else {
         self._on_selectionchange = null;
     }
-}
-
-fn dispatchSelectionChangeEvent(self: *Input, frame: *Frame) !void {
-    const event = try Event.init("selectionchange", .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
-}
-
-fn dispatchInputEvent(self: *Input, data: ?[]const u8, input_type: []const u8, frame: *Frame) !void {
-    const event = try InputEvent.initTrusted(comptime .wrap("input"), .{ .data = data, .inputType = input_type }, frame);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event.asEvent());
 }
 
 pub fn asElement(self: *Input) *Element {
@@ -623,135 +613,32 @@ pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), frame);
 }
 
-pub fn select(self: *Input, frame: *Frame) !void {
-    const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null, frame);
-    const event = try Event.init("select", .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
-}
+const entry = text_entry.TextEntry(Input);
 
-fn selectionAvailable(self: *const Input) bool {
+pub const select = entry.select;
+pub const innerInsert = entry.innerInsert;
+pub const innerDelete = entry.innerDelete;
+pub const getSelectionDirection = entry.getSelectionDirection;
+pub const setSelectionStart = entry.setSelectionStart;
+pub const setSelectionEnd = entry.setSelectionEnd;
+pub const setSelectionRange = entry.setSelectionRange;
+
+pub fn selectionAvailable(self: *const Input) bool {
     switch (self._input_type) {
         .text, .search, .url, .tel, .password => return true,
         else => return false,
     }
 }
 
-const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
-
-fn howSelected(self: *const Input) HowSelected {
-    if (!self.selectionAvailable()) return .none;
-    const value = self._value orelse return .none;
-
-    if (self._selection_start == self._selection_end) return .none;
-    if (self._selection_start == 0 and self._selection_end == value.len) return .full;
-    return .{ .partial = .{ self._selection_start, self._selection_end } };
-}
-
-pub fn innerInsert(self: *Input, str: []const u8, frame: *Frame) !void {
-    const arena = frame.arena;
-
-    switch (self.howSelected()) {
-        .full => {
-            // if the input is fully selected, replace the content.
-            const new_value = try arena.dupe(u8, str);
-            try self.setValue(new_value, frame);
-            self._selection_start = @intCast(new_value.len);
-            self._selection_end = @intCast(new_value.len);
-            self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(frame);
-        },
-        .partial => |range| {
-            // if the input is partially selected, replace the selected content.
-            const current_value = self.getValue();
-            const before = current_value[0..range[0]];
-            const remaining = current_value[range[1]..];
-
-            const new_value = try std.mem.concat(
-                arena,
-                u8,
-                &.{ before, str, remaining },
-            );
-            try self.setValue(new_value, frame);
-
-            const new_pos = range[0] + str.len;
-            self._selection_start = @intCast(new_pos);
-            self._selection_end = @intCast(new_pos);
-            self._selection_direction = .none;
-            try self.dispatchSelectionChangeEvent(frame);
-        },
-        .none => {
-            // if the input is not selected, just insert at cursor.
-            const current_value = self.getValue();
-            const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
-            try self.setValue(new_value, frame);
-        },
-    }
-    try self.dispatchInputEvent(str, "insertText", frame);
-}
-
-pub fn getSelectionDirection(self: *const Input) []const u8 {
-    return @tagName(self._selection_direction);
-}
-
+// Nullable here, unlike <textarea>'s, which is why these two aren't shared.
 pub fn getSelectionStart(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_start;
 }
 
-pub fn setSelectionStart(self: *Input, value: u32, frame: *Frame) !void {
-    if (!self.selectionAvailable()) return error.InvalidStateError;
-    self._selection_start = value;
-    try self.dispatchSelectionChangeEvent(frame);
-}
-
 pub fn getSelectionEnd(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_end;
-}
-
-pub fn setSelectionEnd(self: *Input, value: u32, frame: *Frame) !void {
-    if (!self.selectionAvailable()) return error.InvalidStateError;
-    self._selection_end = value;
-    try self.dispatchSelectionChangeEvent(frame);
-}
-
-pub fn setSelectionRange(
-    self: *Input,
-    selection_start: u32,
-    selection_end: u32,
-    selection_dir: ?[]const u8,
-    frame: *Frame,
-) !void {
-    if (!self.selectionAvailable()) return error.InvalidStateError;
-
-    const direction = blk: {
-        if (selection_dir) |sd| {
-            break :blk std.meta.stringToEnum(Selection.SelectionDirection, sd) orelse .none;
-        } else break :blk .none;
-    };
-
-    const value = self._value orelse {
-        self._selection_start = 0;
-        self._selection_end = 0;
-        self._selection_direction = .none;
-        return;
-    };
-
-    const len_u32: u32 = @intCast(value.len);
-    var start: u32 = if (selection_start > len_u32) len_u32 else selection_start;
-    const end: u32 = if (selection_end > len_u32) len_u32 else selection_end;
-
-    // If end is less than start, both are equal to end.
-    if (end < start) {
-        start = end;
-    }
-
-    self._selection_direction = direction;
-    self._selection_start = start;
-    self._selection_end = end;
-
-    try self.dispatchSelectionChangeEvent(frame);
 }
 
 pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
