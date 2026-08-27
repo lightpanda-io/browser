@@ -23,6 +23,7 @@ const Base64Writer = @import("../Base64Writer.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 const Frame = @import("Frame.zig");
+const Viewport = @import("Viewport.zig");
 const markdown = @import("markdown.zig");
 
 const Node = @import("webapi/Node.zig");
@@ -44,6 +45,15 @@ pub const Opts = struct {
         width: f32,
         height: f32,
     };
+
+    /// Height 0 renders the whole content instead of one viewport.
+    pub fn fromViewport(viewport: Viewport, full_page: bool) Opts {
+        return .{
+            .width = viewport.width,
+            .height = if (full_page) 0 else viewport.height,
+            .scale = viewport.scale,
+        };
+    }
 };
 
 pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
@@ -51,11 +61,10 @@ pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, fr
     return prepared.write(writer);
 }
 
-// get the height of the PNG if we were to render it.
+/// The height a render at `width` would have.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
     const prepared = try prepare(arena, node, .{ .width = width }, frame);
-    var discard: std.Io.Writer.Discarding = .init(&.{});
-    return prepared.render(&discard.writer, RENDER_MEASURE_ONLY);
+    return prepared.measure();
 }
 
 // The DOM walk, done up front so it can fail (allocation) before any output
@@ -80,6 +89,22 @@ pub const Prepared = struct {
 
     pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
         return self.render(writer, 0);
+    }
+
+    /// The content height at `opts.width`, without rasterizing.
+    pub fn measure(self: *const Prepared) std.Io.Writer.Error!u32 {
+        var discard: std.Io.Writer.Discarding = .init(&.{});
+        return self.render(&discard.writer, RENDER_MEASURE_ONLY);
+    }
+
+    /// Bound the render for a consumer with size limits. Layout reflows to
+    /// the width, so the height is measured after narrowing, and only when it
+    /// isn't already a fixed strip within the limit.
+    pub fn fit(self: *Prepared, max_width: u32, max_height: u32) std.Io.Writer.Error!void {
+        self.opts.width = @min(self.opts.width, max_width);
+        if (self.opts.height == 0 or self.opts.height > max_height) {
+            self.opts.height = @min(try self.measure(), max_height);
+        }
     }
 
     fn render(self: *const Prepared, writer: *std.Io.Writer, flags: u32) std.Io.Writer.Error!u32 {
@@ -120,11 +145,22 @@ pub const Prepared = struct {
     pub fn jsonStringify(self: *const Prepared, jws: *std.json.Stringify) std.Io.Writer.Error!void {
         try jws.beginWriteRaw();
         try jws.writer.writeByte('"');
-        var b64 = Base64Writer.init(jws.writer, .standard);
-        _ = try self.write(&b64.writer);
-        try b64.finish();
+        try self.writeBase64(jws.writer);
         try jws.writer.writeByte('"');
         jws.endWriteRaw();
+    }
+
+    /// The PNG as base64, for APIs that want it as one string.
+    pub fn base64Alloc(self: *const Prepared, arena: Allocator) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        try self.writeBase64(&aw.writer);
+        return aw.written();
+    }
+
+    fn writeBase64(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var b64 = Base64Writer.init(writer, .standard);
+        _ = try self.write(&b64.writer);
+        try b64.finish();
     }
 };
 
@@ -771,6 +807,7 @@ test "browser.screenshot: json streams base64" {
     _ = enc.encode(expected[9 .. expected.len - 2], raw.written());
     @memcpy(expected[expected.len - 2 ..], "\"}");
     try testing.expectString(expected, json.written());
+    try testing.expectString(expected[9 .. expected.len - 2], try prepared.base64Alloc(testing.arena_allocator));
 }
 
 test "browser.screenshot: block extraction" {

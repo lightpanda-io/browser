@@ -38,6 +38,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
+        // Overwrites `path` when given.
+        .screenshot => .{ .idempotentHint = true },
         .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
@@ -154,7 +156,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments, .{ .inline_image = true }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -170,6 +172,13 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, browser_tools.errorMessage(err));
     };
 
+    if (result.image) |image| {
+        const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };
+        return server.sendResult(id, protocol.CallToolResult(Content){
+            .content = .{ .{ .data = image, .mimeType = "image/png" }, .{ .text = result.text } },
+            .isError = result.is_error,
+        });
+    }
     try sendToolResultText(server, id, result.text, result.is_error);
 }
 
@@ -184,7 +193,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     };
 
     if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+        return sendErrorContent(server, id, browser_tools.unsafe_path_message);
     }
 
     // The client never sees resolved secrets, but scrub any literal LP_* value
@@ -198,8 +207,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return sendErrorContent(server, id, msg);
     };
 
-    // Absolute path: the cwd is the client-launched server's, not one the user picked.
-    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, args.path, arena) catch args.path;
+    const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
     const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
@@ -282,7 +290,7 @@ fn writeScript(path: []const u8, content: []const u8) !void {
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
+    try server.sendResult(id, protocol.CallToolResult([]const protocol.TextContent([]const u8)){ .content = &content, .isError = is_error });
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {
@@ -1441,6 +1449,43 @@ test "MCP - html: maxBytes truncation and strip" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+}
+
+test "MCP - screenshot: inline image, file, unsafe path" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const inline_call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, inline_call);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"mimeType\":\"image/png\"") != null);
+    // base64 of the PNG signature
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"data\":\"iVBORw0KGgo") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":false") != null);
+    // Inline images are narrowed to the model-facing limit.
+    try testing.expect(std.mem.indexOf(u8, out.written(), "PNG, 1280x") != null);
+
+    const path = "mcp-screenshot-test.png";
+    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+
+    out.clearRetainingCapacity();
+    const to_file = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"path\":\"" ++ path ++ "\",\"selector\":\"#hoverTarget\"}}}";
+    try router.handleMessage(server, testing.arena_allocator, to_file);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Saved 1920x") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") == null);
+    const png = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024 * 1024));
+    try testing.expect(std.mem.startsWith(u8, png, "\x89PNG\r\n\x1a\n"));
+
+    out.clearRetainingCapacity();
+    const unsafe =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"../escape.png"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, unsafe);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
 }
 
 test "MCP - links: dedup, hidden, text fallback, limit" {

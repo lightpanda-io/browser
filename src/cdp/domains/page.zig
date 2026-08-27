@@ -993,11 +993,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const viewport = cmd.cdp.browser.getViewport();
 
-    var opts: lp.screenshot.Opts = .{
-        .scale = viewport.scale,
-        .width = viewport.width,
-        .height = if (params.captureBeyondViewport orelse false) 0 else viewport.height,
-    };
+    var opts: lp.screenshot.Opts = .fromViewport(viewport, params.captureBeyondViewport orelse false);
     if (params.clip) |clip| {
         opts.clip = .{
             .x = @floatCast(clip.x),
