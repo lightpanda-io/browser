@@ -154,7 +154,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.registry, name, arguments) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -239,10 +239,10 @@ fn handleSessionList(server: *Server, arena: std.mem.Allocator, id: std.json.Val
     const Entry = struct { id: []const u8, url: ?[]const u8 };
     var list: std.ArrayList(Entry) = .empty;
 
-    var it = server.sessions.valueIterator();
-    while (it.next()) |entry| {
-        const url: ?[]const u8 = if (entry.*.session.currentFrame()) |frame| frame.url else null;
-        list.append(arena, .{ .id = entry.*.id, .url = url }) catch
+    var it = server.sessions.iterator();
+    while (it.next()) |kv| {
+        const url: ?[]const u8 = if (kv.value_ptr.*.session.currentFrame()) |frame| frame.url else null;
+        list.append(arena, .{ .id = kv.key_ptr.*, .url = url }) catch
             return sendErrorContent(server, id, "out of memory");
     }
 
@@ -263,7 +263,7 @@ fn handleSessionClose(server: *Server, arena: std.mem.Allocator, id: std.json.Va
     }
     // Closing the session serving this very call would tear down the isolate
     // mid-dispatch; require the client to be elsewhere first.
-    if (std.mem.eql(u8, args.id, server.active_session.id)) {
+    if (server.sessions.get(args.id) == server.active_session) {
         return sendErrorContent(server, id, "cannot close the session you are attached to");
     }
     if (!server.closeSession(args.id)) {
@@ -1041,7 +1041,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const btn = frame.document.getElementById("btn", frame).?.asNode();
-        const btn_id = (try server.active_session.node_registry.register(btn)).id;
+        const btn_id = (try server.active_session.registry.register(btn)).id;
         var btn_id_buf: [12]u8 = undefined;
         const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
         const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
@@ -1053,7 +1053,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const inp = frame.document.getElementById("inp", frame).?.asNode();
-        const inp_id = (try server.active_session.node_registry.register(inp)).id;
+        const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
         const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
         const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"value\":\"hello\"}}}" });
@@ -1065,7 +1065,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const sel = frame.document.getElementById("sel", frame).?.asNode();
-        const sel_id = (try server.active_session.node_registry.register(sel)).id;
+        const sel_id = (try server.active_session.registry.register(sel)).id;
         var sel_id_buf: [12]u8 = undefined;
         const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
         const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"value\":\"opt2\"}}}" });
@@ -1077,7 +1077,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
-        const scrollbox_id = (try server.active_session.node_registry.register(scrollbox)).id;
+        const scrollbox_id = (try server.active_session.registry.register(scrollbox)).id;
         var scroll_id_buf: [12]u8 = undefined;
         const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
         const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
@@ -1088,7 +1088,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("hoverTarget", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"hover\",\"arguments\":{\"backendNodeId\":", id_str, "}}}" });
@@ -1099,7 +1099,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("keyTarget", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"press\",\"arguments\":{\"key\":\"Enter\",\"backendNodeId\":", id_str, "}}}" });
@@ -1110,7 +1110,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("sel2", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"selectOption\",\"arguments\":{\"backendNodeId\":", id_str, ",\"value\":\"b\"}}}" });
@@ -1121,7 +1121,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("chk", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
@@ -1132,7 +1132,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     {
         const el = frame.document.getElementById("rad", frame).?.asNode();
-        const el_id = (try server.active_session.node_registry.register(el)).id;
+        const el_id = (try server.active_session.registry.register(el)).id;
         var id_buf: [12]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{el_id}) catch unreachable;
         const msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"setChecked\",\"arguments\":{\"backendNodeId\":", id_str, ",\"checked\":true}}}" });
@@ -1176,8 +1176,8 @@ test "MCP - click that navigates clears node registry" {
 
     const before_frame = server.active_session.session.currentFrame().?;
     const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
-    const link_id = (try server.active_session.node_registry.register(link)).id;
-    try testing.expect(server.active_session.node_registry.lookup_by_id.contains(link_id));
+    const link_id = (try server.active_session.registry.register(link)).id;
+    try testing.expect(server.active_session.registry.lookup_by_id.contains(link_id));
 
     var id_buf: [12]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{link_id}) catch unreachable;
@@ -1189,7 +1189,7 @@ test "MCP - click that navigates clears node registry" {
     try router.handleMessage(server, aa, click_msg);
 
     try testing.expect(server.active_session.session.currentFrame().? != before_frame);
-    try testing.expect(!server.active_session.node_registry.lookup_by_id.contains(link_id));
+    try testing.expect(!server.active_session.registry.lookup_by_id.contains(link_id));
 }
 
 test "MCP - Actions by selector: hover, selectOption, setChecked" {

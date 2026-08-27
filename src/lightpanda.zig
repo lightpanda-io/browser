@@ -34,6 +34,7 @@ pub const Page = @import("browser/Page.zig");
 pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
+pub const ToolSession = @import("ToolSession.zig");
 
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
