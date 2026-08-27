@@ -46,6 +46,12 @@ pub fn init(self: *ToolSession, app: *App) !void {
     try self.browser.init(app, .{}, null);
     errdefer self.browser.deinit();
 
+    try self.restartSession();
+}
+
+/// Replace the session with a fresh one on the same browser: page, cookies,
+/// storage and history gone. The old `session` pointer is invalid afterwards.
+pub fn restartSession(self: *ToolSession) !void {
     self.session = try self.browser.newSession(self.notification);
     try self.session.enableConsoleCapture();
 }
