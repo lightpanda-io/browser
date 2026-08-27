@@ -110,8 +110,10 @@ pub const Command = union(enum) {
         fn isRecorded(self: ToolCall) bool {
             if (!self.tool.isRecorded()) return false;
             const s = self.schema();
-            const args = self.args orelse return s.required.len == 0 and !self.tool.needsLocator();
+            const args = self.args orelse return s.required.len == 0 and !self.tool.needsLocator() and self.tool != .screenshot;
             if (args != .object) return !self.tool.needsLocator();
+            // An inline screenshot (no `path`) only exists as MCP image content.
+            if (self.tool == .screenshot and !args.object.contains("path")) return false;
 
             const has_selector = args.object.contains("selector");
             if (!has_selector and (self.tool.needsLocator() or args.object.contains("backendNodeId"))) return false;
@@ -496,6 +498,22 @@ test "isRecorded / producesData via tool flags" {
 
     const login: Command = .{ .llm = .login };
     try testing.expect(!login.isRecorded());
+}
+
+test "isRecorded: screenshot needs a path to replay" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    try testing.expect(!Command.fromToolCall(.screenshot, null).isRecorded());
+
+    var without: std.json.ObjectMap = .empty;
+    try without.put(aa, "selector", .{ .string = "#main" });
+    try testing.expect(!Command.fromToolCall(.screenshot, .{ .object = without }).isRecorded());
+
+    var with: std.json.ObjectMap = .empty;
+    try with.put(aa, "path", .{ .string = "shot.png" });
+    try testing.expect(Command.fromToolCall(.screenshot, .{ .object = with }).isRecorded());
 }
 
 test "isRecorded: args shape and locator semantics" {

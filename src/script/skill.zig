@@ -198,6 +198,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .waitForSelector => "`waitFor*` default timeout 5000 ms.",
         .waitForScript => "Re-evaluates page JS until truthy.",
         .waitForState => "",
+        .screenshot => "Needs `path`; writes a PNG of the text layout.",
         .press => "Selector first! `page.press(\"Enter\")` binds \"Enter\" to `selector` and fails — use `page.press(null, \"Enter\")` or `page.press({ key: \"Enter\" })`.",
         .click, .fill, .scroll, .hover, .selectOption, .setChecked => "",
         .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => "",
