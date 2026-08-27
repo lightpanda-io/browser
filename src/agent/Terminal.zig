@@ -25,6 +25,8 @@ const Spinner = @import("Spinner.zig");
 const md_term = @import("md_term.zig");
 const prompt_assist = @import("prompt_assist.zig");
 const ansi = @import("ansi.zig");
+const kitty = @import("kitty.zig");
+const tty = @import("tty.zig");
 const c = @import("isocline");
 
 const Terminal = @This();
@@ -53,6 +55,8 @@ assist: prompt_assist.State,
 /// resets everything so fence state can't leak into the next message. Only
 /// used on the styled (REPL tty) path, hence the placeholder.
 md_stream: md_term.Stream = .{ .show_table_placeholder = true },
+/// Probed on first use: it costs a round trip to the terminal.
+shows_images: ?bool = null,
 
 pub const CompletionSource = prompt_assist.CompletionSource;
 pub const HistoryPaths = prompt_assist.HistoryPaths;
@@ -211,6 +215,7 @@ pub fn clearPromptFrame(self: *Terminal) void {
 }
 
 test {
+    _ = kitty;
     _ = md_term;
     _ = prompt_assist;
 }
@@ -288,6 +293,35 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, color, name, ansi.reset, truncated, ellipsis });
+}
+
+pub fn canShowImage(self: *Terminal) bool {
+    if (!self.styledOutput()) return false;
+    if (self.shows_images == null) self.shows_images = kitty.detect();
+    return self.shows_images.?;
+}
+
+pub const Image = struct {
+    png_base64: []const u8,
+    width: u32,
+    height: u32,
+};
+
+// Leaves room for the outcome line and the prompt frame under the image.
+const image_max_rows_reserve = 4;
+
+/// An image the terminal can't show only came because a model wanted it,
+/// hence the note.
+pub fn printToolImage(self: *Terminal, name: []const u8, text: []const u8, image: Image) void {
+    self.printToolOutcome(name, text, false);
+    if (!self.canShowImage()) return self.printDimmed("  sent to the model only; pass `path` to save it", .{});
+
+    const ws: std.posix.winsize = tty.windowSize(std.posix.STDOUT_FILENO) orelse .{ .row = 24, .col = 80, .xpixel = 0, .ypixel = 0 };
+    const cells = kitty.fit(image.width, image.height, ws, ws.row -| image_max_rows_reserve);
+    var buf: [4096]u8 = undefined;
+    var fw = std.Io.File.stdout().writerStreaming(lp.io, &buf);
+    kitty.write(&fw.interface, image.png_base64, cells) catch return;
+    fw.interface.flush() catch {};
 }
 
 /// Freeze the script spinner into a green bullet for a `/load` run that

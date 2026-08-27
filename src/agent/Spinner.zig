@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 const ansi = @import("ansi.zig");
+const tty = @import("tty.zig");
 const truncateUtf8 = @import("../string.zig").truncateUtf8;
 
 const Spinner = @This();
@@ -310,18 +311,8 @@ fn renderLocked(self: *Spinner) void {
     _ = std.c.write(std.posix.STDERR_FILENO, (written).ptr, (written).len);
 }
 
-/// Current terminal width in columns, queried via TIOCGWINSZ on stderr.
-/// Null when stderr isn't a tty, the ioctl fails, or the kernel reports 0
-/// (some pseudo-ttys leave the field unset). Cheap enough to call per render
-/// frame; picks up resizes without SIGWINCH plumbing.
 fn columns() ?u16 {
-    var ws: std.posix.winsize = undefined;
-    // bitcast via c_uint: on archs where `_IOR` sets the direction bit
-    // (MIPS/PPC/SPARC), `IOCGWINSZ` exceeds i32 range, so a plain @intCast
-    // panics; the bitcast preserves the bit pattern.
-    const req: c_int = @bitCast(@as(c_uint, std.posix.T.IOCGWINSZ));
-    const rc = std.c.ioctl(std.posix.STDERR_FILENO, req, &ws);
-    if (rc != 0 or ws.col == 0) return null;
+    const ws = tty.windowSize(std.posix.STDERR_FILENO) orelse return null;
     return ws.col;
 }
 

@@ -23,6 +23,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const ansi = @import("ansi.zig");
+const tty = @import("tty.zig");
 
 pub fn interactiveTty() bool {
     const stdin_tty = std.Io.File.stdin().isTty(lp.io) catch false;
@@ -100,38 +101,23 @@ const ChoiceState = struct {
 };
 
 const RawTerminal = struct {
-    original: std.posix.termios,
+    raw: tty.Raw,
 
     fn enable() error{NotInteractive}!RawTerminal {
         if (!interactiveTty()) return error.NotInteractive;
         // A tty that refuses raw mode is non-interactive for our purposes.
-        const original = std.posix.tcgetattr(std.posix.STDIN_FILENO) catch return error.NotInteractive;
-        var raw = original;
-        raw.iflag.BRKINT = false;
-        raw.iflag.ICRNL = false;
-        raw.iflag.INPCK = false;
-        raw.iflag.ISTRIP = false;
-        raw.iflag.IXON = false;
-        raw.oflag.OPOST = false;
-        raw.cflag.CSIZE = .CS8;
-        raw.lflag.ECHO = false;
-        raw.lflag.ICANON = false;
-        raw.lflag.IEXTEN = false;
-        raw.lflag.ISIG = false;
-        raw.cc[@intFromEnum(std.c.V.MIN)] = 0;
-        raw.cc[@intFromEnum(std.c.V.TIME)] = 1;
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, raw) catch return error.NotInteractive;
+        const raw = tty.Raw.enable() catch return error.NotInteractive;
         // Under `ansi.kitty_disambiguate` (pushed by `Terminal.readLine`),
         // cursor keys arrive as CSI-u the byte reader can't parse; push the
         // legacy encoding to force plain arrows. restore() pops back to
         // whatever the REPL had pushed.
         _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_legacy.ptr, ansi.kitty_legacy.len);
-        return .{ .original = original };
+        return .{ .raw = raw };
     }
 
     fn restore(self: *const RawTerminal) void {
         _ = std.c.write(std.posix.STDOUT_FILENO, ansi.kitty_pop.ptr, ansi.kitty_pop.len);
-        std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, self.original) catch {};
+        self.raw.restore();
     }
 };
 
