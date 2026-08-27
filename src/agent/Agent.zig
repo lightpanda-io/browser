@@ -2063,6 +2063,7 @@ test {
     _ = settings;
     _ = picker;
     _ = Conversation;
+    _ = Terminal;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
