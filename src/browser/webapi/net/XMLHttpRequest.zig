@@ -28,10 +28,10 @@ const Mime = @import("../../Mime.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
 
+const Blob = @import("../Blob.zig");
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
-const Blob = @import("../Blob.zig");
 
 const Headers = @import("Headers.zig");
 const BodyInit = @import("body_init.zig").BodyInit;
@@ -125,11 +125,13 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
 
 fn clearResponse(self: *XMLHttpRequest, page: *Page) void {
     if (self._response) |res| {
-        if (res == .blob) {
-            res.blob.releaseRef(page);
+        switch (res) {
+            .blob => |b| b.releaseRef(page),
+            .json => |js_val| js_val.release(),
+            else => {},
         }
+        self._response = null;
     }
-    self._response = null;
 }
 
 pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
@@ -578,7 +580,9 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     // With responseType "", only an XML final MIME type is parsed (an HTML
     // one yields null); absent a Content-Type it defaults to text/xml.
     const final: Mime = self._override_mime orelse self._response_mime orelse .{ .content_type = .text_xml };
-    if (!final.isXML()) return null;
+    if (!final.isXML()) {
+        return null;
+    }
 
     switch (exec.js.global) {
         .frame => |frame| {
