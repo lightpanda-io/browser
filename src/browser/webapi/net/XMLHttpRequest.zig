@@ -60,6 +60,8 @@ _method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
+_async: bool = true,
+
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
@@ -185,13 +187,18 @@ pub fn getTimeout(self: *const XMLHttpRequest) u32 {
     return self._timeout;
 }
 
-pub fn setTimeout(self: *XMLHttpRequest, value: u32) void {
+pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !void {
+    // https://xhr.spec.whatwg.org/#the-timeout-attribute
+    if (!self._async and exec.js.global == .frame) {
+        return error.InvalidAccessError;
+    }
+
     self._timeout = value;
 }
 
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
-pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
+pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
     // Abort any in-progress request
     if (self._http_transfer) |transfer| {
         transfer.abort(error.Abort);
@@ -210,6 +217,13 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     self._response_mime = null;
     self._response_headers.clearRetainingCapacity();
     self._request_body = null;
+    self._async = async_ orelse true;
+
+    // https://xhr.spec.whatwg.org/#the-timeout-attribute
+    // Throw if the request is sync OR if it is already sent.
+    if (self._timeout != 0 and !self._async) {
+        return error.InvalidAccessError;
+    }
 
     const exec = self._exec;
     self._method = try parseMethod(method_);
@@ -239,6 +253,12 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
     if (self._ready_state != .opened or self._send_flag) {
         return error.InvalidStateError;
+    }
+
+    if (!self._async and exec_.js.global == .frame and
+        (self._timeout != 0 or self._response_type != .default))
+    {
+        return error.InvalidAccessError;
     }
 
     if (body_) |b| {
@@ -303,20 +323,59 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         }
     }
 
-    // Held for abort() / open() / deinit; the error, shutdown and done
-    // callbacks clear it.
-    self._http_transfer = transfer;
-
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
 
-    transfer.submit() catch |err| {
-        // don't releaseSelfRef, submit() has taken ownership and will call
-        // our error callback
+    if (self._async) {
+        // Held for abort() / open() / deinit; the error, shutdown and done
+        // callbacks clear it.
+        self._http_transfer = transfer;
+
+        transfer.submit() catch |err| {
+            // don't releaseSelfRef, submit() has taken ownership and will call
+            // our error callback
+            self._send_flag = false;
+            return err;
+        };
+        return;
+    }
+
+    var resp = transfer.submitSync() catch |err| {
+        log.err(.http, "sync request failed", .{
+            .source = "xhr",
+            .url = self._url,
+            .err = err,
+        });
+        self._ready_state = .done;
         self._send_flag = false;
-        return err;
+        self.releaseSelfRef();
+        return error.NetworkError;
     };
+    defer resp.deinit();
+    defer self.releaseSelfRef();
+
+    self._response_status = resp.status;
+    self._response_url = self._url;
+    self._response_len = resp.body.items.len;
+
+    try self._response_data.appendSlice(self._arena.allocator(), resp.body.items);
+
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+
+    try self.stateChanged(.done, exec);
+    const loaded = self._response_data.items.len;
+    try self._proto.dispatch(.load, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
+    try self._proto.dispatch(.load_end, .{ .total = loaded, .loaded = loaded, .length_computable = true }, exec);
+
+    log.info(.http, "request complete", .{
+        .source = "xhr",
+        .url = self._url,
+        .status = self._response_status,
+        .len = self._response_data.items.len,
+    });
 }
 
 // https://xhr.spec.whatwg.org/#the-upload-attribute
@@ -373,9 +432,18 @@ pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
     return self._response_type;
 }
 
-pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) !void {
+pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execution) !void {
+    const rt: ResponseType = if (value.len == 0)
+        .default
+    else
+        std.meta.stringToEnum(ResponseType, value) orelse return;
+
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
+    }
+
+    if (!self._async and exec.js.global == .frame) {
+        return error.InvalidAccessError;
     }
 
     if (value.len == 0) {
@@ -383,10 +451,8 @@ pub fn setResponseType(self: *XMLHttpRequest, value: []const u8) !void {
         return;
     }
 
-    if (std.meta.stringToEnum(ResponseType, value)) |rt| {
-        if (rt != .default) {
-            self._response_type = rt;
-        }
+    if (rt != .default) {
+        self._response_type = rt;
     }
 }
 
