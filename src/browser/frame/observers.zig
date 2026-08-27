@@ -44,6 +44,12 @@ pub const Mutation = struct {
     observers: std.DoublyLinkedList = .{},
     delivery_scheduled: bool = false,
     delivery_depth: u32 = 0,
+
+    // Consecutive delivery sessions that hit delivery_depth's cap instead of
+    // draining. delivery_depth only bounds one session's recursion; a
+    // callback that reschedules itself can restart a fresh session forever.
+    consecutive_full_depth: u32 = 0,
+    hit_limit_this_session: bool = false,
 };
 
 // IntersectionObserver bookkeeping for a frame.
@@ -316,6 +322,22 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
 }
 
+// No observer on the frame can make progress once this path is reached.
+fn disconnectRunawayMutationObservers(frame: *Frame) void {
+    log.err(.frame, "frame.MutationRunaway", .{ .type = frame._type, .url = frame.url });
+
+    var node: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
+    while (node) |n| {
+        node = n.next;
+        const observer: *MutationObserver = @fieldParentPtr("node", n);
+        observer.disconnect(frame);
+    }
+}
+
+// ~1600 observer callbacks (100 cascades x 16 depth) with zero progress is
+// well past any legitimate coalescing burst.
+const MUTATION_RUNAWAY_LIMIT = 100;
+
 pub fn deliverMutations(frame: *Frame) void {
     if (!frame._mutation.delivery_scheduled) {
         return;
@@ -323,14 +345,26 @@ pub fn deliverMutations(frame: *Frame) void {
     frame._mutation.delivery_scheduled = false;
 
     frame._mutation.delivery_depth += 1;
+    // A session (this call plus every nested/rescheduled call until nothing
+    // is left scheduled) only counts toward consecutive_full_depth once, at
+    // the point where it's known whether it hit the cap.
     defer if (!frame._mutation.delivery_scheduled) {
-        // reset the depth once nothing is left to be scheduled
         frame._mutation.delivery_depth = 0;
+        if (frame._mutation.hit_limit_this_session) {
+            frame._mutation.hit_limit_this_session = false;
+            frame._mutation.consecutive_full_depth += 1;
+            if (frame._mutation.consecutive_full_depth >= MUTATION_RUNAWAY_LIMIT) {
+                disconnectRunawayMutationObservers(frame);
+            }
+        } else {
+            frame._mutation.consecutive_full_depth = 0;
+        }
     };
 
     if (frame._mutation.delivery_depth > 16) {
         log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
+        frame._mutation.hit_limit_this_session = true;
         return;
     }
 

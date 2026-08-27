@@ -470,6 +470,42 @@ test "WebApi: MutationObserver" {
     try testing.htmlRunner("mutation_observer", .{});
 }
 
+test "WebApi: runaway MutationObserver delivery is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\(function() {
+        \\  const target = document.createElement('div');
+        \\  const children = [target.appendChild(document.createElement('div'))];
+        \\  let n = 0;
+        \\  const mutate = () => {
+        \\    n++;
+        \\    for (const child of children) child.style.transform = `translate3d(${n}px,0,0)`;
+        \\  };
+        \\  new MutationObserver(() => {
+        \\    setTimeout(mutate, 0);
+        \\    mutate();
+        \\  }).observe(target, {attributes: true, subtree: true, attributeFilter: ['style']});
+        \\  mutate();
+        \\})()
+    , null);
+
+    for (0..200) |_| {
+        frame.js.env.runMicrotasks();
+        try frame.js.env.runMacrotasks();
+        if (!Frame.observers.hasMutationObservers(frame)) break;
+    }
+
+    try testing.expectEqual(false, Frame.observers.hasMutationObservers(frame));
+}
+
 // Production watchdog path (lightpanda-io/browser#3130 follow-up): the
 // terminate lands inside a MutationObserver callback, so ExecutionTerminated
 // must unwind out of deliverRecords, stay sticky against further V8 entries,
