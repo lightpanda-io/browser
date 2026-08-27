@@ -130,11 +130,23 @@ pub const Prepared = struct {
     pub fn jsonStringify(self: *const Prepared, jws: *std.json.Stringify) std.Io.Writer.Error!void {
         try jws.beginWriteRaw();
         try jws.writer.writeByte('"');
-        var b64 = Base64Writer.init(jws.writer, .standard);
-        _ = try self.write(&b64.writer);
-        try b64.finish();
+        try self.writeBase64(jws.writer);
         try jws.writer.writeByte('"');
         jws.endWriteRaw();
+    }
+
+    /// The PNG as base64, for APIs that want it as one string.
+    pub fn base64Alloc(self: *const Prepared, allocator: Allocator) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        errdefer aw.deinit();
+        try self.writeBase64(&aw.writer);
+        return aw.toOwnedSlice();
+    }
+
+    fn writeBase64(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        var b64 = Base64Writer.init(writer, .standard);
+        _ = try self.write(&b64.writer);
+        try b64.finish();
     }
 };
 
@@ -662,6 +674,23 @@ test "browser.screenshot: png signature and dimensions" {
     const height = std.mem.readInt(u32, out[20..24], .big);
     // Two blocks plus margins.
     try testing.expectEqual(true, height > 60 and height < 200);
+}
+
+test "browser.screenshot: base64Alloc is the png, base64 encoded" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    frame.url = "http://localhost/";
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Hello</p>");
+
+    const prepared = try prepare(testing.arena_allocator, div.asNode(), .{ .width = 320 }, frame);
+    const b64 = try prepared.base64Alloc(testing.arena_allocator);
+    try testing.expect(std.mem.startsWith(u8, b64, "iVBORw0KGgo"));
+
+    const decoder = std.base64.standard.Decoder;
+    const bytes = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(b64));
+    try decoder.decode(bytes, b64);
+    try testing.expectEqual("\x89PNG\r\n\x1a\n", bytes[0..8]);
 }
 
 test "browser.screenshot: fixed height, clip and scale" {
