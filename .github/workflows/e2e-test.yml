@@ -106,7 +106,7 @@ jobs:
       - id: args
         name: build LP args
         run: |
-          args="--http-cache-dir /tmp/lp-cache"
+          args="--http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
           [ "${{ matrix.proxy }}" = "true" ] && args="$args --http-proxy http://127.0.0.1:3000"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"

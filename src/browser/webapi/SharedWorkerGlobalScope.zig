@@ -92,7 +92,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     const proto = self._proto;
     errdefer proto.deinit();
 
-    if (!session.worker_loading_enabled) {
+    if (session.load_resources.worker == false) {
         log.debug(.browser, "shared worker disabled", .{ .url = owned_url });
         return self;
     }

@@ -21,23 +21,23 @@ const lp = @import("lightpanda");
 
 pub const Scope = enum {
     app,
-    dom,
-    bug,
     browser,
+    bug,
+    cache,
     cdp,
     console,
-    http,
-    frame,
-    js,
+    dom,
     event,
-    scheduler,
+    frame,
+    http,
+    js,
+    mcp,
     not_implemented,
+    scheduler,
+    storage,
     telemetry,
     unknown_prop,
-    mcp,
-    cache,
     websocket,
-    storage,
 };
 
 pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
@@ -54,7 +54,7 @@ pub const FilterRule = struct {
 /// array. Directives apply left-to-right, so `-all,+cdp` disables every
 /// scope then re-enables `cdp`. Scopes untouched by any directive stay
 /// enabled.
-pub fn resolveFilterScopes(rules: []const FilterRule) [num_scopes]bool {
+pub fn resolveFilters(rules: []const FilterRule) [num_scopes]bool {
     var scope_enabled = [_]bool{true} ** num_scopes;
     for (rules) |rule| {
         if (rule.scope) |scope| {
@@ -602,17 +602,17 @@ test "log: string escape" {
     }
 }
 
-test "log: resolveFilterScopes" {
+test "log: resolveFilters" {
     // No directives: everything enabled.
     {
-        const se = resolveFilterScopes(&.{});
+        const se = resolveFilters(&.{});
         try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
         try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
     }
 
     // Backward compatible: bare/`-` scope filters that scope out, rest stay in.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = .cdp, .enable = false },
             .{ .scope = .http, .enable = false },
         });
@@ -623,7 +623,7 @@ test "log: resolveFilterScopes" {
 
     // `-all,+cdp`: disable everything, then re-enable cdp.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = false },
             .{ .scope = .cdp, .enable = true },
         });
@@ -634,7 +634,7 @@ test "log: resolveFilterScopes" {
 
     // `+all,-cdp`: enable everything, then disable cdp. Order matters.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = true },
             .{ .scope = .cdp, .enable = false },
         });

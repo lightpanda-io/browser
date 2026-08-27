@@ -52,6 +52,11 @@ const log = lp.log;
 ///     that appears in both with the same field name and type is collapsed
 ///     into one field (the command's own option wins); reusing a name with
 ///     a different type is a compile error.
+///   - `before_parse: fn () void` (optional) — called once the command is
+///     known (by name or sniffed from a legacy flag), before any option is
+///     read. For mode-level process defaults that must already hold while
+///     the options themselves are parsed, e.g. log settings; an explicit
+///     option parsed later still wins.
 ///   - `positional: struct` (optional) — a positional argument with `.name`
 ///     and `.type` that may appear anywhere in argv. By default it holds a
 ///     single value: `.type` must be an optional pointer-to-u8 slice (e.g.
@@ -79,6 +84,8 @@ const log = lp.log;
 ///     built-in type switch. See the validator section below.
 ///   - `variants: tuple` (optional) — alternate flag names that write into
 ///     the same field. See the variants section below.
+///   - `deprecated: []const u8` (optional) — the option still parses, but
+///     each use logs a warning carrying this note.
 ///
 /// ## Supported types and their defaults
 ///
@@ -470,7 +477,6 @@ pub fn Builder(comptime commands: anytype) type {
             inline for (.{
                 "--host",
                 "--port",
-                "--timeout",
             }) |heuristic| {
                 if (std.mem.eql(u8, cmd_str, heuristic)) {
                     return .serve;
@@ -526,6 +532,9 @@ pub fn Builder(comptime commands: anytype) type {
             const OptionType = @TypeOf(option);
             const is_multiple = @hasField(OptionType, "multiple") and option.multiple;
             const has_validator = @hasField(OptionType, "validator");
+            if (@hasField(OptionType, "deprecated")) {
+                log.warn(.app, "deprecated CLI parameter", .{ .name = option.name, .note = option.deprecated });
+            }
 
             // Prefer validator for parsing if provided. The validator writes
             // through the field pointer (the list itself for multiples).
@@ -682,6 +691,9 @@ pub fn Builder(comptime commands: anytype) type {
             args: *std.process.Args.Iterator,
         ) !Union {
             const Command = @FieldType(Union, command.name);
+            if (@hasField(@TypeOf(command), "before_parse")) {
+                command.before_parse();
+            }
             var c = Command{};
 
             const options = blk: {
