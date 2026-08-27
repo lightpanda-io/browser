@@ -116,15 +116,7 @@ pub fn refreshTarget(self: *Meta) ?[]const u8 {
     return immediateRefreshTarget(self.getContent());
 }
 
-// Extracts the URL out of a <meta http-equiv=refresh> `content`, but only for
-// a 0 second delay. A longer delay is deliberately ignored: those are almost
-// always interstitial placeholders, where the page we already have is the one
-// worth keeping.
-// The grammar is the one browsers actually accept (Chromium's ParseHTTPRefresh
-// and the HTML spec's shared declarative refresh steps):
-//   "5"                 a bare delay is a reload of the current page: no URL
-//   "0; /a" "0,/a" "0 /a"
-//   "0; url=/a" "0;url/a" "0; URL = '/a' junk"
+// Extracts the URL out of a <meta http-equiv=refresh> `content`
 fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
     const trimmed = std.mem.trim(u8, content, &std.ascii.whitespace);
 
