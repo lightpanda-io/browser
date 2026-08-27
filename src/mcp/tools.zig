@@ -38,6 +38,8 @@ fn annotations(tool: BrowserTool) protocol.ToolAnnotations {
         // Drains the buffer: a second call returns something else.
         .consoleLogs => .{ .readOnlyHint = true, .destructiveHint = false, .openWorldHint = false },
         .goto, .search, .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => .{ .destructiveHint = false, .idempotentHint = true },
+        // Overwrites `path` when given.
+        .screenshot => .{ .idempotentHint = true },
         .waitForSelector, .waitForScript, .waitForState => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
         .evaluate, .click, .press => .{},
         .fill, .selectOption, .setChecked, .hover => .{ .destructiveHint = false, .idempotentHint = true, .openWorldHint = false },
@@ -170,8 +172,41 @@ fn dispatchBrowserTool(
         return server.sendError(id, code, browser_tools.errorMessage(err));
     };
 
+    if (result.image) |image| {
+        return server.sendResult(id, ImageResult{ .image = image, .text = result.text });
+    }
     try sendToolResultText(server, id, result.text, result.is_error);
 }
+
+/// MCP image content: the PNG streams straight into the message as base64.
+const ImageResult = struct {
+    image: lp.screenshot.Prepared,
+    text: []const u8,
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("content");
+        try jw.beginArray();
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write("image");
+        try jw.objectField("data");
+        try jw.write(self.image);
+        try jw.objectField("mimeType");
+        try jw.write("image/png");
+        try jw.endObject();
+        try jw.beginObject();
+        try jw.objectField("type");
+        try jw.write("text");
+        try jw.objectField("text");
+        try jw.write(self.text);
+        try jw.endObject();
+        try jw.endArray();
+        try jw.objectField("isError");
+        try jw.write(false);
+        try jw.endObject();
+    }
+};
 
 fn surfacesErrorInBand(tool: BrowserTool) bool {
     return tool == .evaluate or tool == .extract;
@@ -1441,6 +1476,43 @@ test "MCP - html: maxBytes truncation and strip" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "<!DOCTYPE html>") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "<h1>") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "[truncated]") != null);
+}
+
+test "MCP - screenshot: inline image, file, unsafe path" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
+    defer server.deinit();
+
+    const inline_call =
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot"}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, inline_call);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"mimeType\":\"image/png\"") != null);
+    // base64 of the PNG signature
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"data\":\"iVBORw0KGgo") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":false") != null);
+
+    const path = "mcp-screenshot-test.png";
+    std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
+
+    out.clearRetainingCapacity();
+    const to_file =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"mcp-screenshot-test.png","selector":"#hoverTarget"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, to_file);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Saved 1920x") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") == null);
+    const png = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, testing.arena_allocator, .limited(1024 * 1024));
+    try testing.expect(std.mem.startsWith(u8, png, "\x89PNG\r\n\x1a\n"));
+
+    out.clearRetainingCapacity();
+    const unsafe =
+        \\{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"../escape.png"}}}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, unsafe);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
 }
 
 test "MCP - links: dedup, hidden, text fallback, limit" {

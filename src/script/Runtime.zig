@@ -721,6 +721,7 @@ fn callTool(
     };
 
     if (result.is_error) return .{ .fail = result.text };
+    if (result.image != null) return .{ .fail = "screenshot needs `path` in a script" };
     return .{ .ok = result.text };
 }
 

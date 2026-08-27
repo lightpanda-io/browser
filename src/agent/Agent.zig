@@ -1488,7 +1488,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| .{
+    const result = browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| return .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1496,6 +1496,9 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         },
         .is_error = true,
     };
+    // Tool results reach the model as text; an inline image has nowhere to go.
+    if (result.image != null) return .{ .text = "screenshot needs `path` here; the inline image is MCP-only", .is_error = true };
+    return result;
 }
 
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
