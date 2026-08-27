@@ -2044,6 +2044,7 @@ test {
     _ = save;
     _ = settings;
     _ = picker;
+    _ = Terminal;
 }
 
 test "savePrompt: save instructions followed by the rendered script skill" {
