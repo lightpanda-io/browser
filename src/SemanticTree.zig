@@ -661,7 +661,8 @@ pub fn getNodeDetails(
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
-    const name = try axn.getName(frame, arena, null);
+    var labels: Label.LabelByForIndex = .{};
+    const name = try axn.getName(frame, arena, &labels);
 
     var is_interactive = false;
     var is_disabled = false;

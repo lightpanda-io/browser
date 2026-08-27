@@ -932,9 +932,8 @@ const AXSource = enum(u8) {
     value, // input value
 };
 
-/// `label_index` makes repeated `<label for>` lookups one document scan
-/// instead of one per element.
-pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, label_index: ?*Label.LabelByForIndex) !?[]const u8 {
+/// `labels` fills on its first `<label for>` lookup; share one across a walk.
+pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, labels: *Label.LabelByForIndex) !?[]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
@@ -961,7 +960,7 @@ pub fn getName(self: AXNode, frame: *Frame, allocator: std.mem.Allocator, label_
 
     const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
-    const source = try self.writeName(null, w, frame, label_index);
+    const source = try self.writeName(null, w, frame, labels);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
         var raw_text = std.mem.trim(u8, aw.written(), "\"");
@@ -977,7 +976,7 @@ fn writeName(
     temp_arena: ?*lp.Arena,
     w: anytype,
     frame: *Frame,
-    label_index: ?*Label.LabelByForIndex,
+    label_index: *Label.LabelByForIndex,
 ) !?AXSource {
     defer if (temp_arena) |a| a.reset(scratch_retain_limit);
 
@@ -1240,17 +1239,13 @@ fn writeLabelName(
     node: *DOMNode,
     el: *DOMNode.Element,
     frame: *Frame,
-    label_index: ?*Label.LabelByForIndex,
+    label_index: *Label.LabelByForIndex,
     w: anytype,
 ) !?AXSource {
     if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
         if (id_value.len > 0) {
             if (node.ownerDocument(frame)) |doc| {
-                const match: ?*DOMNode.Element = if (label_index) |idx|
-                    try idx.lookup(doc.asNode(), id_value, frame.call_arena)
-                else
-                    Label.findLabelByFor(doc.asNode(), id_value);
-                if (match) |label_el| {
+                if (try label_index.lookup(doc.asNode(), id_value, frame.call_arena)) |label_el| {
                     if (try writeLabelInnerText(temp_arena, label_el, frame, w)) return .label_element;
                 }
             }
@@ -2038,7 +2033,8 @@ test "AXNode: getName name-from-content honors explicit role" {
     for (cases) |c| {
         const el = (try doc.querySelector(.wrap(c.selector), frame)).?;
         const axn = AXNode.fromNode(el.asNode());
-        const name = try axn.getName(frame, testing.allocator, null);
+        var labels: Label.LabelByForIndex = .{};
+        const name = try axn.getName(frame, testing.allocator, &labels);
         defer if (name) |n| testing.allocator.free(n);
 
         if (c.expected) |exp| {

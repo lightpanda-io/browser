@@ -59,17 +59,6 @@ pub fn findWrappingLabel(control: *Element) ?*Element {
     return null;
 }
 
-/// First `<label for="id">` descendant of `root`, if any.
-pub fn findLabelByFor(root: *Node, id: []const u8) ?*Element {
-    var it = TreeWalker.Full.Elements.init(root, .{});
-    while (it.next()) |el| {
-        if (el.getTag() != .label) continue;
-        const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
-        if (std.mem.eql(u8, for_attr, id)) return el;
-    }
-    return null;
-}
-
 /// Lazy `for`-attribute → `<label>` index. Built in one tree walk on first
 /// lookup; subsequent lookups are O(1). Use when the same document is queried
 /// multiple times (e.g. one AX tree walk resolves names for every labellable

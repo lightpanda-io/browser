@@ -222,8 +222,7 @@ fn walkInteractive(
             if (!std.ascii.eqlIgnoreCase(r, rf)) continue;
         }
 
-        // Resolve the name only after the cheap role filter passes: it walks
-        // labels and the element's text subtree.
+        // Names walk labels and text; filter on role first.
         const name = (try axn.getName(frame, arena, &label_index)) orelse try getTextContent(node, arena);
         if (filter.name) |nf| {
             const n = name orelse continue;
@@ -395,8 +394,7 @@ pub fn explicitRole(el: *Element) ?[]const u8 {
     return it.next();
 }
 
-/// The accessibility role, or null where there is none: a plain element
-/// that is interactive only by its listener or tabindex.
+/// Null for elements with no role (interactive only by listener or tabindex).
 fn axRole(axn: AXNode) ?[]const u8 {
     const role = axn.getRole() catch return null;
     return if (std.mem.eql(u8, role, "none")) null else role;
@@ -479,7 +477,7 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
     return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
 }
 
-/// Like `testInteractive`, but attached to the document so `<label for>` resolves.
+/// Attached to the document so `<label for>` resolves.
 fn testInteractiveInBody(html: []const u8) ![]InteractiveElement {
     const frame = try testing.createFrame();
     errdefer testing.test_session.closeAllPages();
