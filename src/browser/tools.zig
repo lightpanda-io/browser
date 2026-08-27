@@ -39,8 +39,9 @@ const Selector = @import("webapi/selector/Selector.zig");
 /// recordable as JavaScript agent scripts.
 pub const driver_guidance =
     \\You are driving Lightpanda, a headless browser, through text tools:
-    \\no screenshots, no images, no PDFs — you reason over pages as a
-    \\semantic tree, markdown or HTML.
+    \\you reason over pages as a semantic tree, markdown or HTML. `screenshot`
+    \\renders that text layout as a PNG (no images, fonts or CSS) — use it
+    \\for spatial layout, not as a primary read.
     \\
     \\Reading pages (cheap → expensive — prefer cheaper):
     \\- `tree` → semantic overview (role, name, value, backendNodeId per
@@ -234,6 +235,7 @@ pub const Tool = enum {
     search,
     markdown,
     html,
+    screenshot,
     links,
     evaluate,
     extract,
@@ -263,7 +265,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -275,7 +277,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -285,7 +287,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -295,7 +297,7 @@ pub const Tool = enum {
     /// `getCookies` (`url` filters, not navigates).
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
-            .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
+            .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
             .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -306,7 +308,7 @@ pub const Tool = enum {
     pub fn needsLocator(self: Tool) bool {
         return switch (self) {
             .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .search, .markdown, .html, .screenshot, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -315,7 +317,7 @@ pub const Tool = enum {
     pub fn producesData(self: Tool) bool {
         return switch (self) {
             .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
-            .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
+            .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
 
@@ -393,6 +395,23 @@ pub const Tool = enum {
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
                     \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
+                    \\  }
+                    \\}
+                ),
+            },
+            .screenshot => .{
+                .description = "Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file and returns its location; without it, returns the image inline (MCP only). Use it to see spatial layout; read content with `markdown`/`tree`.",
+                .summary = "Screenshot of the page or a node",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "path": { "type": "string", "description": "Optional relative path (no '..' segments) to write the PNG to. Created or overwritten. Required outside MCP." },
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
+                    \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
                     \\}
@@ -703,7 +722,7 @@ pub const Tool = enum {
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(10000);
+    @setEvalBranchQuota(100_000);
     return comptime blk: {
         var buf: [json.len]u8 = undefined;
         var len: usize = 0;
@@ -790,6 +809,8 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// A rendered PNG the caller streams out itself (MCP image content).
+    image: ?lp.screenshot.Prepared = null,
 };
 
 pub const GotoParams = struct {
@@ -862,6 +883,7 @@ fn dispatch(
         .search => execSearch(arena, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
+        .screenshot => try execScreenshot(arena, session, registry, substituted),
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
         .tree => .{ .text = try execTree(arena, session, registry, substituted) },
         .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
@@ -1307,6 +1329,64 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
         lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
     return aw.written();
+}
+
+fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
+    const Params = struct {
+        path: ?[]const u8 = null,
+        selector: ?[]const u8 = null,
+        backendNodeId: ?CDPNode.Id = null,
+        fullPage: bool = false,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+    if (args.path) |path| {
+        if (!isPathSafe(path)) return .{ .text = "path must be relative and must not contain '..' segments", .is_error = true };
+    }
+    const page = try ensurePage(session, registry, args.url, args.timeout);
+
+    var node = page.document.asNode();
+    var frame = page;
+    if (args.selector) |sel| {
+        const resolved = try resolveBySelector(session, sel);
+        node = resolved.node;
+        frame = resolved.page;
+    } else if (args.backendNodeId) |nid| {
+        const resolved = try resolveNodeAndPage(session, registry, nid);
+        node = resolved.node;
+        frame = resolved.page;
+    }
+
+    const viewport = page._page.getViewport();
+    const prepared = lp.screenshot.prepare(arena, node, .{
+        .width = viewport.width,
+        .height = if (args.fullPage) 0 else viewport.height,
+        .scale = viewport.scale,
+    }, frame) catch return ToolError.InternalError;
+
+    const path = args.path orelse return .{
+        .text = std.fmt.allocPrint(arena, "PNG, {d}px wide", .{viewport.width}) catch return ToolError.OutOfMemory,
+        .image = prepared,
+    };
+
+    const height = writePng(&prepared, path) catch |err| return .{
+        .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+        .is_error = true,
+    };
+    // Absolute path: the cwd is the server's, not one the user picked.
+    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, path, arena) catch path;
+    return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ viewport.width, height, where }) catch return ToolError.OutOfMemory };
+}
+
+fn writePng(prepared: *const lp.screenshot.Prepared, path: []const u8) !u32 {
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
+    defer file.close(lp.io);
+    var buf: [8 * 1024]u8 = undefined;
+    var writer = file.writer(lp.io, &buf);
+    const height = try prepared.write(&writer.interface);
+    try writer.interface.flush();
+    return height;
 }
 
 fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
