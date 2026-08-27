@@ -162,7 +162,7 @@ jobs:
       - id: args
         name: build LP args
         run: |
-          args="--http-cache-dir /tmp/lp-cache"
+          args="--http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
