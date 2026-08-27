@@ -215,6 +215,14 @@ pub const save_script_rules =
 /// `..` segment. Operator-controlled symlinks already inside CWD are out
 /// of scope — the threat we close here is "client supplies an arbitrary
 /// path string".
+pub const unsafe_path_message = "path must be relative and must not contain '..' segments";
+
+/// The cwd is the server's, not one the user picked, so report where a file
+/// really went.
+pub fn absolutePath(arena: std.mem.Allocator, path: []const u8) []const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(lp.io, path, arena) catch path;
+}
+
 pub fn isPathSafe(path: []const u8) bool {
     if (path.len == 0) return false;
     if (std.fs.path.isAbsolute(path)) return false;
@@ -302,14 +310,21 @@ pub const Tool = enum {
         };
     }
 
-    /// Tool requires a target element (selector or backendNodeId) at
-    /// runtime even though the JSON schema marks both as optional. Used by
-    /// the recorder to skip lines that can't be replayed.
-    pub fn needsLocator(self: Tool) bool {
+    /// Args a replay needs even though the schema marks them optional; the
+    /// recorder skips a line missing one. Exhaustive so a new tool must choose.
+    pub fn replayRequires(self: Tool) []const []const u8 {
         return switch (self) {
-            .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .html, .screenshot, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
+            .screenshot => &.{"path"},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
         };
+    }
+
+    pub fn needsLocator(self: Tool) bool {
+        for (self.replayRequires()) |field| {
+            if (std.mem.eql(u8, field, "selector")) return true;
+        }
+        return false;
     }
 
     /// Result is data the caller probably wants on stdout (extracted JSON,
@@ -401,13 +416,13 @@ pub const Tool = enum {
                 ),
             },
             .screenshot => .{
-                .description = "Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file and returns its location; without it, returns the image inline (MCP only). Use it to see spatial layout; read content with `markdown`/`tree`.",
+                .description = "Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file and returns its location; without it, returns the image inline where the client can display one. Use it to see spatial layout; read content with `markdown`/`tree`.",
                 .summary = "Screenshot of the page or a node",
                 .input_schema = minify(
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "path": { "type": "string", "description": "Optional relative path (no '..' segments) to write the PNG to. Created or overwritten. Required outside MCP." },
+                    \\    "path": { "type": "string", "description": "Optional relative path (no '..' segments) to write the PNG to. Created or overwritten. Without it the image is returned inline, which needs a client that can display images." },
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
@@ -722,6 +737,7 @@ pub const Tool = enum {
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
+    // Cumulative: tool_defs evaluates every schema in one comptime scope.
     @setEvalBranchQuota(100_000);
     return comptime blk: {
         var buf: [json.len]u8 = undefined;
@@ -809,7 +825,7 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
-    /// A rendered PNG the caller streams out itself (MCP image content).
+    /// Only set when the caller passed `CallOpts.inline_image`.
     image: ?lp.screenshot.Prepared = null,
 };
 
@@ -838,12 +854,18 @@ const ActionTarget = union(enum) {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
+/// What the caller can do with a result beyond its text.
+pub const CallOpts = struct {
+    inline_image: bool = false,
+};
+
 pub fn call(
     arena: std.mem.Allocator,
     session: *lp.Session,
     registry: *CDPNode.Registry,
     tool_name: []const u8,
     arguments: ?std.json.Value,
+    opts: CallOpts,
 ) ToolError!ToolResult {
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
@@ -862,7 +884,7 @@ pub fn call(
     };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
-    return dispatch(arena, session, registry, tool, substituted) catch |err| {
+    return dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
                 return .{ .text = text, .is_error = true };
@@ -877,13 +899,14 @@ fn dispatch(
     registry: *CDPNode.Registry,
     tool: Tool,
     substituted: ?std.json.Value,
+    opts: CallOpts,
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
         .search => execSearch(arena, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
-        .screenshot => try execScreenshot(arena, session, registry, substituted),
+        .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
         .tree => .{ .text = try execTree(arena, session, registry, substituted) },
         .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
@@ -1289,19 +1312,19 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const opts: lp.markdown.Opts = .{ .max_bytes = args.maxBytes };
+    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else {
-        lp.markdown.dump(page.document.asNode(), opts, &aw.writer, page) catch return ToolError.InternalError;
-    }
+    lp.markdown.dump(node, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
     return aw.written();
+}
+
+/// The node a read tool works on: the selector match, the registry node, or
+/// the whole document. All three live in the current frame.
+fn resolveScope(session: *lp.Session, registry: *CDPNode.Registry, page: *lp.Frame, selector: ?[]const u8, node_id: ?CDPNode.Id) ToolError!*DOMNode {
+    if (selector) |sel| return (try resolveBySelector(session, sel)).node;
+    if (node_id) |nid| return (try resolveNodeAndPage(session, registry, nid)).node;
+    return page.document.asNode();
 }
 
 const HtmlParams = struct {
@@ -1319,19 +1342,16 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
 
     const opts: lp.dump.Opts = .{ .strip = args.strip, .max_bytes = args.maxBytes };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        lp.dump.deep(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        lp.dump.deep(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else {
+    if (args.selector == null and args.backendNodeId == null) {
         lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
+    } else {
+        const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+        lp.dump.deep(node, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
     return aw.written();
 }
 
-fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value, inline_image: bool) ToolError!ToolResult {
     const Params = struct {
         path: ?[]const u8 = null,
         selector: ?[]const u8 = null,
@@ -1342,41 +1362,27 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
     if (args.path) |path| {
-        if (!isPathSafe(path)) return .{ .text = "path must be relative and must not contain '..' segments", .is_error = true };
+        if (!isPathSafe(path)) return .{ .text = unsafe_path_message, .is_error = true };
+    } else if (!inline_image) {
+        return .{ .text = "pass `path`: this client cannot display an inline image", .is_error = true };
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
+    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    const prepared = lp.screenshot.prepare(arena, node, .fromViewport(page._page.getViewport(), args.fullPage), page) catch
+        return ToolError.InternalError;
+    const width = prepared.opts.width;
 
-    var node = page.document.asNode();
-    var frame = page;
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        node = resolved.node;
-        frame = resolved.page;
-    } else if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        node = resolved.node;
-        frame = resolved.page;
+    if (args.path) |path| {
+        const height = writePng(&prepared, path) catch |err| return .{
+            .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        };
+        return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
-
-    const viewport = page._page.getViewport();
-    const prepared = lp.screenshot.prepare(arena, node, .{
-        .width = viewport.width,
-        .height = if (args.fullPage) 0 else viewport.height,
-        .scale = viewport.scale,
-    }, frame) catch return ToolError.InternalError;
-
-    const path = args.path orelse return .{
-        .text = std.fmt.allocPrint(arena, "PNG, {d}px wide", .{viewport.width}) catch return ToolError.OutOfMemory,
+    return .{
+        .text = std.fmt.allocPrint(arena, "PNG, {d}px wide", .{width}) catch return ToolError.OutOfMemory,
         .image = prepared,
     };
-
-    const height = writePng(&prepared, path) catch |err| return .{
-        .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
-        .is_error = true,
-    };
-    // Absolute path: the cwd is the server's, not one the user picked.
-    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, path, arena) catch path;
-    return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ viewport.width, height, where }) catch return ToolError.OutOfMemory };
 }
 
 fn writePng(prepared: *const lp.screenshot.Prepared, path: []const u8) !u32 {
@@ -2455,7 +2461,7 @@ test "call: unknown tool name surfaces in-band" {
 
     // Session/registry are never touched on this branch; the name check is
     // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null);
+    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }

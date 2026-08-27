@@ -439,9 +439,7 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
 }
 
 fn prepareShot(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !screenshot.Prepared {
-    return screenshot.prepare(arena, try dumpRoot(frame, opts.selector), .{
-        .width = frame._page.getViewport().width,
-    }, frame);
+    return screenshot.prepare(arena, try dumpRoot(frame, opts.selector), .fromViewport(frame._page.getViewport(), true), frame);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -462,9 +460,7 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
         .png => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
-            _ = try screenshot.png(arena.allocator(), root, .{
-                .width = frame._page.getViewport().width,
-            }, writer, frame);
+            _ = try screenshot.png(arena.allocator(), root, .fromViewport(frame._page.getViewport(), true), writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
             var registry = CDPNode.Registry.init(app.allocator);

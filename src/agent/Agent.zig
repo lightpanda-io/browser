@@ -1488,7 +1488,7 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         .tool_call => |t| t,
         else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
     };
-    const result = browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args) catch |err| return .{
+    return browser_tools.call(arena, self.session, &self.node_registry, tc.name(), tc.args, .{}) catch |err| .{
         .text = switch (err) {
             error.OutOfMemory => "out of memory",
             error.FrameNotLoaded => "no page loaded — run /goto <url> first",
@@ -1496,9 +1496,6 @@ fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tool
         },
         .is_error = true,
     };
-    // Tool results reach the model as text; an inline image has nowhere to go.
-    if (result.image != null) return .{ .text = "screenshot needs `path` here; the inline image is MCP-only", .is_error = true };
-    return result;
 }
 
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
@@ -1925,7 +1922,7 @@ fn handleToolCall(ctx: *anyopaque, allocator: std.mem.Allocator, tool_name: []co
     self.terminal.spinner.setTool(tool_name, args_str);
     defer self.terminal.spinner.setThinking();
 
-    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments)) |result|
+    const outcome: zenai.provider.Client.ToolHandler.Result = if (browser_tools.call(allocator, self.session, &self.node_registry, tool_name, arguments, .{})) |result|
         .{ .content = capToolOutput(allocator, tool_name, result.text), .is_error = result.is_error }
     else |err|
         .{ .content = std.fmt.allocPrint(allocator, "Error: {s}", .{browser_tools.errorMessage(err)}) catch "Error: tool execution failed", .is_error = true };

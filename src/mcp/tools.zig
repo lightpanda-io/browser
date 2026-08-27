@@ -156,7 +156,7 @@ fn dispatchBrowserTool(
     };
 
     const active = server.active_session;
-    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments) catch |err| {
+    const result = browser_tools.call(arena, active.session, &active.node_registry, name, arguments, .{ .inline_image = true }) catch |err| {
         // evaluate/extract surface failures in-band so the LLM can self-correct;
         // other tools' operational failures are protocol-level.
         if (surfacesErrorInBand(tool)) {
@@ -173,40 +173,13 @@ fn dispatchBrowserTool(
     };
 
     if (result.image) |image| {
-        return server.sendResult(id, ImageResult{ .image = image, .text = result.text });
+        return server.sendResult(id, .{
+            .content = .{ protocol.ImageContent{ .data = image }, protocol.TextContent([]const u8){ .text = result.text } },
+            .isError = result.is_error,
+        });
     }
     try sendToolResultText(server, id, result.text, result.is_error);
 }
-
-/// MCP image content: the PNG streams straight into the message as base64.
-const ImageResult = struct {
-    image: lp.screenshot.Prepared,
-    text: []const u8,
-
-    pub fn jsonStringify(self: @This(), jw: anytype) !void {
-        try jw.beginObject();
-        try jw.objectField("content");
-        try jw.beginArray();
-        try jw.beginObject();
-        try jw.objectField("type");
-        try jw.write("image");
-        try jw.objectField("data");
-        try jw.write(self.image);
-        try jw.objectField("mimeType");
-        try jw.write("image/png");
-        try jw.endObject();
-        try jw.beginObject();
-        try jw.objectField("type");
-        try jw.write("text");
-        try jw.objectField("text");
-        try jw.write(self.text);
-        try jw.endObject();
-        try jw.endArray();
-        try jw.objectField("isError");
-        try jw.write(false);
-        try jw.endObject();
-    }
-};
 
 fn surfacesErrorInBand(tool: BrowserTool) bool {
     return tool == .evaluate or tool == .extract;
@@ -219,7 +192,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     };
 
     if (!browser_tools.isPathSafe(args.path)) {
-        return sendErrorContent(server, id, "path must be relative and must not contain '..' segments");
+        return sendErrorContent(server, id, browser_tools.unsafe_path_message);
     }
 
     // The client never sees resolved secrets, but scrub any literal LP_* value
@@ -233,8 +206,7 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return sendErrorContent(server, id, msg);
     };
 
-    // Absolute path: the cwd is the client-launched server's, not one the user picked.
-    const where = std.Io.Dir.cwd().realPathFileAlloc(lp.io, args.path, arena) catch args.path;
+    const where = browser_tools.absolutePath(arena, args.path);
     const lines = std.mem.count(u8, script, "\n") + 1;
     const msg = std.fmt.allocPrint(arena, "saved {d} line(s) to {s}", .{ lines, where }) catch
         return sendErrorContent(server, id, "out of memory");
@@ -1498,9 +1470,7 @@ test "MCP - screenshot: inline image, file, unsafe path" {
     defer std.Io.Dir.cwd().deleteFile(lp.io, path) catch {};
 
     out.clearRetainingCapacity();
-    const to_file =
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"screenshot","arguments":{"path":"mcp-screenshot-test.png","selector":"#hoverTarget"}}}
-    ;
+    const to_file = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"screenshot\",\"arguments\":{\"path\":\"" ++ path ++ "\",\"selector\":\"#hoverTarget\"}}}";
     try router.handleMessage(server, testing.arena_allocator, to_file);
     try testing.expect(std.mem.indexOf(u8, out.written(), "Saved 1920x") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "\"type\":\"image\"") == null);
