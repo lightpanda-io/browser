@@ -136,11 +136,10 @@ pub const Prepared = struct {
     }
 
     /// The PNG as base64, for APIs that want it as one string.
-    pub fn base64Alloc(self: *const Prepared, allocator: Allocator) ![]const u8 {
-        var aw: std.Io.Writer.Allocating = .init(allocator);
-        errdefer aw.deinit();
+    pub fn base64Alloc(self: *const Prepared, arena: Allocator) ![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(arena);
         try self.writeBase64(&aw.writer);
-        return aw.toOwnedSlice();
+        return aw.written();
     }
 
     fn writeBase64(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -676,23 +675,6 @@ test "browser.screenshot: png signature and dimensions" {
     try testing.expectEqual(true, height > 60 and height < 200);
 }
 
-test "browser.screenshot: base64Alloc is the png, base64 encoded" {
-    defer testing.test_session.closeAllPages();
-    const frame = try testing.createFrame();
-    frame.url = "http://localhost/";
-    const div = try frame.window._document.createElement("div", null, frame);
-    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>Hello</p>");
-
-    const prepared = try prepare(testing.arena_allocator, div.asNode(), .{ .width = 320 }, frame);
-    const b64 = try prepared.base64Alloc(testing.arena_allocator);
-    try testing.expect(std.mem.startsWith(u8, b64, "iVBORw0KGgo"));
-
-    const decoder = std.base64.standard.Decoder;
-    const bytes = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(b64));
-    try decoder.decode(bytes, b64);
-    try testing.expectEqual("\x89PNG\r\n\x1a\n", bytes[0..8]);
-}
-
 test "browser.screenshot: fixed height, clip and scale" {
     defer testing.test_session.closeAllPages();
     const frame = try testing.createFrame();
@@ -810,6 +792,7 @@ test "browser.screenshot: json streams base64" {
     _ = enc.encode(expected[9 .. expected.len - 2], raw.written());
     @memcpy(expected[expected.len - 2 ..], "\"}");
     try testing.expectString(expected, json.written());
+    try testing.expectString(expected[9 .. expected.len - 2], try prepared.base64Alloc(testing.arena_allocator));
 }
 
 test "browser.screenshot: block extraction" {

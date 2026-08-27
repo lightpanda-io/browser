@@ -173,8 +173,9 @@ fn dispatchBrowserTool(
     };
 
     if (result.image) |image| {
-        return server.sendResult(id, .{
-            .content = .{ protocol.ImageContent{ .data = image }, protocol.TextContent([]const u8){ .text = result.text } },
+        const Content = struct { protocol.ImageContent(lp.screenshot.Prepared), protocol.TextContent([]const u8) };
+        return server.sendResult(id, protocol.CallToolResult(Content){
+            .content = .{ .{ .data = image, .mimeType = "image/png" }, .{ .text = result.text } },
             .isError = result.is_error,
         });
     }
@@ -289,7 +290,7 @@ fn writeScript(path: []const u8, content: []const u8) !void {
 
 fn sendToolResultText(server: *Server, id: std.json.Value, msg: []const u8, is_error: bool) !void {
     const content = [_]protocol.TextContent([]const u8){.{ .text = msg }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = is_error });
+    try server.sendResult(id, protocol.CallToolResult([]const protocol.TextContent([]const u8)){ .content = &content, .isError = is_error });
 }
 
 fn sendErrorContent(server: *Server, id: std.json.Value, msg: []const u8) !void {

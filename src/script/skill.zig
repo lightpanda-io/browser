@@ -180,7 +180,9 @@ fn positionalOptional(s: *const Schema, p: []const u8) bool {
     if (s.findField(p)) |f| {
         if (f.default_true) return true;
     }
-    if (std.mem.eql(u8, p, "selector") and s.tool.needsLocator()) return false;
+    for (s.tool.replayRequires()) |r| {
+        if (std.mem.eql(u8, r, p)) return false;
+    }
     for (s.required) |r| {
         if (std.mem.eql(u8, r, p)) return false;
     }
