@@ -207,12 +207,11 @@ fn handleSave(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     try sendToolResultText(server, id, msg, false);
 }
 
-/// The session tools require the HTTP transport's parked-isolate discipline:
-/// a second session means a second V8 isolate, only safe when isolates are
-/// entered around use. Over stdio (one permanently-entered isolate) they are
-/// all unsupported, kept uniform so clients see one consistent rule.
+/// The session tools need a transport that routes by session id (HTTP's
+/// `Mcp-Session-Id`). Over stdio they are all unsupported, kept uniform so
+/// clients see one consistent rule.
 fn requireMultiSession(server: *Server, id: std.json.Value) !bool {
-    if (server.park_isolates) return true;
+    if (server.multi_session) return true;
     try sendToolResultText(server, id, "multiple sessions require the HTTP transport (start with --port)", true);
     return false;
 }
@@ -1036,6 +1035,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     const frame = server.active_session.session.currentFrame().?;
 
@@ -1173,6 +1176,10 @@ test "MCP - click that navigates clears node registry" {
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_nav.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     const before_frame = server.active_session.session.currentFrame().?;
     const link = before_frame.document.getElementById("navlink", before_frame).?.asNode();
@@ -1198,6 +1205,10 @@ test "MCP - Actions by selector: hover, selectOption, setChecked" {
     var out: std.Io.Writer.Allocating = .init(aa);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);
     defer server.deinit();
+    // Poking the page directly (node registration, JS) needs its isolate
+    // entered, as a tool dispatch would.
+    server.active_session.enterIsolate();
+    defer server.active_session.exitIsolate();
 
     // Single-page test: reach straight into the live page.
     const page = server.active_session.session.pages.items[0];
@@ -1580,8 +1591,7 @@ test "MCP - sessions: new, list, attach isolation, close" {
     var out: std.Io.Writer.Allocating = .init(aa);
     var server = try Server.init(testing.allocator, testing.test_app, &out.writer);
     defer server.deinit();
-    // Session tools require the HTTP transport's parked-isolate discipline.
-    server.enableIsolateParking();
+    server.multi_session = true;
 
     try router.handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_new","arguments":{"name":"a"}}}
@@ -1628,10 +1638,14 @@ fn testLoadPage(url: [:0]const u8, writer: *std.Io.Writer) !*Server {
     var server = try Server.init(testing.allocator, testing.test_app, writer);
     errdefer server.deinit();
 
-    const page = try server.active_session.session.createPage();
+    const session = server.active_session;
+    session.enterIsolate();
+    defer session.exitIsolate();
+
+    const page = try session.session.createPage();
     try page.navigate(url, .{});
 
-    var runner = server.active_session.session.runner(.{});
+    var runner = session.session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     return server;
 }

@@ -23,11 +23,10 @@ app: *App,
 sessions: std.StringHashMapUnmanaged(*lp.ToolSession) = .empty,
 /// Monotonic counter backing auto-generated session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
-/// Whether sessions park their isolates between uses (see
-/// `ToolSession.enterIsolate`). The HTTP transport sets this; stdio (one
-/// isolate, permanently entered by `Env`) leaves it false and keeps its
-/// historical behavior.
-park_isolates: bool = false,
+/// Whether the transport can route a request to a named session. HTTP does
+/// (`Mcp-Session-Id`); over stdio the session tools are refused, since a
+/// session created there could never be addressed.
+multi_session: bool = false,
 /// The session the request currently being handled targets. Safe as a single
 /// field because every request is dispatched on one thread, one at a time;
 /// the transport sets it (via `useSession`) before each dispatch. Tools and
@@ -83,31 +82,12 @@ pub fn createSession(self: *Self, id: []const u8) !*lp.ToolSession {
     }
 
     try self.sessions.put(self.allocator, owned_id, entry);
-    self.exitIsolate(entry);
+    entry.exitIsolate();
     return entry;
 }
 
 fn isDefault(id: []const u8) bool {
     return std.mem.eql(u8, id, default_session_id);
-}
-
-/// Switch to the multi-isolate discipline: park the default (which `Server.init`
-/// left entered) and require every use to bracket with `enterIsolate`. The HTTP
-/// transport calls this on its worker thread before serving anyone.
-pub fn enableIsolateParking(self: *Self) void {
-    self.park_isolates = true;
-    self.exitIsolate(self.defaultSession());
-}
-
-/// `ToolSession.enterIsolate`, unless stdio's single isolate is permanently
-/// current. Must bracket any use of the session (dispatch, idle pumping,
-/// teardown).
-pub fn enterIsolate(self: *Self, entry: *lp.ToolSession) void {
-    if (self.park_isolates) entry.enterIsolate();
-}
-
-pub fn exitIsolate(self: *Self, entry: *lp.ToolSession) void {
-    if (self.park_isolates) entry.exitIsolate();
 }
 
 /// Tear down the session named `id`. Returns false if no such session, or if
@@ -127,7 +107,7 @@ fn destroySession(self: *Self, id: []const u8, entry: *lp.ToolSession) void {
         }
     }
 
-    self.enterIsolate(entry);
+    entry.enterIsolate();
     entry.deinit();
     self.allocator.free(id);
     self.allocator.destroy(entry);
@@ -163,9 +143,9 @@ pub fn idle(self: *Self) u31 {
     while (it.next()) |entry| {
         // Pumping may resume JS (e.g. a completed script fetch), so it needs
         // the session's isolate current.
-        self.enterIsolate(entry.*);
+        entry.*.enterIsolate();
         wait = @min(wait, entry.*.session.idleSlice());
-        self.exitIsolate(entry.*);
+        entry.*.exitIsolate();
     }
     return wait;
 }
@@ -198,8 +178,8 @@ pub fn handleToolList(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
 pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
     // Dispatch runs page JS, so enter the target isolate around it.
     const entry = self.active_session;
-    self.enterIsolate(entry);
-    defer self.exitIsolate(entry);
+    entry.enterIsolate();
+    defer entry.exitIsolate();
     return tools.handleCall(self, arena, req);
 }
 
@@ -209,8 +189,8 @@ pub fn handleResourceList(self: *Self, req: protocol.Request) !void {
 
 pub fn handleResourceRead(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
     const entry = self.active_session;
-    self.enterIsolate(entry);
-    defer self.exitIsolate(entry);
+    entry.enterIsolate();
+    defer entry.exitIsolate();
     return resources.handleRead(self, arena, req);
 }
 
