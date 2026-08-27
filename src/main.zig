@@ -83,16 +83,6 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
         else => {},
     }
 
-    if (args.logLevel()) |ll| {
-        log.opts.level = ll;
-    }
-    if (args.logFormat()) |lf| {
-        log.opts.format = lf;
-    }
-
-    // Set log filter scopes.
-    log.opts.scope_enabled = log.resolveFilterScopes(args.logFilterScopes().items);
-
     // must be installed before any other threads
     const sighandler = try main_arena.create(SigHandler);
     sighandler.* = .{ .arena = main_arena };

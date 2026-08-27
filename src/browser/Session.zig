@@ -92,33 +92,14 @@ _tool_frame_override: ?u32 = null,
 // connection (see `Browser.frame_id_gen` and issue #2472).
 loader_id_gen: u32 = 0,
 
-// configuration (or CDP command) to disable iframe loading
-subframe_loading_enabled: bool = true,
-
-// configuration (or CDP command) to disable Web Worker loading. When false,
-// `new Worker(url)` returns a Worker object whose script is never fetched
-// and never evaluated. Set from the `--disable-workers` CLI flag at
-// session init; the LP.configureLoading CDP method can flip it per-session.
-worker_loading_enabled: bool = true,
-
 // Console.* capture for the `consoleLogs` tool, capped at `max_console_bytes`.
 // Opt-in via `enableConsoleCapture`: plain CDP `serve` never drains it, so
 // leaving the listener off keeps the buffer at zero bytes.
 _console_messages: std.Io.Writer.Allocating,
 _console_capture: bool = false,
 
-// Opt-in fetch of external <link rel=stylesheet> resources. Defaults to
-// false to preserve the current rendering-free fast path: drivers that
-// don't need accurate visibility checks pay nothing. Set from the
-// `--enable-external-stylesheets` CLI flag at session init; the
-// LP.configureLoading CDP method can flip it per-session. When true,
-// `Link.linkAddedCallback` routes to `Frame.loadExternalStylesheet`
-// (synchronous fetch + parse + register on `document.styleSheets`).
-load_external_stylesheets: bool = false,
-
-// Sub-resources to actually request. Off by default: a driver that only
-// reads the DOM shouldn't pay for bytes it never looks at.
-load_resources: Config.LoadResources = .{},
+// configured external resources (images, stylesheet, worker, iframe) to load
+load_resources: Config.LoadResources,
 
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
 /// ticks; once `check` returns true the wait returns `error.Cancelled`.
@@ -180,11 +161,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .browser = browser,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
-        // CLI defaults; LP.configureLoading can flip these per-session.
-        .subframe_loading_enabled = !browser.app.config.disableSubframes(),
-        .worker_loading_enabled = !browser.app.config.disableWorkers(),
         ._console_messages = .init(allocator),
-        .load_external_stylesheets = browser.app.config.enableExternalStylesheets(),
         .load_resources = browser.app.config.loadResources(),
     };
     errdefer self._console_messages.deinit();

@@ -102,10 +102,10 @@ fn configureLoading(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    if (params.subFrame) |v| bc.session.subframe_loading_enabled = v;
-    if (params.worker) |v| bc.session.worker_loading_enabled = v;
-    if (params.externalStylesheets) |v| bc.session.load_external_stylesheets = v;
     if (params.images) |v| bc.session.load_resources.image = v;
+    if (params.worker) |v| bc.session.load_resources.worker = v;
+    if (params.subFrame) |v| bc.session.load_resources.iframe = v;
+    if (params.externalStylesheets) |v| bc.session.load_resources.stylesheet = v;
     return cmd.sendResult(null, .{});
 }
 
@@ -771,8 +771,8 @@ test "cdp.lp: configureLoading toggles subFrame and worker independently" {
     _ = try bc.session.createPage();
 
     // Defaults: both loading types enabled.
-    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
 
     // subFrame-only: leaves worker untouched.
     try ctx.processMessage(.{
@@ -781,8 +781,8 @@ test "cdp.lp: configureLoading toggles subFrame and worker independently" {
         .params = .{ .subFrame = false },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-    try testing.expectEqual(false, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+    try testing.expectEqual(false, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
 
     // worker-only: leaves subFrame untouched.
     try ctx.processMessage(.{
@@ -791,8 +791,8 @@ test "cdp.lp: configureLoading toggles subFrame and worker independently" {
         .params = .{ .worker = false },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
-    try testing.expectEqual(false, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(false, bc.session.worker_loading_enabled);
+    try testing.expectEqual(false, bc.session.load_resources.iframe);
+    try testing.expectEqual(false, bc.session.load_resources.worker);
 
     // Both at once.
     try ctx.processMessage(.{
@@ -801,8 +801,8 @@ test "cdp.lp: configureLoading toggles subFrame and worker independently" {
         .params = .{ .subFrame = true, .worker = true },
     });
     try ctx.expectSentResult(null, .{ .id = 3 });
-    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
 }
 
 test "cdp.lp: configureLoading toggles externalStylesheets independently" {
@@ -813,7 +813,7 @@ test "cdp.lp: configureLoading toggles externalStylesheets independently" {
     _ = try bc.session.createPage();
 
     // Default is opt-in: off unless the CLI flag or CDP toggle enables it.
-    try testing.expectEqual(false, bc.session.load_external_stylesheets);
+    try testing.expectEqual(false, bc.session.load_resources.stylesheet);
 
     // Enable via CDP; the other two loading toggles stay at their defaults.
     try ctx.processMessage(.{
@@ -822,9 +822,9 @@ test "cdp.lp: configureLoading toggles externalStylesheets independently" {
         .params = .{ .externalStylesheets = true },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-    try testing.expectEqual(true, bc.session.load_external_stylesheets);
-    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+    try testing.expectEqual(true, bc.session.load_resources.stylesheet);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
 
     // Flip back off; partial params must not reset the other fields.
     try ctx.processMessage(.{
@@ -833,7 +833,7 @@ test "cdp.lp: configureLoading toggles externalStylesheets independently" {
         .params = .{ .externalStylesheets = false },
     });
     try ctx.expectSentResult(null, .{ .id = 2 });
-    try testing.expectEqual(false, bc.session.load_external_stylesheets);
-    try testing.expectEqual(true, bc.session.subframe_loading_enabled);
-    try testing.expectEqual(true, bc.session.worker_loading_enabled);
+    try testing.expectEqual(false, bc.session.load_resources.stylesheet);
+    try testing.expectEqual(true, bc.session.load_resources.iframe);
+    try testing.expectEqual(true, bc.session.load_resources.worker);
 }
