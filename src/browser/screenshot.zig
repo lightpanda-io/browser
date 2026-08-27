@@ -64,8 +64,7 @@ pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, fr
 // get the height of the PNG if we were to render it.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
     const prepared = try prepare(arena, node, .{ .width = width }, frame);
-    var discard: std.Io.Writer.Discarding = .init(&.{});
-    return prepared.render(&discard.writer, RENDER_MEASURE_ONLY);
+    return prepared.measure();
 }
 
 // The DOM walk, done up front so it can fail (allocation) before any output
@@ -90,6 +89,12 @@ pub const Prepared = struct {
 
     pub fn write(self: *const Prepared, writer: *std.Io.Writer) std.Io.Writer.Error!u32 {
         return self.render(writer, 0);
+    }
+
+    /// The content height at `opts.width`, without rasterizing.
+    pub fn measure(self: *const Prepared) std.Io.Writer.Error!u32 {
+        var discard: std.Io.Writer.Discarding = .init(&.{});
+        return self.render(&discard.writer, RENDER_MEASURE_ONLY);
     }
 
     fn render(self: *const Prepared, writer: *std.Io.Writer, flags: u32) std.Io.Writer.Error!u32 {

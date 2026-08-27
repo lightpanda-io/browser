@@ -53,7 +53,16 @@ pub fn sendResponse(self: *Self, response: anytype) !void {
     try self.aw.writer.writeByte('\n');
     try self.writer.writeAll(self.aw.writer.buffered());
     try self.writer.flush();
+
+    // A screenshot response can be megabytes; don't keep that much parked.
+    if (self.aw.writer.buffer.len > large_response) {
+        const allocator = self.aw.allocator;
+        self.aw.deinit();
+        self.aw = .init(allocator);
+    }
 }
+
+const large_response = 1024 * 1024;
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
     const GenericResponse = struct {
