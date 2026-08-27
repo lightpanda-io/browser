@@ -28,9 +28,60 @@ pub const Session = struct {
     session: *lp.Session,
     notification: *lp.Notification,
     node_registry: CDPNode.Registry,
+    /// Owns `heal_target`'s strings; freed on every overwrite.
+    heal_arena: std.heap.ArenaAllocator,
+    /// The cure target `heal_commit` validates against: the finding of the
+    /// last failed/suspicious file `replay`, minus the detail the cure check
+    /// never reads. Server-held so a client cannot widen or retarget it — an
+    /// echoed `threw` would let a fix-by-deletion commit; `heal_commit`'s
+    /// `fields` may only narrow it.
+    heal_target: ?HealTarget = null,
+
+    const HealTarget = struct {
+        path: []const u8,
+        /// `detail` left blank — the cure check never reads it.
+        failure: lp.replay.Failure,
+    };
 
     fn isDefault(self: *const Session) bool {
         return std.mem.eql(u8, self.id, default_session_id);
+    }
+
+    /// A file replay speaks for its file: failed or suspicious arms the cure
+    /// target, clean retires it. A `script` trial is neither — don't note it.
+    pub fn noteFileReplay(self: *Session, report: lp.replay.RunReport) error{OutOfMemory}!void {
+        switch (report.status) {
+            .ok => return self.retireHealTarget(report.path),
+            .failed, .suspicious => {},
+        }
+        const failure = report.failure.?;
+        // Drop first: an OOM mid-copy must not leave a target pointing into
+        // the freed arena.
+        self.dropHealTarget();
+        const arena = self.heal_arena.allocator();
+        const dry_fields = try arena.alloc([]const u8, failure.dry_fields.len);
+        for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try arena.dupe(u8, field);
+        self.heal_target = .{
+            .path = try arena.dupe(u8, report.path),
+            .failure = .{ .kind = failure.kind, .dry_fields = dry_fields },
+        };
+    }
+
+    /// Forget `path`'s target — a clean replay or a committed cure. No-op for
+    /// any other path.
+    pub fn retireHealTarget(self: *Session, path: []const u8) void {
+        const target = self.heal_target orelse return;
+        if (std.mem.eql(u8, target.path, path)) self.dropHealTarget();
+    }
+
+    pub fn cureTarget(self: *const Session, path: []const u8) ?lp.replay.Failure {
+        const target = self.heal_target orelse return null;
+        return if (std.mem.eql(u8, target.path, path)) target.failure else null;
+    }
+
+    fn dropHealTarget(self: *Session) void {
+        self.heal_target = null;
+        _ = self.heal_arena.reset(.free_all);
     }
 };
 
@@ -97,27 +148,34 @@ pub fn createSession(self: *Self, id: []const u8) !*Session {
         .session = undefined,
         .notification = notification,
         .node_registry = CDPNode.Registry.init(self.allocator),
+        .heal_arena = .init(self.allocator),
     };
     errdefer entry.node_registry.deinit();
+    errdefer entry.heal_arena.deinit();
 
     try entry.browser.init(self.app, .{}, null);
     errdefer entry.browser.deinit();
 
-    entry.session = try entry.browser.newSession(notification);
-    try entry.session.enableConsoleCapture();
-
-    // Only the default session is backed by the on-disk cookie file; named
-    // sessions start clean so agents stay isolated by default.
-    if (entry.isDefault()) {
-        if (self.app.config.cookieFile()) |cookie_path| {
-            lp.cookies.loadFromFile(entry.session, cookie_path);
-        }
-    }
+    try self.restartSession(entry);
 
     try self.sessions.put(self.allocator, owned_id, entry);
     // Browser.init left the isolate entered; park it (see park_isolates).
     self.exitIsolate(entry);
     return entry;
+}
+
+/// Point `entry` at a fresh browsing session — pages, cookies and node ids
+/// dropped. Bring-up for `createSession` and the reset heal validation
+/// requires. Only the default session is backed by the on-disk cookie file:
+/// named sessions stay isolated, and a restart discards the in-memory
+/// failure-state cookies for that clean baseline identity.
+pub fn restartSession(self: *Self, entry: *Session) !void {
+    entry.session = try lp.tools.freshSession(&entry.browser, entry.notification, &entry.node_registry);
+    if (entry.isDefault()) {
+        if (self.app.config.cookieFile()) |cookie_path| {
+            lp.cookies.loadFromFile(entry.session, cookie_path);
+        }
+    }
 }
 
 /// Switch to the multi-isolate discipline: park the default (which `Server.init`
@@ -159,6 +217,7 @@ fn destroySession(self: *Self, entry: *Session) void {
     // Re-enter so `Browser.deinit`'s `Env.deinit` exit stays balanced against
     // a parked isolate (and operates on the current one).
     self.enterIsolate(entry);
+    entry.heal_arena.deinit();
     entry.node_registry.deinit();
     entry.browser.deinit();
     entry.notification.deinit();
@@ -220,7 +279,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.tools.driver_guidance,
+        .instructions = lp.tools.driver_guidance ++ tools.script_lifecycle_note,
     });
 }
 

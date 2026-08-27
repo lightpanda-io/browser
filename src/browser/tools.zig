@@ -430,7 +430,7 @@ pub const Tool = enum {
             },
             .extract => .{
                 .description =
-                \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. Value shapes:
+                \\Extract structured data from the current page (navigate first). `schema` is a JSON object (passed as a string) mapping output field names to CSS-selector specs. It is NOT a JSON Schema — no "type"/"properties" wrappers; the keys ARE your output fields. A top-level array spec is also accepted and returns the array directly. Value shapes:
                 \\  "<sel>"                                → first match's text (trimmed; null if no match)
                 \\  ["<sel>"]                              → every match's text (string[])
                 \\  {"selector":"<sel>","attr":"<name>"}   → first match's attribute value (href/src resolved to absolute URLs)
@@ -452,7 +452,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "schema": { "type": "string", "description": "Extraction schema as a string: a JSON object literal mapping output field names to CSS-selector specs (see tool description). Not a JSON Schema." },
+                    \\    "schema": { "type": "string", "description": "Extraction schema as a string: a JSON object literal mapping output field names to CSS-selector specs, or a top-level array spec (see tool description). Not a JSON Schema." },
                     \\    "save": { "type": "string", "description": "Optional bridge-store key. The extracted JSON is stored under this name and exposed as `lp.<name>` in subsequent /evaluate calls." }
                     \\  },
                     \\  "required": ["schema"]
@@ -790,6 +790,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 pub const ToolResult = struct {
     text: []const u8,
     is_error: bool = false,
+    /// Set only by a successful `extract`: each top-level result field and
+    /// whether it carried data, so consumers tally without re-parsing `text`.
+    fields: ?[]const lp.extract.ExtractField = null,
 };
 
 pub const GotoParams = struct {
@@ -816,6 +819,15 @@ const ActionTarget = union(enum) {
 };
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
+
+/// Fresh browsing session with console capture enabled and `registry`
+/// cleared — node IDs are session-scoped.
+pub fn freshSession(browser: *lp.Browser, notification: *lp.Notification, registry: *CDPNode.Registry) !*lp.Session {
+    const session = try browser.newSession(notification);
+    try session.enableConsoleCapture();
+    registry.reset();
+    return session;
+}
 
 pub fn call(
     arena: std.mem.Allocator,
@@ -917,13 +929,17 @@ pub fn extract(
     schema_json: []const u8,
 ) ToolError!ToolResult {
     const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
-    if (trimmed.len == 0 or trimmed[0] != '{') return error.InvalidParams;
+    if (trimmed.len == 0 or (trimmed[0] != '{' and trimmed[0] != '[')) return error.InvalidParams;
     const valid = try std.json.validate(arena, schema_json);
     if (!valid) return error.InvalidParams;
 
     const script = try std.mem.concatWithSentinel(arena, u8, &.{ schema_walker_prefix, schema_json, schema_walker_suffix }, 0);
     const page = try ensurePage(session, registry, null, null);
-    return runEval(arena, page, script, null);
+    const result = try runEval(arena, page, script, null);
+    if (result.is_error) return result;
+    const parsed = (try lp.extract.parseJsonLenient(arena, result.text)) orelse
+        return .{ .text = "extract: walker produced non-JSON output", .is_error = true };
+    return .{ .text = result.text, .fields = try lp.extract.classifyExtractFields(arena, parsed) };
 }
 
 // The schema literal is spliced between prefix and suffix verbatim — a format
@@ -963,14 +979,21 @@ const schema_walker_prefix =
     \\    if (!t) return null;
     \\    return valueOf(t, v);
     \\  }
-    \\  const out = {};
+    \\  let out;
     \\  let any = false;
-    \\  for (const k in schema) {
-    \\    out[k] = ext(document, schema[k]);
-    \\    const v = out[k];
-    \\    // A resolved array — even empty — is a real result (e.g. a page with
-    \\    // zero comments); only an all-null schema means every selector missed.
-    \\    if (v !== null) any = true;
+    \\  if (Array.isArray(schema)) {
+    \\    // A top-level array schema is one list spec: the result is the array.
+    \\    out = ext(document, schema);
+    \\    any = out !== null;
+    \\  } else {
+    \\    out = {};
+    \\    for (const k in schema) {
+    \\      out[k] = ext(document, schema[k]);
+    \\      const v = out[k];
+    \\      // A resolved array — even empty — is a real result (e.g. a page with
+    \\      // zero comments); only an all-null schema means every selector missed.
+    \\      if (v !== null) any = true;
+    \\    }
     \\  }
     \\  if (!any) throw new Error("extract: no schema selector matched any element — inspect the page with tree/markdown and retry with corrected selectors");
     \\  return JSON.stringify(out);
@@ -1481,11 +1504,10 @@ fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNod
     const result = try extract(arena, session, registry, args.schema);
 
     if (!result.is_error) if (args.save) |name| {
-        bridgeStoreSet(session.browser.app.allocator, &session.bridge_store, name, result.text) catch |err| switch (err) {
-            error.OutOfMemory => return ToolError.OutOfMemory,
-            error.InvalidJson => return .{ .text = "extract: walker produced non-JSON output", .is_error = true },
-        };
-        return .{ .text = "" };
+        // `extract` already parsed the walker output: canonical JSON.
+        bridgeStorePut(session.browser.app.allocator, &session.bridge_store, name, result.text) catch
+            return ToolError.OutOfMemory;
+        return .{ .text = "", .fields = result.fields };
     };
 
     return result;
@@ -2333,34 +2355,45 @@ pub fn substituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutO
     return result.toOwnedSlice(arena);
 }
 
-/// Inverse of `substituteEnvVars`, used by the recorder so a credential the
-/// agent retyped as a literal doesn't leak into the recording. Values < 4
-/// chars are skipped to avoid false-positive substring matches.
-pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
-    if (input.len < 4) return input;
-    const env_names = try lpEnvNames(arena);
+pub const EnvPair = struct { name: []const u8, value: []const u8 };
 
-    // Iterate by value length descending. With two LP_* values where one is a
-    // substring of the other (both ≥4 chars so neither is filtered), name-order
-    // iteration would let the shorter value clobber part of the longer one
-    // before its full match is found, leaking a suffix into the recording.
-    const Pair = struct { name: []const u8, value: []const u8 };
-    var pairs: std.ArrayList(Pair) = .empty;
+/// The LP_* (name, value) pairs reverse substitution scrubs against. Values
+/// < 4 chars are skipped to avoid false-positive substring matches.
+///
+/// Sorted by value length descending: with two LP_* values where one is a
+/// substring of the other, name-order iteration would let the shorter value
+/// clobber part of the longer one before its full match is found, leaking a
+/// suffix into the recording.
+pub fn lpEnvPairs(arena: std.mem.Allocator) error{OutOfMemory}![]const EnvPair {
+    const env_names = try lpEnvNames(arena);
+    var pairs: std.ArrayList(EnvPair) = .empty;
     try pairs.ensureTotalCapacityPrecise(arena, env_names.len);
     for (env_names) |name| {
         const value = lookupLpEnv(name) orelse continue;
         if (value.len < 4) continue;
         pairs.appendAssumeCapacity(.{ .name = name, .value = value });
     }
-    std.mem.sort(Pair, pairs.items, {}, struct {
-        fn lt(_: void, a: Pair, b: Pair) bool {
+    std.mem.sort(EnvPair, pairs.items, {}, struct {
+        fn lt(_: void, a: EnvPair, b: EnvPair) bool {
             return a.value.len > b.value.len;
         }
     }.lt);
+    return pairs.items;
+}
 
+/// Inverse of `substituteEnvVars`, used by the recorder so a credential the
+/// agent retyped as a literal doesn't leak into the recording.
+pub fn reverseSubstituteEnvVars(arena: std.mem.Allocator, input: []const u8) error{OutOfMemory}![]const u8 {
+    if (input.len < 4) return input;
+    return reverseSubstituteWithPairs(arena, input, try lpEnvPairs(arena));
+}
+
+/// `reverseSubstituteEnvVars` against precomputed `lpEnvPairs`.
+pub fn reverseSubstituteWithPairs(arena: std.mem.Allocator, input: []const u8, pairs: []const EnvPair) error{OutOfMemory}![]const u8 {
+    if (input.len < 4) return input;
     var current: []const u8 = input;
     var changed = false;
-    for (pairs.items) |p| {
+    for (pairs) |p| {
         if (std.mem.indexOf(u8, current, p.value) == null) continue;
         const placeholder = try std.fmt.allocPrint(arena, "${s}", .{p.name});
         current = try std.mem.replaceOwned(u8, arena, current, p.value, placeholder);
