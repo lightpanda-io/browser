@@ -33,6 +33,8 @@ const Message = zenai.provider.Message;
 // system prompt plus the most recent `prune_keep`.
 const prune_high = 30;
 const prune_keep = 20;
+// Every image in history is re-sent on every request; keep only the newest.
+const image_keep = 2;
 
 allocator: std.mem.Allocator,
 /// Seeded as `messages[0]` on the first turn. Lives outside `arena` (static or
@@ -66,6 +68,29 @@ pub fn ensureSystemPrompt(self: *Conversation) !void {
             .content = self.system_prompt,
         });
     }
+}
+
+/// Drop tool-result images older than the newest `image_keep`; their text
+/// stays, with a note so the model knows to look again.
+pub fn expireImages(self: *Conversation) void {
+    var kept: usize = 0;
+    var i = self.messages.items.len;
+    while (i > 0) {
+        i -= 1;
+        for (self.messages.items[i].tool_results orelse continue) |*res| {
+            if (!hasImage(res.parts orelse continue)) continue;
+            kept += 1;
+            if (kept <= image_keep) continue;
+            const result = @constCast(res);
+            result.parts = null;
+            result.content = std.fmt.allocPrint(self.arena.allocator(), "{s} (image dropped from context; call the tool again to look)", .{res.content}) catch res.content;
+        }
+    }
+}
+
+fn hasImage(parts: []const zenai.provider.ContentPart) bool {
+    for (parts) |part| if (part == .image) return true;
+    return false;
 }
 
 /// Cap history growth: once it exceeds `prune_high`, keep the system prompt plus
@@ -108,4 +133,26 @@ fn repackTail(self: *Conversation, tail: []const Message) void {
     self.messages.shrinkRetainingCapacity(1 + duped.len);
     self.arena.deinit();
     self.arena = new_arena;
+}
+
+test "expireImages keeps the newest images and annotates the rest" {
+    var conv: Conversation = .init(std.testing.allocator, "sys");
+    defer conv.deinit();
+    const a = conv.arena.allocator();
+
+    const image = [_]zenai.provider.ContentPart{.{ .image = .{ .data = "AAAA", .mime_type = "image/png" } }};
+    for (0..4) |n| {
+        const results = try a.alloc(zenai.provider.ToolResult, 1);
+        results[0] = .{ .id = "c", .name = "screenshot", .content = try std.fmt.allocPrint(a, "shot {d}", .{n}), .parts = &image };
+        try conv.messages.append(std.testing.allocator, .{ .role = .tool, .tool_results = results });
+    }
+
+    conv.expireImages();
+
+    try std.testing.expect(conv.messages.items[0].tool_results.?[0].parts == null);
+    try std.testing.expectEqualStrings("shot 0 (image dropped from context; call the tool again to look)", conv.messages.items[0].tool_results.?[0].content);
+    try std.testing.expect(conv.messages.items[1].tool_results.?[0].parts == null);
+    try std.testing.expect(conv.messages.items[2].tool_results.?[0].parts != null);
+    try std.testing.expect(conv.messages.items[3].tool_results.?[0].parts != null);
+    try std.testing.expectEqualStrings("shot 3", conv.messages.items[3].tool_results.?[0].content);
 }
