@@ -49,6 +49,9 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         printToPDF,
         getLayoutMetrics,
         handleJavaScriptDialog,
+        setBypassCSP,
+        bringToFront,
+        setInterceptFileChooserDialog,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -68,6 +71,9 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .printToPDF => return printToPDF(cmd),
         .getLayoutMetrics => return getLayoutMetrics(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        // CSP isn't enforced, there is a single page, and no file chooser
+        // ever opens: each of these already holds.
+        .setBypassCSP, .bringToFront, .setInterceptFileChooserDialog => return cmd.sendResult(null, .{}),
     }
 }
 
@@ -1127,6 +1133,21 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.frame: setup no-ops" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-NOOP" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Page.setBypassCSP", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.bringToFront" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setInterceptFileChooserDialog", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+}
+
 test "cdp.frame: getFrameTree" {
     var ctx = try testing.context();
     defer ctx.deinit();
