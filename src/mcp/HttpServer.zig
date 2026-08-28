@@ -283,7 +283,7 @@ fn worker(self: *HttpServer) void {
     };
     defer server.deinit();
 
-    server.enableIsolateParking();
+    server.multi_session = true;
 
     self.worker_ok = true;
     self.worker_ready.set(lp.io);
