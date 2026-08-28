@@ -25,6 +25,7 @@ const SelectorPath = @import("browser/SelectorPath.zig");
 
 const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
+const Label = @import("browser/webapi/element/html/Label.zig");
 const Node = @import("browser/webapi/Node.zig");
 const AXNode = @import("cdp/AXNode.zig");
 const CDPNode = @import("cdp/Node.zig");
@@ -51,11 +52,13 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
     };
     var visibility_cache: Element.VisibilityCache = .empty;
     var pointer_events_cache: Element.PointerEventsCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .visibility_cache = &visibility_cache,
         .pointer_events_cache = &pointer_events_cache,
+        .label_index = &label_index,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
@@ -72,11 +75,13 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
     };
     var visibility_cache: Element.VisibilityCache = .empty;
     var pointer_events_cache: Element.PointerEventsCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .visibility_cache = &visibility_cache,
         .pointer_events_cache = &pointer_events_cache,
+        .label_index = &label_index,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
@@ -109,6 +114,7 @@ const WalkContext = struct {
     listener_targets: interactive.ListenerTargetMap,
     visibility_cache: *Element.VisibilityCache,
     pointer_events_cache: *Element.PointerEventsCache,
+    label_index: *Label.LabelByForIndex,
 };
 
 fn walk(
@@ -191,7 +197,7 @@ fn walk(
     try appendXPathSegment(node, ctx.xpath_buffer, self.arena, index);
     const xpath = ctx.xpath_buffer.items;
 
-    var name = try axn.getName(self.frame, self.arena);
+    var name = try axn.getName(self.frame, self.arena, ctx.label_index);
 
     const has_explicit_label = if (node.is(Element)) |el|
         el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
@@ -655,7 +661,8 @@ pub fn getNodeDetails(
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
-    const name = try axn.getName(frame, arena);
+    var labels: Label.LabelByForIndex = .{};
+    const name = try axn.getName(frame, arena, &labels);
 
     var is_interactive = false;
     var is_disabled = false;

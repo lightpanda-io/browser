@@ -63,6 +63,7 @@ pub fn registerNodes(links: []Link, registry: anytype) !void {
 pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
     var links: std.StringArrayHashMapUnmanaged(Link) = .empty;
     var visibility_cache: Element.VisibilityCache = .empty;
+    var labels: Label.LabelByForIndex = .{};
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
         defer list.deinit(frame._page);
@@ -80,12 +81,12 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
 
             const gop = try links.getOrPut(arena, href);
             if (gop.found_existing) {
-                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena);
+                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena, &labels);
                 continue;
             }
             gop.value_ptr.* = .{
                 .node = node,
-                .text = try AXNode.fromNode(node).getName(frame, arena),
+                .text = try AXNode.fromNode(node).getName(frame, arena, &labels),
                 .href = href,
             };
         }
@@ -98,6 +99,7 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
 }
 
 const testing = @import("../testing.zig");
+const Label = @import("webapi/element/html/Label.zig");
 
 fn testLinks(html: []const u8) ![]Link {
     const frame = try testing.createFrame();
