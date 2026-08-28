@@ -222,8 +222,10 @@ fn walkInteractive(
             if (!std.ascii.eqlIgnoreCase(r, rf)) continue;
         }
 
-        // Names walk labels and text; filter on role first.
-        const name = (try axn.getName(frame, arena, &label_index)) orelse try getTextContent(node, arena);
+        // Names walk labels and text; filter on role first. Role-less elements
+        // (listener/tabindex only) sit outside AccName; their text is the only handle.
+        const name = try axn.getName(frame, arena, &label_index) orelse
+            if (role == null) try getTextContent(node, arena) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
             if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
@@ -514,6 +516,24 @@ test "browser.interactive: an element with no role keeps its text as name" {
     try testing.expectEqual(1, elements.len);
     try testing.expectEqual(null, elements[0].role);
     try testing.expectEqual("Open menu", elements[0].name.?);
+}
+
+test "browser.interactive: an element with a role takes only its accessible name" {
+    const elements = try testInteractive(
+        \\<select><option>Red</option></select>
+        \\<textarea>draft</textarea>
+        \\<details><summary>More</summary><p>Content</p></details>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(4, elements.len);
+    try testing.expectEqual("combobox", elements[0].role.?);
+    try testing.expectEqual(null, elements[0].name);
+    try testing.expectEqual("textbox", elements[1].role.?);
+    try testing.expectEqual(null, elements[1].name);
+    try testing.expectEqual("group", elements[2].role.?);
+    try testing.expectEqual(null, elements[2].name);
+    try testing.expectEqual("button", elements[3].role.?);
+    try testing.expectEqual("More", elements[3].name.?);
 }
 
 test "browser.interactive: button" {
