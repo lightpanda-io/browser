@@ -106,7 +106,8 @@ docker run -d --name lightpanda -p 127.0.0.1:9222:9222 lightpanda/browser:nightl
 ```
 
 You can use `--dump markdown` to convert directly into markdown, or
-`--dump png > page.png` for a text-only rendering of the page.
+`--dump png > page.png` or `--dump pdf > page.pdf` for a text-only rendering
+of the page.
 `--wait-until`, `--wait-ms`, `--wait-selector` and `--wait-script` are
 available to adjust waiting time before dump.
 
