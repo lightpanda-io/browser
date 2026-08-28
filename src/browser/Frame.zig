@@ -74,6 +74,7 @@ const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRa
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const RateLimiter = @import("../network/RateLimiter.zig");
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
@@ -1118,6 +1119,15 @@ pub fn abortTransfers(self: *Frame) void {
     }
     const http_client = &self._session.browser.http_client;
     http_client.abortOwner(&self._http_owner);
+}
+
+// Apply the rules to the generator meta tag.
+// For now it only updates the rate limiter.
+pub fn setGenerator(self: *Frame, content: []const u8) void {
+    if (self._session.browser.http_client.network.rate_limiter) |*rl| {
+        const host = URL.getHostname(self.url);
+        rl.observeGenerator(host, content);
+    }
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -3188,6 +3198,7 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
             return err;
         };
+        meta.processGenerator(frame);
     } else if (node.is(Element.Html.Link)) |link| {
         const frame = if (comptime from_parser) self else node.ownerFrame(self);
         link.linkAddedCallback(frame) catch |err| {

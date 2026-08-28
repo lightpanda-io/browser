@@ -44,6 +44,10 @@ pub const TTFB_FACTOR: u64 = 2;
 // Smoothing of the server time: each new sample weighs 1 / TTFB_SMOOTHING.
 pub const TTFB_SMOOTHING: u64 = 4;
 
+// A host served by git web is spaced by at least `GIT_INTERVALS` base
+// intervals: every page costs it git operations.
+pub const GIT_INTERVALS: u64 = 10;
+
 allocator: Allocator,
 
 // Minimum gap between two navigations to the same host.
@@ -97,6 +101,9 @@ const Host = struct {
     // Smoothed server time (time to first byte, excluding connect) of the
     // host's last responses. 0 until the first response.
     ttfb_ms: u64,
+
+    // Minimum interval forced on the host (see setFloor). 0 until set.
+    floor_ms: u64,
 };
 
 pub fn init(allocator: Allocator, interval_ms: u64, burst: u32) RateLimiter {
@@ -154,6 +161,7 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         .pressure = 1,
         .clock = now,
         .ttfb_ms = 0,
+        .floor_ms = 0,
     };
 
     if (self.hosts.count() >= self.sweep_at) {
@@ -190,12 +198,38 @@ pub fn observe(self: *RateLimiter, host: []const u8, ttfb_ms: u64, now: u64) voi
     });
 }
 
+pub fn observeGenerator(self: *RateLimiter, host: []const u8, generator: []const u8) void {
+    // a cgit host is throttled, since every page costs it git operations.
+    if (!std.ascii.startsWithIgnoreCase(generator, "cgit")) {
+        return;
+    }
+
+    const floor_ms = RateLimiter.GIT_INTERVALS * self.interval_ms;
+    log.debug(.rate_limit, "generator rule", .{ .host = host, .generator = generator, .floor_ms = floor_ms });
+    self.setFloor(host, floor_ms);
+}
+
+// Force a minimum interval on a host, whatever its pressure and server time.
+// The next reserve() picks it up. Capped at `max_ms` like the other terms.
+pub fn setFloor(self: *RateLimiter, host: []const u8, floor_ms: u64) void {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    // Unknown host: it was swept, or never throttled. Nothing to adjust.
+    const h = self.hosts.getPtr(host) orelse return;
+    h.floor_ms = floor_ms;
+    log.debug(.rate_limit, "interval floor", .{
+        .host = host,
+        .floor_ms = floor_ms,
+    });
+}
+
 // Effective interval for a host: one extra base interval per full
 // `ramp_step` of navigations, never less than `TTFB_FACTOR` times the host's
-// server time, capped at `max_ms`.
+// server time nor than its floor, capped at `max_ms`.
 fn intervalFor(self: *const RateLimiter, h: *const Host) u64 {
     const pressure = self.interval_ms * (1 + h.pressure / self.ramp_step);
-    return @min(@max(pressure, TTFB_FACTOR * h.ttfb_ms), self.max_ms);
+    return @min(@max(pressure, TTFB_FACTOR * h.ttfb_ms, h.floor_ms), self.max_ms);
 }
 
 // Credit the idle time since the host's cooldown clock to its pressure.
@@ -360,8 +394,34 @@ test "RateLimiter: pressure cap" {
     }
     try testing.expectEqual(6000, max_gap);
     try testing.expectEqual(rl.pressure_max, rl.hosts.get("a.test").?.pressure);
-    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max, .clock = 0, .ttfb_ms = 0 }));
-    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max * 2, .clock = 0, .ttfb_ms = 0 }));
+    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max, .clock = 0, .ttfb_ms = 0, .floor_ms = 0 }));
+    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max * 2, .clock = 0, .ttfb_ms = 0, .floor_ms = 0 }));
+}
+
+test "RateLimiter: interval floor" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    defer rl.deinit();
+
+    try testing.expectEqual(1000, try rl.reserve("a.test", 1000));
+
+    // the floor wins over the 100ms pressure term
+    rl.setFloor("a.test", 1000);
+    try testing.expectEqual(1100, try rl.reserve("a.test", 1000));
+    try testing.expectEqual(2100, try rl.reserve("a.test", 1000));
+
+    // a slower server time still wins over the floor
+    rl.observe("a.test", 800, 2000);
+    try testing.expectEqual(3100, try rl.reserve("a.test", 2000));
+    try testing.expectEqual(4700, try rl.reserve("a.test", 2000));
+
+    // the floor is capped like the other terms (60 x base)
+    rl.setFloor("a.test", 100_000);
+    try testing.expectEqual(10_000, try rl.reserve("a.test", 10_000));
+    try testing.expectEqual(16_000, try rl.reserve("a.test", 10_000));
+
+    // an unknown host is ignored
+    rl.setFloor("b.test", 1000);
+    try testing.expect(rl.hosts.get("b.test") == null);
 }
 
 test "RateLimiter: slow host" {

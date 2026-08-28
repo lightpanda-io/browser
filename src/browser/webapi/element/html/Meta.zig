@@ -109,6 +109,19 @@ pub fn processRefresh(self: *Meta, frame: *Frame) !void {
     return frame.metaRefresh(target);
 }
 
+// Tell the frame which software generated the page, e.g.
+// <meta name="generator" content="cgit v1.3.1">.
+pub fn processGenerator(self: *Meta, frame: *Frame) void {
+    if (!std.ascii.eqlIgnoreCase(self.getName(), "generator")) {
+        return;
+    }
+    const content = std.mem.trim(u8, self.getContent(), &std.ascii.whitespace);
+    if (content.len == 0) {
+        return;
+    }
+    frame.setGenerator(content);
+}
+
 // Where this meta wants to navigate, or null if it doesn't. Only for a meta
 // that's in the document: the caller's tree walk is what establishes that.
 pub fn refreshTarget(self: *Meta) ?[]const u8 {
@@ -184,10 +197,15 @@ pub const Build = struct {
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
-        if (!name.eql(comptime .wrap("http-equiv")) and !name.eql(comptime .wrap("content"))) {
+        const self = element.as(Meta);
+        const is_content = name.eql(comptime .wrap("content"));
+        if ((is_content or name.eql(comptime .wrap("name"))) and element.asNode().isConnected()) {
+            self.processGenerator(element.asNode().ownerFrame(frame));
+        }
+        if (!name.eql(comptime .wrap("http-equiv")) and !is_content) {
             return;
         }
-        return element.as(Meta).processRefresh(element.asNode().ownerFrame(frame));
+        return self.processRefresh(element.asNode().ownerFrame(frame));
     }
 };
 
