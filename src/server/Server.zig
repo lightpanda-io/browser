@@ -666,7 +666,7 @@ const Worker = struct {
 
 const IOEngine = switch (builtin.os.tag) {
     .linux => EPoll,
-    // .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
+    .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
     else => unreachable,
 };
 
@@ -849,6 +849,196 @@ const EPoll = struct {
                         .writable = flags & linux.EPOLL.OUT != 0,
                         .hangup = flags & (linux.EPOLL.RDHUP | linux.EPOLL.HUP | linux.EPOLL.ERR) != 0,
                     } };
+                },
+            }
+        }
+    };
+};
+
+const KQueue = struct {
+    fd: i32,
+    event_list: [128]Kevent,
+
+    const EV = std.c.EV;
+    const NOTE = std.c.NOTE;
+    const EVFILT = std.c.EVFILT;
+    const Kevent = std.c.Kevent;
+
+    // Poll data carries the owner: an http Connection as-is, an WebSocket with
+    // the low bit set (both are word-aligned, so the bit is free).
+    const WS_TAG: usize = 1;
+
+    // The listener carries 0. The two wake channels are EVFILT_USER events,
+    // whose ident only has to be unique amongst user events, so it doubles as
+    // the udata sentinel.
+    const LISTENER: usize = 0;
+    const SHUTDOWN: usize = 1;
+    const SIGNAL: usize = 2;
+
+    fn init() !KQueue {
+        const fd = try sys_net.kqueue();
+        errdefer sys_net.close(fd);
+
+        var self = KQueue{ .fd = fd, .event_list = undefined };
+
+        // Both wake channels are edge-triggered and never drained: every
+        // NOTE_TRIGGER is its own edge, EV_CLEAR resets the event as it is
+        // delivered, and one delivery services everything that arrived.
+        try self.change(&.{
+            userEvent(SHUTDOWN, EV.ADD | EV.CLEAR, 0),
+            userEvent(SIGNAL, EV.ADD | EV.CLEAR, 0),
+        });
+
+        return self;
+    }
+
+    fn deinit(self: *const KQueue) void {
+        sys_net.close(self.fd);
+    }
+
+    fn stop(self: *const KQueue) void {
+        self.change(&.{userEvent(SHUTDOWN, 0, NOTE.TRIGGER)}) catch |err| {
+            log.fatal(.serve, "network close", .{ .err = err, .type = "kqueue" });
+        };
+    }
+
+    fn signal(self: *const KQueue) void {
+        self.change(&.{userEvent(SIGNAL, 0, NOTE.TRIGGER)}) catch |err| {
+            log.err(.serve, "network signal", .{ .err = err, .type = "kqueue" });
+        };
+    }
+
+    fn monitorListener(self: *const KQueue, fd: posix.fd_t) !void {
+        return self.monitor(fd, EVFILT.READ, LISTENER);
+    }
+
+    fn pauseListener(self: *const KQueue, fd: posix.fd_t) !void {
+        return self.change(&.{socketEvent(fd, EVFILT.READ, EV.DELETE, 0)});
+    }
+
+    fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
+        return self.monitor(conn.socket, EVFILT.READ, @intFromPtr(conn));
+    }
+
+    fn monitorWebSocket(self: *const KQueue, ws: *WebSocket) !void {
+        return self.monitor(ws.socket, EVFILT.READ, @intFromPtr(ws) | WS_TAG);
+    }
+
+    // A socket only ever has one of the two filters registered, so flipping is
+    // a delete plus an add. The callers only ever flip a connection that is
+    // registered for the filter being dropped, so the delete can't fail and
+    // abort the rest of the list.
+    pub fn waitWritable(self: *const KQueue, conn: *Connection) !void {
+        return self.flip(conn, EVFILT.READ, EVFILT.WRITE);
+    }
+
+    pub fn waitReadable(self: *const KQueue, conn: *Connection) !void {
+        return self.flip(conn, EVFILT.WRITE, EVFILT.READ);
+    }
+
+    fn flip(self: *const KQueue, conn: *Connection, from: i16, to: i16) !void {
+        return self.change(&.{
+            socketEvent(conn.socket, from, EV.DELETE, 0),
+            socketEvent(conn.socket, to, EV.ADD | EV.ENABLE, @intFromPtr(conn)),
+        });
+    }
+
+    pub fn remove(self: *const KQueue, socket: posix.socket_t) void {
+        // We don't track which of the two a socket is registered for, and it
+        // might not be registered at all.
+        self.unmonitor(socket, EVFILT.READ);
+        self.unmonitor(socket, EVFILT.WRITE);
+    }
+
+    // No EV_CLEAR, no EV_DISPATCH: socket filters stay level-triggered, the
+    // loop relies on an unread remainder waking us again.
+    fn monitor(self: *const KQueue, socket: posix.socket_t, filter: i16, udata: usize) !void {
+        return self.change(&.{socketEvent(socket, filter, EV.ADD | EV.ENABLE, udata)});
+    }
+
+    fn unmonitor(self: *const KQueue, socket: posix.socket_t, filter: i16) void {
+        self.change(&.{socketEvent(socket, filter, EV.DELETE, 0)}) catch {};
+    }
+
+    // Registrations go through their own kevent call rather than riding along
+    // with the next wait: an empty event list makes kqueue report a bad change
+    // through errno, so the callers above can keep an honest error union.
+    fn change(self: *const KQueue, changes: []const Kevent) !void {
+        var none: [0]Kevent = .{};
+        _ = try sys_net.kevent(self.fd, changes, &none, null);
+    }
+
+    fn userEvent(ident: usize, flags: u16, fflags: u32) Kevent {
+        return .{
+            .ident = ident,
+            .filter = EVFILT.USER,
+            .flags = flags,
+            .fflags = fflags,
+            .data = 0,
+            .udata = ident,
+        };
+    }
+
+    fn socketEvent(socket: posix.socket_t, filter: i16, flags: u16, udata: usize) Kevent {
+        return .{
+            .ident = @intCast(socket),
+            .filter = filter,
+            .flags = flags,
+            .fflags = 0,
+            .data = 0,
+            .udata = udata,
+        };
+    }
+
+    // null blocks until an event arrives
+    fn wait(self: *KQueue, timeout_ms: ?u64) Iterator {
+        const event_list = &self.event_list;
+
+        var ts: std.c.timespec = undefined;
+        const timeout: ?*const std.c.timespec = if (timeout_ms) |ms| blk: {
+            ts = .{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
+            break :blk &ts;
+        } else null;
+
+        // With no changes to apply, only programmer errors are possible.
+        const event_count = sys_net.kevent(self.fd, &.{}, event_list, timeout) catch unreachable;
+        return .{
+            .index = 0,
+            .events = event_list[0..event_count],
+        };
+    }
+
+    const Iterator = struct {
+        index: usize,
+        events: []Kevent,
+
+        fn next(self: *Iterator) ?IOEvent {
+            const index = self.index;
+            const events = self.events;
+            if (index == events.len) {
+                return null;
+            }
+            self.index = index + 1;
+
+            const event = &events[index];
+            switch (event.udata) {
+                LISTENER => return .{ .accept = {} },
+                SHUTDOWN => return .{ .shutdown = {} },
+                SIGNAL => return .{ .signal = {} },
+                else => |nptr| {
+                    return .{
+                        .read_write = .{
+                            .target = if (nptr & WS_TAG == 0)
+                                .{ .http = @ptrFromInt(nptr) }
+                            else
+                                .{ .ws = @ptrFromInt(nptr & ~WS_TAG) },
+                            .readable = event.filter == EVFILT.READ,
+                            .writable = event.filter == EVFILT.WRITE,
+                            // EV_EOF on a read filter can still come with buffered
+                            // bytes; readers deal with the two together.
+                            .hangup = event.flags & (EV.EOF | EV.ERROR) != 0,
+                        },
+                    };
                 },
             }
         }

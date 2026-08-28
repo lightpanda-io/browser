@@ -284,6 +284,34 @@ pub fn epoll_wait(epfd: i32, events: []c.epoll_event, timeout: i32) usize {
     }
 }
 
+pub fn kqueue() !i32 {
+    const rc = c.kqueue();
+    return switch (c.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        else => error.Unexpected,
+    };
+}
+
+pub fn kevent(kq: i32, changes: []const c.Kevent, events: []c.Kevent, timeout: ?*const c.timespec) !usize {
+    while (true) {
+        const rc = c.kevent(kq, changes.ptr, @intCast(changes.len), events.ptr, @intCast(events.len), timeout);
+        switch (c.errno(rc)) {
+            .SUCCESS => return @intCast(rc),
+            .INTR => continue,
+            .BADF => unreachable, // always a race condition if this happens
+            .FAULT => unreachable,
+            .INVAL => unreachable,
+            .ACCES => return error.AccessDenied,
+            .NOENT => return error.EventNotFound,
+            .NOMEM => return error.SystemResources,
+            .SRCH => return error.ProcessNotFound,
+            else => return error.Unexpected,
+        }
+    }
+}
+
 fn errnoError(e: posix.E) anyerror {
     return switch (e) {
         .AGAIN => error.WouldBlock,
