@@ -1778,23 +1778,52 @@ fn formatActionResult(
     return std.fmt.allocPrint(arena, "{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
 }
 
+/// What `finalizeAction` compares against; take it before the action runs.
+const ActionScope = struct {
+    frame: ?*lp.Frame,
+    popups: usize,
+};
+
+fn beginAction(session: *lp.Session) ActionScope {
+    const frame = session.currentFrame();
+    return .{ .frame = frame, .popups = if (frame) |f| f._page.popups.items.len else 0 };
+}
+
 /// Finish a state-changing action: drain any queued navigation triggered by
 /// the action, then tag `body` with the resulting page URL and title so the
 /// caller (LLM, MCP client) can see whether the action triggered navigation.
-fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, body: []const u8) ToolError![]const u8 {
-    const before = session.currentFrame();
+fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
+    const before = scope.frame;
     if (before) |b| {
         try awaitQueuedNavigation(session, b._frame_id);
     }
-    const page = try requireFrame(session);
+    var page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
     // Page (`Session.replaceRootImmediate` / `commitPendingPage`), so every
     // DOMNode pointer in the registry now dangles. Drop the registry so the
     // next action can't dereference freed memory.
     if (before != null and before.? != page) registry.reset();
+
+    var note: []const u8 = "";
+    if (page._page.popups.items.len > scope.popups) {
+        // The action opened a new window (target=_blank or window.open).
+        // Follow it, as a user whose click opened a tab would.
+        var runner = session.runner(.{});
+        runner.waitForFrame(page._page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+            return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+        page = try requireFrame(session);
+        const popups = page._page.popups.items;
+        if (popups.len > scope.popups) {
+            page = popups[popups.len - 1];
+            session.followPopup(page._frame_id);
+            registry.reset();
+            note = " Opened a new window; tools now act on it.";
+        }
+    }
+
     const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "{s}. Page url: {s}, title: {s}", .{
-        body, page.url, page_title orelse "(none)",
+    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, title: {s}", .{
+        body, note, page.url, page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
 
@@ -1806,10 +1835,12 @@ fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
     const body = try formatActionResult(arena, "Clicked element", resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1823,12 +1854,14 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const text = try substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1947,10 +1980,12 @@ fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
     const body = try formatActionResult(arena, "Hovered element", resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1972,12 +2007,14 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
         target_node = try resolveOptionalNode(registry, args.backendNodeId);
     }
 
+    const scope = beginAction(session);
+
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 
     // Pressing Enter on a form input triggers implicit form submission;
     // `finalizeAction` drains the queued navigation before tagging the body.
     const body = std.fmt.allocPrint(arena, "Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -1989,11 +2026,13 @@ fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *C
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
     const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, prefix, resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
@@ -2005,12 +2044,14 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
     const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Set element", resolved.target, suffix);
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
