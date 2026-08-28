@@ -44,10 +44,6 @@ pub const Connection = struct {
     // When a keepalive (or just connected) connection should be closed
     deadline: u64,
 
-    // Whether at least one request has been answered. A deadline miss before
-    // that is a client that connected and never spoke; after, an idle keepalive.
-    served: bool,
-
     // Response that couldn't be sent without blocking. Socket will switch to
     // "write-mode" until it's drained.
     pending: ?Writing,
@@ -236,6 +232,7 @@ pub const Connection = struct {
         live: usize, // acquired and not yet released
         retain: usize, // min # to keep
         free_count: usize, // # of connections available in free
+        buffer_size: usize, // --cdp-max-http-message-size
 
         pub fn init(app: *App) !Pool {
             const retain = app.config.maxConnections();
@@ -245,6 +242,7 @@ pub const Connection = struct {
                 .free_count = 0,
                 .retain = retain,
                 .allocator = app.allocator,
+                .buffer_size = app.config.cdpMaxHTTPMessageSize(),
             };
             errdefer self.deinit();
 
@@ -288,7 +286,6 @@ pub const Connection = struct {
             conn.socket = -1;
             conn.address = .{ .ip4 = .unspecified(0) };
             conn.deadline = 0;
-            conn.served = false;
             conn.pending = null;
             conn.buffer.len = 0;
             conn.state = .header;
@@ -306,10 +303,9 @@ pub const Connection = struct {
                 .socket = -1,
                 .address = .{ .ip4 = .unspecified(0) },
                 .deadline = 0,
-                .served = false,
                 .pending = null,
                 .state = .header,
-                .buffer = try .init(allocator, 4096),
+                .buffer = try .init(allocator, self.buffer_size),
             };
             return conn;
         }
@@ -321,11 +317,8 @@ pub const Connection = struct {
     };
 };
 
-// How long a keepalive connection may sit without a complete request before
-// we close it.
-const IDLE_TIMEOUT_MS = 10_000;
-
-pub const FIRST_TIMEOUT_MS = 5_000;
+// How long a connection may sit without completing a request before we close it.
+pub const IDLE_TIMEOUT_MS = 10_000;
 
 pub fn processEvent(server: *Server, conn: *Connection, rw: Server.IOEvent.ReadWrite, now: u64) void {
     if (conn.pending != null) {
@@ -402,6 +395,7 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
                 if (try serveHTTP(server, conn, req) == .upgraded) {
                     // The fd moved to a WebSocket (and out of server.http); all
                     // that's left of this Connection is to recycle it.
+                    // upgradeConnection already took it out of http_connections.
                     recycle(server, conn);
                     return true;
                 }
@@ -796,7 +790,6 @@ fn recycle(server: *Server, conn: *Connection) void {
 }
 
 fn touch(server: *Server, conn: *Connection, now: u64) void {
-    conn.served = true;
     conn.deadline = now + IDLE_TIMEOUT_MS;
     const node = &conn.node;
     if (server.http_connections.last == node) {

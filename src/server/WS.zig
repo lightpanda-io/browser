@@ -223,7 +223,9 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
                     buf = self.buf[0..len];
                     // we need more data
                     return null;
-                } else if (buf.len < message_len) {
+                }
+
+                if (buf.len < message_len) {
                     // we need more data
                     return null;
                 }
@@ -396,7 +398,7 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
 // don't need to narrow it first; unrecognized errors return null.
 pub fn errorReply(err: anyerror) ?[]const u8 {
     return switch (err) {
-        error.TooLarge => &CLOSE_TOO_BIG,
+        error.TooLarge, error.InboxBacklog => &CLOSE_TOO_BIG,
         error.Masked,
         error.NotMasked,
         error.ReservedFlags,
@@ -579,4 +581,32 @@ test "reader: reclaims buffer after a run of small messages" {
     try feedAndDrain(&reader, big.items);
     try testing.expect(reader.buf.len > RECLAIM_TO);
     try testing.expectEqual(@as(usize, 0), reader.small_message_streak);
+}
+
+test "reader: control frame arriving in pieces" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    // A ping with a 114 byte payload; only the header and 50 bytes of it
+    // have arrived. The control branch skips the "is the whole frame here"
+    // check that the data branches do, so next() used to slice past len.
+    var frame: [2 + 114]u8 = undefined;
+    frame[0] = 128 | 9; // FIN + ping
+    frame[1] = 114;
+    @memset(frame[2..], 'a');
+
+    const partial = frame[0 .. 2 + 50];
+    @memcpy(reader.readBuf()[0..partial.len], partial);
+    reader.len += partial.len;
+    try testing.expectEqual(@as(?Message, null), try reader.next());
+
+    // the rest arrives
+    const rest = frame[2 + 50 ..];
+    @memcpy(reader.readBuf()[0..rest.len], rest);
+    reader.len += rest.len;
+
+    const msg = (try reader.next()) orelse return error.NoMessage;
+    try testing.expectEqual(.ping, msg.type);
+    try testing.expectEqual(114, msg.data.len);
 }

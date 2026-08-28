@@ -39,6 +39,16 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // inbox's own.
 const Link = @This();
 
+// A send that has flipped to blocking (below) waits at most this long for the
+// peer to take more bytes.
+const SEND_TIMEOUT_S = 5;
+
+// The loop reads as fast as it can. The worker _can_ be slow to process its
+// inbox (e.g. stuck in a syncRequest). Still, we want _some_ limit on how much
+// data is queued. This is 32 * the configured max message size. Which should
+// be plenty for a well-behaving client.
+const INBOX_BACKLOG_MESSAGES = 32;
+
 inbox: *Inbox,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
@@ -46,6 +56,7 @@ socket_flags: usize,
 protocol: Driver.Protocol,
 reader: WS.Reader,
 send_arena: ArenaAllocator,
+max_inbox_backlog: usize,
 
 pub fn init(
     self: *Link,
@@ -60,6 +71,9 @@ pub fn init(
         lp.assert(socket_flags & nonblocking == nonblocking, "Link.init blocking", .{});
     }
 
+    const timeout = std.mem.toBytes(posix.timeval{ .sec = SEND_TIMEOUT_S, .usec = 0 });
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+
     const config = app.config;
     const allocator = app.allocator;
 
@@ -71,6 +85,7 @@ pub fn init(
         .socket_flags = socket_flags,
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
+        .max_inbox_backlog = @as(usize, config.cdpMaxMessageSize()) * INBOX_BACKLOG_MESSAGES,
     };
 }
 
@@ -98,11 +113,18 @@ pub fn send(self: *Link, data: []const u8) !void {
                 // queue with its own allocations. On WouldBlock we flip the
                 // socket to blocking for this write and flip it back after.
                 // Should virtually never happen.
-                lp.assert(changed_to_blocking == false, "Link double block", .{});
+                if (changed_to_blocking) {
+                    // We already flipped, so this is SO_SNDTIMEO firing: the
+                    // peer has stopped draining entirely. Treat it as gone
+                    // rather than parking the worker on it.
+                    return error.Timeout;
+                }
                 changed_to_blocking = true;
                 _ = try sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
                 continue :LOOP;
             },
+            // a signal landed mid-write; nothing was written
+            error.Interrupted => continue :LOOP,
             else => return err,
         };
 
@@ -156,6 +178,11 @@ pub const Read = struct {
 
 // Server loop. The socket is readable
 pub fn readAvailable(self: *Link, budget: usize) !Read {
+    if (self.inbox.queuedBytes() >= self.max_inbox_backlog) {
+        lp.metrics.serve_inbox_backlog.incr();
+        return error.InboxBacklog;
+    }
+
     var pushed = false;
     var remaining = budget;
     while (remaining > 0) {
@@ -267,7 +294,95 @@ fn pushBiDi(self: *Link, bytes: []const u8, pushed: *bool) !bool {
     return true;
 }
 
-// Called from the worker (Driver.shutdown) to break the loop's read.
+// Server loop, closing only the  read side. The worker can still send a message
+// (e.g. a close frame).
 pub fn shutdown(self: *Link) void {
     sys_net.shutdown(self.socket, .recv) catch {};
+}
+
+const testing = @import("../testing.zig");
+
+test "link: send gives up when the peer stops reading" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    const small = std.mem.toBytes(@as(c_int, 4096));
+    try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVBUF, &small);
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDBUF, &small);
+
+    const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
+    const flags = try sys_net.fcntl(pair[1], posix.F.GETFL, 0);
+    _ = try sys_net.fcntl(pair[1], posix.F.SETFL, flags | nonblocking);
+
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+
+    var link: Link = undefined;
+    try link.init(testing.test_app, pair[1], .cdp, &inbox);
+    defer link.deinit();
+
+    // shorten the blocking window so the test doesn't sit out the real one
+    const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 50_000 });
+    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+
+    const payload = try testing.allocator.alloc(u8, 1024 * 1024);
+    defer testing.allocator.free(payload);
+    @memset(payload, 'a');
+
+    // Nobody drains pair[0]. send() flips to blocking to finish the write;
+    // unbounded, that parks the worker forever and, because shutdown only
+    // half-closes the read side, hangs the whole process on SIGINT.
+    try testing.expectError(error.Timeout, link.send(payload));
+
+    // and the socket has to be non-blocking again for the run loop's reads
+    try testing.expectEqual(flags | nonblocking, try sys_net.fcntl(pair[1], posix.F.GETFL, 0));
+}
+
+test "link: stops reading once the worker's inbox backs up" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
+    const flags = try sys_net.fcntl(pair[1], posix.F.GETFL, 0);
+    _ = try sys_net.fcntl(pair[1], posix.F.SETFL, flags | nonblocking);
+
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+
+    var link: Link = undefined;
+    try link.init(testing.test_app, pair[1], .cdp, &inbox);
+    defer link.deinit();
+
+    // a ceiling below one max-size message would refuse what was configured
+    try testing.expect(link.max_inbox_backlog > testing.test_app.config.cdpMaxMessageSize());
+
+    // an empty inbox reads normally (nothing pending, so nothing pushed)
+    const read = try link.readAvailable(1024);
+    try testing.expectEqual(true, read.keep);
+    try testing.expectEqual(false, read.pushed);
+
+    // a worker that has fallen this far behind isn't going to catch up
+    {
+        const arena = try testing.test_app.arena_pool.acquire(link.max_inbox_backlog, "backlog test");
+        const payload = try arena.allocator().alloc(u8, link.max_inbox_backlog);
+        inbox.push(arena, .{ .bidi = payload });
+    }
+    try testing.expectEqual(link.max_inbox_backlog, inbox.queuedBytes());
+    try testing.expectError(error.InboxBacklog, link.readAvailable(1024));
+
+    // and it recovers once the worker drains
+    {
+        const msg = inbox.pop().?;
+        defer msg.deinit();
+    }
+    try testing.expectEqual(0, inbox.queuedBytes());
+    _ = try link.readAvailable(1024);
 }

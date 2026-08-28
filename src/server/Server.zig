@@ -280,47 +280,64 @@ pub fn run(self: *Server) void {
         return;
     };
 
-    while (true) {
-        const deadline = blk: {
-            // self.http_connections is ordered by deadline
-            const node = self.http_connections.first orelse break :blk null;
-            const conn: *Connection = @fieldParentPtr("node", node);
-            break :blk conn.deadline -| lp.datetime.milliTimestamp(.boot);
-        };
+    while (self.runOnce()) {}
+}
 
-        var events = self.io_engine.wait(deadline);
-        const now = lp.datetime.milliTimestamp(.boot);
-        while (events.next()) |event| {
-            switch (event) {
-                .accept => self.accept(now) catch |err| log.err(.serve, "accept", .{ .err = err }),
-                .read_write => |rw| switch (rw.target) {
-                    .http => |conn| http.processEvent(self, conn, rw, now),
-                    .ws => |ws| self.processWebSocketEvent(ws, rw),
-                },
-                .signal => self.drainWorkerQueue(),
-                .shutdown => self.beginShutdown(),
-            }
-        }
+fn runOnce(self: *Server) bool {
+    const deadline = blk: {
+        // self.http_connections is ordered by deadline
+        const node = self.http_connections.first orelse break :blk null;
+        const conn: *Connection = @fieldParentPtr("node", node);
+        break :blk conn.deadline -| lp.datetime.milliTimestamp(.boot);
+    };
 
-        // evict http connections that have passed their deadline
-        while (self.http_connections.first) |node| {
-            const conn: *Connection = @fieldParentPtr("node", node);
-            if (conn.deadline > now) {
-                // self.http_connections is ordered by deadline, so as soon as we find one
-                // that hasn't reach its deadline, none of the ones after can.
-                break;
-            }
-            lp.metrics.serve_http_evictions.incr(if (conn.served) .idle else .first_request);
-            http.disconnect(self, conn);
-        }
+    var events = self.io_engine.wait(deadline);
+    const now = lp.datetime.milliTimestamp(.boot);
 
-        // Keep looping until every worker has released; their terminate was
-        // requested in beginShutdown. Only then is it safe to return (deinit
-        // frees state the workers reference).
-        if (self.shutdown_begun and self.websocket_pool.live == 0) {
-            return;
+    var pending_accept = false;
+    var pending_signal = false;
+    var pending_shutdown = false;
+    while (events.next()) |event| {
+        switch (event) {
+            .accept => pending_accept = true,
+            .read_write => |rw| switch (rw.target) {
+                .http => |conn| http.processEvent(self, conn, rw, now),
+                .ws => |ws| self.processWebSocketEvent(ws, rw),
+            },
+            .signal => pending_signal = true,
+            .shutdown => pending_shutdown = true,
         }
     }
+
+    // signal first: a worker that released frees a slot the accept can use.
+    if (pending_signal) {
+        self.drainWorkerQueue();
+    }
+    if (pending_accept) {
+        self.accept(now) catch |err| log.err(.serve, "accept", .{ .err = err });
+    }
+    // shutdown last: it's terminal, and draining the queue first keeps it from
+    // walking a websocket whose worker has already gone.
+    if (pending_shutdown) {
+        self.beginShutdown();
+    }
+
+    // evict http connections that have passed their deadline
+    while (self.http_connections.first) |node| {
+        const conn: *Connection = @fieldParentPtr("node", node);
+        if (conn.deadline > now) {
+            // self.http_connections is ordered by deadline, so as soon as we find one
+            // that hasn't reach its deadline, none of the ones after can.
+            break;
+        }
+        lp.metrics.serve_http_evictions.incr();
+        http.disconnect(self, conn);
+    }
+
+    if (self.shutdown_begun and self.websocket_pool.live == 0) {
+        return false;
+    }
+    return true;
 }
 
 fn accept(self: *Server, now: u64) !void {
@@ -349,6 +366,8 @@ fn accept(self: *Server, now: u64) !void {
             }
         };
         errdefer sys_net.close(socket);
+        configureSocket(socket);
+
         const peer = sys_net.addressFromSockaddr(@ptrCast(&address));
         if (comptime lp.IS_DEBUG) {
             log.debug(.serve, "client connected", .{ .address = peer });
@@ -360,13 +379,40 @@ fn accept(self: *Server, now: u64) !void {
         conn.address = peer;
 
         try self.io_engine.monitorHTTP(conn);
-        conn.deadline = now + http.FIRST_TIMEOUT_MS;
+        conn.deadline = now + http.IDLE_TIMEOUT_MS;
         self.http_connections.append(&conn.node);
 
         if (self.liveConnections() == self.max_connections) {
             return;
         }
     }
+}
+
+// A peer that goes away without a FIN (a killed VM, a NAT timeout) leaves an
+// upgraded connection holding a worker, a browser and a --cdp-max-connections
+// slot; nothing above the socket notices. Keepalive is what ends it, and
+// Driver.tick's wait cadence is built on that. Best effort: a socket we can't
+// configure is still a usable socket.
+fn configureSocket(socket: posix.socket_t) void {
+    setSocketOption(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, @as(c_int, 1), "SO_KEEPALIVE");
+
+    const idle_opt = switch (builtin.os.tag) {
+        .macos, .ios => posix.TCP.KEEPALIVE,
+        else => posix.TCP.KEEPIDLE,
+    };
+    setSocketOption(socket, posix.IPPROTO.TCP, idle_opt, Config.CDP_KEEPALIVE_IDLE_S, "TCP_KEEPIDLE");
+    setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, Config.CDP_KEEPALIVE_INTVL_S, "TCP_KEEPINTVL");
+    setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, Config.CDP_KEEPALIVE_CNT, "TCP_KEEPCNT");
+
+    if (comptime builtin.os.tag == .linux) {
+        setSocketOption(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, Config.CDP_TCP_USER_TIMEOUT_MS, "TCP_USER_TIMEOUT");
+    }
+}
+
+fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anytype, comptime name: []const u8) void {
+    posix.setsockopt(socket, level, option, &std.mem.toBytes(value)) catch |err| {
+        log.warn(.serve, "setsockopt", .{ .err = err, .option = name });
+    };
 }
 
 fn liveConnections(self: *const Server) usize {
@@ -399,8 +445,8 @@ fn saturated(self: *Server) !void {
 
 fn processWebSocketEvent(self: *Server, ws: *WebSocket, rw: IOEvent.ReadWrite) void {
     if (ws.monitored == false) {
-        // can have an event that comes in during the same batch as a release
-        // and there's no guarantee about the order that we process them in.
+        // only attachWorker puts a websocket in the poll set, and only once
+        // the driver is set; an unmonitored slot has no business here.
         return;
     }
 
@@ -516,15 +562,17 @@ fn attachWorker(self: *Server, ws: *WebSocket, driver: Driver) void {
 
 fn releaseWorker(self: *Server, ws: *WebSocket, notify: *std.Io.Event) void {
     if (ws.monitored) {
+        ws.monitored = false;
         self.io_engine.remove(ws.socket);
     }
     self.releaseWebSocket(ws);
+    // The worker is free to deinit its driver and close the fd from here.
     notify.set(lp.io);
 }
 
 // Frees the slot once the loop is done with the fd. The fd itself is closed
 // by whoever owns the end of its life: the worker after its driver's deinit,
-// or openWebSocket when there never was a worker.
+// or upgradeConnection when there never was a worker.
 fn releaseWebSocket(self: *Server, ws: *WebSocket) void {
     self.websockets.remove(&ws.node);
     lp.metrics.serve_active_connections.decr(ws.protocol);
@@ -585,8 +633,9 @@ fn fdBudget(config: *const Config) usize {
         };
         break :blk limit.cur;
     };
-    // unlimited is really "as many as we'd care to hold 4KB buffers for"
-    const budget = @min(soft, 1 << 16) -| reserve;
+    // put some limit incase of a unlimited or very large rlimit
+    const ceiling = (64 * 1024 * 1024) / @max(@as(u64, config.cdpMaxHTTPMessageSize()), 1);
+    const budget = @min(soft, ceiling) -| reserve;
     return @intCast(@max(budget, 8));
 }
 
@@ -640,11 +689,14 @@ const Worker = struct {
         // The loop is done with us once releaseConnection returns; the
         // driver's deinit may still tick the client, without a producer.
         defer driver.browser.http_client.driver_link_active = false;
-        // It's possible the terminate flag is set. Our teardown (e.g. cdp.deinit()
-        // and bidi.deinit() in our caller) might need V8 in a usable state. So
-        // clear the terminate flag
-        driver.browser.env.cancelTerminate();
+        // Release first: until the loop has let go of this websocket it can
+        // still drop the link, and onLinkDisconnect requests a terminate. Doing
+        // it the other way round left that request landing after the cancel,
+        // so the teardown below ran with a pending terminate -- which is the
+        // one thing the cancel is here to prevent (cdp.deinit() and
+        // bidi.deinit() in our caller need V8 in a usable state).
         Worker.releaseConnection(server, ws);
+        driver.browser.env.cancelTerminate();
     }
 
     // Worker -> loop: synchronous release. Blocks until the loop has dropped the
@@ -2036,3 +2088,220 @@ const TestClient = struct {
         }
     }
 };
+
+// A server of our own, bound to an ephemeral port and never run(): these
+// tests drive its handlers by hand to reproduce what one event batch does.
+// The real test server (port 9583) is shared and can't be torn down.
+const LoopTest = struct {
+    server: *Server,
+    address: sys_net.IpAddress,
+
+    fn init() !LoopTest {
+        const server = try Server.init(testing.test_app, .{ .ip4 = .loopback(0) });
+        errdefer server.deinit();
+        server.protocols = .{ .cdp = true, .webdriver = true };
+        // run() does this; runOnce() on its own would never see an accept
+        try server.io_engine.monitorListener(server.listener);
+
+        var bound: posix.sockaddr.storage = undefined;
+        var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+        try sys_net.getsockname(server.listener, @ptrCast(&bound), &bound_len);
+
+        return .{ .server = server, .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) };
+    }
+
+    fn deinit(self: *LoopTest) void {
+        self.server.deinit();
+    }
+
+    fn expectResponse(self: *const LoopTest, client: posix.socket_t, prefix: []const u8) !void {
+        _ = self;
+        var buf: [512]u8 = undefined;
+        const n = try posix.read(client, &buf);
+        try testing.expect(std.mem.startsWith(u8, buf[0..n], prefix));
+    }
+
+    // Connects a client and runs the accept the loop would have run,
+    // returning the client's end and the Connection the loop now owns.
+    fn accept(self: *LoopTest) !struct { posix.socket_t, *Connection } {
+        const client = try sys_net.connect(&self.address);
+        errdefer sys_net.close(client);
+        // never block the suite on a response that isn't coming
+        const timeout = std.mem.toBytes(posix.timeval{ .sec = 5, .usec = 0 });
+        try posix.setsockopt(client, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+
+        const before = self.server.http_connections.last;
+        try self.server.accept(lp.datetime.milliTimestamp(.boot));
+
+        const node = self.server.http_connections.last orelse return error.NotAccepted;
+        if (node == before) {
+            return error.NotAccepted;
+        }
+        return .{ client, @fieldParentPtr("node", node) };
+    }
+};
+
+// epoll and kqueue both report in the order things became ready, so making the
+// deferred event ready first and the socket readable second puts the batch in
+// the order that used to be fatal: the recycle before the event that names it.
+test "server: a shutdown in the same batch as a readable connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, _ = try lt.accept();
+    defer sys_net.close(client);
+
+    // shutdown first...
+    lt.server.shutdown();
+    // ...then the request, so it lands behind it in the batch
+    try sys_net.writeAll(client, "GET /json/version HTTP/1.1\r\n\r\n");
+
+    // beginShutdown drops every http connection, so running it where it
+    // arrived left the rest of the batch pointing at a recycled (or freed)
+    // Connection. The request has to be answered first.
+    try testing.expectEqual(false, lt.server.runOnce());
+    try lt.expectResponse(client, "HTTP/1.1 200 OK\r\n");
+    try testing.expect(lt.server.shutdown_begun);
+}
+
+test "server: an accept at the connection limit in the same batch as a readable connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, _ = try lt.accept();
+    defer sys_net.close(client);
+
+    // one connection, and no room for another: the next accept has to make
+    // room by disconnecting an idle connection
+    lt.server.max_connections = 1;
+    try testing.expectEqual(1, lt.server.liveConnections());
+
+    // the accept first...
+    const second = try sys_net.connect(&lt.address);
+    defer sys_net.close(second);
+    // ...then the request, so it lands behind it in the batch
+    try sys_net.writeAll(client, "GET /json/version HTTP/1.1\r\n\r\n");
+
+    // saturated() picks the idle connection to drop, which is the one the
+    // batch is still holding a pointer to. Its request comes first.
+    _ = lt.server.runOnce();
+    try lt.expectResponse(client, "HTTP/1.1 200 OK\r\n");
+}
+
+// Why the ordering matters rather than a flag on the connection: past the
+// pool's retain count a release doesn't recycle, it destroys, so a stale
+// pointer isn't merely pointing at the wrong client -- it's dangling.
+test "server: releasing past the pool's retain destroys the connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const pool = &lt.server.http_connection_pool;
+    const retain = pool.retain;
+
+    const clients = try testing.allocator.alloc(posix.socket_t, retain + 1);
+    defer testing.allocator.free(clients);
+    var doomed: *Connection = undefined;
+    for (clients, 0..) |*client, i| {
+        client.*, const conn = try lt.accept();
+        if (i == clients.len - 1) {
+            doomed = conn;
+        }
+    }
+    defer for (clients) |client| sys_net.close(client);
+    try testing.expectEqual(retain + 1, pool.live);
+    try testing.expectEqual(0, pool.free_count);
+
+    while (lt.server.http_connections.first) |node| {
+        http.disconnect(lt.server, @fieldParentPtr("node", node));
+    }
+
+    // retain + 1 released but only retain came back, and `doomed` is not among
+    // them: it was destroyed, not pooled.
+    try testing.expectEqual(0, pool.live);
+    try testing.expectEqual(retain, pool.free_count);
+    var node = pool.free.first;
+    while (node) |n| : (node = n.next) {
+        try testing.expect(@as(*Connection, @fieldParentPtr("node", n)) != doomed);
+    }
+}
+
+test "server: the connection budget is bounded by buffer memory" {
+    const opts = &testing.test_config.mode.serve;
+    const original = opts.cdp_max_http_message_size;
+    defer opts.cdp_max_http_message_size = original;
+
+    // whatever NOFILE happens to be, we never sign up for more read buffers
+    // than fdBudget's ceiling pays for (kept in step with it by hand)
+    const ceiling = 64 * 1024 * 1024;
+    for ([_]u14{ 1024, 4096, 16383 }) |size| {
+        opts.cdp_max_http_message_size = size;
+        const budget = fdBudget(testing.test_app.config);
+        try testing.expect(budget * size <= ceiling);
+        try testing.expect(budget >= 8);
+    }
+}
+
+test "server: accepted sockets get TCP keepalive" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, const conn = try lt.accept();
+    defer sys_net.close(client);
+
+    // Driver.tick leans on this for liveness: without it a peer that goes
+    // away without a FIN holds a worker and a connection slot forever.
+    var value: c_int = 0;
+    var len: posix.socklen_t = @sizeOf(c_int);
+    try testing.expectEqual(0, std.c.getsockopt(conn.socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &value, &len));
+    try testing.expectEqual(1, value);
+
+    http.disconnect(lt.server, conn);
+}
+
+test "server: the http read buffer is sized by --cdp-max-http-message-size" {
+    // the pool is built in Server.init, so this has to move first
+    const opts = &testing.test_config.mode.serve;
+    const original = opts.cdp_max_http_message_size;
+    defer opts.cdp_max_http_message_size = original;
+    opts.cdp_max_http_message_size = 8192;
+
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, const conn = try lt.accept();
+    defer sys_net.close(client);
+
+    try testing.expectEqual(8192, conn.buffer.buf.len);
+
+    http.disconnect(lt.server, conn);
+}
+
+test "server: http connections stay ordered by deadline" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    // A connects and completes a request, so it gets the served deadline...
+    const client_a, const conn_a = try lt.accept();
+    defer sys_net.close(client_a);
+    try sys_net.writeAll(client_a, "GET /json/version HTTP/1.1\r\n\r\n");
+    const readable: IOEvent.ReadWrite = .{ .target = .{ .http = conn_a }, .readable = true, .writable = false, .hangup = false };
+    http.processEvent(lt.server, conn_a, readable, lp.datetime.milliTimestamp(.boot));
+
+    // ...and B connects after it, so it sits behind A in the list.
+    const client_b, const conn_b = try lt.accept();
+    defer sys_net.close(client_b);
+
+    // run() reads the wait timeout off the head and the eviction sweep stops
+    // at the first unexpired entry, so a later node may never hold an earlier
+    // deadline.
+    var node = lt.server.http_connections.first;
+    var previous: u64 = 0;
+    while (node) |n| : (node = n.next) {
+        const conn: *Connection = @fieldParentPtr("node", n);
+        try testing.expect(conn.deadline >= previous);
+        previous = conn.deadline;
+    }
+
+    http.disconnect(lt.server, conn_a);
+    http.disconnect(lt.server, conn_b);
+}

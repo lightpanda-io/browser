@@ -37,6 +37,10 @@ const Inbox = @This();
 mutex: std.Io.Mutex = .init,
 queue: DoublyLinkedList = .{},
 
+// Payload bytes sitting in the queue. Used to disconnect a client if we've
+// fallen too far behind (largely to protect against a misbehaving client)
+queued_bytes: usize = 0,
+
 // One-way latch, set by the worker's drainInbox the first time it
 // observes a .disconnect (or .close) and never cleared. Ensures that, on
 // multiple drains, the terminated state is preserved / communicated. This is
@@ -51,6 +55,13 @@ pub fn deinit(self: *Inbox) void {
         const msg: *Message = @fieldParentPtr("node", node);
         msg.deinit();
     }
+    self.queued_bytes = 0;
+}
+
+pub fn queuedBytes(self: *Inbox) usize {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+    return self.queued_bytes;
 }
 
 pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
@@ -61,6 +72,7 @@ pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
     msg.* = .{ .payload = payload, .arena = arena };
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
+    self.queued_bytes += payload.size();
     self.queue.append(&msg.node);
 }
 
@@ -68,7 +80,9 @@ pub fn pop(self: *Inbox) ?*Message {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     const node = self.queue.popFirst() orelse return null;
-    return @fieldParentPtr("node", node);
+    const msg: *Message = @fieldParentPtr("node", node);
+    self.queued_bytes -= msg.payload.size();
+    return msg;
 }
 
 // Peek for a message matching `predicate` without removing it. Used by
@@ -99,6 +113,7 @@ pub fn popIf(self: *Inbox, predicate: *const fn (*Message) bool) ?*Message {
         const msg: *Message = @fieldParentPtr("node", node);
         if (predicate(msg)) {
             self.queue.remove(node);
+            self.queued_bytes -= msg.payload.size();
             return msg;
         }
     }
@@ -141,6 +156,14 @@ pub const Message = struct {
         // pushes this on peer EOF, fatal WS framing error, or
         // (now) JSON parse failure.
         disconnect: ?anyerror,
+
+        pub fn size(self: Payload) usize {
+            return switch (self) {
+                .cdp => |c| c.raw.len,
+                .bidi, .ping => |b| b.len,
+                .close, .disconnect => 0,
+            };
+        }
     };
 
     pub const Cdp = struct {
@@ -345,4 +368,49 @@ test "Inbox: popIf picks first match in FIFO order" {
     const m = inbox.popIf(testIsPing).?;
     defer m.deinit();
     try testing.expectEqual("first", m.payload.ping);
+}
+
+test "Inbox: queued bytes track the payloads" {
+    const arena_pool = &testing.test_app.arena_pool;
+
+    var inbox = Inbox{};
+    defer inbox.deinit();
+
+    try testing.expectEqual(0, inbox.queuedBytes());
+
+    {
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .ping = try arena.dupe(u8, "12345") });
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        // control payloads are free; only what the peer sends counts
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .disconnect = null });
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .bidi = try arena.dupe(u8, "abc") });
+    }
+    try testing.expectEqual(8, inbox.queuedBytes());
+
+    // popIf cherry-picks out of the middle, and has to pay the same toll
+    {
+        const m = inbox.popIf(struct {
+            fn f(msg: *Message) bool {
+                return msg.payload == .bidi;
+            }
+        }.f).?;
+        defer m.deinit();
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        const m = inbox.pop().?;
+        defer m.deinit();
+    }
+    try testing.expectEqual(0, inbox.queuedBytes());
 }

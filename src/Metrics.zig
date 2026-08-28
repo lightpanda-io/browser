@@ -23,7 +23,8 @@ const Metrics = @This();
 const Driver = @import("server/Driver.zig").Protocol;
 
 serve_http_requests: CounterEnum("status", @import("network/http.zig").StatusCategory) = .{},
-serve_http_evictions: CounterEnum("reason", enum { first_request, idle }) = .{},
+serve_http_evictions: Counter = .{},
+serve_inbox_backlog: Counter = .{},
 serve_connections: CounterEnum("driver", Driver) = .{},
 serve_connection_limit: Counter = .{},
 serve_active_connections: GaugeEnum("driver", Driver) = .{},
@@ -95,7 +96,8 @@ robots_access: CounterEnum("result", enum { allow, deny }) = .{},
 // compile error.
 const help = .{
     .serve_http_requests = "HTTP responses sent, by status category (includes the pre-parse 400/413 rejections)",
-    .serve_http_evictions = "HTTP connections closed for exceeding a deadline; first_request never completed a request, idle is a keepalive connection that went quiet",
+    .serve_http_evictions = "HTTP connections closed for sitting past their deadline without completing a request",
+    .serve_inbox_backlog = "Websocket connections closed for queueing more unprocessed messages than the worker could drain",
     .serve_connections = "Websocket connections accepted, by driver protocol",
     .serve_connection_limit = "Accepts deferred because the connection budget was full: the listener pauses until a slot frees (counted before any handshake, so no driver label)",
     .serve_active_connections = "Currently connected clients, by driver protocol",
