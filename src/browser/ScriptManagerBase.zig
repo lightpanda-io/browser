@@ -84,7 +84,7 @@ pub const Owner = union(enum) {
     pub fn siteForCookies(self: Owner) Cookie.SiteForCookies {
         return switch (self) {
             .frame => |frame| frame.siteForCookies(),
-            .worker => |worker| .{ .url = worker.url },
+            .worker => |worker| worker.site_for_cookies,
         };
     }
 };

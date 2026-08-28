@@ -133,11 +133,11 @@ pub fn origin(self: *const Execution) ?[]const u8 {
     };
 }
 
-// a Worker's is its own URL; `Frame` prefers its ancestor chain.
+// a Worker inherits its creating document's; `Frame` walks its ancestor chain.
 pub fn siteForCookies(self: *const Execution) Cookie.SiteForCookies {
     return switch (self.js.global) {
         .frame => |frame| frame.siteForCookies(),
-        .worker => |worker| .{ .url = worker.url },
+        .worker => |worker| worker.site_for_cookies,
     };
 }
 

@@ -107,7 +107,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .loader_id = self._loader_id,
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = .{ .url = resolved_url },
+        .cookie_origin = frame.siteForCookies(),
         .notification = session.notification,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,

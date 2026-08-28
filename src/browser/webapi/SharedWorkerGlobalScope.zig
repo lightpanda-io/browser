@@ -108,7 +108,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         .loader_id = self._loader_id,
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = .{ .url = owned_url },
+        .cookie_origin = proto.site_for_cookies,
         .notification = session.notification,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
