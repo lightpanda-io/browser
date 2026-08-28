@@ -32,6 +32,8 @@ const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
 const Element = @import("../webapi/Element.zig");
 const TreeWalker = @import("../webapi/TreeWalker.zig");
+const TextEvent = @import("../webapi/event/TextEvent.zig");
+const InputEvent = @import("../webapi/event/InputEvent.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
 const PointerEvent = @import("../webapi/event/PointerEvent.zig");
@@ -312,7 +314,7 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
 
 fn deltaToScroll(d: f64) i32 {
     if (std.math.isNan(d)) return 0;
-    return @intFromFloat(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+    return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
 // callback when the "click" event reaches the frame.
@@ -628,22 +630,79 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
             return;
         }
 
-        // Handle printable characters
-        if (key.isPrintable()) {
-            try input.innerInsert(key.asString(), frame);
+        return editKey(frame, event, input, key);
+    }
+
+    if (target.is(Element.Html.TextArea)) |textarea| {
+        if (key == .Enter) {
+            if (try allowEdit(frame, event, textarea.asElement(), null, "\n", "insertLineBreak")) {
+                try textarea.innerInsert("\n", frame);
+            }
+            return;
+        }
+
+        return editKey(frame, event, textarea, key);
+    }
+}
+
+// edit keys are handled by Input and TextArea the same
+fn editKey(frame: *Frame, event: *Event, ctl: anytype, key: KeyboardEvent.Key) !void {
+    if (key == .Backspace or key == .Delete) {
+        const forward = key == .Delete;
+        if (try allowEdit(frame, event, ctl.asElement(), null, null, deleteInputType(forward))) {
+            try ctl.innerDelete(forward, frame);
         }
         return;
     }
 
-    if (target.is(Element.Html.TextArea)) |textarea| {
-        // zig fmt: off
-        const append =
-            if (key == .Enter) "\n"
-            else if (key.isPrintable()) key.asString()
-            else return
-        ;
-        // zig fmt: on
-        return textarea.innerInsert(append, frame);
+    if (key.isPrintable()) {
+        if (try allowEdit(frame, event, ctl.asElement(), key.asString(), key.asString(), "insertText")) {
+            try ctl.innerInsert(key.asString(), frame);
+        }
+    }
+}
+
+fn deleteInputType(forward: bool) []const u8 {
+    return if (forward) "deleteContentForward" else "deleteContentBackward";
+}
+
+// pre-edit events for a key's default action, can cancel the edit (i.e. by
+// returning false)
+fn allowEdit(frame: *Frame, keydown: *Event, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
+    if (keydown.getIsTrusted() == false) {
+        // only trusted events fire these events, so for a untrusted event, the
+        // edit isn't cancelled.
+        return true;
+    }
+
+    {
+        const before = (try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
+            .bubbles = true,
+            .cancelable = true,
+            .composed = true,
+            .data = before_data,
+            .inputType = input_type,
+        }, frame)).asEvent();
+        before.acquireRef(); // need to check its _prevent_default
+        defer _ = before.releaseRef(frame._page);
+        try frame._event_manager.dispatch(target.asEventTarget(), before);
+        if (before._prevent_default) {
+            return false;
+        }
+    }
+
+    {
+        const data = text_data orelse return true;
+        const text_event = (try TextEvent.initTrusted("textInput", .{
+            .bubbles = true,
+            .cancelable = true,
+            .view = frame.window,
+            .data = data,
+        }, frame)).asEvent();
+        text_event.acquireRef(); // need to check its _prevent_default
+        defer _ = text_event.releaseRef(frame._page);
+        try frame._event_manager.dispatch(target.asEventTarget(), text_event);
+        return text_event._prevent_default == false;
     }
 }
 

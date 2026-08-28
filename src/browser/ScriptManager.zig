@@ -671,3 +671,23 @@ test "ScriptManager: async script whose submit fails synchronously releases its 
         \\document.head.appendChild(s);
     , null);
 }
+
+test "ScriptManager: preload whose submit fails synchronously releases its arena once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const sm = &frame._script_manager;
+    const client = sm.base.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    // PreloadedScript.errorCallback logs the fetch error.
+    testing.expectLog(&.{.http});
+
+    const url = "http://127.0.0.1:9582/fails-at-submit.js";
+    // A fetch was started (and failed), so the hint's error event fires.
+    try testing.expectEqual(true, try sm.preloadScript(null, url));
+    // errorCallback consumed the entry; nothing dangles in the map.
+    try testing.expectEqual(false, sm.preloaded_scripts.contains(url));
+}

@@ -1094,7 +1094,7 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
         errdefer transfer.deinit();
         try self.headersForRequest(transfer);
     }
-    return transfer.submit();
+    transfer.submit() catch {};
 }
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
@@ -1855,8 +1855,8 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     if (iframe._executed) {
         return;
     }
-    if (!self._session.subframe_loading_enabled) {
-        // configured not to load frames
+    if (self._session.load_resources.iframe == false) {
+        log.warnDisabledIFrame();
         iframe._executed = true;
         return;
     }
@@ -2269,9 +2269,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 
     const session = self._session;
 
-    // this feature is disabled by default, and can be turned on via a command
-    // line flag or via an CDP command
-    if (session.load_external_stylesheets == false) {
+    if (session.load_resources.stylesheet == false) {
         return self.queueLoad(Factory.protoOf(link));
     }
 
@@ -3796,9 +3794,9 @@ test "Frame: iframeAddedCallback does not create a frame when termination is pen
     defer testing.test_session.closeAllPages();
 
     const session = frame._session;
-    const subframe_loading_enabled = session.subframe_loading_enabled;
-    session.subframe_loading_enabled = true;
-    defer session.subframe_loading_enabled = subframe_loading_enabled;
+    const subframe_loading_enabled = session.load_resources.iframe;
+    session.load_resources.iframe = true;
+    defer session.load_resources.iframe = subframe_loading_enabled;
 
     const element = try frame.document.createElement("iframe", null, frame);
     const iframe = element.as(HtmlElement.IFrame);

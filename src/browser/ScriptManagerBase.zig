@@ -1120,6 +1120,58 @@ test "ScriptManagerBase: shutdownCallback fails a .loading module" {
     try testing.expectError(error.Failed, sm.waitForImport(url));
 }
 
+test "ScriptManagerBase: import whose submit fails synchronously releases its arena once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const sm = &frame._script_manager.base;
+    const client = sm.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    // Script.errorCallback logs the fetch error.
+    testing.expectLog(&.{.http});
+
+    const url: [:0]const u8 = "http://127.0.0.1:9582/fails-at-submit.js";
+    try sm.preloadImport(url, frame.url, .{});
+
+    // The failure is delivered through the entry, same as an async one.
+    try testing.expect(sm.async_scripts.first == null);
+    try testing.expect(sm.imported_modules.getPtr(url).?.state == .err);
+    try testing.expectError(error.Failed, sm.waitForImport(url));
+}
+
+test "ScriptManagerBase: dynamic import whose submit fails synchronously rejects once" {
+    const page = try testing.pageTest("mcp_nav.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    const sm = &frame._script_manager.base;
+    const client = sm.client;
+    client.test_fail_submit = error.TestSubmitFailure;
+    defer client.test_fail_submit = null;
+
+    // Script.errorCallback logs the fetch error.
+    testing.expectLog(&.{.http});
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\globalThis.__dyn = 'pending';
+        \\import('http://127.0.0.1:9582/fails-at-submit.js').then(
+        \\  () => { globalThis.__dyn = 'resolved'; },
+        \\  (e) => { globalThis.__dyn = String(e); },
+        \\);
+    , frame.url); // the resource name is the import's base url
+    ls.local.runMicrotasks();
+
+    try testing.expect(sm.async_scripts.first == null);
+    try testing.expectEqual(true, (try ls.local.exec("globalThis.__dyn === 'TestSubmitFailure'", null)).toBool());
+}
+
 test "ScriptManagerBase: waitForImport stops when teardown is pending" {
     const page = try testing.pageTest("mcp_nav.html", .{});
     defer page.close();

@@ -261,7 +261,7 @@ pub fn maybeBumpGenerator(self: *Engine, store_id: i64, key: f64) !void {
 
     // Cap at 2^53, the largest integer the generator tracks per spec.
     const capped = @min(@floor(key), 9007199254740992);
-    const want: i64 = @intFromFloat(capped + 1);
+    const want: i64 = @trunc(capped + 1);
     try self.conn.exec(
         "update idb_object_stores set key_generator = ?2 where id = ?1 and key_generator < ?2",
         .{ store_id, want },

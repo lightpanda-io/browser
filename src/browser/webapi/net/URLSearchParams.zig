@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
+const URL = @import("../URL.zig");
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
@@ -44,6 +45,7 @@ const URLSearchParams = @This();
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _params: KeyValueList,
+_url: ?*URL = null, // Set when created via the url.searchParams getter
 
 const InitOpts = union(enum) {
     form_data: *FormData,
@@ -62,9 +64,12 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*URLSearchParams {
             .form_data => |fd| break :blk try fd.toKeyValueList(arena.allocator()),
             .value => |js_val| {
                 if (js_val.isObject()) {
+                    // Per Web IDL, an object with @@iterator converts as a
+                    // sequence of [name, value] pairs. This covers arrays,
+                    // Maps, generators and other URLSearchParams - including
+                    // ones with a patched @@iterator, so no instanceof
+                    // fast-path here.
                     if (try js_val.iterator()) |it| {
-                        // value satisfies the @@iterator protocol, so we're
-                        // expecting [name, value] tuples
                         break :blk try paramsFromIterator(arena.allocator(), it);
                     }
                     // normalizer is null, so frame won't be used
@@ -118,16 +123,19 @@ pub fn has(self: *const URLSearchParams, name: []const u8, value: ?[]const u8) b
     return self._params.has(name, value);
 }
 
-pub fn set(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    return self._params.set(self._arena.allocator(), name, value);
+pub fn set(self: *URLSearchParams, name: []const u8, value: []const u8, exec: *const Execution) !void {
+    try self._params.set(self._arena.allocator(), name, value);
+    try self.postUpdate(exec);
 }
 
-pub fn append(self: *URLSearchParams, name: []const u8, value: []const u8) !void {
-    return self._params.append(self._arena.allocator(), name, value);
+pub fn append(self: *URLSearchParams, name: []const u8, value: []const u8, exec: *const Execution) !void {
+    try self._params.append(self._arena.allocator(), name, value);
+    try self.postUpdate(exec);
 }
 
-pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8) void {
+pub fn delete(self: *URLSearchParams, name: []const u8, value: ?[]const u8, exec: *const Execution) !void {
     self._params.delete(name, value);
+    try self.postUpdate(exec);
 }
 
 pub fn keys(self: *URLSearchParams, exec: *const Execution) !*KeyIterator {
@@ -154,7 +162,10 @@ pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
 pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !void {
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
-    // the callback can mutate the list
+    // Index-based on purpose: the callback can mutate the list (delete,
+    // append, ...), which both changes its length and can reallocate the
+    // backing slice, so neither a captured slice nor a pointer into it
+    // survives the call.
     var i: usize = 0;
     while (i < self._params._entries.items.len) : (i += 1) {
         const entry = self._params._entries.items[i];
@@ -165,15 +176,27 @@ pub fn forEach(self: *URLSearchParams, cb_: js.Function, js_this_: ?js.Object) !
     }
 }
 
-pub fn sort(self: *URLSearchParams) void {
-    // std.mem.sort is stable (as required by the spec)
+pub fn sort(self: *URLSearchParams, exec: *const Execution) !void {
+    // std.mem.sort (block sort) is stable, which the spec requires: entries
+    // with equal names keep their relative order.
     std.mem.sort(KeyValueList.Entry, self._params._entries.items, {}, struct {
         fn cmp(_: void, a: KeyValueList.Entry, b: KeyValueList.Entry) bool {
             return utf16Order(a.name.str(), b.name.str()) == .lt;
         }
     }.cmp);
+    try self.postUpdate(exec);
 }
 
+// we need to keep the linked url in sync
+fn postUpdate(self: *URLSearchParams, exec: *const Execution) !void {
+    const url = self._url orelse return;
+    try url.syncQueryFromParams(exec);
+}
+
+// The URL spec sorts by UTF-16 code units, not bytes or code points. The
+// difference is observable for supplementary-plane characters: 🌈 (U+1F308)
+// is a higher code point than ﬃ (U+FB03), but its UTF-16 lead surrogate
+// (0xD83C) is a lower code unit.
 fn utf16Order(a: []const u8, b: []const u8) std.math.Order {
     var ia: usize = 0;
     var ib: usize = 0;
@@ -231,21 +254,17 @@ fn paramsFromIterator(allocator: Allocator, it: js.Value.Iterator) !KeyValueList
 
         if (item.isArray()) {
             const as_array = item.toArray();
-            if (as_array.len() != 2) {
-                // we should be getting [name, value]
-                return error.TypeError;
-            }
+            // Each pair must have exactly 2 items.
+            if (as_array.len() != 2) return error.TypeError;
             name_val = try as_array.get(0);
             value_val = try as_array.get(1);
         } else {
-            // Not an array, but it could itself be an iterator
+            // A non-array pair (e.g. what a Map entries iterator or a custom
+            // generator yields) converts through its own @@iterator.
             var pair_it = (try item.iterator()) orelse return error.TypeError;
             name_val = (try pair_it.next()) orelse return error.TypeError;
             value_val = (try pair_it.next()) orelse return error.TypeError;
-            if (try pair_it.next() != null) {
-                // should only have a name and a value, anything else is wrong
-                return error.TypeError;
-            }
+            if (try pair_it.next() != null) return error.TypeError;
         }
 
         try params._entries.append(allocator, .{
@@ -299,6 +318,13 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
     }
 
     return params;
+}
+
+// True when value[i] starts a valid %XX escape. A '%' not followed by two
+// hex digits is not an error: percent-decode passes it through literally
+// ("b=%2sf" parses to "%2sf").
+fn isEscapeTriplet(value: []const u8, i: usize) bool {
+    return i + 2 < value.len and std.ascii.isHex(value[i + 1]) and std.ascii.isHex(value[i + 2]);
 }
 
 fn unescape(arena: Allocator, value: []const u8, buf: []u8) !String {
@@ -389,11 +415,6 @@ pub const Iterator = struct {
         return .{ e.name.str(), e.value.str() };
     }
 };
-
-// True when value[i] starts a valid %XX escape
-fn isEscapeTriplet(value: []const u8, i: usize) bool {
-    return i + 2 < value.len and std.ascii.isHex(value[i + 1]) and std.ascii.isHex(value[i + 2]);
-}
 
 const GenericIterator = @import("../collections/iterator.zig").Entry;
 pub const KeyIterator = GenericIterator(Iterator, "0");
