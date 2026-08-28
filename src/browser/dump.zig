@@ -89,7 +89,7 @@ fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: 
         if (opts.with_base) {
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, frame);
-            try base.setAttributeSafe(comptime .wrap("base"), .wrap(frame.base()), frame);
+            try base.setAttributeSafe(comptime .wrap("href"), .wrap(frame.base()), frame);
             _ = try parent.insertBefore(base.asNode(), parent.firstChild(), frame);
         }
     }
@@ -348,13 +348,17 @@ fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Fram
     }
 }
 
-fn isVoidElement(el: *const Node.Element) bool {
-    return switch (el._type) {
-        .html => switch (el.subtype(Node.Element.Html)._type) {
-            .br, .hr, .img, .input, .link, .meta => true,
-            else => false,
+fn isVoidElement(el: *Node.Element) bool {
+    return switch (el.getTag()) {
+        .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track => true,
+        .unknown => {
+            const unknown = el.as(Node.Element.Html.Unknown);
+            if (unknown._tag_name.eql(comptime .wrap("wbr"))) {
+                return true;
+            }
+            return false;
         },
-        .svg => false,
+        else => false,
     };
 }
 
@@ -494,8 +498,27 @@ test "dump: default dumps the whole document" {
 test "dump: with_base injects a <base> element" {
     try expectDump(.{ .with_base = true },
         \\<!DOCTYPE html>
-        \\<html><head><base base="http://127.0.0.1:9582/src/browser/tests/dump.html"></base><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
+        \\<html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump.html"><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><p class="hidden">secret</p><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: void elements have no end tag" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<video><source src="a.mp4"><track kind="captions"></video><map><area shape="rect"></map><embed src="e.swf"><p>a<wbr>b</p><table><colgroup><col span="2"></colgroup></table>
+    );
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{}, &aw.writer, frame);
+
+    try testing.expectString(
+        \\<div><video><source src="a.mp4"><track kind="captions"></video><map><area shape="rect"></map><embed src="e.swf"><p>a<wbr>b</p><table><colgroup><col span="2"></colgroup></table></div>
+    , aw.written());
 }
 
 test "dump: strip.js removes script and noscript" {

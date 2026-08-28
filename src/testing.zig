@@ -341,8 +341,10 @@ const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
     timeout_ms: u32 = 2000,
     inject_script: ?[]const u8 = null,
-    load_external_stylesheets: bool = false,
-    load_resources: Config.LoadResources = .{},
+    load_resources: Config.LoadResources = .{
+        .worker = true,
+        .iframe = true,
+    },
 };
 
 // Create a fresh page on `test_session` and return its root frame — for tests
@@ -368,11 +370,12 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     }
     defer test_session.inject_scripts = &.{};
 
-    test_session.load_external_stylesheets = opts.load_external_stylesheets;
-    defer test_session.load_external_stylesheets = false;
-
     test_session.load_resources = opts.load_resources;
-    defer test_session.load_resources = .{};
+    defer test_session.load_resources = .{
+        // original defaults, tests expect these to be on
+        .worker = true,
+        .iframe = true,
+    };
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
@@ -533,6 +536,7 @@ test "tests:beforeAll" {
         .insecure_disable_tls_host_verification = true,
         .user_agent_suffix = "internal-tester",
         .ws_max_concurrent = 50,
+        .load_resources = .{ .worker = true, .iframe = true },
     } });
 
     test_app = try App.init(test_allocator, &test_config);

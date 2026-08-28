@@ -21,23 +21,24 @@ const lp = @import("lightpanda");
 
 pub const Scope = enum {
     app,
-    dom,
-    bug,
     browser,
+    bug,
+    cache,
     cdp,
     console,
-    http,
-    frame,
-    js,
+    disabled,
+    dom,
     event,
-    scheduler,
+    frame,
+    http,
+    js,
+    mcp,
     not_implemented,
+    scheduler,
+    storage,
     telemetry,
     unknown_prop,
-    mcp,
-    cache,
     websocket,
-    storage,
 };
 
 pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
@@ -54,7 +55,7 @@ pub const FilterRule = struct {
 /// array. Directives apply left-to-right, so `-all,+cdp` disables every
 /// scope then re-enables `cdp`. Scopes untouched by any directive stay
 /// enabled.
-pub fn resolveFilterScopes(rules: []const FilterRule) [num_scopes]bool {
+pub fn resolveFilters(rules: []const FilterRule) [num_scopes]bool {
     var scope_enabled = [_]bool{true} ** num_scopes;
     for (rules) |rule| {
         if (rule.scope) |scope| {
@@ -70,7 +71,6 @@ const Opts = struct {
     format: Format = if (lp.IS_DEBUG) .pretty else .logfmt,
     level: Level = if (lp.IS_DEBUG) .info else .warn,
     // Per-scope enabled flags; a `false` entry suppresses that scope's logs.
-    // Only consulted in Debug builds. Default: everything enabled.
     scope_enabled: [num_scopes]bool = [_]bool{true} ** num_scopes,
 };
 
@@ -86,10 +86,8 @@ pub fn enabled(scope: Scope, level: Level) bool {
         return false;
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (opts.scope_enabled[@intFromEnum(scope)] == false) {
-            return false;
-        }
+    if (opts.scope_enabled[@intFromEnum(scope)] == false) {
+        return false;
     }
 
     return true;
@@ -161,6 +159,20 @@ pub fn fatal(scope: Scope, msg: []const u8, data: anytype) void {
 pub fn note(scope: Scope, msg: []const u8, data: anytype) void {
     if (comptime lp.IS_TEST == false) {
         log(scope, .note, msg, data);
+    }
+}
+
+var warned_disabled_worker = std.atomic.Value(bool).init(false);
+pub fn warnDisabledWorker() void {
+    if (warned_disabled_worker.swap(true, .monotonic) == false) {
+        warn(.disabled, "workers disabled", .{ .hint = "enable via --load-resources worker" });
+    }
+}
+
+var warned_disabled_iframe = std.atomic.Value(bool).init(false);
+pub fn warnDisabledIFrame() void {
+    if (warned_disabled_iframe.swap(true, .monotonic) == false) {
+        warn(.disabled, "iframes disabled", .{ .hint = "enable via --load-resources iframe" });
     }
 }
 
@@ -602,17 +614,17 @@ test "log: string escape" {
     }
 }
 
-test "log: resolveFilterScopes" {
+test "log: resolveFilters" {
     // No directives: everything enabled.
     {
-        const se = resolveFilterScopes(&.{});
+        const se = resolveFilters(&.{});
         try testing.expectEqual(true, se[@intFromEnum(Scope.cdp)]);
         try testing.expectEqual(true, se[@intFromEnum(Scope.http)]);
     }
 
     // Backward compatible: bare/`-` scope filters that scope out, rest stay in.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = .cdp, .enable = false },
             .{ .scope = .http, .enable = false },
         });
@@ -623,7 +635,7 @@ test "log: resolveFilterScopes" {
 
     // `-all,+cdp`: disable everything, then re-enable cdp.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = false },
             .{ .scope = .cdp, .enable = true },
         });
@@ -634,7 +646,7 @@ test "log: resolveFilterScopes" {
 
     // `+all,-cdp`: enable everything, then disable cdp. Order matters.
     {
-        const se = resolveFilterScopes(&.{
+        const se = resolveFilters(&.{
             .{ .scope = null, .enable = true },
             .{ .scope = .cdp, .enable = false },
         });

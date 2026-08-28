@@ -91,14 +91,8 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
 
-    // `--disable-workers` (or `LP.configureLoading { worker: false }`):
-    // skip the script fetch and eval. The Worker object is still
-    // constructed so JS `new Worker(url)` does not throw, but the
-    // worker's eval never runs (postMessage from the page is queued
-    // indefinitely with no handler to drain it). Mirrors the
-    // `subframe_loading_enabled` pattern for iframes.
-    if (!session.worker_loading_enabled) {
-        log.debug(.browser, "worker disabled", .{ .url = resolved_url });
+    if (session.load_resources.worker == false) {
+        log.warnDisabledWorker();
         return self;
     }
 

@@ -26,7 +26,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::os::raw::c_void;
-use std::sync::{Mutex, OnceLock};
 
 use fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::{
@@ -114,11 +113,148 @@ pub const RC_NO_RASTER: i32 = 3;
 pub const RC_ENCODE_FAILED: i32 = 4;
 pub const RC_PANIC: i32 = 5;
 
+/// Self-description of the ABI above, so screenshot.zig can check its
+/// hand-written mirror. `size` is `size_of::<LpAbi>()` and is compared first:
+/// it catches a field added to only one side of this struct itself.
+#[repr(C)]
+pub struct LpAbi {
+    pub size: u32,
+
+    pub span_size: u32,
+    pub span_align: u32,
+    pub span_text: u32,
+    pub span_len: u32,
+    pub span_flags: u32,
+    pub span_color: u32,
+
+    pub block_size: u32,
+    pub block_align: u32,
+    pub block_spans: u32,
+    pub block_spans_len: u32,
+    pub block_marker: u32,
+    pub block_marker_len: u32,
+    pub block_kind: u32,
+    pub block_level: u32,
+    pub block_list_depth: u32,
+    pub block_quote_depth: u32,
+    pub block_flags: u32,
+
+    pub opts_size: u32,
+    pub opts_align: u32,
+    pub opts_width: u32,
+    pub opts_height: u32,
+    pub opts_clip_x: u32,
+    pub opts_clip_y: u32,
+    pub opts_clip_w: u32,
+    pub opts_clip_h: u32,
+    pub opts_scale: u32,
+    pub opts_flags: u32,
+
+    pub span_bold: u32,
+    pub span_italic: u32,
+    pub span_underline: u32,
+    pub span_mono: u32,
+    pub span_strike: u32,
+    pub span_has_color: u32,
+
+    pub block_heading: u32,
+    pub block_pre: u32,
+    pub block_rule: u32,
+    pub block_tight: u32,
+
+    pub render_measure_only: u32,
+
+    pub rc_ok: u32,
+    pub rc_write_refused: u32,
+    pub rc_invalid: u32,
+    pub rc_no_raster: u32,
+    pub rc_encode_failed: u32,
+    pub rc_panic: u32,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
+    use std::mem::{align_of, offset_of, size_of};
+    *out = LpAbi {
+        size: size_of::<LpAbi>() as u32,
+
+        span_size: size_of::<LpSpan>() as u32,
+        span_align: align_of::<LpSpan>() as u32,
+        span_text: offset_of!(LpSpan, text) as u32,
+        span_len: offset_of!(LpSpan, len) as u32,
+        span_flags: offset_of!(LpSpan, flags) as u32,
+        span_color: offset_of!(LpSpan, color) as u32,
+
+        block_size: size_of::<LpBlock>() as u32,
+        block_align: align_of::<LpBlock>() as u32,
+        block_spans: offset_of!(LpBlock, spans) as u32,
+        block_spans_len: offset_of!(LpBlock, spans_len) as u32,
+        block_marker: offset_of!(LpBlock, marker) as u32,
+        block_marker_len: offset_of!(LpBlock, marker_len) as u32,
+        block_kind: offset_of!(LpBlock, kind) as u32,
+        block_level: offset_of!(LpBlock, level) as u32,
+        block_list_depth: offset_of!(LpBlock, list_depth) as u32,
+        block_quote_depth: offset_of!(LpBlock, quote_depth) as u32,
+        block_flags: offset_of!(LpBlock, flags) as u32,
+
+        opts_size: size_of::<LpRenderOpts>() as u32,
+        opts_align: align_of::<LpRenderOpts>() as u32,
+        opts_width: offset_of!(LpRenderOpts, width) as u32,
+        opts_height: offset_of!(LpRenderOpts, height) as u32,
+        opts_clip_x: offset_of!(LpRenderOpts, clip_x) as u32,
+        opts_clip_y: offset_of!(LpRenderOpts, clip_y) as u32,
+        opts_clip_w: offset_of!(LpRenderOpts, clip_w) as u32,
+        opts_clip_h: offset_of!(LpRenderOpts, clip_h) as u32,
+        opts_scale: offset_of!(LpRenderOpts, scale) as u32,
+        opts_flags: offset_of!(LpRenderOpts, flags) as u32,
+
+        span_bold: SPAN_BOLD,
+        span_italic: SPAN_ITALIC,
+        span_underline: SPAN_UNDERLINE,
+        span_mono: SPAN_MONO,
+        span_strike: SPAN_STRIKE,
+        span_has_color: SPAN_HAS_COLOR,
+
+        block_heading: BLOCK_HEADING as u32,
+        block_pre: BLOCK_PRE as u32,
+        block_rule: BLOCK_RULE as u32,
+        block_tight: BLOCK_TIGHT as u32,
+
+        render_measure_only: RENDER_MEASURE_ONLY,
+
+        rc_ok: RC_OK as u32,
+        rc_write_refused: RC_WRITE_REFUSED as u32,
+        rc_invalid: RC_INVALID as u32,
+        rc_no_raster: RC_NO_RASTER as u32,
+        rc_encode_failed: RC_ENCODE_FAILED as u32,
+        rc_panic: RC_PANIC as u32,
+    };
+}
+
+/// A renderer: parsed fonts, shaping scratch and the glyph cache. Not
+/// thread-safe; the caller drives each handle from one thread at a time.
+/// Null on panic (font registration is the only thing in there that could).
+#[no_mangle]
+pub extern "C" fn lp_render_new() -> *mut Renderer {
+    match std::panic::catch_unwind(Renderer::new) {
+        Ok(r) => Box::into_raw(Box::new(r)),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lp_render_free(r: *mut Renderer) {
+    drop(Box::from_raw(r));
+}
+
 /// Renders `blocks` to PNG, streaming the encoded bytes to `write`.
 /// `content_height` receives the full-page height in CSS px, and is filled in
-/// even when rendering fails. Returns one of the RC_* codes above.
+/// even when rendering fails. Returns one of the RC_* codes above. The
+/// renderer stays usable after RC_PANIC: layout state is scratch that the
+/// next call resets.
 #[no_mangle]
 pub unsafe extern "C" fn lp_render_png(
+    r: *mut Renderer,
     blocks: *const LpBlock,
     blocks_len: usize,
     opts: LpRenderOpts,
@@ -127,12 +263,21 @@ pub unsafe extern "C" fn lp_render_png(
     write: LpWriteFn,
 ) -> i32 {
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        render_png(blocks, blocks_len, opts, content_height, ctx, write)
+        render_png(
+            &mut *r,
+            blocks,
+            blocks_len,
+            opts,
+            content_height,
+            ctx,
+            write,
+        )
     }));
     caught.unwrap_or(RC_PANIC)
 }
 
 unsafe fn render_png(
+    r: &mut Renderer,
     blocks: *const LpBlock,
     blocks_len: usize,
     opts: LpRenderOpts,
@@ -179,12 +324,6 @@ unsafe fn render_png(
             spans: out_spans,
         });
     }
-
-    static RENDERER: OnceLock<Mutex<Renderer>> = OnceLock::new();
-    let mut r = RENDERER
-        .get_or_init(|| Mutex::new(Renderer::new()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
 
     let mut sink = Sink {
         ctx,
@@ -260,7 +399,7 @@ const MAX_RASTER_PIXELS: u64 = 64 << 20;
 /// (font, glyph id). Deliberately not the size — see draw_glyph_run.
 type GlyphKey = (usize, u32);
 
-struct Renderer {
+pub struct Renderer {
     fcx: FontContext,
     lcx: LayoutContext<Rgb>,
     glyph_cache: HashMap<GlyphKey, Option<tiny_skia::Path>>,

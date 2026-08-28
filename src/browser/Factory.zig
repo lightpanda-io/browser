@@ -56,6 +56,10 @@ pub fn init(arena: Allocator) Factory {
     };
 }
 
+pub fn storageAllocator(self: *Factory) Allocator {
+    return self._slab.allocator();
+}
+
 // this is a root object
 pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return self.eventTargetWithAllocator(self._slab.allocator(), child);

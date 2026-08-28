@@ -231,19 +231,19 @@ fn substringFn(arena: Allocator, args: []const result.Result) Error![]const u8 {
         if (std.math.isNan(len_raw)) return "";
         const len = roundHalfToPosInf(len_raw);
         const sum = start - 1 + len;
-        // -inf + inf is NaN; @intFromFloat(NaN) is illegal behavior.
+        // -inf + inf is NaN, and NaN to integer is illegal behavior.
         if (std.math.isNan(sum)) return "";
         const si_f = @max(start - 1, 0);
         const ei_f = @min(sum, s_len);
         if (si_f >= ei_f) return "";
-        const si: usize = @intFromFloat(si_f);
-        const ei: usize = @intFromFloat(ei_f);
+        const si: usize = @trunc(si_f);
+        const ei: usize = @trunc(ei_f);
         return s[si..ei];
     }
 
     const si_f = @max(start - 1, 0);
     if (si_f >= s_len) return "";
-    const si: usize = @intFromFloat(si_f);
+    const si: usize = @trunc(si_f);
     return s[si..];
 }
 

@@ -67,6 +67,9 @@ permissions: std.StringHashMapUnmanaged(PermissionState) = .empty,
 // Runtime viewport override
 viewport_override: ?Viewport = null,
 
+// Screenshot renderer (fonts, glyph cache); created on the first screenshot.
+renderer: ?*lp.screenshot.Renderer = null,
+
 // Runtime geolocation override
 geolocation_override: ?Geolocation.Override = null,
 
@@ -154,6 +157,7 @@ pub fn deinit(self: *Browser) void {
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
     self.http_client.deinit();
+    if (self.renderer) |r| r.deinit();
     self.clearPermissions();
     self.permissions.deinit(allocator);
     self.selector_cache.deinit();

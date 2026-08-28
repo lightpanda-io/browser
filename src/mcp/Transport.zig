@@ -25,6 +25,9 @@ const protocol = @import("protocol.zig");
 
 const Self = @This();
 
+/// A screenshot response is hundreds of KB; don't keep that parked.
+pub const large_response = 256 * 1024;
+
 writer: *std.Io.Writer,
 mutex: std.Io.Mutex = .init,
 aw: std.Io.Writer.Allocating,
@@ -53,6 +56,12 @@ pub fn sendResponse(self: *Self, response: anytype) !void {
     try self.aw.writer.writeByte('\n');
     try self.writer.writeAll(self.aw.writer.buffered());
     try self.writer.flush();
+
+    if (self.aw.writer.buffer.len > large_response) {
+        const allocator = self.aw.allocator;
+        self.aw.deinit();
+        self.aw = .init(allocator);
+    }
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {

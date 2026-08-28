@@ -174,9 +174,19 @@ pub fn TextContent(comptime T: type) type {
     };
 }
 
-pub fn CallToolResult(comptime T: type) type {
+/// `T` serializes as the base64 payload.
+pub fn ImageContent(comptime T: type) type {
     return struct {
-        content: []const TextContent(T),
+        type: []const u8 = "image",
+        data: T,
+        mimeType: []const u8,
+    };
+}
+
+/// `Content` is the content array: a slice or tuple of `TextContent`/`ImageContent`.
+pub fn CallToolResult(comptime Content: type) type {
+    return struct {
+        content: Content,
         isError: bool = false,
     };
 }
