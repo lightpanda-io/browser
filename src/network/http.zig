@@ -593,6 +593,18 @@ pub const Connection = struct {
         return micros;
     }
 
+    // Time the server took to send its first byte once the request was
+    // sent, in microseconds. Name lookup, connect and TLS are excluded, so
+    // this measures the server, not the network. Across redirects curl adds
+    // the time of each hop.
+    pub fn getServerTimeMicros(self: *const Connection) !c_long {
+        var pretransfer: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .pretransfer_time_t, &pretransfer);
+        var starttransfer: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .starttransfer_time_t, &starttransfer);
+        return @max(0, starttransfer - pretransfer);
+    }
+
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
         var hdr: ?*libcurl.CurlHeader = null;
         libcurl.curl_easy_header(self._easy, name, index, .connect, -1, &hdr) catch |err| {

@@ -1636,6 +1636,17 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         } else |_| {}
     }
 
+    // Tell the rate limiter how slow the host was, so the next navigation
+    // to it is spaced accordingly.
+    if (transfer.req.throttle) {
+        if (self.network.rate_limiter) |*rl| {
+            if (msg.conn.getServerTimeMicros()) |micros| {
+                const ms: u64 = @intCast(@divTrunc(micros, 1000));
+                rl.observe(URL.getHostname(transfer.req.url), ms, lp.datetime.milliTimestamp(.boot));
+            } else |_| {}
+        }
+    }
+
     // Release the conn before any of this response's callbacks can run —
     // they'll want it for the next resource.
     self.removeConn(msg.conn);

@@ -37,6 +37,13 @@ pub const COOLDOWN_INTERVALS: u64 = 10;
 // The interval never grows beyond `MAX_INTERVALS` base intervals.
 pub const MAX_INTERVALS: u64 = 60;
 
+// A host is spaced by at least `TTFB_FACTOR` times its (smoothed) server
+// time: the slower it answers, the more we leave it alone.
+pub const TTFB_FACTOR: u64 = 2;
+
+// Smoothing of the server time: each new sample weighs 1 / TTFB_SMOOTHING.
+pub const TTFB_SMOOTHING: u64 = 4;
+
 allocator: Allocator,
 
 // Minimum gap between two navigations to the same host.
@@ -86,6 +93,10 @@ const Host = struct {
     // to `pressure`. Advanced by whole `cooldown_ms` steps so no idle time is
     // lost to rounding.
     clock: u64,
+
+    // Smoothed server time (time to first byte, excluding connect) of the
+    // host's last responses. 0 until the first response.
+    ttfb_ms: u64,
 };
 
 pub fn init(allocator: Allocator, interval_ms: u64, burst: u32) RateLimiter {
@@ -121,7 +132,7 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         const h = gop.value_ptr;
         self.cooldown(h, now);
 
-        const interval = self.intervalFor(h.pressure);
+        const interval = self.intervalFor(h);
         const start = @max(now, h.tat -| self.tau);
         h.tat = @max(h.tat, start) + interval;
         h.pressure = @min(h.pressure + 1, self.pressure_max);
@@ -142,6 +153,7 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         .tat = now + self.interval_ms,
         .pressure = 1,
         .clock = now,
+        .ttfb_ms = 0,
     };
 
     if (self.hosts.count() >= self.sweep_at) {
@@ -150,10 +162,40 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
     return now;
 }
 
-// Effective interval for a host under the given pressure: one extra base
-// interval per full `ramp_step` of navigations, capped at `max_ms`.
-fn intervalFor(self: *const RateLimiter, pressure: u64) u64 {
-    return @min(self.interval_ms * (1 + pressure / self.ramp_step), self.max_ms);
+// Record the server time of a response from the host, and push its next
+// slot after the response: a host slower than its interval would otherwise
+// be hit again as soon as it answers.
+pub fn observe(self: *RateLimiter, host: []const u8, ttfb_ms: u64, now: u64) void {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    // Unknown host: it was swept, or never throttled. Nothing to adjust.
+    const h = self.hosts.getPtr(host) orelse return;
+
+    if (h.ttfb_ms == 0) {
+        h.ttfb_ms = ttfb_ms;
+    } else {
+        h.ttfb_ms = (h.ttfb_ms * (TTFB_SMOOTHING - 1) + ttfb_ms) / TTFB_SMOOTHING;
+    }
+
+    // reserve() spaces starts by TTFB_FACTOR * ttfb. The response arrived
+    // one ttfb after the start, so the rest of that spacing must still
+    // elapse after the response.
+    const rest = @min((TTFB_FACTOR - 1) * h.ttfb_ms, self.max_ms);
+    h.tat = @max(h.tat, now + rest);
+    log.debug(.rate_limit, "response observed", .{
+        .host = host,
+        .ttfb_ms = ttfb_ms,
+        .smoothed_ttfb_ms = h.ttfb_ms,
+    });
+}
+
+// Effective interval for a host: one extra base interval per full
+// `ramp_step` of navigations, never less than `TTFB_FACTOR` times the host's
+// server time, capped at `max_ms`.
+fn intervalFor(self: *const RateLimiter, h: *const Host) u64 {
+    const pressure = self.interval_ms * (1 + h.pressure / self.ramp_step);
+    return @min(@max(pressure, TTFB_FACTOR * h.ttfb_ms), self.max_ms);
 }
 
 // Credit the idle time since the host's cooldown clock to its pressure.
@@ -318,8 +360,41 @@ test "RateLimiter: pressure cap" {
     }
     try testing.expectEqual(6000, max_gap);
     try testing.expectEqual(rl.pressure_max, rl.hosts.get("a.test").?.pressure);
-    try testing.expectEqual(6000, rl.intervalFor(rl.pressure_max));
-    try testing.expectEqual(6000, rl.intervalFor(rl.pressure_max * 2));
+    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max, .clock = 0, .ttfb_ms = 0 }));
+    try testing.expectEqual(6000, rl.intervalFor(&.{ .tat = 0, .pressure = rl.pressure_max * 2, .clock = 0, .ttfb_ms = 0 }));
+}
+
+test "RateLimiter: slow host" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    defer rl.deinit();
+
+    // first navigation at 1000, the server takes 300ms to answer
+    try testing.expectEqual(1000, try rl.reserve("a.test", 1000));
+    rl.observe("a.test", 300, 1300);
+    try testing.expectEqual(300, rl.hosts.get("a.test").?.ttfb_ms);
+
+    // the TAT (1100) was already past: the next slot is pushed one ttfb
+    // after the response, and starts are now spaced by 2 x ttfb
+    try testing.expectEqual(1600, try rl.reserve("a.test", 1300));
+    try testing.expectEqual(2200, try rl.reserve("a.test", 1300));
+
+    // a fast response does not push anything, and the smoothed ttfb comes
+    // down slowly: (300 * 3 + 0) / 4
+    rl.observe("a.test", 0, 1900);
+    try testing.expectEqual(2800, rl.hosts.get("a.test").?.tat);
+    try testing.expectEqual(225, rl.hosts.get("a.test").?.ttfb_ms);
+    try testing.expectEqual(2800, try rl.reserve("a.test", 2600));
+    try testing.expectEqual(2800 + 450, rl.hosts.get("a.test").?.tat);
+
+    // the ttfb term is capped like the pressure one (60 x base)
+    rl.observe("a.test", 100_000, 3000);
+    try testing.expectEqual(3000 + 6000, rl.hosts.get("a.test").?.tat);
+    try testing.expectEqual(9000, try rl.reserve("a.test", 9000));
+    try testing.expectEqual(9000 + 6000, try rl.reserve("a.test", 9000));
+
+    // an unknown host is ignored
+    rl.observe("b.test", 300, 3000);
+    try testing.expect(rl.hosts.get("b.test") == null);
 }
 
 test "RateLimiter: sweep" {
