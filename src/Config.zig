@@ -871,6 +871,7 @@ pub const DumpFormat = enum {
     html,
     markdown,
     png,
+    pdf,
     wpt,
     semantic_tree,
     semantic_tree_text,

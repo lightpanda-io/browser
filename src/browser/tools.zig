@@ -1365,7 +1365,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *CDP
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
-    var prepared = lp.screenshot.prepare(arena, node, .fromViewport(page._page.getViewport(), args.fullPage), page) catch
+    var prepared = lp.screenshot.preparePng(arena, node, .fromViewport(page._page.getViewport(), args.fullPage), page) catch
         return ToolError.InternalError;
 
     if (args.path) |path| {

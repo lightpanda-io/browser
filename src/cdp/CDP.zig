@@ -96,6 +96,9 @@ frame_arena: std.heap.ArenaAllocator,
 // (or altogether eliminate) our use of this.
 browser_context_arena: std.heap.ArenaAllocator,
 
+// Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
+streams: @import("domains/io.zig").Streams,
+
 pub fn init(
     self: *CDP,
     app: *App,
@@ -115,6 +118,7 @@ pub fn init(
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .notification_arena = std.heap.ArenaAllocator.init(allocator),
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+        .streams = .{ .allocator = allocator },
     };
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
@@ -140,6 +144,7 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
+    self.streams.deinit();
     self.conn.deinit();
 }
 // Called by the Server run loop when readable bytes arrive on the CDP
@@ -388,6 +393,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
     switch (domain.len) {
         2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
             asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
+            asUint(u16, "IO") => return @import("domains/io.zig").processMessage(command),
             else => {},
         },
         3 => switch (@as(u24, @bitCast(domain[0..3].*))) {

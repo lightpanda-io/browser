@@ -67,6 +67,10 @@ pub struct LpSpan {
     pub len: usize,
     pub flags: u32,
     pub color: u32,
+    /// Absolute URL of the enclosing link; empty for none. Not used here:
+    /// pdf.zig maps it onto the exported clusters.
+    pub href: *const u8,
+    pub href_len: usize,
 }
 
 #[repr(C)]
@@ -101,6 +105,140 @@ pub struct LpRenderOpts {
     pub flags: u32,
 }
 
+/// A laid-out document in layout px (scale 1), as flat arrays: blocks own a
+/// range of lines, lines a range of runs and clusters, runs a range of
+/// glyphs. Everything is owned by the handle `lp_layout_new` returns and is
+/// valid until `lp_layout_free`. The consumer is src/browser/pdf.zig.
+#[repr(C)]
+pub struct LpLayout {
+    /// Column height, margins included.
+    pub height: f32,
+    /// Style the consumer has to reproduce: <pre> padding, quote bar step,
+    /// rule/bar color and <pre> background (0xRRGGBB).
+    pub pre_pad: f32,
+    pub quote_indent: f32,
+    pub rule_color: u32,
+    pub pre_bg: u32,
+    pub blocks: *const LpLayoutBlock,
+    pub blocks_len: usize,
+    pub lines: *const LpLine,
+    pub lines_len: usize,
+    pub runs: *const LpRun,
+    pub runs_len: usize,
+    pub glyphs: *const LpGlyph,
+    pub glyphs_len: usize,
+    pub clusters: *const LpCluster,
+    pub clusters_len: usize,
+    pub fonts: *const LpFont,
+    pub fonts_len: usize,
+}
+
+/// "No index" for `marker_line` and `LpCluster.glyph`.
+pub const LAYOUT_NONE: u32 = u32::MAX;
+
+#[repr(C)]
+pub struct LpLayoutBlock {
+    /// Text origin: x is the left edge of the runs, y the top of the first
+    /// line box (inside the <pre> padding).
+    pub x: f32,
+    pub y: f32,
+    /// Where quote bars start; one every `quote_indent`.
+    pub quote_x: f32,
+    /// Text lines, in order. A rule has none.
+    pub lines: u32,
+    pub lines_len: u32,
+    /// The list marker's line (its own layout, positioned in the gutter),
+    /// or LAYOUT_NONE.
+    pub marker_line: u32,
+    /// BLOCK_* kind.
+    pub kind: u8,
+    pub quote_bars: u8,
+}
+
+#[repr(C)]
+pub struct LpLine {
+    /// Absolute origin of the runs on this line.
+    pub x: f32,
+    /// Absolute line box.
+    pub top: f32,
+    pub bottom: f32,
+    pub runs: u32,
+    pub runs_len: u32,
+    /// Every cluster on the line in visual order, for text mapping.
+    pub clusters: u32,
+    pub clusters_len: u32,
+}
+
+/// A run of glyphs in one font, size and style.
+#[repr(C)]
+pub struct LpRun {
+    pub font: u32,
+    pub size: f32,
+    /// tan of the synthetic italic angle; 0 for upright.
+    pub skew: f32,
+    /// 0xRRGGBB.
+    pub color: u32,
+    /// x from the line origin.
+    pub offset: f32,
+    /// Absolute y.
+    pub baseline: f32,
+    pub advance: f32,
+    pub glyphs: u32,
+    pub glyphs_len: u32,
+    pub underline: LpDecoration,
+    pub strike: LpDecoration,
+}
+
+/// A line drawn `offset` above the baseline, `size` thick, over the run.
+#[repr(C)]
+pub struct LpDecoration {
+    pub enabled: u32,
+    pub offset: f32,
+    pub size: f32,
+    pub color: u32,
+}
+
+/// Positioned relative to the pen: x/y offsets, then the pen advances.
+#[repr(C)]
+pub struct LpGlyph {
+    pub id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub advance: f32,
+}
+
+/// What a piece of the block's text became: the (first) glyph it produced,
+/// and where on the line it sits. `text_start` indexes the concatenation
+/// of the block's span texts.
+#[repr(C)]
+pub struct LpCluster {
+    pub font: u32,
+    /// Glyph id, or LAYOUT_NONE for a cluster that produced none (a
+    /// ligature continuation).
+    pub glyph: u32,
+    pub text_start: u32,
+    pub text_len: u32,
+    /// x from the line origin.
+    pub x: f32,
+    pub advance: f32,
+    pub flags: u32,
+}
+
+pub const CLUSTER_LIGATURE_START: u32 = 1 << 0;
+pub const CLUSTER_LIGATURE_CONT: u32 = 1 << 1;
+
+/// A face the layout used: the raw font file (static, outlives the handle)
+/// and how to name it.
+#[repr(C)]
+pub struct LpFont {
+    pub data: *const u8,
+    pub data_len: usize,
+    pub index: u32,
+    pub name: *const u8,
+    pub name_len: usize,
+    pub mono: u8,
+}
+
 pub type LpWriteFn = extern "C" fn(ctx: *mut c_void, data: *const u8, len: usize) -> bool;
 
 /// Return codes. Anything but OK means nothing usable reached `write`, so a
@@ -126,6 +264,8 @@ pub struct LpAbi {
     pub span_len: u32,
     pub span_flags: u32,
     pub span_color: u32,
+    pub span_href: u32,
+    pub span_href_len: u32,
 
     pub block_size: u32,
     pub block_align: u32,
@@ -150,6 +290,89 @@ pub struct LpAbi {
     pub opts_scale: u32,
     pub opts_flags: u32,
 
+    pub layout_sizeof: u32,
+    pub layout_alignof: u32,
+    pub layout_height: u32,
+    pub layout_pre_pad: u32,
+    pub layout_quote_indent: u32,
+    pub layout_rule_color: u32,
+    pub layout_pre_bg: u32,
+    pub layout_blocks: u32,
+    pub layout_blocks_len: u32,
+    pub layout_lines: u32,
+    pub layout_lines_len: u32,
+    pub layout_runs: u32,
+    pub layout_runs_len: u32,
+    pub layout_glyphs: u32,
+    pub layout_glyphs_len: u32,
+    pub layout_clusters: u32,
+    pub layout_clusters_len: u32,
+    pub layout_fonts: u32,
+    pub layout_fonts_len: u32,
+    pub lblock_sizeof: u32,
+    pub lblock_alignof: u32,
+    pub lblock_x: u32,
+    pub lblock_y: u32,
+    pub lblock_quote_x: u32,
+    pub lblock_lines: u32,
+    pub lblock_lines_len: u32,
+    pub lblock_marker_line: u32,
+    pub lblock_kind: u32,
+    pub lblock_quote_bars: u32,
+    pub line_sizeof: u32,
+    pub line_alignof: u32,
+    pub line_x: u32,
+    pub line_top: u32,
+    pub line_bottom: u32,
+    pub line_runs: u32,
+    pub line_runs_len: u32,
+    pub line_clusters: u32,
+    pub line_clusters_len: u32,
+    pub run_sizeof: u32,
+    pub run_alignof: u32,
+    pub run_font: u32,
+    pub run_size: u32,
+    pub run_skew: u32,
+    pub run_color: u32,
+    pub run_offset: u32,
+    pub run_baseline: u32,
+    pub run_advance: u32,
+    pub run_glyphs: u32,
+    pub run_glyphs_len: u32,
+    pub run_underline: u32,
+    pub run_strike: u32,
+    pub deco_sizeof: u32,
+    pub deco_alignof: u32,
+    pub deco_enabled: u32,
+    pub deco_offset: u32,
+    pub deco_size: u32,
+    pub deco_color: u32,
+    pub glyph_sizeof: u32,
+    pub glyph_alignof: u32,
+    pub glyph_id: u32,
+    pub glyph_x: u32,
+    pub glyph_y: u32,
+    pub glyph_advance: u32,
+    pub cluster_sizeof: u32,
+    pub cluster_alignof: u32,
+    pub cluster_font: u32,
+    pub cluster_glyph: u32,
+    pub cluster_text_start: u32,
+    pub cluster_text_len: u32,
+    pub cluster_x: u32,
+    pub cluster_advance: u32,
+    pub cluster_flags: u32,
+    pub font_sizeof: u32,
+    pub font_alignof: u32,
+    pub font_data: u32,
+    pub font_data_len: u32,
+    pub font_index: u32,
+    pub font_name: u32,
+    pub font_name_len: u32,
+    pub font_mono: u32,
+    pub layout_none: u32,
+    pub cluster_ligature_start: u32,
+    pub cluster_ligature_cont: u32,
     pub span_bold: u32,
     pub span_italic: u32,
     pub span_underline: u32,
@@ -184,6 +407,8 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
         span_len: offset_of!(LpSpan, len) as u32,
         span_flags: offset_of!(LpSpan, flags) as u32,
         span_color: offset_of!(LpSpan, color) as u32,
+        span_href: offset_of!(LpSpan, href) as u32,
+        span_href_len: offset_of!(LpSpan, href_len) as u32,
 
         block_size: size_of::<LpBlock>() as u32,
         block_align: align_of::<LpBlock>() as u32,
@@ -208,6 +433,89 @@ pub unsafe extern "C" fn lp_render_abi(out: *mut LpAbi) {
         opts_scale: offset_of!(LpRenderOpts, scale) as u32,
         opts_flags: offset_of!(LpRenderOpts, flags) as u32,
 
+        layout_sizeof: size_of::<LpLayout>() as u32,
+        layout_alignof: align_of::<LpLayout>() as u32,
+        layout_height: offset_of!(LpLayout, height) as u32,
+        layout_pre_pad: offset_of!(LpLayout, pre_pad) as u32,
+        layout_quote_indent: offset_of!(LpLayout, quote_indent) as u32,
+        layout_rule_color: offset_of!(LpLayout, rule_color) as u32,
+        layout_pre_bg: offset_of!(LpLayout, pre_bg) as u32,
+        layout_blocks: offset_of!(LpLayout, blocks) as u32,
+        layout_blocks_len: offset_of!(LpLayout, blocks_len) as u32,
+        layout_lines: offset_of!(LpLayout, lines) as u32,
+        layout_lines_len: offset_of!(LpLayout, lines_len) as u32,
+        layout_runs: offset_of!(LpLayout, runs) as u32,
+        layout_runs_len: offset_of!(LpLayout, runs_len) as u32,
+        layout_glyphs: offset_of!(LpLayout, glyphs) as u32,
+        layout_glyphs_len: offset_of!(LpLayout, glyphs_len) as u32,
+        layout_clusters: offset_of!(LpLayout, clusters) as u32,
+        layout_clusters_len: offset_of!(LpLayout, clusters_len) as u32,
+        layout_fonts: offset_of!(LpLayout, fonts) as u32,
+        layout_fonts_len: offset_of!(LpLayout, fonts_len) as u32,
+        lblock_sizeof: size_of::<LpLayoutBlock>() as u32,
+        lblock_alignof: align_of::<LpLayoutBlock>() as u32,
+        lblock_x: offset_of!(LpLayoutBlock, x) as u32,
+        lblock_y: offset_of!(LpLayoutBlock, y) as u32,
+        lblock_quote_x: offset_of!(LpLayoutBlock, quote_x) as u32,
+        lblock_lines: offset_of!(LpLayoutBlock, lines) as u32,
+        lblock_lines_len: offset_of!(LpLayoutBlock, lines_len) as u32,
+        lblock_marker_line: offset_of!(LpLayoutBlock, marker_line) as u32,
+        lblock_kind: offset_of!(LpLayoutBlock, kind) as u32,
+        lblock_quote_bars: offset_of!(LpLayoutBlock, quote_bars) as u32,
+        line_sizeof: size_of::<LpLine>() as u32,
+        line_alignof: align_of::<LpLine>() as u32,
+        line_x: offset_of!(LpLine, x) as u32,
+        line_top: offset_of!(LpLine, top) as u32,
+        line_bottom: offset_of!(LpLine, bottom) as u32,
+        line_runs: offset_of!(LpLine, runs) as u32,
+        line_runs_len: offset_of!(LpLine, runs_len) as u32,
+        line_clusters: offset_of!(LpLine, clusters) as u32,
+        line_clusters_len: offset_of!(LpLine, clusters_len) as u32,
+        run_sizeof: size_of::<LpRun>() as u32,
+        run_alignof: align_of::<LpRun>() as u32,
+        run_font: offset_of!(LpRun, font) as u32,
+        run_size: offset_of!(LpRun, size) as u32,
+        run_skew: offset_of!(LpRun, skew) as u32,
+        run_color: offset_of!(LpRun, color) as u32,
+        run_offset: offset_of!(LpRun, offset) as u32,
+        run_baseline: offset_of!(LpRun, baseline) as u32,
+        run_advance: offset_of!(LpRun, advance) as u32,
+        run_glyphs: offset_of!(LpRun, glyphs) as u32,
+        run_glyphs_len: offset_of!(LpRun, glyphs_len) as u32,
+        run_underline: offset_of!(LpRun, underline) as u32,
+        run_strike: offset_of!(LpRun, strike) as u32,
+        deco_sizeof: size_of::<LpDecoration>() as u32,
+        deco_alignof: align_of::<LpDecoration>() as u32,
+        deco_enabled: offset_of!(LpDecoration, enabled) as u32,
+        deco_offset: offset_of!(LpDecoration, offset) as u32,
+        deco_size: offset_of!(LpDecoration, size) as u32,
+        deco_color: offset_of!(LpDecoration, color) as u32,
+        glyph_sizeof: size_of::<LpGlyph>() as u32,
+        glyph_alignof: align_of::<LpGlyph>() as u32,
+        glyph_id: offset_of!(LpGlyph, id) as u32,
+        glyph_x: offset_of!(LpGlyph, x) as u32,
+        glyph_y: offset_of!(LpGlyph, y) as u32,
+        glyph_advance: offset_of!(LpGlyph, advance) as u32,
+        cluster_sizeof: size_of::<LpCluster>() as u32,
+        cluster_alignof: align_of::<LpCluster>() as u32,
+        cluster_font: offset_of!(LpCluster, font) as u32,
+        cluster_glyph: offset_of!(LpCluster, glyph) as u32,
+        cluster_text_start: offset_of!(LpCluster, text_start) as u32,
+        cluster_text_len: offset_of!(LpCluster, text_len) as u32,
+        cluster_x: offset_of!(LpCluster, x) as u32,
+        cluster_advance: offset_of!(LpCluster, advance) as u32,
+        cluster_flags: offset_of!(LpCluster, flags) as u32,
+        font_sizeof: size_of::<LpFont>() as u32,
+        font_alignof: align_of::<LpFont>() as u32,
+        font_data: offset_of!(LpFont, data) as u32,
+        font_data_len: offset_of!(LpFont, data_len) as u32,
+        font_index: offset_of!(LpFont, index) as u32,
+        font_name: offset_of!(LpFont, name) as u32,
+        font_name_len: offset_of!(LpFont, name_len) as u32,
+        font_mono: offset_of!(LpFont, mono) as u32,
+        layout_none: LAYOUT_NONE,
+        cluster_ligature_start: CLUSTER_LIGATURE_START,
+        cluster_ligature_cont: CLUSTER_LIGATURE_CONT,
         span_bold: SPAN_BOLD,
         span_italic: SPAN_ITALIC,
         span_underline: SPAN_UNDERLINE,
@@ -288,6 +596,262 @@ unsafe fn render_png(
     if opts.width == 0 || !(opts.scale > 0.0) || opts.scale > 8.0 {
         return RC_INVALID;
     }
+    let Some(doc) = blocks_from_ffi(blocks, blocks_len) else {
+        return RC_INVALID;
+    };
+    let mut sink = Sink {
+        ctx,
+        write,
+        failed: false,
+    };
+    let (h, rc) = r.render(&doc, opts, &mut sink);
+    if !content_height.is_null() {
+        *content_height = h;
+    }
+    // A refused write surfaces as an encode failure too; report the cause.
+    if sink.failed {
+        RC_WRITE_REFUSED
+    } else {
+        rc
+    }
+}
+
+/// Lays `blocks` out in a column `width` layout px wide with `margin` on
+/// every side and exports the result into `out`. Null on invalid input or
+/// panic; the handle must be freed with `lp_layout_free`.
+#[no_mangle]
+pub unsafe extern "C" fn lp_layout_new(
+    r: *mut Renderer,
+    blocks: *const LpBlock,
+    blocks_len: usize,
+    width: f32,
+    margin: f32,
+    out: *mut LpLayout,
+) -> *mut LayoutHandle {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !(width >= 1.0) || !width.is_finite() || !(margin >= 0.0) || !margin.is_finite() {
+            return std::ptr::null_mut();
+        }
+        let Some(doc) = blocks_from_ffi(blocks, blocks_len) else {
+            return std::ptr::null_mut();
+        };
+        let (placed, height) = (*r).layout(&doc, width, margin, 1.0);
+        let handle = Box::new(LayoutHandle::export(&placed, height));
+        *out = handle.view();
+        Box::into_raw(handle)
+    }));
+    caught.unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn lp_layout_free(h: *mut LayoutHandle) {
+    drop(Box::from_raw(h));
+}
+
+/// The arrays behind an `LpLayout`.
+pub struct LayoutHandle {
+    height: f32,
+    blocks: Vec<LpLayoutBlock>,
+    lines: Vec<LpLine>,
+    runs: Vec<LpRun>,
+    glyphs: Vec<LpGlyph>,
+    clusters: Vec<LpCluster>,
+    fonts: Vec<LpFont>,
+}
+
+impl LayoutHandle {
+    fn view(&self) -> LpLayout {
+        LpLayout {
+            height: self.height,
+            pre_pad: PRE_PAD,
+            quote_indent: QUOTE_INDENT,
+            rule_color: RULE_COLOR.packed(),
+            pre_bg: PRE_BG.packed(),
+            blocks: self.blocks.as_ptr(),
+            blocks_len: self.blocks.len(),
+            lines: self.lines.as_ptr(),
+            lines_len: self.lines.len(),
+            runs: self.runs.as_ptr(),
+            runs_len: self.runs.len(),
+            glyphs: self.glyphs.as_ptr(),
+            glyphs_len: self.glyphs.len(),
+            clusters: self.clusters.as_ptr(),
+            clusters_len: self.clusters.len(),
+            fonts: self.fonts.as_ptr(),
+            fonts_len: self.fonts.len(),
+        }
+    }
+
+    fn export(placed: &[Placed], height: f32) -> LayoutHandle {
+        let mut h = LayoutHandle {
+            height,
+            blocks: Vec::with_capacity(placed.len()),
+            lines: Vec::new(),
+            runs: Vec::new(),
+            glyphs: Vec::new(),
+            clusters: Vec::new(),
+            fonts: Vec::new(),
+        };
+        for p in placed {
+            let lines = h.lines.len() as u32;
+            if p.kind != BLOCK_RULE {
+                h.export_layout(&p.layout, p.x, p.y);
+            }
+            let lines_len = h.lines.len() as u32 - lines;
+            let marker_line = match &p.marker {
+                Some(m) => {
+                    let at = h.lines.len() as u32;
+                    h.export_layout(&m.layout, m.x, p.y);
+                    at
+                }
+                None => LAYOUT_NONE,
+            };
+            h.blocks.push(LpLayoutBlock {
+                x: p.x,
+                y: p.y,
+                quote_x: p.quote_x,
+                lines,
+                lines_len,
+                marker_line,
+                kind: p.kind,
+                quote_bars: p.quote_bars,
+            });
+        }
+        h
+    }
+
+    fn export_layout(&mut self, layout: &Layout<Rgb>, ox: f32, oy: f32) {
+        for line in layout.lines() {
+            let m = line.metrics();
+            let runs = self.runs.len() as u32;
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    self.export_run(&gr, oy);
+                }
+            }
+            let runs_len = self.runs.len() as u32 - runs;
+
+            // Clusters in visual order, positioned by accumulating advances
+            // (parley's Cluster::visual_offset is linear per call).
+            let clusters = self.clusters.len() as u32;
+            let mut x = m.offset;
+            for run in line.runs() {
+                let font = self.font_index(run.font());
+                for cluster in run.visual_clusters() {
+                    let range = cluster.text_range();
+                    let mut flags = 0;
+                    if cluster.is_ligature_start() {
+                        flags |= CLUSTER_LIGATURE_START;
+                    }
+                    if cluster.is_ligature_continuation() {
+                        flags |= CLUSTER_LIGATURE_CONT;
+                    }
+                    self.clusters.push(LpCluster {
+                        font,
+                        glyph: cluster.glyphs().next().map_or(LAYOUT_NONE, |g| g.id),
+                        text_start: range.start as u32,
+                        text_len: range.len() as u32,
+                        x,
+                        advance: cluster.advance(),
+                        flags,
+                    });
+                    x += cluster.advance();
+                }
+            }
+            let clusters_len = self.clusters.len() as u32 - clusters;
+
+            self.lines.push(LpLine {
+                x: ox,
+                top: oy + m.block_min_coord,
+                bottom: oy + m.block_max_coord,
+                runs,
+                runs_len,
+                clusters,
+                clusters_len,
+            });
+        }
+    }
+
+    fn export_run(&mut self, gr: &GlyphRun<Rgb>, oy: f32) {
+        let run = gr.run();
+        let style = gr.style();
+        let m = run.metrics();
+        let glyphs = self.glyphs.len() as u32;
+        for g in gr.glyphs() {
+            self.glyphs.push(LpGlyph {
+                id: g.id,
+                x: g.x,
+                y: g.y,
+                advance: g.advance,
+            });
+        }
+        let deco = |d: &Option<parley::layout::Decoration<Rgb>>, off: f32, size: f32| match d {
+            Some(d) => LpDecoration {
+                enabled: 1,
+                offset: d.offset.unwrap_or(off),
+                size: d.size.unwrap_or(size).max(1.0),
+                color: d.brush.packed(),
+            },
+            None => LpDecoration {
+                enabled: 0,
+                offset: 0.0,
+                size: 0.0,
+                color: 0,
+            },
+        };
+        let font = self.font_index(run.font());
+        let glyphs_len = self.glyphs.len() as u32 - glyphs;
+        self.runs.push(LpRun {
+            font,
+            size: run.font_size(),
+            skew: run
+                .synthesis()
+                .skew()
+                .map(|deg| deg.to_radians().tan())
+                .unwrap_or(0.0),
+            color: style.brush.packed(),
+            offset: gr.offset(),
+            baseline: oy + gr.baseline(),
+            advance: gr.advance(),
+            glyphs,
+            glyphs_len,
+            underline: deco(&style.underline, m.underline_offset, m.underline_size),
+            strike: deco(
+                &style.strikethrough,
+                m.strikethrough_offset,
+                m.strikethrough_size,
+            ),
+        });
+    }
+
+    fn font_index(&mut self, font: &parley::FontData) -> u32 {
+        let bytes = font.data.as_ref();
+        if let Some(i) = self
+            .fonts
+            .iter()
+            .position(|f| f.data == bytes.as_ptr() && f.index == font.index)
+        {
+            return i as u32;
+        }
+        let (name, mono) = FONTS
+            .iter()
+            .find(|f| f.0.as_ptr() == bytes.as_ptr())
+            .map(|f| (f.1, f.2))
+            .unwrap_or(("DejaVuSans", false));
+        self.fonts.push(LpFont {
+            data: bytes.as_ptr(),
+            data_len: bytes.len(),
+            index: font.index,
+            name: name.as_ptr(),
+            name_len: name.len(),
+            mono: mono as u8,
+        });
+        (self.fonts.len() - 1) as u32
+    }
+}
+
+/// None if any span isn't UTF-8.
+unsafe fn blocks_from_ffi<'a>(blocks: *const LpBlock, blocks_len: usize) -> Option<Vec<Block<'a>>> {
     let blocks = if blocks_len == 0 {
         &[][..]
     } else {
@@ -303,9 +867,7 @@ unsafe fn render_png(
         let mut out_spans = Vec::with_capacity(spans.len());
         for s in spans {
             let bytes = std::slice::from_raw_parts(s.text, s.len);
-            let Ok(text) = std::str::from_utf8(bytes) else {
-                return RC_INVALID;
-            };
+            let text = std::str::from_utf8(bytes).ok()?;
             out_spans.push(Span {
                 text,
                 flags: s.flags,
@@ -324,25 +886,10 @@ unsafe fn render_png(
             spans: out_spans,
         });
     }
-
-    let mut sink = Sink {
-        ctx,
-        write,
-        failed: false,
-    };
-    let (h, rc) = r.render(&doc, opts, &mut sink);
-    if !content_height.is_null() {
-        *content_height = h;
-    }
-    // A refused write surfaces as an encode failure too; report the cause.
-    if sink.failed {
-        RC_WRITE_REFUSED
-    } else {
-        rc
-    }
+    Some(doc)
 }
 
-struct Sink {
+pub(crate) struct Sink {
     ctx: *mut c_void,
     write: LpWriteFn,
     failed: bool,
@@ -382,6 +929,12 @@ struct Block<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 struct Rgb(u8, u8, u8);
 
+impl Rgb {
+    fn packed(self) -> u32 {
+        (self.0 as u32) << 16 | (self.1 as u32) << 8 | self.2 as u32
+    }
+}
+
 const BASE_SIZE: f32 = 16.0;
 const PAGE_MARGIN: f32 = 16.0;
 const LIST_INDENT: f32 = 24.0;
@@ -405,15 +958,46 @@ pub struct Renderer {
     glyph_cache: HashMap<GlyphKey, Option<tiny_skia::Path>>,
 }
 
-struct Placed {
+/// A laid-out block. Positions are layout px from the top-left of the
+/// column; `layout` itself is in device px (layout px times the scale it
+/// was built with).
+pub(crate) struct Placed {
     layout: Layout<Rgb>,
     x: f32,
     y: f32,
     kind: u8,
-    marker: Option<(Layout<Rgb>, f32)>,
+    marker: Option<Marker>,
     quote_bars: u8,
     quote_x: f32,
 }
+
+pub(crate) struct Marker {
+    layout: Layout<Rgb>,
+    /// Device px; already right-aligned into the gutter.
+    x: f32,
+}
+
+/// The bundled faces: (file, PostScript-ish name, monospace). parley hands
+/// back the same `&'static [u8]` it was registered with, so a face is
+/// identified by its data pointer.
+pub(crate) static FONTS: [(&[u8], &str, bool); 4] = [
+    (include_bytes!("fonts/DejaVuSans.ttf"), "DejaVuSans", false),
+    (
+        include_bytes!("fonts/DejaVuSans-Bold.ttf"),
+        "DejaVuSans-Bold",
+        false,
+    ),
+    (
+        include_bytes!("fonts/DejaVuSansMono.ttf"),
+        "DejaVuSansMono",
+        true,
+    ),
+    (
+        include_bytes!("fonts/DejaVuSansMono-Bold.ttf"),
+        "DejaVuSansMono-Bold",
+        true,
+    ),
+];
 
 /// (font_size, weight, space_before, space_after, line_height)
 fn block_metrics(b: &Block) -> (f32, FontWeight, f32, f32, f32) {
@@ -444,13 +1028,10 @@ impl Renderer {
             shared: false,
             system_fonts: false,
         });
-        let sans = Self::register(&mut collection, include_bytes!("fonts/DejaVuSans.ttf"));
-        Self::register(&mut collection, include_bytes!("fonts/DejaVuSans-Bold.ttf"));
-        let mono = Self::register(&mut collection, include_bytes!("fonts/DejaVuSansMono.ttf"));
-        Self::register(
-            &mut collection,
-            include_bytes!("fonts/DejaVuSansMono-Bold.ttf"),
-        );
+        let sans = Self::register(&mut collection, FONTS[0].0);
+        Self::register(&mut collection, FONTS[1].0);
+        let mono = Self::register(&mut collection, FONTS[2].0);
+        Self::register(&mut collection, FONTS[3].0);
         for generic in [
             GenericFamily::SansSerif,
             GenericFamily::Serif,
@@ -476,12 +1057,18 @@ impl Renderer {
         fams[0].0
     }
 
-    /// Returns the content height in CSS px, and RC_OK only if a complete
-    /// PNG reached `sink`.
-    fn render(&mut self, blocks: &[Block], opts: LpRenderOpts, sink: &mut Sink) -> (u32, i32) {
-        let scale = opts.scale;
-        let content_w = (opts.width as f32 - 2.0 * PAGE_MARGIN).max(1.0);
-        let mut y = PAGE_MARGIN;
+    /// Flows `blocks` into a column `width` layout px wide with `margin` on
+    /// every side, shaping at `scale` device px per layout px. Returns the
+    /// placed blocks and the column height (margins included), in layout px.
+    pub(crate) fn layout(
+        &mut self,
+        blocks: &[Block],
+        width: f32,
+        margin: f32,
+        scale: f32,
+    ) -> (Vec<Placed>, f32) {
+        let content_w = (width - 2.0 * margin).max(1.0);
+        let mut y = margin;
         let mut placed: Vec<Placed> = Vec::with_capacity(blocks.len());
         let mut prev_after: Option<f32> = None;
 
@@ -495,12 +1082,12 @@ impl Renderer {
 
             let indent =
                 block.list_depth as f32 * LIST_INDENT + block.quote_depth as f32 * QUOTE_INDENT;
-            let quote_x = PAGE_MARGIN + block.list_depth as f32 * LIST_INDENT;
+            let quote_x = margin + block.list_depth as f32 * LIST_INDENT;
 
             if block.kind == BLOCK_RULE {
                 placed.push(Placed {
                     layout: Layout::new(),
-                    x: PAGE_MARGIN + indent,
+                    x: margin + indent,
                     y,
                     kind: BLOCK_RULE,
                     marker: None,
@@ -579,14 +1166,14 @@ impl Renderer {
                 b.push_default(StyleProperty::Brush(TEXT_COLOR));
                 let mut ml = b.build(block.marker);
                 ml.break_all_lines(None);
-                let mx = (PAGE_MARGIN + indent) * scale - ml.width() - 6.0 * scale;
-                Some((ml, mx))
+                let mx = (margin + indent) * scale - ml.width() - 6.0 * scale;
+                Some(Marker { layout: ml, x: mx })
             };
 
             let h = layout.height() / scale;
             placed.push(Placed {
                 layout,
-                x: PAGE_MARGIN + indent + pad,
+                x: margin + indent + pad,
                 y: y + pad,
                 kind: block.kind,
                 marker,
@@ -595,7 +1182,14 @@ impl Renderer {
             });
             y += h + 2.0 * pad;
         }
-        y += PAGE_MARGIN;
+        (placed, y + margin)
+    }
+
+    /// Returns the content height in CSS px, and RC_OK only if a complete
+    /// PNG reached `sink`.
+    fn render(&mut self, blocks: &[Block], opts: LpRenderOpts, sink: &mut Sink) -> (u32, i32) {
+        let scale = opts.scale;
+        let (placed, y) = self.layout(blocks, opts.width as f32, PAGE_MARGIN, scale);
         let content_h = y.ceil().max(1.0) as u32;
         if opts.flags & RENDER_MEASURE_ONLY != 0 {
             return (content_h, RC_OK);
@@ -662,8 +1256,8 @@ impl Renderer {
                     pixmap.fill_rect(r, &paint, Transform::identity(), None);
                 }
             }
-            if let Some((ml, mx)) = &p.marker {
-                self.draw_layout(&mut pixmap, ml, *mx, oy);
+            if let Some(m) = &p.marker {
+                self.draw_layout(&mut pixmap, &m.layout, m.x, oy);
             }
             self.draw_layout(&mut pixmap, &p.layout, p.x * scale, oy);
         }
