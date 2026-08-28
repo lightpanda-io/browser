@@ -62,11 +62,13 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
         transfer.unpark();
 
         if (!allowed) {
+            lp.metrics.cors_preflight.incr(.blocked);
             log.warn(.cors, "preflight blocked", .{ .url = transfer.req.url });
             transfer.failAsync(error.CorsBlocked);
             continue;
         }
 
+        lp.metrics.cors_preflight.incr(.allowed);
         transfer.client.resumeAfterCors(transfer) catch |e| {
             transfer.abortPipelineError(e);
         };
@@ -183,6 +185,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     if (req.origin) |origin| {
         if (URL.isSameOrigin(req.url, origin)) {
             log.debug(.cors, "same origin", .{ .url = req.url, .origin = origin });
+            lp.metrics.cors_check.incr(.same_origin);
             return .allowed;
         }
     }
@@ -198,6 +201,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
             .origin = origin,
             .mode = "no-cors",
         });
+        lp.metrics.cors_check.incr(.no_cors);
         return .allowed;
     }
 
@@ -207,6 +211,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
             .origin = origin,
             .preflight = false,
         });
+        lp.metrics.cors_check.incr(.simple);
         return .allowed;
     }
 
@@ -215,6 +220,7 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         .origin = origin,
         .preflight = true,
     });
+    lp.metrics.cors_check.incr(.preflight);
 
     try self.fetchThenResume(transfer);
     return .pending;
@@ -548,6 +554,8 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
 
 pub fn validateResponse(transfer: *Transfer) !void {
     const req = &transfer.req;
+    errdefer lp.metrics.cors_response.incr(.blocked);
+
     const allow_origin = HttpClient.findHeader(transfer.res.headers, ACCESS_CONTROL_ALLOW_ORIGIN) orelse {
         log.warn(.cors, "blocked", .{ .url = req.url, .reason = "missing acao" });
         return error.CorsBlocked;
@@ -589,4 +597,6 @@ pub fn validateResponse(transfer: *Transfer) !void {
             return error.CorsBlocked;
         }
     }
+
+    lp.metrics.cors_response.incr(.allowed);
 }

@@ -91,6 +91,9 @@ http_navigation_delay_ms: Histogram(&.{
 }) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
+cors_check: CounterEnum("result", enum { same_origin, no_cors, simple, preflight }) = .{},
+cors_preflight: CounterEnum("result", enum { allowed, blocked }) = .{},
+cors_response: CounterEnum("result", enum { allowed, blocked }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
@@ -123,6 +126,9 @@ const help = .{
     .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
+    .cors_check = "CORS initial classification: same_origin/no_cors need no CORS handling, simple needs response validation only, preflight needs an OPTIONS round-trip first",
+    .cors_preflight = "CORS preflight (OPTIONS) results, one per request that required one",
+    .cors_response = "CORS actual-response validation results",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {
