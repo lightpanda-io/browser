@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script>
+// Elements inside <template> content live in the inert "template contents
+// owner document", which has no browsing context and no custom element
+// registry. They must never be constructed/upgraded, and no reactions may run
+// on them, even if a matching definition already exists. Only a copy stamped
+// into the real document (importNode/cloneNode + insert) gets upgraded.
+//
+// Polymer relies on this: its `html` tag sets template.innerHTML with binding
+// annotations such as items="[[list]]", then strips those attributes from the
+// template content *before* stamping. If the element is upgraded while still
+// in the template, attributeChangedCallback receives the raw "[[list]]" text
+// and JSON.parse fails:
+//   Polymer::Attributes: couldn't decode Array as JSON: [[list]]
+// (lib/mixins/property-accessors.js `_deserializeValue`, case Array).
+let calls = [];
+
+class TplElement extends HTMLElement {
+    static get observedAttributes() {
+        return ['items'];
+    }
+
+    constructor() {
+        super();
+        calls.push('ctor');
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+        calls.push(`acc:${name}=${newValue}`);
+    }
+
+    connectedCallback() {
+        calls.push('connected');
+    }
+}
+
+customElements.define('tpl-element', TplElement);
+</script>
+
+<template id="markup"><tpl-element items="[[fromMarkup]]"></tpl-element></template>
+
+<script id="template_content">
+{
+    // Parsed from document markup, defined before the <template> was parsed.
+    const tpl = document.getElementById('markup');
+    const inner = tpl.content.firstChild;
+    testing.expectEqual('TPL-ELEMENT', inner.tagName);
+    testing.expectFalse(inner instanceof TplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+}
+
+{
+    // Polymer's html`` path: template.innerHTML with binding annotations.
+    calls = [];
+    const tpl = document.createElement('template');
+    tpl.innerHTML = '<tpl-element items="[[list]]"></tpl-element>';
+    const inner = tpl.content.firstChild;
+    testing.expectEqual('TPL-ELEMENT', inner.tagName);
+    testing.expectFalse(inner instanceof TplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+
+    // Polymer strips the binding attribute from the template content before
+    // stamping; that must not trigger a reaction either.
+    inner.removeAttribute('items');
+    inner.setAttribute('items', '["a"]');
+    testing.expectEqual('[]', JSON.stringify(calls));
+
+    // Stamping a copy into the document upgrades the copy, which sees only
+    // the current attribute values.
+    const frag = document.importNode(tpl.content, true);
+    document.body.appendChild(frag);
+    testing.expectEqual('["ctor","acc:items=[\\"a\\"]","connected"]', JSON.stringify(calls));
+
+    // The template content itself is still untouched.
+    testing.expectFalse(inner instanceof TplElement);
+}
+
+{
+    // Template content belongs to a separate, inert document, shared by all
+    // templates: https://html.spec.whatwg.org/#template-contents-owner-document
+    const tpl = document.createElement('template');
+    tpl.innerHTML = '<tpl-element></tpl-element>';
+    const owner = tpl.content.ownerDocument;
+    testing.expectTrue(owner !== document);
+    testing.expectTrue(owner === document.createElement('template').content.ownerDocument);
+    testing.expectTrue(owner instanceof HTMLDocument);
+    testing.expectEqual(null, owner.defaultView);
+    testing.expectEqual(null, owner.documentElement);
+    testing.expectEqual('about:blank', owner.URL);
+    testing.expectEqual('complete', owner.readyState);
+    testing.expectTrue(tpl.content.firstChild.ownerDocument === owner);
+}
+
+{
+    // Polymer's <template is="dom-repeat"> wrapping: an element created by
+    // the template contents owner document is never upgraded, and neither
+    // are the binding attributes copied onto it.
+    calls = [];
+    const tpl = document.createElement('template');
+    tpl.innerHTML = '<template items="[[tabHeaders]]"></template>';
+    const inner = tpl.content.firstChild;
+    const wrapper = inner.ownerDocument.createElement('tpl-element');
+    testing.expectTrue(wrapper.ownerDocument === inner.ownerDocument);
+    testing.expectFalse(wrapper instanceof TplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+
+    inner.parentNode.replaceChild(wrapper, inner);
+    wrapper.appendChild(inner);
+    wrapper.setAttribute('items', inner.getAttribute('items'));
+    inner.removeAttribute('items');
+    testing.expectFalse(wrapper instanceof TplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+
+    // A fragment created by the inert document keeps moved content inert.
+    const holder = tpl.content.ownerDocument.createDocumentFragment();
+    holder.appendChild(tpl.content);
+    testing.expectTrue(holder.ownerDocument === wrapper.ownerDocument);
+    wrapper.setAttribute('items', '[[still]]');
+    testing.expectEqual('[]', JSON.stringify(calls));
+
+    // Stamping still works and only sees the final attributes.
+    wrapper.setAttribute('items', '["x"]');
+    const stamped = document.importNode(holder, true);
+    testing.expectTrue(stamped.ownerDocument === document);
+    testing.expectTrue(stamped.firstChild instanceof TplElement);
+    testing.expectEqual('["ctor","acc:items=[\\"x\\"]"]', JSON.stringify(calls));
+
+    // Moving the inert original into the document adopts and upgrades it.
+    calls = [];
+    document.body.appendChild(wrapper);
+    testing.expectTrue(wrapper.ownerDocument === document);
+    testing.expectTrue(wrapper instanceof TplElement);
+    testing.expectEqual('["ctor","acc:items=[\\"x\\"]","connected"]', JSON.stringify(calls));
+}
+
+{
+    // Cloning template content keeps the clone inert until it is stamped.
+    calls = [];
+    const tpl = document.createElement('template');
+    tpl.innerHTML = '<tpl-element items="[[clone]]"></tpl-element>';
+    const clone = tpl.content.cloneNode(true);
+    testing.expectEqual('[]', JSON.stringify(calls));
+    testing.expectFalse(clone.firstChild instanceof TplElement);
+}
+
+{
+    // Defining the element after the template exists does not reach into
+    // template content.
+    calls = [];
+    const tpl = document.createElement('template');
+    tpl.innerHTML = '<late-tpl-element items="[[late]]"></late-tpl-element>';
+
+    class LateTplElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['items'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            calls.push(`late:${name}=${newValue}`);
+        }
+    }
+
+    customElements.define('late-tpl-element', LateTplElement);
+    testing.expectFalse(tpl.content.firstChild instanceof LateTplElement);
+    testing.expectEqual('[]', JSON.stringify(calls));
+}
+</script>
