@@ -652,7 +652,7 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
     return true;
 }
 
-fn areSameSite(maybe_origin_url: ?SiteForCookies, target_host: []const u8) bool {
+pub fn areSameSite(maybe_origin_url: ?SiteForCookies, target_host: []const u8) bool {
     // No initiating document (browser-initiated request).
     const origin_url = switch (maybe_origin_url orelse return true) {
         .none => return false,
