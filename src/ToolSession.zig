@@ -75,7 +75,6 @@ pub fn exitIsolate(self: *ToolSession) void {
     self.browser.env.isolate.exit();
 }
 
-const std = @import("std");
 const tools = @import("browser/tools.zig");
 const testing = @import("testing.zig");
 
@@ -93,15 +92,15 @@ test "ToolSession: isolates interleave on one thread and tear down balanced" {
     b.exitIsolate();
 
     a.enterIsolate();
-    try std.testing.expectEqualStrings("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag = 'a'")).text);
+    try testing.expectEqual("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag = 'a'")).text);
     a.exitIsolate();
 
     b.enterIsolate();
-    try std.testing.expectEqualStrings("undefined", (try tools.evalScript(arena, b.session, &b.registry, "String(globalThis.tag)")).text);
+    try testing.expectEqual("undefined", (try tools.evalScript(arena, b.session, &b.registry, "String(globalThis.tag)")).text);
     b.exitIsolate();
 
     a.enterIsolate();
-    try std.testing.expectEqualStrings("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag")).text);
+    try testing.expectEqual("a", (try tools.evalScript(arena, a.session, &a.registry, "globalThis.tag")).text);
     a.deinit();
 
     b.enterIsolate();
