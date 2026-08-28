@@ -49,7 +49,6 @@ pub const Mutation = struct {
     // draining. delivery_depth only bounds one session's recursion; a
     // callback that reschedules itself can restart a fresh session forever.
     consecutive_full_depth: u32 = 0,
-    hit_limit_this_session: bool = false,
 };
 
 // IntersectionObserver bookkeeping for a frame.
@@ -345,13 +344,10 @@ pub fn deliverMutations(frame: *Frame) void {
     frame._mutation.delivery_scheduled = false;
 
     frame._mutation.delivery_depth += 1;
-    // A session (this call plus every nested/rescheduled call until nothing
-    // is left scheduled) only counts toward consecutive_full_depth once, at
-    // the point where it's known whether it hit the cap.
+    var capped = false;
     defer if (!frame._mutation.delivery_scheduled) {
         frame._mutation.delivery_depth = 0;
-        if (frame._mutation.hit_limit_this_session) {
-            frame._mutation.hit_limit_this_session = false;
+        if (capped) {
             frame._mutation.consecutive_full_depth += 1;
             if (frame._mutation.consecutive_full_depth >= MUTATION_RUNAWAY_LIMIT) {
                 disconnectRunawayMutationObservers(frame);
@@ -364,7 +360,7 @@ pub fn deliverMutations(frame: *Frame) void {
     if (frame._mutation.delivery_depth > 16) {
         log.err(.frame, "frame.MutationLimit", .{ .type = frame._type, .url = frame.url });
         frame._mutation.delivery_depth = 0;
-        frame._mutation.hit_limit_this_session = true;
+        capped = true;
         return;
     }
 
