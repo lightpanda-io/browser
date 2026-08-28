@@ -660,10 +660,7 @@ handler runs, abort() cancels the re-send and no load is delivered.
       // Per spec the blob response entity body is cached: the same object comes
       // back on every access.
       testing.expectEqual(req.response, req.response);
-      // TODO: should be 'application/octet-stream'. Mime keeps a content-type
-      // enum, not the header text, and Mime.contentTypeString() has no entry
-      // for it, so the type is lost on the way to the Blob.
-      testing.expectEqual('', req.response.type);
+      testing.expectEqual('application/octet-stream', req.response.type);
     });
 
     testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int8Array(await req.response.arrayBuffer()));
