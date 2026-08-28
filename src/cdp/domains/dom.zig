@@ -528,15 +528,16 @@ fn getBoxModel(cmd: *CDP.Command) !void {
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
 
+    // Without padding, border or margin in the layout, the four boxes coincide.
+    // Drivers read `border` for boundingBox(), so it must not be zero.
     const rect = element.boundingClientRectValues(frame);
     const quad = rectToQuad(rect);
-    const zero = [_]f64{0.0} ** 8;
 
     return cmd.sendResult(.{ .model = BoxModel{
         .content = quad,
-        .padding = zero,
-        .border = zero,
-        .margin = zero,
+        .padding = quad,
+        .border = quad,
+        .margin = quad,
         .width = @trunc(rect.width),
         .height = @trunc(rect.height),
     } }, .{});
@@ -1157,9 +1158,9 @@ test "cdp.dom: getBoxModel" {
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
         .content = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
-        .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
-        .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
-        .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+        .padding = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .border = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .margin = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
         .width = 5,
         .height = 5,
     } }, .{ .id = 5 });
