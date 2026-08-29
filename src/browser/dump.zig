@@ -349,15 +349,15 @@ fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Fram
 }
 
 fn isVoidElement(el: *Node.Element) bool {
+    if (el._namespace != .html) {
+        // only html has void tags
+        return false;
+    }
+
     return switch (el.getTag()) {
         .area, .base, .br, .col, .embed, .hr, .img, .input, .link, .meta, .param, .source, .track => true,
-        .unknown => {
-            const unknown = el.as(Node.Element.Html.Unknown);
-            if (unknown._tag_name.eql(comptime .wrap("wbr"))) {
-                return true;
-            }
-            return false;
-        },
+        // <wbr> has no dedicated Tag, so it lands in Html.Unknown.
+        .unknown => el.as(Node.Element.Html.Unknown)._tag_name.eql(comptime .wrap("wbr")),
         else => false,
     };
 }
@@ -518,6 +518,28 @@ test "dump: void elements have no end tag" {
 
     try testing.expectString(
         \\<div><video><source src="a.mp4"><track kind="captions"></video><map><area shape="rect"></map><embed src="e.swf"><p>a<wbr>b</p><table><colgroup><col span="2"></colgroup></table></div>
+    , aw.written());
+}
+
+// There are no void SVG elements: every one gets an end tag, including those
+// whose tag name is void in HTML, and those with no dedicated Element.Tag
+// (which report .unknown, same as an unrecognized HTML element).
+test "dump: no svg element is void" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<svg><defs><clipPath id="c"><polygon points="0,0"></polygon></clipPath></defs><use href="#c"></use><text>a<tspan>b</tspan></text><source></source><track></track><input></input><link></link><a>after</a></svg>
+    );
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{}, &aw.writer, frame);
+
+    try testing.expectString(
+        \\<div><svg><defs><clipPath id="c"><polygon points="0,0"></polygon></clipPath></defs><use href="#c"></use><text>a<tspan>b</tspan></text><source></source><track></track><input></input><link></link><a>after</a></svg></div>
     , aw.written());
 }
 
