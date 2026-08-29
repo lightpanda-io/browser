@@ -34,6 +34,9 @@ const default_charset_len = 5;
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 
+/// The fallback for a Content-Type that fails to parse.
+pub const octet_stream = Mime{ .content_type = .{ .application_octet_stream = {} } };
+
 pub const ContentTypeEnum = enum {
     text_xml,
     text_html,

@@ -68,8 +68,10 @@ _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
 _response_len: ?usize = 0,
 _response_url: [:0]const u8 = "",
-_response_mime: ?Mime = null,
 _override_mime: ?Mime = null,
+_response_mime: ?Mime = null,
+_override_mime_raw: ?[]const u8 = null,
+_response_mime_raw: ?[]const u8 = null,
 _response_xml: ?*Node.Document = null,
 _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .default,
@@ -231,6 +233,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     self._response_len = 0;
     self._response_url = "";
     self._response_mime = null;
+    self._response_mime_raw = null;
     self._response_headers.clearRetainingCapacity();
     self._request_body = null;
     self._async = async_ orelse true;
@@ -259,8 +262,14 @@ pub fn overrideMimeType(self: *XMLHttpRequest, mime: []const u8) !void {
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
     }
-    self._override_mime = Mime.parse(mime) catch
-        Mime.parse("application/octet-stream") catch unreachable;
+    if (Mime.parse(mime)) |parsed| {
+        self._override_mime = parsed;
+        self._override_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, mime, &std.ascii.whitespace));
+    } else |_| {
+        // An unparseable override is application/octet-stream.
+        self._override_mime = .octet_stream;
+        self._override_mime_raw = "application/octet-stream";
+    }
 }
 
 pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !void {
@@ -543,8 +552,7 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
         },
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
         .blob => blk: {
-            const mime = self._override_mime orelse self._response_mime;
-            const content_type = if (mime) |m| m.contentTypeString() else "";
+            const content_type = self._override_mime_raw orelse self._response_mime_raw orelse "text/xml";
             const blob = try Blob.initFromBytes(data, content_type, exec);
             blob.acquireRef();
             break :blk .{ .blob = blob };
@@ -621,6 +629,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
             });
             return .abort;
         };
+        self._response_mime_raw = try self._arena.dupe(u8, std.mem.trim(u8, ct, &std.ascii.whitespace));
     }
 
     var it = transfer.responseHeaderIterator();
