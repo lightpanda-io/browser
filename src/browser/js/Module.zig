@@ -60,6 +60,11 @@ pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
 }
 
 pub fn evaluate(self: Module) !js.Value {
+    switch (self.getStatus()) {
+        .kUninstantiated, .kInstantiating => return error.InvalidModuleStatus,
+        .kInstantiated, .kEvaluating, .kEvaluated, .kErrored => {},
+    }
+
     const res = v8.v8__Module__Evaluate(self.handle, self.local.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {

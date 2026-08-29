@@ -406,7 +406,10 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 }
 
 fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
-    const evaluated = mod.evaluate() catch {
+    const evaluated = mod.evaluate() catch |err| {
+        if (err == error.InvalidModuleStatus) {
+            return err;
+        }
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
         }
@@ -1031,6 +1034,47 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 }
 
 const testing = @import("../../testing.zig");
+test "Context: evaluating a module before instantiation returns an error" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const uninstantiated = try compileModule(local, "export const value = 1", "https://example.com/uninstantiated.js");
+    try testing.expectEqual(js.Module.Status.kUninstantiated, uninstantiated.getStatus());
+    try testing.expectError(error.InvalidModuleStatus, uninstantiated.evaluate());
+
+    const instantiating = try compileModule(local, "import './dependency.js'", "https://example.com/instantiating.js");
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+    try testing.expectError(error.JsException, instantiating.instantiate(struct {
+        fn resolve(
+            c_context: ?*const v8.Context,
+            _: ?*const v8.String,
+            _: ?*const v8.FixedArray,
+            c_referrer: ?*const v8.Module,
+        ) callconv(.c) ?*const v8.Module {
+            const ctx = Context.fromC(c_context.?).?;
+            const callback_local = js.Local{
+                .ctx = ctx,
+                .handle = c_context.?,
+                .isolate = ctx.isolate,
+                .call_arena = ctx.call_arena,
+            };
+            const current = js.Module{ .local = &callback_local, .handle = c_referrer.? };
+            testing.expectEqual(js.Module.Status.kUninstantiated, current.getStatus()) catch @panic("unexpected module status");
+            testing.expectError(error.InvalidModuleStatus, current.evaluate()) catch @panic("module evaluation did not fail");
+            return null;
+        }
+    }.resolve));
+
+    try testing.expectEqual(2, try (try local.exec("1 + 1", null)).toI32());
+}
+
 test "Context: terminated async module completion does not re-enter V8" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
