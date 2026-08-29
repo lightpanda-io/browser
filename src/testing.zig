@@ -841,6 +841,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/no_content_type")) {
+        return req.respond("untyped", .{});
+    }
+
     if (std.mem.eql(u8, path, "/xhr/binary")) {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
