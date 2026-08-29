@@ -515,7 +515,13 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, section: bool) void {
 
     if (target.result.os.tag == .macos) {
         // needed for proxying on mac
-        mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+        const framework_path = if (b.sysroot) |sysroot|
+            b.pathJoin(&.{ sysroot, "System/Library/Frameworks" })
+        else if (b.graph.environ_map.get("SDKROOT")) |sdk_root|
+            b.pathJoin(&.{ sdk_root, "System/Library/Frameworks" })
+        else
+            "/System/Library/Frameworks";
+        mod.addSystemFrameworkPath(.{ .cwd_relative = framework_path });
         mod.linkFramework("CoreFoundation", .{});
         mod.linkFramework("SystemConfiguration", .{});
     }
