@@ -57,6 +57,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getAllCookies,
         getResponseBody,
         getRequestPostData,
+        emulateNetworkConditions,
+        setBypassServiceWorker,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -76,7 +78,28 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getAllCookies => return getAllCookies(cmd),
         .getResponseBody => return getResponseBody(cmd),
         .getRequestPostData => return getRequestPostData(cmd),
+        .emulateNetworkConditions => return emulateNetworkConditions(cmd),
+        // There are no service workers to bypass.
+        .setBypassServiceWorker => return cmd.sendResult(null, .{}),
     }
+}
+
+fn emulateNetworkConditions(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        offline: bool,
+        latency: f64,
+        downloadThroughput: f64,
+        uploadThroughput: f64,
+    })) orelse return error.InvalidParams;
+
+    if (params.offline) {
+        return cmd.sendError(-32000, "Offline emulation is not supported", .{});
+    }
+    // -1 disables a throughput limit.
+    if (params.latency > 0 or params.downloadThroughput > 0 or params.uploadThroughput > 0) {
+        log.warn(.not_implemented, "Network.emulateNetworkConditions", .{ .param = "throttling" });
+    }
+    return cmd.sendResult(null, .{});
 }
 
 fn enable(cmd: *CDP.Command) !void {
@@ -678,6 +701,22 @@ fn keyFromRequestId(request_id: []const u8) !CDP.BrowserContext.CapturedKey {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.network emulateNetworkConditions and setBypassServiceWorker" {
+    testing.silenceLog(&.{.not_implemented});
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-NET" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Network.emulateNetworkConditions", .params = .{ .offline = false, .latency = 0, .downloadThroughput = -1, .uploadThroughput = -1 } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Network.emulateNetworkConditions", .params = .{ .offline = true, .latency = 0, .downloadThroughput = -1, .uploadThroughput = -1 } });
+    try ctx.expectSentError(-32000, "Offline emulation is not supported", .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Network.setBypassServiceWorker", .params = .{ .bypass = true } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+}
+
 test "cdp.network setExtraHTTPHeaders" {
     var ctx = try testing.context();
     defer ctx.deinit();

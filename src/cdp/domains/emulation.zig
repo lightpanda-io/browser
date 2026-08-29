@@ -35,6 +35,10 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         setUserAgentOverride,
         setGeolocationOverride,
         clearGeolocationOverride,
+        setLocaleOverride,
+        setTimezoneOverride,
+        setScriptExecutionDisabled,
+        setDefaultBackgroundColorOverride,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -46,6 +50,11 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .setUserAgentOverride => return setUserAgentOverride(cmd),
         .setGeolocationOverride => return setGeolocationOverride(cmd),
         .clearGeolocationOverride => return clearGeolocationOverride(cmd),
+        .setLocaleOverride => return setLocaleOverride(cmd),
+        .setTimezoneOverride => return setTimezoneOverride(cmd),
+        .setScriptExecutionDisabled => return setScriptExecutionDisabled(cmd),
+        // Nothing is painted with a background.
+        .setDefaultBackgroundColorOverride => return cmd.sendResult(null, .{}),
     }
 }
 
@@ -202,7 +211,60 @@ fn clearGeolocationOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+// Accepted so drivers can finish context setup; Intl/Date keep the host's
+// locale and timezone.
+fn setLocaleOverride(cmd: *CDP.Command) !void {
+    const Params = struct { locale: ?[]const u8 = null };
+    const params = (try cmd.params(Params)) orelse Params{};
+    if (params.locale) |v| {
+        log.warn(.not_implemented, "Emulation.setLocaleOverride", .{ .locale = v });
+    }
+    return cmd.sendResult(null, .{});
+}
+
+fn setTimezoneOverride(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        timezoneId: []const u8,
+    })) orelse return error.InvalidParams;
+    if (params.timezoneId.len > 0) {
+        log.warn(.not_implemented, "Emulation.setTimezoneOverride", .{ .timezoneId = params.timezoneId });
+    }
+    return cmd.sendResult(null, .{});
+}
+
+fn setScriptExecutionDisabled(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        value: bool,
+    })) orelse return error.InvalidParams;
+    if (params.value) {
+        return cmd.sendError(-32000, "Disabling script execution is not supported", .{});
+    }
+    return cmd.sendResult(null, .{});
+}
+
 const testing = @import("../testing.zig");
+
+test "cdp.Emulation: locale, timezone and script execution stubs" {
+    testing.silenceLog(&.{.not_implemented});
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-EMU" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setLocaleOverride", .params = .{ .locale = "fr-FR" } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setTimezoneOverride", .params = .{ .timezoneId = "Europe/Paris" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = false } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    try ctx.processMessage(.{ .id = 4, .method = "Emulation.setScriptExecutionDisabled", .params = .{ .value = true } });
+    try ctx.expectSentError(-32000, "Disabling script execution is not supported", .{ .id = 4 });
+
+    try ctx.processMessage(.{ .id = 5, .method = "Emulation.setDefaultBackgroundColorOverride", .params = .{ .color = .{ .r = 0, .g = 0, .b = 0, .a = 0 } } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+}
 
 test "cdp.Emulation: setUserAgentOverride with valid user agent" {
     var ctx = try testing.context();
