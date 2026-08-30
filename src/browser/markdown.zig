@@ -171,13 +171,29 @@ const Context = struct {
         }
     }
 
+    fn getRenderDisplay(self: *Context, el: *Element, force_slot: bool) ?StyleManager.Display {
+        const display = visibleDisplay(el, self.frame) orelse {
+            if (el.asNode() == self.root) {
+                return StyleManager.Display.other;
+            } else {
+                return null;
+            }
+        };
+        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return null;
+        if (!force_slot and el.getAttributeSafe(comptime .wrap("slot")) != null) return null;
+        return display;
+    }
+
     fn render(self: *Context, node: *Node) error{WriteFailed}!void {
         switch (node._type) {
             .document, .document_fragment => {
                 try self.renderChildren(node, false);
             },
             .element => {
-                try self.renderElement(node.subtype(Node.Element));
+                const el = node.subtype(Node.Element);
+                if (self.getRenderDisplay(el, self.force_slot)) |display| {
+                    try self.renderElement(el, display);
+                }
             },
             .cdata => {
                 if (node.is(Node.CData.Text)) |_| {
@@ -205,11 +221,11 @@ const Context = struct {
                 continue;
             }
             if (child.is(Element)) |el| {
-                if (self.skips(el, self.force_slot)) continue;
+                const display = self.getRenderDisplay(el, self.force_slot) orelse continue;
                 if (separate and !el.getTag().isBlock() and !self.state.last_char_was_newline) {
                     try self.writer.writeByte(' ');
                 }
-                try self.renderElement(el);
+                try self.renderElement(el, display);
             } else if (child.is(Node.CData.Text)) |_| {
                 const text = std.mem.trim(u8, child.subtype(Node.CData).getData().str(), &std.ascii.whitespace);
                 if (text.len == 0) continue;
@@ -218,12 +234,6 @@ const Context = struct {
             } else continue;
             separate = true;
         }
-    }
-
-    fn skips(self: *Context, el: *Element, force_slot: bool) bool {
-        if (el.asNode() != self.root and !isVisibleElement(el, self.frame)) return true;
-        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return true;
-        return !force_slot and el.getAttributeSafe(comptime .wrap("slot")) != null;
     }
 
     // Render a <slot>'s assigned light-DOM nodes, or its own children as
@@ -241,15 +251,10 @@ const Context = struct {
         self.force_slot = false;
     }
 
-    fn renderElement(self: *Context, el: *Element) !void {
-        const force_slot = self.force_slot;
+    fn renderElement(self: *Context, el: *Element, display: StyleManager.Display) !void {
         self.force_slot = false;
 
         const tag = el.getTag();
-
-        const display = visibleDisplay(el, self.frame) orelse if (el.asNode() == self.root) StyleManager.Display.other else return;
-        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return;
-        if (!force_slot and el.getAttributeSafe(comptime .wrap("slot")) != null) return;
         const boxed = display == .flex or display == .grid;
 
         // Ensure block elements start on a new line
