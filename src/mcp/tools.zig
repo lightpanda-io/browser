@@ -1161,7 +1161,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     defer try_catch.deinit();
 
     const result = try ls.local.exec(
-        \\ window.clicked === true && window.inputVal === 'hello' &&
+        \\ window.mousedowned === true && window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
         \\ window.scrolled === true &&
         \\ window.hovered === true &&

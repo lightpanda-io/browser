@@ -22,6 +22,7 @@ const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const PointerEvent = @import("webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -38,21 +39,54 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-pub fn click(node: *DOMNode, frame: *Frame) !void {
-    const el = node.is(Element) orelse return error.InvalidNodeType;
-
-    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) !void {
+    const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
+        .button = button,
+        .buttons = buttons,
+        .pointerId = 1,
+        .pointerType = "mouse",
+        .isPrimary = true,
+    }, frame);
+    frame._event_manager.dispatch(el.asEventTarget(), event.asEvent()) catch |err| {
+        lp.log.err(.app, "click failed", .{ .err = err, .type = typ });
+        return error.ActionFailed;
+    };
+}
+
+fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) !void {
+    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .button = button,
+        .buttons = buttons,
+        .detail = 1,
         .clientX = 0,
         .clientY = 0,
     }, frame);
-
-    frame._event_manager.dispatch(el.asEventTarget(), mouse_event.asEvent()) catch |err| {
-        lp.log.err(.app, "click failed", .{ .err = err });
+    frame._event_manager.dispatch(el.asEventTarget(), event.asEvent()) catch |err| {
+        lp.log.err(.app, "click failed", .{ .err = err, .type = typ });
         return error.ActionFailed;
     };
+}
+
+// A full trusted primary-button click sequence on the element, as a real user
+// click would produce: pointerdown, mousedown, pointerup, mouseup, click.
+// Unlike a single bare "click" event, many widgets (autocomplete/combobox
+// components in particular) key their open/interaction behavior off
+// mousedown or pointerdown, not click alone -- see WebDriver.zig's `click`,
+// which already implements this same sequence for testdriver's `click`.
+pub fn click(node: *DOMNode, frame: *Frame) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+
+    try dispatchPointer(el, "pointerdown", 0, 1, frame);
+    try dispatchMouse(el, "mousedown", 0, 1, frame);
+    try dispatchPointer(el, "pointerup", 0, 0, frame);
+    try dispatchMouse(el, "mouseup", 0, 0, frame);
+    try dispatchMouse(el, "click", 0, 0, frame);
 }
 
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
