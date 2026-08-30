@@ -24,6 +24,7 @@ const App = @import("App.zig");
 const Config = @import("Config.zig");
 
 const CDP = @import("cdp/CDP.zig");
+const Connection = @import("cdp/Connection.zig");
 const http = @import("network/http.zig");
 const sys_net = @import("sys/net.zig");
 
@@ -67,7 +68,7 @@ const PSEUDO_POLLFDS = 2;
 
 app: *App,
 max_connections: usize,
-json_version_response: []const u8,
+http_responses: Connection.HttpResponses,
 
 // Number of active CDP conns, used to enforce the cdp-max-connections limit.
 active_conns: std.atomic.Value(u32) = .init(0),
@@ -142,11 +143,20 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     log.note(.app, "server running", .{ .address = bound_address });
 
     const json_version_response = try buildJSONVersionResponse(app, bound_address.getPort());
+    errdefer allocator.free(json_version_response);
+    const json_list_response = try buildTargetJSONResponse(app, bound_address.getPort(), true);
+    errdefer allocator.free(json_list_response);
+    const json_new_response = try buildTargetJSONResponse(app, bound_address.getPort(), false);
+    errdefer allocator.free(json_new_response);
 
     self.* = .{
         .app = app,
         .cdp_pool = .empty,
-        .json_version_response = json_version_response,
+        .http_responses = .{
+            .version = json_version_response,
+            .list = json_list_response,
+            .new = json_new_response,
+        },
         .max_connections = max_connections,
         .listener = listener,
         .pollfds = pollfds,
@@ -210,7 +220,9 @@ pub fn deinit(self: *Server) void {
     const allocator = self.app.allocator;
     self.cdps.deinit(allocator);
     self.cdp_pool.deinit(allocator);
-    allocator.free(self.json_version_response);
+    inline for (std.meta.fields(Connection.HttpResponses)) |field| {
+        allocator.free(@field(self.http_responses, field.name));
+    }
     allocator.free(self.pollfds);
     allocator.free(self.poll_snapshot);
     for (self.wakeup_pipe) |fd| {
@@ -637,7 +649,7 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
         self.cdp_pool.destroy(cdp);
     }
 
-    cdp.init(self.app, socket, self.json_version_response) catch |err| {
+    cdp.init(self.app, socket, self.http_responses) catch |err| {
         log.err(.app, "CDP init", .{ .err = err });
         return;
     };
@@ -732,6 +744,23 @@ fn handleConnection(self: *Server, socket: posix.socket_t) void {
     _ = self.active_conns.fetchSub(1, .monotonic);
 }
 
+// We send a Connection: Close (and actually close the connection)
+// because chromedp (Go driver) sends a request to /json/version and then
+// does an upgrade request, on a different connection. Since we only allow
+// 1 connection at a time, the upgrade connection doesn't proceed until we
+// timeout the /json/version. So, instead of waiting for that, we just
+// always close HTTP requests.
+fn buildJSONHttpResponse(allocator: Allocator, comptime body_format: []const u8, args: anytype) ![]const u8 {
+    const body_len = std.fmt.count(body_format, args);
+    const response_format =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        body_format;
+    return try std.fmt.allocPrint(allocator, response_format, .{body_len} ++ args);
+}
+
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     const host = app.config.advertiseHost();
     if (app.config.bindIsWildcard()) {
@@ -751,21 +780,25 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
         "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
         "}}";
-    const body_len = std.fmt.count(body_format, .{ host, port });
+    return try buildJSONHttpResponse(app.allocator, body_format, .{ host, port });
+}
 
-    // We send a Connection: Close (and actually close the connection)
-    // because chromedp (Go driver) sends a request to /json/version and then
-    // does an upgrade request, on a different connection. Since we only allow
-    // 1 connection at a time, the upgrade connection doesn't proceed until we
-    // timeout the /json/version. So, instead of waiting for that, we just
-    // always close HTTP requests.
-    const response_format =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
+// Synthetic: /json is answered before any browser context exists, so the id
+// won't match Target.getTargets and title/url never reflect a live page.
+const target_json_format =
+    "{{" ++
+    "\"description\": \"\", " ++
+    "\"devtoolsFrontendUrl\": \"\", " ++
+    "\"id\": \"1\", " ++
+    "\"title\": \"\", " ++
+    "\"type\": \"page\", " ++
+    "\"url\": \"about:blank\", " ++
+    "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
+    "}}";
+
+fn buildTargetJSONResponse(app: *const App, port: u16, comptime as_list: bool) ![]const u8 {
+    const body_format = if (as_list) "[ " ++ target_json_format ++ " ]" else target_json_format;
+    return try buildJSONHttpResponse(app.allocator, body_format, .{ app.config.advertiseHost(), port });
 }
 
 const testing = @import("testing.zig");
@@ -784,6 +817,22 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+}
+
+test "server: buildTargetJSONResponse" {
+    inline for (.{ true, false }) |as_list| {
+        const res = try buildTargetJSONResponse(testing.test_app, testing.test_app.config.port(), as_list);
+        defer testing.test_app.allocator.free(res);
+
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") != null);
+
+        try testing.expect(std.mem.indexOf(u8, res, "\"id\": \"1\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"type\": \"page\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"url\": \"about:blank\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+    }
 }
 
 test "Client: http invalid request" {
@@ -1106,6 +1155,61 @@ test "server: get /json/version" {
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
         try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+    }
+}
+
+test "server: get /json and /json/list" {
+    for ([_][]const u8{
+        "GET /json HTTP/1.1\r\n\r\n",
+        "GET /json/ HTTP/1.1\r\n\r\n",
+        "GET /json/list HTTP/1.1\r\n\r\n",
+        "GET /json/list/ HTTP/1.1\r\n\r\n",
+    }) |req| {
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const res = try c.httpRequest(req);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"id\": \"1\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"type\": \"page\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"url\": \"about:blank\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+    }
+}
+
+test "server: get and put /json/new" {
+    for ([_][]const u8{
+        "GET /json/new HTTP/1.1\r\n\r\n",
+        "GET /json/new/ HTTP/1.1\r\n\r\n",
+        "GET /json/new?https://example.com HTTP/1.1\r\n\r\n",
+        "PUT /json/new HTTP/1.1\r\n\r\n",
+        "PUT /json/new?https://example.com HTTP/1.1\r\n\r\n",
+    }) |req| {
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const res = try c.httpRequest(req);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"id\": \"1\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"type\": \"page\"") != null);
+        try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+    }
+}
+
+test "server: /json/activate and /json/close" {
+    for ([_]struct { req: []const u8, body: []const u8 }{
+        .{ .req = "GET /json/activate/1 HTTP/1.1\r\n\r\n", .body = "Target activated" },
+        .{ .req = "GET /json/close/1 HTTP/1.1\r\n\r\n", .body = "Target is closing" },
+    }) |case| {
+        var c = try createTestClient();
+        defer c.deinit();
+
+        const res = try c.httpRequest(case.req);
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain") != null);
+        try testing.expect(std.mem.endsWith(u8, res, case.body));
     }
 }
 

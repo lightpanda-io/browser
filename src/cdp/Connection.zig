@@ -37,6 +37,12 @@ pub const Connection = @This();
 
 pub const State = enum { handshaking, live };
 
+pub const HttpResponses = struct {
+    version: []const u8,
+    list: []const u8,
+    new: []const u8,
+};
+
 // reference to http_client.inbox
 inbox: *Inbox,
 arena_pool: *ArenaPool,
@@ -47,13 +53,13 @@ reader: WS.Reader(true),
 send_arena: ArenaAllocator,
 metrics_enabled: bool,
 max_http_message_size: usize,
-json_version_response: []const u8,
+http_responses: HttpResponses,
 
 pub fn init(
     self: *Connection,
     app: *App,
     socket: posix.socket_t,
-    json_version_response: []const u8,
+    http_responses: HttpResponses,
     inbox: *Inbox,
 ) !void {
     const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
@@ -74,7 +80,7 @@ pub fn init(
         .max_http_message_size = config.cdpMaxHTTPMessageSize(),
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
-        .json_version_response = json_version_response,
+        .http_responses = http_responses,
     };
 }
 
@@ -269,7 +275,8 @@ fn handleHttpRequest(self: *Connection, request: []u8) !HttpResult {
         return error.InvalidRequest;
     }
 
-    if (std.mem.eql(u8, request[0..4], "GET ") == false) {
+    const is_get = std.mem.startsWith(u8, request, "GET ");
+    if (!is_get and !std.mem.startsWith(u8, request, "PUT ")) {
         return error.NotFound;
     }
 
@@ -279,67 +286,92 @@ fn handleHttpRequest(self: *Connection, request: []u8) !HttpResult {
 
     const url = request[4..url_end];
 
+    // Only /json/new takes PUT (required since Chrome 66; GET kept for
+    // older clients).
+    if (!is_get and !std.mem.startsWith(u8, url, "/json/new")) {
+        return error.NotFound;
+    }
+
     if (std.mem.eql(u8, url, "/")) {
         try self.upgrade(request);
         return .upgraded;
     }
 
     if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
-        try self.send(self.json_version_response);
-        // Chromedp (a Go driver) does an http request to /json/version
-        // then to / (websocket upgrade) using a different connection.
-        // Since we only allow 1 connection at a time, the 2nd one (the
-        // websocket upgrade) blocks until the first one times out.
-        // We can avoid that by closing the connection. json_version_response
-        // has a Connection: Close header too.
-        self.shutdown();
-        return .close;
+        return self.sendAndClose(self.http_responses.version);
     }
 
     if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
         std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
     {
-        try self.send(empty_json_list_response);
-        self.shutdown();
-        return .close;
+        return self.sendAndClose(self.http_responses.list);
+    }
+
+    if (std.mem.eql(u8, url, "/json/new") or std.mem.eql(u8, url, "/json/new/") or
+        std.mem.startsWith(u8, url, "/json/new?"))
+    {
+        if (std.mem.startsWith(u8, url, "/json/new?")) {
+            log.warn(.not_implemented, "json new navigation", .{ .url = url["/json/new?".len..] });
+        }
+        return self.sendAndClose(self.http_responses.new);
+    }
+
+    if (std.mem.eql(u8, url, "/json/activate") or std.mem.startsWith(u8, url, "/json/activate/")) {
+        return self.sendAndClose(target_activated_response);
+    }
+
+    if (std.mem.eql(u8, url, "/json/close") or std.mem.startsWith(u8, url, "/json/close/")) {
+        log.warn(.not_implemented, "json close target", .{});
+        return self.sendAndClose(target_closing_response);
     }
 
     if (std.mem.eql(u8, url, "/json/protocol") or std.mem.eql(u8, url, "/json/protocol/")) {
-        try self.send(protocol_response);
-        self.shutdown();
-        return .close;
+        return self.sendAndClose(protocol_response);
     }
 
     if (self.metrics_enabled and std.mem.eql(u8, url, "/metrics")) {
-        try self.sendMetrics();
-        self.shutdown();
-        return .close;
+        return self.sendAndClose(try self.metricsResponse());
     }
 
     return error.NotFound;
 }
 
-fn sendMetrics(self: *Connection) !void {
+// Every HTTP response carries Connection: Close and we really do close:
+// chromedp requests /json/version and then upgrades on a different
+// connection, and with a single connection allowed the upgrade would
+// otherwise wait for the first one to time out.
+fn sendAndClose(self: *Connection, response: []const u8) !HttpResult {
+    try self.send(response);
+    self.shutdown();
+    return .close;
+}
+
+fn metricsResponse(self: *Connection) ![]const u8 {
     const allocator = self.send_arena.allocator();
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     lp.metrics.write(&aw.writer);
     const body = aw.written();
 
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
+    return std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
         "Content-Length: {d}\r\n" ++
         "Connection: Close\r\n" ++
         "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\r\n" ++
         "{s}", .{ body.len, body });
-    try self.send(response);
 }
 
-const empty_json_list_response =
-    "HTTP/1.1 200 OK\r\n" ++
-    "Content-Length: 2\r\n" ++
-    "Connection: Close\r\n" ++
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-    "[]";
+fn plainTextResponse(comptime body: []const u8) []const u8 {
+    return std.fmt.comptimePrint(
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: Close\r\n" ++
+            "Content-Type: text/plain; charset=UTF-8\r\n\r\n",
+        .{body.len},
+    ) ++ body;
+}
+
+const target_activated_response = plainTextResponse("Target activated");
+const target_closing_response = plainTextResponse("Target is closing");
 
 const protocol_json = @embedFile("../data/protocol.json");
 

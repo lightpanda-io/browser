@@ -44,7 +44,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 const BrowserContextParam = struct { browserContextId: ?[]const u8 = null };
 
 fn clearCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
     if (params.browserContextId) |browser_context_id| {
@@ -59,7 +59,7 @@ fn clearCookies(cmd: *CDP.Command) !void {
 }
 
 fn getCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
 
     if (params.browserContextId) |browser_context_id| {
@@ -73,7 +73,7 @@ fn getCookies(cmd: *CDP.Command) !void {
 }
 
 fn setCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(struct {
         cookies: []const CdpCookie,
         browserContextId: ?[]const u8 = null,

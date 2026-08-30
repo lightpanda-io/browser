@@ -103,7 +103,7 @@ pub fn init(
     self: *CDP,
     app: *App,
     socket: posix.socket_t,
-    json_version_response: []const u8,
+    http_responses: Connection.HttpResponses,
 ) !void {
     const allocator = app.allocator;
 
@@ -124,7 +124,7 @@ pub fn init(
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
     const http_client = &self.browser.http_client;
 
-    try self.conn.init(app, socket, json_version_response, &http_client.inbox);
+    try self.conn.init(app, socket, http_responses, &http_client.inbox);
     errdefer self.conn.deinit();
 
     self.link = .{
@@ -1330,6 +1330,16 @@ pub const Command = struct {
     pub fn createBrowserContext(self: *Command) !*BrowserContext {
         _ = try self.cdp.createBrowserContext();
         self.browser_context = &(self.cdp.browser_context.?);
+        return self.browser_context.?;
+    }
+
+    // Flat-protocol clients skip the Target handshake and expect the /json
+    // target to exist. A session id without a context is the browser
+    // session, which must not get a page implicitly.
+    pub fn requireBrowserContext(self: *Command) !*BrowserContext {
+        if (self.browser_context) |bc| return bc;
+        if (self.input.session_id != null) return error.BrowserContextNotLoaded;
+        try @import("domains/target.zig").createImplicitTarget(self);
         return self.browser_context.?;
     }
 

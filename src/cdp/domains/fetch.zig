@@ -151,7 +151,7 @@ fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     bc.fetchDisableForSession(try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }
@@ -163,7 +163,7 @@ fn enable(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.fetchEnable(params.handleAuthRequests, try commandSessionId(cmd, bc));
 
     return cmd.sendResult(null, .{});
@@ -225,7 +225,7 @@ pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *c
 }
 
 fn continueRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(struct {
         requestId: []const u8, // INT-{d}"
         url: ?[]const u8 = null,
@@ -292,7 +292,7 @@ const AuthChallengeResponse = enum {
 };
 
 fn continueWithAuth(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         authChallengeResponse: struct {
@@ -344,7 +344,7 @@ fn continueWithAuth(cmd: *CDP.Command) !void {
 }
 
 fn fulfillRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
@@ -391,7 +391,7 @@ fn fulfillRequest(cmd: *CDP.Command) !void {
 }
 
 fn failRequest(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         errorReason: ErrorReason,

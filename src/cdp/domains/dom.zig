@@ -92,7 +92,7 @@ fn getDocument(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try bc.node_registry.register(frame.window._document.asNode());
@@ -156,7 +156,7 @@ fn performSearch(cmd: *CDP.Command) !void {
         includeUserAgentShadowDOM: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const root = frame.window._document.asNode();
 
@@ -187,7 +187,7 @@ fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMN
 // We should dispatch a node only if it has never been sent.
 fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
     const arena = cmd.arena;
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
 
     var parents: std.ArrayList(*Node) = .empty;
@@ -246,7 +246,7 @@ fn discardSearchResults(cmd: *CDP.Command) !void {
         searchId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     bc.node_search_list.remove(params.searchId);
     return cmd.sendResult(null, .{});
@@ -264,7 +264,7 @@ fn getSearchResults(cmd: *CDP.Command) !void {
         return error.BadIndices;
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     const search = bc.node_search_list.get(params.searchId) orelse {
         return error.SearchResultNotFound;
@@ -284,7 +284,7 @@ fn querySelector(cmd: *CDP.Command) !void {
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
@@ -310,7 +310,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
         selector: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
@@ -343,7 +343,7 @@ fn resolveNode(cmd: *CDP.Command) !void {
         executionContextId: ?u32 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     var ls: js.Local.Scope = undefined;
@@ -409,7 +409,7 @@ fn describeNode(cmd: *CDP.Command) !void {
     if (params.pierce) {
         log.warn(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
@@ -454,7 +454,7 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
     // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
 
     // We retrieve the node to at least check if it exists and is valid.
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
 
     switch (node.dom._type) {
@@ -494,7 +494,7 @@ fn getContentQuads(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
@@ -520,7 +520,7 @@ fn getBoxModel(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
@@ -551,7 +551,7 @@ fn requestChildNodes(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     if (params.depth == 0) return error.InvalidParams;
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
     const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
         return error.InvalidNode;
@@ -572,7 +572,7 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         frameId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame_id = try id.parseFrameId(params.frameId);
 
     const frame = bc.session.findFrameByFrameId(frame_id) orelse {
@@ -594,7 +594,7 @@ fn getOuterHTML(cmd: *CDP.Command) !void {
     if (params.includeShadowDOM) {
         log.warn(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
@@ -610,7 +610,7 @@ fn requestNode(cmd: *CDP.Command) !void {
         objectId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const node = try getNode(cmd.arena, bc, null, null, params.objectId);
 
     return cmd.sendResult(.{ .nodeId = node.id }, .{});
@@ -629,7 +629,7 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
         objectId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
@@ -716,12 +716,14 @@ test "cdp.dom: getSearchResults unknown search id" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
     try ctx.processMessage(.{
         .id = 8,
         .method = "DOM.getSearchResults",
         .params = .{ .searchId = "Nope", .fromIndex = 0, .toIndex = 10 },
     });
-    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 8 });
+    try ctx.expectSentError(-31998, "SearchResultNotFound", .{ .id = 8 });
 }
 
 test "cdp.dom: search flow" {

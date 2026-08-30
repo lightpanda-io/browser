@@ -57,7 +57,11 @@ pub const TestContext = struct {
 
     pub fn cdp(self: *TestContext) *CDP {
         if (!self.cdp_initialized) {
-            self.cdp_.init(base.test_app, self.cdp_socket, "json-version") catch |err| @panic(@errorName(err));
+            self.cdp_.init(base.test_app, self.cdp_socket, .{
+                .version = "json-version",
+                .list = "json-list",
+                .new = "json-new",
+            }) catch |err| @panic(@errorName(err));
             self.cdp_initialized = true;
         }
         return &self.cdp_;

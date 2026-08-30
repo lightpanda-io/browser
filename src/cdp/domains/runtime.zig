@@ -58,7 +58,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         // Bookkeeping that can neither observe nor change the page's global.
         .releaseObjectGroup, .discardConsoleEntries, .getHeapUsage, .getIsolateId, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => return sendInspector(cmd),
         else => {
-            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+            const bc = try cmd.requireBrowserContext();
             bc.main_world_touched = true;
             return sendInspector(cmd);
         },
@@ -66,19 +66,19 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.runtimeEnable();
     return sendInspector(cmd);
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     bc.runtimeDisable();
     return sendInspector(cmd);
 }
 
 fn sendInspector(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     // the result to return is handled directly by the inspector.
     bc.callInspector(cmd.input.json);
