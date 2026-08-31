@@ -1398,17 +1398,35 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
 // width / height treshold is reached. If the size isn't explicit, we fallback
 // to the content size.
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
-        return 0.0;
-    }
-    return self.boxAxis(frame, .width);
+    return self.clientAxis(frame, .width);
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
+    return self.clientAxis(frame, .height);
+}
+
+fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
-    return self.boxAxis(frame, .height);
+    return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+}
+
+fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    const tag = self.getTag();
+    if (tag != .html and tag != .body) {
+        return null;
+    }
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    if ((tag == .body) != doc.isQuirksMode()) {
+        return null;
+    }
+    // In quicks mode, the root element (the body) reports the viewport for
+    // clientWidth and clientHeight rather than its own MASSIVE box. This
+    // fixes jstracker's uiContourMap which attempts to tile the clientHeight
+    // of the body. (https://github.com/lightpanda-io/browser/issues/3251)
+    const viewport = frame._page.getViewport();
+    return @floatFromInt(if (axis == .width) viewport.width else viewport.height);
 }
 
 // Caller must have made sure self is visible.
@@ -1581,12 +1599,20 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     return total;
 }
 
+// Unlike clientHeight, the root's offsetHeight is its box (the document
+// extent), so it stays on the synthetic root default.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
-    return self.getClientHeight(frame);
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+        return 0.0;
+    }
+    return self.boxAxis(frame, .height);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
-    return self.getClientWidth(frame);
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+        return 0.0;
+    }
+    return self.boxAxis(frame, .width);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
