@@ -551,7 +551,7 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
         // controlled via Network.configureDurableMessages (which we don't
         // support).
         bc.captured_requests = .empty;
-        bc.captured_responses = .empty;
+        bc.clearCapturedResponses();
     }
 }
 
