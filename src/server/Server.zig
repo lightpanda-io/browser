@@ -1580,8 +1580,10 @@ test "server: get /json and /json/list" {
     for ([_][]const u8{
         "GET /json HTTP/1.1\r\n\r\n",
         "GET /json/ HTTP/1.1\r\n\r\n",
+        "GET /json?t=1 HTTP/1.1\r\n\r\n",
         "GET /json/list HTTP/1.1\r\n\r\n",
         "GET /json/list/ HTTP/1.1\r\n\r\n",
+        "GET /json/list?t=1 HTTP/1.1\r\n\r\n",
     }) |req| {
         var c = try createTestClient();
         defer c.deinit();
@@ -1603,6 +1605,7 @@ test "server: get and put /json/new" {
         "GET /json/new?https://example.com HTTP/1.1\r\n\r\n",
         "PUT /json/new HTTP/1.1\r\n\r\n",
         "PUT /json/new?https://example.com HTTP/1.1\r\n\r\n",
+        "PUT /json/new HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc",
     }) |req| {
         var c = try createTestClient();
         defer c.deinit();

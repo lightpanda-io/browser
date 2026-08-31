@@ -1022,6 +1022,15 @@ test "cdp.target: sessionless page command creates an implicit target" {
     try ctx.expectSentResult(null, .{ .id = 3 });
     try testing.expectEqual(null, ctx.cdp().browser_context);
 
+    // teardown succeeds as a no-op rather than spawning a page
+    try ctx.processMessage(.{ .id = 4, .method = "Network.disable" });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "Runtime.disable" });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "Page.close" });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
     try ctx.processMessage(.{ .id = 2, .method = "Page.setLifecycleEventsEnabled", .params = .{ .enabled = true } });
     const bc = ctx.cdp().browser_context.?;
     try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});

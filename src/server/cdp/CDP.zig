@@ -1305,6 +1305,8 @@ pub const Command = struct {
     // Flat-protocol clients skip the Target handshake and expect the /json
     // target to exist. A session id without a context is the browser
     // session, which must not get a page implicitly.
+    // Teardown handlers (X.disable, Page.close) don't use this: disabling
+    // what was never enabled succeeds as a no-op instead of spawning a page.
     pub fn requireBrowserContext(self: *Command) !*BrowserContext {
         if (self.browser_context) |bc| return bc;
         if (self.input.session_id != null) return error.BrowserContextNotLoaded;

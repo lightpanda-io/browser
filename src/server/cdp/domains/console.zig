@@ -44,7 +44,7 @@ fn enable(cmd: *CDP.Command) !void {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
+    const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
     bc.consoleDisable();
     return cmd.sendResult(null, .{});
 }

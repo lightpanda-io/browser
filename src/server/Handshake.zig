@@ -166,8 +166,10 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.NotFound;
     }
 
-    // Everything else is body-less: the header block is the request.
-    if (head_len != request.len) {
+    // GETs are body-less: the header block is the request. A PUT body (if
+    // any) is ignored — /json/new takes its argument in the URL — so don't
+    // wait on bytes that may never arrive.
+    if (is_get and head_len != request.len) {
         return .more;
     }
 
@@ -175,36 +177,41 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.InvalidRequest;
     };
 
+    // Routing ignores the query string, like Chrome's endpoints do.
     const url = request[4..url_end];
+    const path, const query = if (std.mem.indexOfScalar(u8, url, '?')) |i|
+        .{ url[0..i], url[i + 1 ..] }
+    else
+        .{ url, "" };
 
     // Only /json/new takes PUT (required since Chrome 66; GET kept for
     // older clients).
-    if (!is_get and !std.mem.startsWith(u8, url, "/json/new")) {
+    if (!is_get and !std.mem.startsWith(u8, path, "/json/new")) {
         return error.NotFound;
     }
 
-    if (std.mem.eql(u8, url, "/metrics") and self.app.config.metricsEndpointEnabled()) {
+    if (std.mem.eql(u8, path, "/metrics") and self.app.config.metricsEndpointEnabled()) {
         try self.sendMetrics();
         self.shutdown();
         return .close;
     }
 
     if (self.options.protocols.webdriver) {
-        if (std.mem.eql(u8, url, "/session")) {
+        if (std.mem.eql(u8, path, "/session")) {
             // /session is the path Firefox advertises its BiDi endpoint on
             try self.upgrade(request);
             return .{ .upgrade = .{ .bidi = null } };
         }
 
-        if (std.mem.startsWith(u8, url, "/session/") and url.len == "/session/".len + 36) {
+        if (std.mem.startsWith(u8, path, "/session/") and path.len == "/session/".len + 36) {
             // The URL a POST /session handed out; the session id is the suffix.
             var session_id: [36]u8 = undefined;
-            @memcpy(&session_id, url["/session/".len..]);
+            @memcpy(&session_id, path["/session/".len..]);
             try self.upgrade(request);
             return .{ .upgrade = .{ .bidi = session_id } };
         }
 
-        if (std.mem.eql(u8, url, "/status")) {
+        if (std.mem.eql(u8, path, "/status")) {
             // WebDriver's discovery endpoint; `ready` is whether a new session
             // can be created, which the bootstrap never refuses.
             return self.sendWebDriver("200 OK", .{ .ready = true, .message = "" });
@@ -215,40 +222,38 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.NotFound;
     }
 
-    if (std.mem.eql(u8, url, "/")) {
+    if (std.mem.eql(u8, path, "/")) {
         try self.upgrade(request);
         return .{ .upgrade = .cdp };
     }
 
-    if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
+    if (std.mem.eql(u8, path, "/json/version") or std.mem.eql(u8, path, "/json/version/")) {
         return self.sendAndClose(self.options.http_responses.version);
     }
 
-    if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
-        std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
+    if (std.mem.eql(u8, path, "/json/list") or std.mem.eql(u8, path, "/json/list/") or
+        std.mem.eql(u8, path, "/json") or std.mem.eql(u8, path, "/json/"))
     {
         return self.sendAndClose(self.options.http_responses.list);
     }
 
-    if (std.mem.eql(u8, url, "/json/new") or std.mem.eql(u8, url, "/json/new/") or
-        std.mem.startsWith(u8, url, "/json/new?"))
-    {
-        if (std.mem.startsWith(u8, url, "/json/new?")) {
-            log.warn(.not_implemented, "json new navigation", .{ .url = url["/json/new?".len..] });
+    if (std.mem.eql(u8, path, "/json/new") or std.mem.eql(u8, path, "/json/new/")) {
+        if (query.len > 0) {
+            log.warn(.not_implemented, "json new navigation", .{ .url = query });
         }
         return self.sendAndClose(self.options.http_responses.new);
     }
 
-    if (std.mem.eql(u8, url, "/json/activate") or std.mem.startsWith(u8, url, "/json/activate/")) {
+    if (std.mem.eql(u8, path, "/json/activate") or std.mem.startsWith(u8, path, "/json/activate/")) {
         return self.sendAndClose(target_activated_response);
     }
 
-    if (std.mem.eql(u8, url, "/json/close") or std.mem.startsWith(u8, url, "/json/close/")) {
+    if (std.mem.eql(u8, path, "/json/close") or std.mem.startsWith(u8, path, "/json/close/")) {
         log.warn(.not_implemented, "json close target", .{});
         return self.sendAndClose(target_closing_response);
     }
 
-    if (std.mem.eql(u8, url, "/json/protocol") or std.mem.eql(u8, url, "/json/protocol/")) {
+    if (std.mem.eql(u8, path, "/json/protocol") or std.mem.eql(u8, path, "/json/protocol/")) {
         return self.sendAndClose(protocol_response);
     }
 

@@ -151,7 +151,7 @@ fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
+    const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
     bc.fetchDisableForSession(try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }
