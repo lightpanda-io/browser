@@ -45,6 +45,14 @@
   testing.expectEqual(true, location.pathname.endsWith('target.html'));
 </script>
 
+<form id=fblank target=_blank action=support/page.html>
+  <input type=submit id=submit_blank>
+</form>
+<script id=form_blank>
+  $('#submit_blank').click();
+  testing.expectEqual(true, location.pathname.endsWith('target.html'));
+</script>
+
 <iframe name=frame3 id=f3></iframe>
 <form target="_top" action="support/page.html">
   <input type=submit id=submit1 formtarget="frame3">

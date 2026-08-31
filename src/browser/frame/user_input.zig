@@ -552,17 +552,13 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         if (target_name.len == 0) {
             break :blk target.ownerFrame(frame);
         }
-        break :blk frame.resolveTargetFrame(target_name) orelse {
-            // _blank: a new top-level context, as window.open creates. The
-            // opener is withheld unless rel=opener.
-            const owner = target.ownerFrame(frame);
-            try element.focus(frame);
-            _ = try owner.openPopup(.{
-                .url = href,
-                .name = "",
-                .opener = if (hasRelToken(element, "opener")) owner.window else null,
-            });
-            return;
+        break :blk switch (frame.resolveTargetFrame(target_name)) {
+            .frame => |f| f,
+            .blank => {
+                try element.focus(frame);
+                _ = try target.ownerFrame(frame).openBlankTarget(element, href);
+                return;
+            },
         };
     };
 
@@ -571,17 +567,6 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         .reason = .script,
         .kind = .{ .push = null },
     }, .{ .anchor = target_frame });
-}
-
-fn hasRelToken(element: *Element, token: []const u8) bool {
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return false;
-    var it = std.mem.tokenizeAny(u8, rel, &std.ascii.whitespace);
-    while (it.next()) |t| {
-        if (std.ascii.eqlIgnoreCase(t, token)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {

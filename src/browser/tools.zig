@@ -1544,7 +1544,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     }
 
     // Script may have queued a navigation (e.g. `top.location = …`).
-    try awaitQueuedNavigation(session, page._frame_id);
+    try awaitQueuedNavigation(session, page);
     const after = session.currentFrame() orelse return result;
     if (before == null or before.? == after) return result;
 
@@ -1759,13 +1759,17 @@ fn mapActionError(err: anytype) ToolError {
 
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
-fn awaitQueuedNavigation(session: *lp.Session, frame_id: u32) ToolError!void {
+fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void {
+    // Runner waits are keyed by Page root (a popup lives on its opener's
+    // Page). Read it before processing: a synthetic root navigation frees
+    // the Page in place.
+    const root_frame_id = frame._page.frame._frame_id;
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
         return;
     }
     var runner = session.runner(.{});
-    runner.waitForFrame(frame_id, 10000, .{ .until = .done }) catch |err|
+    runner.waitForFrame(root_frame_id, 10000, .{ .until = .done }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1795,7 +1799,7 @@ fn beginAction(session: *lp.Session) ActionScope {
 fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
     const before = scope.frame;
     if (before) |b| {
-        try awaitQueuedNavigation(session, b._frame_id);
+        try awaitQueuedNavigation(session, b);
     }
     var page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
@@ -1944,7 +1948,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     // script may have queued a navigation (e.g. top.location=…); drain it so
     // the next command reads post-navigation state
-    try awaitQueuedNavigation(session, frame._frame_id);
+    try awaitQueuedNavigation(session, frame);
 
     return "Script returned truthy.";
 }
