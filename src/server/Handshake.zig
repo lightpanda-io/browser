@@ -166,9 +166,8 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.NotFound;
     }
 
-    // GETs are body-less: the header block is the request. A PUT body (if
-    // any) is ignored — /json/new takes its argument in the URL — so don't
-    // wait on bytes that may never arrive.
+    // GETs are body-less: the header block is the request. A PUT body is
+    // ignored rather than waited on — /json/new takes its argument in the URL.
     if (is_get and head_len != request.len) {
         return .more;
     }
@@ -177,7 +176,7 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.InvalidRequest;
     };
 
-    // Routing ignores the query string, like Chrome's endpoints do.
+    // Routing ignores the query string, as Chrome does.
     const url = request[4..url_end];
     const path, const query = if (std.mem.indexOfScalar(u8, url, '?')) |i|
         .{ url[0..i], url[i + 1 ..] }
@@ -227,33 +226,34 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return .{ .upgrade = .cdp };
     }
 
-    if (std.mem.eql(u8, path, "/json/version") or std.mem.eql(u8, path, "/json/version/")) {
+    // The /json routes match with or without a trailing slash.
+    const route = if (path.len > 1 and path[path.len - 1] == '/') path[0 .. path.len - 1] else path;
+
+    if (std.mem.eql(u8, route, "/json/version")) {
         return self.sendAndClose(self.options.http_responses.version);
     }
 
-    if (std.mem.eql(u8, path, "/json/list") or std.mem.eql(u8, path, "/json/list/") or
-        std.mem.eql(u8, path, "/json") or std.mem.eql(u8, path, "/json/"))
-    {
+    if (std.mem.eql(u8, route, "/json/list") or std.mem.eql(u8, route, "/json")) {
         return self.sendAndClose(self.options.http_responses.list);
     }
 
-    if (std.mem.eql(u8, path, "/json/new") or std.mem.eql(u8, path, "/json/new/")) {
+    if (std.mem.eql(u8, route, "/json/new")) {
         if (query.len > 0) {
             log.warn(.not_implemented, "json new navigation", .{ .url = query });
         }
         return self.sendAndClose(self.options.http_responses.new);
     }
 
-    if (std.mem.eql(u8, path, "/json/activate") or std.mem.startsWith(u8, path, "/json/activate/")) {
+    if (std.mem.eql(u8, route, "/json/activate") or std.mem.startsWith(u8, route, "/json/activate/")) {
         return self.sendAndClose(target_activated_response);
     }
 
-    if (std.mem.eql(u8, path, "/json/close") or std.mem.startsWith(u8, path, "/json/close/")) {
+    if (std.mem.eql(u8, route, "/json/close") or std.mem.startsWith(u8, route, "/json/close/")) {
         log.warn(.not_implemented, "json close target", .{});
         return self.sendAndClose(target_closing_response);
     }
 
-    if (std.mem.eql(u8, path, "/json/protocol") or std.mem.eql(u8, path, "/json/protocol/")) {
+    if (std.mem.eql(u8, route, "/json/protocol")) {
         return self.sendAndClose(protocol_response);
     }
 
@@ -567,25 +567,18 @@ fn shutdown(self: *Handshake) void {
     sys_net.shutdown(self.socket, .recv) catch {};
 }
 
-fn plainTextResponse(comptime body: []const u8) []const u8 {
+fn staticResponse(comptime content_type: []const u8, comptime body: []const u8) []const u8 {
     return std.fmt.comptimePrint(
         "HTTP/1.1 200 OK\r\n" ++
             "Content-Length: {d}\r\n" ++
             "Connection: Close\r\n" ++
-            "Content-Type: text/plain; charset=UTF-8\r\n\r\n",
+            "Content-Type: " ++ content_type ++ "; charset=UTF-8\r\n\r\n",
         .{body.len},
     ) ++ body;
 }
 
-const target_activated_response = plainTextResponse("Target activated");
-const target_closing_response = plainTextResponse("Target is closing");
+const target_activated_response = staticResponse("text/plain", "Target activated");
+const target_closing_response = staticResponse("text/plain", "Target is closing");
 
 const protocol_json = @embedFile("../data/protocol.json");
-
-const protocol_response = std.fmt.comptimePrint(
-    "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n",
-    .{protocol_json.len},
-) ++ protocol_json;
+const protocol_response = staticResponse("application/json", protocol_json);

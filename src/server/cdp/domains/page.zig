@@ -194,7 +194,7 @@ fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 }
 
 fn close(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
+    const bc = try cmd.teardownBrowserContext() orelse return;
 
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 

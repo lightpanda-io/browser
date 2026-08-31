@@ -156,9 +156,9 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const port = bound_address.getPort();
     const json_version_response = try buildJSONVersionResponse(app, port);
     errdefer allocator.free(json_version_response);
-    const json_list_response = try buildTargetJSONResponse(app, port, true);
+    const json_list_response = try buildJSONHttpResponse(allocator, "[ " ++ target_json_format ++ " ]", .{ app.config.advertiseHost(), port });
     errdefer allocator.free(json_list_response);
-    const json_new_response = try buildTargetJSONResponse(app, port, false);
+    const json_new_response = try buildJSONHttpResponse(allocator, target_json_format, .{ app.config.advertiseHost(), port });
     errdefer allocator.free(json_new_response);
 
     const bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ app.config.advertiseHost(), port });
@@ -241,9 +241,9 @@ pub fn deinit(self: *Server) void {
     self.drivers.deinit(allocator);
     self.handshakes.deinit(allocator);
     self.cdp_pool.deinit(allocator);
-    inline for (std.meta.fields(Handshake.HttpResponses)) |field| {
-        allocator.free(@field(self.http_responses, field.name));
-    }
+    allocator.free(self.http_responses.version);
+    allocator.free(self.http_responses.list);
+    allocator.free(self.http_responses.new);
     allocator.free(self.bidi_session_url);
     allocator.free(self.pollfds);
     allocator.free(self.poll_snapshot);
@@ -798,17 +798,6 @@ fn serve(self: *Server, driver: Driver, active_conns_early_release: *bool) void 
     _ = self.active_conns.fetchSub(1, .monotonic);
 }
 
-fn buildJSONHttpResponse(allocator: Allocator, comptime body_format: []const u8, args: anytype) ![]const u8 {
-    const body_len = std.fmt.count(body_format, args);
-    const response_format =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        body_format;
-    return try std.fmt.allocPrint(allocator, response_format, .{body_len} ++ args);
-}
-
 fn track(self: *Server, driver: Driver) void {
     self.driver_mutex.lockUncancelable(lp.io);
     defer self.driver_mutex.unlock(lp.io);
@@ -832,6 +821,17 @@ fn getClientAddress(socket: posix.socket_t) !sys_net.IpAddress {
     var socklen: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
     try posix.getpeername(socket, @ptrCast(&storage), &socklen);
     return sys_net.addressFromSockaddr(@ptrCast(&storage));
+}
+
+fn buildJSONHttpResponse(allocator: Allocator, comptime body_format: []const u8, args: anytype) ![]const u8 {
+    const body_len = std.fmt.count(body_format, args);
+    const response_format =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Length: {d}\r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+        body_format;
+    return try std.fmt.allocPrint(allocator, response_format, .{body_len} ++ args);
 }
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
@@ -869,11 +869,6 @@ const target_json_format =
     "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
     "}}";
 
-fn buildTargetJSONResponse(app: *const App, port: u16, comptime as_list: bool) ![]const u8 {
-    const body_format = if (as_list) "[ " ++ target_json_format ++ " ]" else target_json_format;
-    return try buildJSONHttpResponse(app.allocator, body_format, .{ app.config.advertiseHost(), port });
-}
-
 const testing = @import("../testing.zig");
 test "server: buildJSONVersionResponse" {
     const res = try buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
@@ -890,22 +885,6 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
-}
-
-test "server: buildTargetJSONResponse" {
-    inline for (.{ true, false }) |as_list| {
-        const res = try buildTargetJSONResponse(testing.test_app, testing.test_app.config.port(), as_list);
-        defer testing.test_app.allocator.free(res);
-
-        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") != null);
-
-        try testing.expect(std.mem.indexOf(u8, res, "\"id\": \"1\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "\"type\": \"page\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "\"url\": \"about:blank\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
-    }
 }
 
 test "Client: http invalid request" {

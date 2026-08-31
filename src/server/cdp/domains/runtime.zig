@@ -56,9 +56,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         // Bookkeeping that can neither observe nor change the page's global.
-        // Without a context there is nothing to book-keep: succeed as a no-op.
         .releaseObjectGroup, .discardConsoleEntries, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => {
-            const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
+            const bc = try cmd.teardownBrowserContext() orelse return;
             return sendInspector(cmd, bc);
         },
         // These have no honest answer without a live isolate.
@@ -78,7 +77,7 @@ fn enable(cmd: *CDP.Command) !void {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.runtimeDisable();
     return sendInspector(cmd, bc);
 }

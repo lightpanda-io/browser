@@ -44,8 +44,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 const BrowserContextParam = struct { browserContextId: ?[]const u8 = null };
 
 fn clearCookies(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
+    const bc = try cmd.requireBrowserContext();
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -59,8 +59,8 @@ fn clearCookies(cmd: *CDP.Command) !void {
 }
 
 fn getCookies(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(BrowserContextParam)) orelse BrowserContextParam{};
+    const bc = try cmd.requireBrowserContext();
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
@@ -73,11 +73,11 @@ fn getCookies(cmd: *CDP.Command) !void {
 }
 
 fn setCookies(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(struct {
         cookies: []const CdpCookie,
         browserContextId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
+    const bc = try cmd.requireBrowserContext();
 
     if (params.browserContextId) |browser_context_id| {
         if (std.mem.eql(u8, browser_context_id, bc.id) == false) {

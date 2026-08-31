@@ -136,7 +136,7 @@ fn enable(cmd: *CDP.Command) !void {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return cmd.sendResult(null, .{});
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.networkDisable();
     return cmd.sendResult(null, .{});
 }
@@ -314,8 +314,8 @@ const GetCookiesParam = struct {
     urls: ?[]const [:0]const u8 = null,
 };
 fn getCookies(cmd: *CDP.Command) !void {
-    const bc = try cmd.requireBrowserContext();
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
+    const bc = try cmd.requireBrowserContext();
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
     const frame_url = if (bc.mainFrame()) |frame| frame.url else null;
@@ -350,7 +350,7 @@ fn getResponseBody(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const key = try keyFromRequestId(params.requestId);
-    const bc = try cmd.requireBrowserContext();
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const resp = bc.captured_responses.getPtr(key) orelse return error.RequestNotFound;
     const data = resp.data orelse {
         return cmd.sendError(-32000, "Request content was evicted from inspector cache", .{});
@@ -381,7 +381,7 @@ fn getRequestPostData(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const key = try keyFromRequestId(params.requestId);
-    const bc = try cmd.requireBrowserContext();
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const body = bc.captured_requests.get(key) orelse return error.RequestNotFound;
 
     return cmd.sendResult(.{ .postData = SafeString.wrap(body) }, .{});
