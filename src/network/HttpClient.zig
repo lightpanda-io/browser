@@ -2316,7 +2316,6 @@ pub const Transfer = struct {
                 if (run_at > now) {
                     const d = run_at - now;
                     lp.metrics.http_navigation_delay_ms.observe(@intCast(d));
-                    log.debug(.http, "navigation delayed", .{ .url = self.req.url, .ms = d });
                     self.client.delay(self, run_at);
                     return;
                 }
