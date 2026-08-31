@@ -418,6 +418,11 @@
     \\  --http-timeout <INT>
     \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
     \\          Defaults to 10000.
+    \\  --http-version <VERSION>
+    \\          HTTP version to negotiate. "1.1" never offers HTTP/2. "auto"
+    \\          picks the best available option.
+    \\          Defaults to "auto".
+    \\          Allowed values: "auto", "1.1".
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.

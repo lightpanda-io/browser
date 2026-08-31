@@ -34,6 +34,9 @@ const default_charset_len = 5;
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 
+/// The fallback for a Content-Type that fails to parse.
+pub const octet_stream = Mime{ .content_type = .{ .application_octet_stream = {} } };
+
 pub const ContentTypeEnum = enum {
     text_xml,
     text_html,
@@ -47,6 +50,7 @@ pub const ContentTypeEnum = enum {
     image_png,
     image_webp,
     application_json,
+    application_octet_stream,
     unknown,
     other,
     other_xml,
@@ -65,6 +69,7 @@ pub const ContentType = union(ContentTypeEnum) {
     image_png: void,
     image_webp: void,
     application_json: void,
+    application_octet_stream: void,
     unknown: void,
     // A valid but unrecognized type/subtype. Keeping it would require some
     // memory management of the input. Nothing needs it right now, so why bother.
@@ -86,6 +91,7 @@ pub fn contentTypeString(mime: *const Mime) []const u8 {
         .image_gif => "image/gif",
         .image_webp => "image/webp",
         .application_json => "application/json",
+        .application_octet_stream => "application/octet-stream",
         else => "",
     };
 }
@@ -451,6 +457,7 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         @"image/webp",
 
         @"application/json",
+        @"application/octet-stream",
         @"application/xml",
     }, type_name)) |known_type| {
         const ct: ContentType = switch (known_type) {
@@ -467,6 +474,7 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
             .@"image/gif" => .{ .image_gif = {} },
             .@"image/webp" => .{ .image_webp = {} },
             .@"application/json" => .{ .application_json = {} },
+            .@"application/octet-stream" => .{ .application_octet_stream = {} },
         };
         return .{ ct, attribute_start };
     }
@@ -898,6 +906,8 @@ test "Mime: parse common" {
     try expect(.{ .content_type = .{ .image_png = {} } }, "image/png");
     try expect(.{ .content_type = .{ .image_gif = {} } }, "image/gif");
     try expect(.{ .content_type = .{ .image_webp = {} } }, "image/webp");
+
+    try expect(.{ .content_type = .{ .application_octet_stream = {} } }, "application/octet-stream");
 }
 
 test "Mime: parse uncommon" {

@@ -199,6 +199,7 @@ pub const CurlOption = enum(c.CURLoption) {
     timeout_ms = c.CURLOPT_TIMEOUT_MS,
     connect_timeout_ms = c.CURLOPT_CONNECTTIMEOUT_MS,
     follow_location = c.CURLOPT_FOLLOWLOCATION,
+    http_version = c.CURLOPT_HTTP_VERSION,
     proxy = c.CURLOPT_PROXY,
     ssl_verify_host = c.CURLOPT_SSL_VERIFYHOST,
     ssl_verify_peer = c.CURLOPT_SSL_VERIFYPEER,
@@ -229,6 +230,11 @@ pub const CurlOption = enum(c.CURLoption) {
     opensocket_data = c.CURLOPT_OPENSOCKETDATA,
     ssl_ctx_function = c.CURLOPT_SSL_CTX_FUNCTION,
     ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
+};
+
+pub const CurlHttpVersion = enum(c_long) {
+    none = c.CURL_HTTP_VERSION_NONE, // libcurl's own defaults, picks the best
+    v1_1 = c.CURL_HTTP_VERSION_1_1,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
@@ -633,6 +639,8 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         => @as(?*anyopaque, @ptrCast(value)),
 
         .ssl_ctx_data => @as(*crypto.X509_STORE, value),
+
+        .http_version => @as(c_long, @intFromEnum(@as(CurlHttpVersion, value))),
 
         .debug_function => @as(CurlDebugFunction, value),
         .opensocket_function => @as(CurlOpenSocketFunction, value),

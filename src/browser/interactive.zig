@@ -21,6 +21,8 @@ const std = @import("std");
 const Frame = @import("Frame.zig");
 const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
+const Label = @import("webapi/element/html/Label.zig");
+const AXNode = @import("../cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -179,6 +181,7 @@ fn walkInteractive(
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
     var css_cache: Element.PointerEventsCache = .empty;
+    var label_index: Label.LabelByForIndex = .{};
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
@@ -212,15 +215,17 @@ fn walkInteractive(
 
         const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
 
-        const role = getRole(el);
+        const axn = AXNode.fromNode(node);
+        const role = axRole(axn);
         if (filter.role) |rf| {
             const r = role orelse continue;
             if (!std.ascii.eqlIgnoreCase(r, rf)) continue;
         }
 
-        // Resolve accessible name only after the cheap role filter passes,
-        // since getAccessibleName walks the element's text subtree.
-        const name = try getAccessibleName(el, arena);
+        // Names walk labels and text; filter on role first. Role-less elements
+        // (listener/tabindex only) sit outside AccName; their text is the only handle.
+        const name = try axn.getName(frame, arena, &label_index) orelse
+            if (role == null) try getTextContent(node, arena) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
             if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
@@ -391,65 +396,10 @@ pub fn explicitRole(el: *Element) ?[]const u8 {
     return it.next();
 }
 
-fn getRole(el: *Element) ?[]const u8 {
-    if (explicitRole(el)) |role| return role;
-
-    // Implicit role from tag
-    return switch (el.getTag()) {
-        .button, .summary => "button",
-        .anchor, .area => if (el.getAttributeSafe(comptime .wrap("href")) != null) "link" else null,
-        .input => blk: {
-            if (el.is(Element.Html.Input)) |input| {
-                break :blk switch (input._input_type) {
-                    .text, .tel, .url, .email => "textbox",
-                    .checkbox => "checkbox",
-                    .radio => "radio",
-                    .button, .submit, .reset, .image => "button",
-                    .range => "slider",
-                    .number => "spinbutton",
-                    .search => "searchbox",
-                    else => null,
-                };
-            }
-            break :blk null;
-        },
-        .select => "combobox",
-        .textarea => "textbox",
-        .details => "group",
-        else => null,
-    };
-}
-
-fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
-    // aria-label
-    if (el.getAttributeSafe(comptime .wrap("aria-label"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // alt (for img, input[type=image])
-    if (el.getAttributeSafe(comptime .wrap("alt"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // title
-    if (el.getAttributeSafe(comptime .wrap("title"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // placeholder
-    if (el.getAttributeSafe(comptime .wrap("placeholder"))) |v| {
-        if (v.len > 0) return v;
-    }
-
-    // value (for buttons)
-    if (el.getTag() == .input) {
-        if (el.getAttributeSafe(comptime .wrap("value"))) |v| {
-            if (v.len > 0) return v;
-        }
-    }
-
-    // Text content (first non-empty text node, trimmed)
-    return try getTextContent(el.asNode(), arena);
+/// Null for elements with no role (interactive only by listener or tabindex).
+fn axRole(axn: AXNode) ?[]const u8 {
+    const role = axn.getRole() catch return null;
+    return if (std.mem.eql(u8, role, "none")) null else role;
 }
 
 pub fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
@@ -527,6 +477,63 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
+}
+
+/// Attached to the document so `<label for>` resolves.
+fn testInteractiveInBody(html: []const u8) ![]InteractiveElement {
+    const frame = try testing.createFrame();
+    errdefer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    _ = try doc.asNode().appendChild(div.asNode(), frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    return collectInteractiveElements(div.asNode(), frame.call_arena, frame);
+}
+
+test "browser.interactive: names come from labels, like the tree" {
+    const elements = try testInteractiveInBody(
+        \\<label for="email">Email address</label><input id="email" type="text">
+        \\<label>Password <input type="password"></label>
+        \\<span id="q-label">Search</span><input type="search" aria-labelledby="q-label">
+        \\<input type="text" placeholder="City">
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(4, elements.len);
+    try testing.expectEqual("textbox", elements[0].role.?);
+    try testing.expectEqual("Email address", elements[0].name.?);
+    try testing.expectEqual("textbox", elements[1].role.?);
+    try testing.expectEqual("Password", elements[1].name.?);
+    try testing.expectEqual("searchbox", elements[2].role.?);
+    try testing.expectEqual("Search", elements[2].name.?);
+    try testing.expectEqual("City", elements[3].name.?);
+}
+
+test "browser.interactive: an element with no role keeps its text as name" {
+    const elements = try testInteractive("<div tabindex=\"0\">Open menu</div>");
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(1, elements.len);
+    try testing.expectEqual(null, elements[0].role);
+    try testing.expectEqual("Open menu", elements[0].name.?);
+}
+
+test "browser.interactive: an element with a role takes only its accessible name" {
+    const elements = try testInteractive(
+        \\<select><option>Red</option></select>
+        \\<textarea>draft</textarea>
+        \\<details><summary>More</summary><p>Content</p></details>
+    );
+    defer testing.test_session.closeAllPages();
+    try testing.expectEqual(4, elements.len);
+    try testing.expectEqual("combobox", elements[0].role.?);
+    try testing.expectEqual(null, elements[0].name);
+    try testing.expectEqual("textbox", elements[1].role.?);
+    try testing.expectEqual(null, elements[1].name);
+    try testing.expectEqual("group", elements[2].role.?);
+    try testing.expectEqual(null, elements[2].name);
+    try testing.expectEqual("button", elements[3].role.?);
+    try testing.expectEqual("More", elements[3].name.?);
 }
 
 test "browser.interactive: button" {

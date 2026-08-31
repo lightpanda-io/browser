@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const Base64Writer = @import("../Base64Writer.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
+const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
 const Viewport = @import("Viewport.zig");
 const markdown = @import("markdown.zig");
@@ -64,7 +65,47 @@ pub const Renderer = opaque {
     }
 };
 
-fn rendererFor(frame: *Frame) !*Renderer {
+/// The block model laid out by the Rust side at scale 1, as flat arrays
+/// (see `LpLayout`). Lives on the Rust heap until `deinit`.
+pub const Layout = struct {
+    handle: *LayoutHandle,
+    raw: LpLayout,
+
+    pub fn deinit(self: *Layout) void {
+        lp_layout_free(self.handle);
+    }
+
+    pub fn blocks(self: *const Layout) []const LpLayoutBlock {
+        return self.raw.blocks[0..self.raw.blocks_len];
+    }
+    pub fn lines(self: *const Layout) []const LpLine {
+        return self.raw.lines[0..self.raw.lines_len];
+    }
+    pub fn runs(self: *const Layout) []const LpRun {
+        return self.raw.runs[0..self.raw.runs_len];
+    }
+    pub fn glyphs(self: *const Layout) []const LpGlyph {
+        return self.raw.glyphs[0..self.raw.glyphs_len];
+    }
+    pub fn clusters(self: *const Layout) []const LpCluster {
+        return self.raw.clusters[0..self.raw.clusters_len];
+    }
+    pub fn fonts(self: *const Layout) []const LpFont {
+        return self.raw.fonts[0..self.raw.fonts_len];
+    }
+};
+
+const LayoutHandle = opaque {};
+
+/// Flows `blocks` into a column `width` layout px wide with `margin` on
+/// every side.
+pub fn layout(renderer: *Renderer, blocks: []const LpBlock, width: f32, margin: f32) error{LayoutFailed}!Layout {
+    var raw: LpLayout = undefined;
+    const handle = lp_layout_new(renderer, blocks.ptr, blocks.len, width, margin, &raw) orelse return error.LayoutFailed;
+    return .{ .handle = handle, .raw = raw };
+}
+
+pub fn rendererFor(frame: *Frame) !*Renderer {
     const browser = frame._session.browser;
     if (browser.renderer) |r| {
         return r;
@@ -75,34 +116,53 @@ fn rendererFor(frame: *Frame) !*Renderer {
 }
 
 pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
-    const prepared = try prepare(arena, node, opts, frame);
+    const prepared = try preparePng(arena, node, opts, frame);
     return prepared.write(writer);
 }
 
 /// The height a render at `width` would have.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
-    const prepared = try prepare(arena, node, .{ .width = width }, frame);
+    const prepared = try preparePng(arena, node, .{ .width = width }, frame);
     return prepared.measure();
 }
 
 // The DOM walk, done up front so it can fail (allocation) before any output
 // starts. Rasterizing is then a pure write: `Prepared` can be embedded in a
 // std.json value and streams itself as a base64 string.
-pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepared {
+pub fn preparePng(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepared {
     if (opts.width == 0 or !(opts.scale > 0 and opts.scale <= 8)) {
         return error.InvalidScreenshotOptions;
     }
+    return .{
+        .opts = opts,
+        .blocks = try collect(arena, node, frame),
+        .renderer = try rendererFor(frame),
+    };
+}
+
+pub fn collect(arena: Allocator, node: *Node, frame: *Frame) ![]const LpBlock {
     var builder: Builder = .{
         .frame = frame,
         .arena = arena,
     };
     try builder.render(node);
     try builder.closeBlock();
-    return .{
-        .opts = opts,
-        .blocks = builder.blocks.items,
-        .renderer = try rendererFor(frame),
-    };
+    return builder.blocks.items;
+}
+
+// Any non-zero rc means nothing usable was written, so the caller has to fail
+// rather than hand back a truncated file. WriteFailed is the only error
+// jsonStringify's signature can carry, hence the log line.
+fn renderFailed(what: []const u8, rc: i32) error{WriteFailed} {
+    log.err(.browser, what, .{ .reason = switch (rc) {
+        RC_WRITE_REFUSED => "write refused",
+        RC_INVALID => "invalid options",
+        RC_NO_RASTER => "raster allocation failed",
+        RC_ENCODE_FAILED => "png encoding failed",
+        RC_PANIC => "renderer panicked",
+        else => "unknown",
+    }, .rc = rc });
+    return error.WriteFailed;
 }
 
 pub const Prepared = struct {
@@ -149,19 +209,7 @@ pub const Prepared = struct {
         if (rc == RC_OK) {
             return content_height;
         }
-
-        // Any non-zero rc means nothing usable was written, so this has to
-        // fail rather than hand back a truncated PNG. WriteFailed is the only
-        // error jsonStringify's signature can carry, hence the log line.
-        log.err(.browser, "screenshot render", .{ .reason = switch (rc) {
-            RC_WRITE_REFUSED => "write refused",
-            RC_INVALID => "invalid options",
-            RC_NO_RASTER => "raster allocation failed",
-            RC_ENCODE_FAILED => "png encoding failed",
-            RC_PANIC => "renderer panicked",
-            else => "unknown",
-        }, .rc = rc });
-        return error.WriteFailed;
+        return renderFailed("screenshot render", rc);
     }
 
     // Serializes as a base64 string, streamed: no PNG or base64 buffer.
@@ -198,14 +246,16 @@ const Sink = struct {
 };
 
 // Mirrors the C ABI in src/rust/render/lib.rs.
-const LpSpan = extern struct {
+pub const LpSpan = extern struct {
     text: [*]const u8,
     len: usize,
     flags: u32,
     color: u32,
+    href: [*]const u8,
+    href_len: usize,
 };
 
-const LpBlock = extern struct {
+pub const LpBlock = extern struct {
     spans: [*]const LpSpan,
     spans_len: usize,
     marker: [*]const u8,
@@ -216,7 +266,7 @@ const LpBlock = extern struct {
     quote_depth: u8,
     flags: u8,
 
-    const Kind = enum(u8) {
+    pub const Kind = enum(u8) {
         paragraph = 0,
         heading = 1,
         pre = 2,
@@ -246,6 +296,102 @@ const BLOCK_TIGHT: u8 = 1 << 0;
 
 const RENDER_MEASURE_ONLY: u32 = 1 << 0;
 
+// The laid-out document `lp_layout_new` exports, in layout px: blocks own a
+// range of lines, lines a range of runs and clusters, runs a range of
+// glyphs. Consumed by pdf.zig; see the Rust definitions for field docs.
+pub const LpLayout = extern struct {
+    height: f32,
+    pre_pad: f32,
+    quote_indent: f32,
+    rule_color: u32,
+    pre_bg: u32,
+    blocks: [*]const LpLayoutBlock,
+    blocks_len: usize,
+    lines: [*]const LpLine,
+    lines_len: usize,
+    runs: [*]const LpRun,
+    runs_len: usize,
+    glyphs: [*]const LpGlyph,
+    glyphs_len: usize,
+    clusters: [*]const LpCluster,
+    clusters_len: usize,
+    fonts: [*]const LpFont,
+    fonts_len: usize,
+};
+
+pub const LAYOUT_NONE: u32 = std.math.maxInt(u32);
+
+pub const LpLayoutBlock = extern struct {
+    x: f32,
+    y: f32,
+    quote_x: f32,
+    lines: u32,
+    lines_len: u32,
+    marker_line: u32,
+    kind: u8,
+    quote_bars: u8,
+};
+
+pub const LpLine = extern struct {
+    x: f32,
+    top: f32,
+    bottom: f32,
+    runs: u32,
+    runs_len: u32,
+    clusters: u32,
+    clusters_len: u32,
+};
+
+pub const LpRun = extern struct {
+    font: u32,
+    size: f32,
+    skew: f32,
+    color: u32,
+    offset: f32,
+    baseline: f32,
+    advance: f32,
+    glyphs: u32,
+    glyphs_len: u32,
+    underline: LpDecoration,
+    strike: LpDecoration,
+};
+
+pub const LpDecoration = extern struct {
+    enabled: u32,
+    offset: f32,
+    size: f32,
+    color: u32,
+};
+
+pub const LpGlyph = extern struct {
+    id: u32,
+    x: f32,
+    y: f32,
+    advance: f32,
+};
+
+pub const LpCluster = extern struct {
+    font: u32,
+    glyph: u32,
+    text_start: u32,
+    text_len: u32,
+    x: f32,
+    advance: f32,
+    flags: u32,
+};
+
+pub const CLUSTER_LIGATURE_START: u32 = 1 << 0;
+pub const CLUSTER_LIGATURE_CONT: u32 = 1 << 1;
+
+pub const LpFont = extern struct {
+    data: [*]const u8,
+    data_len: usize,
+    index: u32,
+    name: [*]const u8,
+    name_len: usize,
+    mono: u8,
+};
+
 const RC_OK: i32 = 0;
 const RC_WRITE_REFUSED: i32 = 1;
 const RC_INVALID: i32 = 2;
@@ -263,6 +409,8 @@ const LpAbi = extern struct {
     span_len: u32,
     span_flags: u32,
     span_color: u32,
+    span_href: u32,
+    span_href_len: u32,
 
     block_size: u32,
     block_align: u32,
@@ -287,6 +435,89 @@ const LpAbi = extern struct {
     opts_scale: u32,
     opts_flags: u32,
 
+    layout_sizeof: u32,
+    layout_alignof: u32,
+    layout_height: u32,
+    layout_pre_pad: u32,
+    layout_quote_indent: u32,
+    layout_rule_color: u32,
+    layout_pre_bg: u32,
+    layout_blocks: u32,
+    layout_blocks_len: u32,
+    layout_lines: u32,
+    layout_lines_len: u32,
+    layout_runs: u32,
+    layout_runs_len: u32,
+    layout_glyphs: u32,
+    layout_glyphs_len: u32,
+    layout_clusters: u32,
+    layout_clusters_len: u32,
+    layout_fonts: u32,
+    layout_fonts_len: u32,
+    lblock_sizeof: u32,
+    lblock_alignof: u32,
+    lblock_x: u32,
+    lblock_y: u32,
+    lblock_quote_x: u32,
+    lblock_lines: u32,
+    lblock_lines_len: u32,
+    lblock_marker_line: u32,
+    lblock_kind: u32,
+    lblock_quote_bars: u32,
+    line_sizeof: u32,
+    line_alignof: u32,
+    line_x: u32,
+    line_top: u32,
+    line_bottom: u32,
+    line_runs: u32,
+    line_runs_len: u32,
+    line_clusters: u32,
+    line_clusters_len: u32,
+    run_sizeof: u32,
+    run_alignof: u32,
+    run_font: u32,
+    run_size: u32,
+    run_skew: u32,
+    run_color: u32,
+    run_offset: u32,
+    run_baseline: u32,
+    run_advance: u32,
+    run_glyphs: u32,
+    run_glyphs_len: u32,
+    run_underline: u32,
+    run_strike: u32,
+    deco_sizeof: u32,
+    deco_alignof: u32,
+    deco_enabled: u32,
+    deco_offset: u32,
+    deco_size: u32,
+    deco_color: u32,
+    glyph_sizeof: u32,
+    glyph_alignof: u32,
+    glyph_id: u32,
+    glyph_x: u32,
+    glyph_y: u32,
+    glyph_advance: u32,
+    cluster_sizeof: u32,
+    cluster_alignof: u32,
+    cluster_font: u32,
+    cluster_glyph: u32,
+    cluster_text_start: u32,
+    cluster_text_len: u32,
+    cluster_x: u32,
+    cluster_advance: u32,
+    cluster_flags: u32,
+    font_sizeof: u32,
+    font_alignof: u32,
+    font_data: u32,
+    font_data_len: u32,
+    font_index: u32,
+    font_name: u32,
+    font_name_len: u32,
+    font_mono: u32,
+    layout_none: u32,
+    cluster_ligature_start: u32,
+    cluster_ligature_cont: u32,
     span_bold: u32,
     span_italic: u32,
     span_underline: u32,
@@ -323,6 +554,15 @@ extern "c" fn lp_render_png(
     ctx: *anyopaque,
     write: *const fn (ctx: *anyopaque, data: [*]const u8, len: usize) callconv(.c) bool,
 ) i32;
+extern "c" fn lp_layout_new(
+    r: *Renderer,
+    blocks: [*]const LpBlock,
+    blocks_len: usize,
+    width: f32,
+    margin: f32,
+    out: *LpLayout,
+) ?*LayoutHandle;
+extern "c" fn lp_layout_free(h: *LayoutHandle) void;
 extern "c" fn lp_render_abi(out: *LpAbi) void;
 
 const Builder = struct {
@@ -341,6 +581,7 @@ const Builder = struct {
     text: std.ArrayList(u8) = .empty,
     text_flags: u32 = 0,
     text_color: u32 = 0,
+    text_href: []const u8 = "",
     has_content: bool = false,
     pending_space: bool = false,
     // Nothing appended since an <a> closed. Adjacent links with no whitespace
@@ -357,6 +598,8 @@ const Builder = struct {
     mono: u8 = 0,
     strike: u8 = 0,
     link: u8 = 0,
+    // Resolved href of the nearest enclosing <a>; "" outside one.
+    href: []const u8 = "",
     muted: u8 = 0,
     // Nearest enclosing <pre>, for whitespace preservation.
     pre_node: ?*Node = null,
@@ -434,6 +677,8 @@ const Builder = struct {
             .len = copy.len,
             .flags = self.text_flags,
             .color = self.text_color,
+            .href = self.text_href.ptr,
+            .href_len = self.text_href.len,
         });
         self.text.clearRetainingCapacity();
     }
@@ -471,11 +716,12 @@ const Builder = struct {
         try self.ensureBlock();
         const flags = self.currentFlags();
         const color = self.currentColor();
-        if (self.text.items.len > 0 and (flags != self.text_flags or color != self.text_color)) {
+        if (self.text.items.len > 0 and (flags != self.text_flags or color != self.text_color or !std.mem.eql(u8, self.href, self.text_href))) {
             try self.flushSpan();
         }
         self.text_flags = flags;
         self.text_color = color;
+        self.text_href = self.href;
         try self.text.appendSlice(self.arena, text);
         self.has_content = true;
         self.after_anchor = false;
@@ -498,11 +744,15 @@ const Builder = struct {
             flags &= ~SPAN_HAS_COLOR;
         }
         if (flags & SPAN_HAS_COLOR == 0) color = 0;
+        // Same for the link: the gap is part of it only when both sides are
+        // the same link, so a hit box never bridges two.
+        const href = if (std.mem.eql(u8, self.text_href, self.href)) self.text_href else "";
 
-        if (flags != self.text_flags or color != self.text_color) {
+        if (flags != self.text_flags or color != self.text_color or !std.mem.eql(u8, href, self.text_href)) {
             try self.flushSpan();
             self.text_flags = flags;
             self.text_color = color;
+            self.text_href = href;
         }
         try self.text.append(self.arena, ' ');
     }
@@ -687,13 +937,22 @@ const Builder = struct {
                     self.tight += 1;
                 }
                 if (self.after_anchor) self.pending_space = true;
-                if (href != null) self.link += 1;
+                const prev_href = self.href;
+                if (href) |h| {
+                    self.link += 1;
+                    // Absolute, like markdown: the PDF's link annotations
+                    // point outside the document.
+                    self.href = URL.resolve(self.arena, self.frame.base(), h, .{ .encoding = self.frame.charset }) catch h;
+                }
                 if (info.has_visible) {
                     try self.renderContent(el);
                 } else {
                     try self.renderText(label.?);
                 }
-                if (href != null) self.link -= 1;
+                if (href != null) {
+                    self.link -= 1;
+                    self.href = prev_href;
+                }
                 if (standalone) {
                     try self.closeBlock();
                     self.tight -= 1;
@@ -773,6 +1032,8 @@ test "browser.screenshot: rust abi matches" {
         .span_len = @offsetOf(LpSpan, "len"),
         .span_flags = @offsetOf(LpSpan, "flags"),
         .span_color = @offsetOf(LpSpan, "color"),
+        .span_href = @offsetOf(LpSpan, "href"),
+        .span_href_len = @offsetOf(LpSpan, "href_len"),
 
         .block_size = @sizeOf(LpBlock),
         .block_align = @alignOf(LpBlock),
@@ -797,6 +1058,89 @@ test "browser.screenshot: rust abi matches" {
         .opts_scale = @offsetOf(LpRenderOpts, "scale"),
         .opts_flags = @offsetOf(LpRenderOpts, "flags"),
 
+        .layout_sizeof = @sizeOf(LpLayout),
+        .layout_alignof = @alignOf(LpLayout),
+        .layout_height = @offsetOf(LpLayout, "height"),
+        .layout_pre_pad = @offsetOf(LpLayout, "pre_pad"),
+        .layout_quote_indent = @offsetOf(LpLayout, "quote_indent"),
+        .layout_rule_color = @offsetOf(LpLayout, "rule_color"),
+        .layout_pre_bg = @offsetOf(LpLayout, "pre_bg"),
+        .layout_blocks = @offsetOf(LpLayout, "blocks"),
+        .layout_blocks_len = @offsetOf(LpLayout, "blocks_len"),
+        .layout_lines = @offsetOf(LpLayout, "lines"),
+        .layout_lines_len = @offsetOf(LpLayout, "lines_len"),
+        .layout_runs = @offsetOf(LpLayout, "runs"),
+        .layout_runs_len = @offsetOf(LpLayout, "runs_len"),
+        .layout_glyphs = @offsetOf(LpLayout, "glyphs"),
+        .layout_glyphs_len = @offsetOf(LpLayout, "glyphs_len"),
+        .layout_clusters = @offsetOf(LpLayout, "clusters"),
+        .layout_clusters_len = @offsetOf(LpLayout, "clusters_len"),
+        .layout_fonts = @offsetOf(LpLayout, "fonts"),
+        .layout_fonts_len = @offsetOf(LpLayout, "fonts_len"),
+        .lblock_sizeof = @sizeOf(LpLayoutBlock),
+        .lblock_alignof = @alignOf(LpLayoutBlock),
+        .lblock_x = @offsetOf(LpLayoutBlock, "x"),
+        .lblock_y = @offsetOf(LpLayoutBlock, "y"),
+        .lblock_quote_x = @offsetOf(LpLayoutBlock, "quote_x"),
+        .lblock_lines = @offsetOf(LpLayoutBlock, "lines"),
+        .lblock_lines_len = @offsetOf(LpLayoutBlock, "lines_len"),
+        .lblock_marker_line = @offsetOf(LpLayoutBlock, "marker_line"),
+        .lblock_kind = @offsetOf(LpLayoutBlock, "kind"),
+        .lblock_quote_bars = @offsetOf(LpLayoutBlock, "quote_bars"),
+        .line_sizeof = @sizeOf(LpLine),
+        .line_alignof = @alignOf(LpLine),
+        .line_x = @offsetOf(LpLine, "x"),
+        .line_top = @offsetOf(LpLine, "top"),
+        .line_bottom = @offsetOf(LpLine, "bottom"),
+        .line_runs = @offsetOf(LpLine, "runs"),
+        .line_runs_len = @offsetOf(LpLine, "runs_len"),
+        .line_clusters = @offsetOf(LpLine, "clusters"),
+        .line_clusters_len = @offsetOf(LpLine, "clusters_len"),
+        .run_sizeof = @sizeOf(LpRun),
+        .run_alignof = @alignOf(LpRun),
+        .run_font = @offsetOf(LpRun, "font"),
+        .run_size = @offsetOf(LpRun, "size"),
+        .run_skew = @offsetOf(LpRun, "skew"),
+        .run_color = @offsetOf(LpRun, "color"),
+        .run_offset = @offsetOf(LpRun, "offset"),
+        .run_baseline = @offsetOf(LpRun, "baseline"),
+        .run_advance = @offsetOf(LpRun, "advance"),
+        .run_glyphs = @offsetOf(LpRun, "glyphs"),
+        .run_glyphs_len = @offsetOf(LpRun, "glyphs_len"),
+        .run_underline = @offsetOf(LpRun, "underline"),
+        .run_strike = @offsetOf(LpRun, "strike"),
+        .deco_sizeof = @sizeOf(LpDecoration),
+        .deco_alignof = @alignOf(LpDecoration),
+        .deco_enabled = @offsetOf(LpDecoration, "enabled"),
+        .deco_offset = @offsetOf(LpDecoration, "offset"),
+        .deco_size = @offsetOf(LpDecoration, "size"),
+        .deco_color = @offsetOf(LpDecoration, "color"),
+        .glyph_sizeof = @sizeOf(LpGlyph),
+        .glyph_alignof = @alignOf(LpGlyph),
+        .glyph_id = @offsetOf(LpGlyph, "id"),
+        .glyph_x = @offsetOf(LpGlyph, "x"),
+        .glyph_y = @offsetOf(LpGlyph, "y"),
+        .glyph_advance = @offsetOf(LpGlyph, "advance"),
+        .cluster_sizeof = @sizeOf(LpCluster),
+        .cluster_alignof = @alignOf(LpCluster),
+        .cluster_font = @offsetOf(LpCluster, "font"),
+        .cluster_glyph = @offsetOf(LpCluster, "glyph"),
+        .cluster_text_start = @offsetOf(LpCluster, "text_start"),
+        .cluster_text_len = @offsetOf(LpCluster, "text_len"),
+        .cluster_x = @offsetOf(LpCluster, "x"),
+        .cluster_advance = @offsetOf(LpCluster, "advance"),
+        .cluster_flags = @offsetOf(LpCluster, "flags"),
+        .font_sizeof = @sizeOf(LpFont),
+        .font_alignof = @alignOf(LpFont),
+        .font_data = @offsetOf(LpFont, "data"),
+        .font_data_len = @offsetOf(LpFont, "data_len"),
+        .font_index = @offsetOf(LpFont, "index"),
+        .font_name = @offsetOf(LpFont, "name"),
+        .font_name_len = @offsetOf(LpFont, "name_len"),
+        .font_mono = @offsetOf(LpFont, "mono"),
+        .layout_none = LAYOUT_NONE,
+        .cluster_ligature_start = CLUSTER_LIGATURE_START,
+        .cluster_ligature_cont = CLUSTER_LIGATURE_CONT,
         .span_bold = SPAN_BOLD,
         .span_italic = SPAN_ITALIC,
         .span_underline = SPAN_UNDERLINE,
@@ -943,7 +1287,7 @@ test "browser.screenshot: json streams base64" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
 
-    const prepared = try prepare(testing.arena_allocator, div.asNode(), .{ .width = 200 }, frame);
+    const prepared = try preparePng(testing.arena_allocator, div.asNode(), .{ .width = 200 }, frame);
 
     var raw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer raw.deinit();
@@ -1015,7 +1359,10 @@ test "browser.screenshot: block extraction" {
     try testing.expectEqual(SPAN_UNDERLINE | SPAN_HAS_COLOR, blocks[1].spans[4].flags);
     try testing.expectEqual(LINK_COLOR, blocks[1].spans[4].color);
     try testing.expectEqual("a link", blocks[1].spans[4].text[0..blocks[1].spans[4].len]);
+    try testing.expectEqual("http://localhost/l", blocks[1].spans[4].href[0..blocks[1].spans[4].href_len]);
+    try testing.expectEqual(0, blocks[1].spans[3].href_len);
     try testing.expectEqual(" tail", blocks[1].spans[5].text[0..blocks[1].spans[5].len]);
+    try testing.expectEqual(0, blocks[1].spans[5].href_len);
 
     try testing.expectEqual("one", try S.text(blocks[2], arena));
     try testing.expectEqual(1, blocks[2].list_depth);

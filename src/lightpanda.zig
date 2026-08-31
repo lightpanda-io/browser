@@ -34,11 +34,13 @@ pub const Page = @import("browser/Page.zig");
 pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
+pub const ToolSession = @import("ToolSession.zig");
 
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const screenshot = @import("browser/screenshot.zig");
+pub const pdf = @import("browser/pdf.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
 const Selector = @import("browser/webapi/selector/Selector.zig");
 const Node = @import("browser/webapi/Node.zig");
@@ -396,12 +398,14 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
             }
 
             const frame = page.frame();
-            if (opts.dump_mode == .png and frame != null) {
+            if ((opts.dump_mode == .png or opts.dump_mode == .pdf) and frame != null) {
+                // Binary formats stream themselves into the envelope as
+                // base64; nothing is buffered here.
                 const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
                 defer arena.release();
 
-                if (prepareShot(arena.allocator(), frame.?, opts)) |shot| {
-                    try writeJsonEnvelope(writer, frame, opts.dump_mode, shot, err.*);
+                if (prepareBinary(arena.allocator(), frame.?, opts)) |prepared| {
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, prepared, err.*);
                 } else |e| {
                     if (err.* == null) err.* = e;
                     try writeJsonEnvelope(writer, frame, opts.dump_mode, "", err.*);
@@ -438,8 +442,26 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
     try writer.flush();
 }
 
-fn prepareShot(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !screenshot.Prepared {
-    return screenshot.prepare(arena, try dumpRoot(frame, opts.selector), .fromViewport(frame._page.getViewport(), true), frame);
+// A dump that can only fail before any output starts; it then streams into
+// the JSON envelope as base64.
+const Binary = union(enum) {
+    png: screenshot.Prepared,
+    pdf: pdf.Prepared,
+
+    pub fn jsonStringify(self: *const Binary, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        switch (self.*) {
+            inline else => |*prepared| try prepared.jsonStringify(jws),
+        }
+    }
+};
+
+fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
+    const root = try dumpRoot(frame, opts.selector);
+    return switch (opts.dump_mode.?) {
+        .png => .{ .png = try screenshot.preparePng(arena, root, .fromViewport(frame._page.getViewport(), true), frame) },
+        .pdf => .{ .pdf = try pdf.prepare(arena, root, .{}, frame) },
+        else => unreachable,
+    };
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -461,6 +483,11 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
             _ = try screenshot.png(arena.allocator(), root, .fromViewport(frame._page.getViewport(), true), writer, frame);
+        },
+        .pdf => {
+            var arena: std.heap.ArenaAllocator = .init(app.allocator);
+            defer arena.deinit();
+            try pdf.print(arena.allocator(), root, .{}, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
             var registry = CDPNode.Registry.init(app.allocator);

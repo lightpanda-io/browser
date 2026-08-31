@@ -20,8 +20,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const screenshot_pdf = @embedFile("screenshot.pdf");
-
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
@@ -51,6 +49,9 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         printToPDF,
         getLayoutMetrics,
         handleJavaScriptDialog,
+        setBypassCSP,
+        bringToFront,
+        setInterceptFileChooserDialog,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -70,6 +71,9 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .printToPDF => return printToPDF(cmd),
         .getLayoutMetrics => return getLayoutMetrics(cmd),
         .handleJavaScriptDialog => return handleJavaScriptDialog(cmd),
+        // CSP isn't enforced, there is a single page, and no file chooser
+        // ever opens: each of these already holds.
+        .setBypassCSP, .bringToFront, .setInterceptFileChooserDialog => return cmd.sendResult(null, .{}),
     }
 }
 
@@ -547,7 +551,7 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
         // controlled via Network.configureDurableMessages (which we don't
         // support).
         bc.captured_requests = .empty;
-        bc.captured_responses = .empty;
+        bc.clearCapturedResponses();
     }
 }
 
@@ -962,13 +966,6 @@ const Viewport = struct {
     scale: f64,
 };
 
-fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSize(input.len)]u8 {
-    const encoder = std.base64.standard.Encoder;
-    var buf: [encoder.calcSize(input.len)]u8 = undefined;
-    _ = encoder.encode(&buf, input);
-    return buf;
-}
-
 fn captureScreenshot(cmd: *CDP.Command) !void {
     const Params = struct {
         format: ?[]const u8 = "png",
@@ -1005,15 +1002,69 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     }
 
     // Prepared streams itself as base64 straight into the outgoing message.
-    const shot = try lp.screenshot.prepare(cmd.arena, frame.window._document.asNode(), opts, frame);
+    const shot = try lp.screenshot.preparePng(cmd.arena, frame.window._document.asNode(), opts, frame);
     return cmd.sendResult(.{ .data = shot }, .{});
 }
 
-// Return a fake pdf
 fn printToPDF(cmd: *CDP.Command) !void {
-    // Ignore all parameters.
+    // Lengths in inches; Chrome's defaults.
+    const Params = struct {
+        landscape: bool = false,
+        displayHeaderFooter: bool = false,
+        printBackground: bool = false,
+        scale: f32 = 1,
+        paperWidth: f32 = 8.5,
+        paperHeight: f32 = 11,
+        marginTop: f32 = 0.4,
+        marginBottom: f32 = 0.4,
+        marginLeft: f32 = 0.4,
+        marginRight: f32 = 0.4,
+        pageRanges: []const u8 = "",
+        transferMode: enum { ReturnAsBase64, ReturnAsStream } = .ReturnAsBase64,
+    };
+    const params = try cmd.params(Params) orelse Params{};
+    if (params.displayHeaderFooter) {
+        log.warn(.not_implemented, "Page.printToPDF params", .{ .displayHeaderFooter = true });
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const paper_w = if (params.landscape) params.paperHeight else params.paperWidth;
+    const paper_h = if (params.landscape) params.paperWidth else params.paperHeight;
+    const opts: lp.pdf.Opts = .{
+        .paper_width = paper_w * 96,
+        .paper_height = paper_h * 96,
+        .margin_top = params.marginTop * 96,
+        .margin_right = params.marginRight * 96,
+        .margin_bottom = params.marginBottom * 96,
+        .margin_left = params.marginLeft * 96,
+        .scale = params.scale,
+        .print_background = params.printBackground,
+        .page_ranges = lp.pdf.parsePageRanges(cmd.arena, params.pageRanges) catch |err| switch (err) {
+            error.InvalidPageRangeSyntax => return cmd.sendError(-32000, "Invalid page range syntax", .{}),
+            error.InvalidPageRange => return cmd.sendError(-32000, "Invalid page range", .{}),
+            error.OutOfMemory => return error.OutOfMemory,
+        },
+    };
+    const prepared = lp.pdf.prepare(cmd.arena, frame.window._document.asNode(), opts, frame) catch |err| switch (err) {
+        error.InvalidPdfOptions => return cmd.sendError(-32602, "invalid print parameters", .{}),
+        error.PageRangeExceedsPageCount => return cmd.sendError(-32000, "Page range exceeds page count", .{}),
+        else => return err,
+    };
+
+    if (params.transferMode == .ReturnAsBase64) {
+        return cmd.sendResult(.{ .data = prepared }, .{});
+    }
+
+    // Read via IO.read
+    var aw: std.Io.Writer.Allocating = .init(cmd.cdp.allocator);
+    errdefer aw.deinit();
+    try prepared.write(&aw.writer);
+    const handle = try cmd.cdp.streams.add(try aw.toOwnedSlice());
     return cmd.sendResult(.{
-        .data = base64Encode(screenshot_pdf),
+        .data = "",
+        .stream = try std.fmt.allocPrint(cmd.arena, "{d}", .{handle}),
     }, .{});
 }
 
@@ -1082,6 +1133,21 @@ fn getLayoutMetrics(cmd: *CDP.Command) !void {
 }
 
 const testing = @import("../testing.zig");
+test "cdp.frame: setup no-ops" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-NOOP" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "Page.setBypassCSP", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.bringToFront" });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "Page.setInterceptFileChooserDialog", .params = .{ .enabled = true } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+}
+
 test "cdp.frame: getFrameTree" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1360,12 +1426,94 @@ test "cdp.frame: printToPDF" {
 
     var ctx = try testing.context();
     defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
     {
-        try ctx.processMessage(.{ .id = 10, .method = "Page.printToPDF", .params = .{ .landscape = true } });
-        try ctx.expectSentResult(.{
-            .data = base64Encode(screenshot_pdf),
-        }, .{ .id = 10 });
+        try ctx.processMessage(.{ .id = 10, .method = "Page.printToPDF", .params = .{ .scale = 5 } });
+        try ctx.expectSentError(-32602, "invalid print parameters", .{ .id = 10 });
+
+        // Chrome's three page-range errors.
+        try ctx.processMessage(.{ .id = 20, .method = "Page.printToPDF", .params = .{ .pageRanges = "x" } });
+        try ctx.expectSentError(-32000, "Invalid page range syntax", .{ .id = 20 });
+        try ctx.processMessage(.{ .id = 21, .method = "Page.printToPDF", .params = .{ .pageRanges = "3-1" } });
+        try ctx.expectSentError(-32000, "Invalid page range", .{ .id = 21 });
+        try ctx.processMessage(.{ .id = 22, .method = "Page.printToPDF", .params = .{ .pageRanges = "9" } });
+        try ctx.expectSentError(-32000, "Page range exceeds page count", .{ .id = 22 });
     }
+
+    {
+        // Inline base64, landscape: Letter swapped, in points.
+        try ctx.processMessage(.{ .id = 11, .method = "Page.printToPDF", .params = .{ .landscape = true } });
+        const pdf = try pdfResult(&ctx, 11);
+        try testing.expectEqual(true, std.mem.indexOf(u8, pdf, "/MediaBox [0 0 792.000 612.000]") != null);
+    }
+
+    {
+        // The stream mode drivers use: a handle, then IO.read until eof.
+        try ctx.processMessage(.{ .id = 12, .method = "Page.printToPDF", .params = .{ .transferMode = "ReturnAsStream" } });
+        const handle = try streamHandle(&ctx, 12);
+
+        try ctx.processMessage(.{ .id = 13, .method = "IO.read", .params = .{ .handle = handle, .size = 16 } });
+        const head = try ioReadResult(&ctx, 13, false);
+        try testing.expectEqual("%PDF-1.4\n", head[0..9]);
+
+        try ctx.processMessage(.{ .id = 14, .method = "IO.read", .params = .{ .handle = handle } });
+        const rest = try ioReadResult(&ctx, 14, true);
+        try testing.expectEqual("%%EOF\n", rest[rest.len - 6 ..]);
+
+        try ctx.processMessage(.{ .id = 15, .method = "IO.close", .params = .{ .handle = handle } });
+        try ctx.expectSentResult(null, .{ .id = 15 });
+
+        try ctx.processMessage(.{ .id = 16, .method = "IO.read", .params = .{ .handle = handle } });
+        try ctx.expectSentError(-32000, "Invalid stream handle", .{ .id = 16 });
+    }
+}
+
+fn pdfResult(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = msg.object;
+        const got = obj.get("id") orelse continue;
+        if (got != .integer or got.integer != msg_id) continue;
+        const data = obj.get("result").?.object.get("data").?.string;
+        const decoder = std.base64.standard.Decoder;
+        const out = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(data));
+        try decoder.decode(out, data);
+        try testing.expectEqual("%PDF-1.4\n", out[0..9]);
+        return out;
+    }
+    return error.ResultNotFound;
+}
+
+fn streamHandle(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = msg.object;
+        const got = obj.get("id") orelse continue;
+        if (got != .integer or got.integer != msg_id) continue;
+        const result = obj.get("result").?.object;
+        try testing.expectEqual("", result.get("data").?.string);
+        return try testing.arena_allocator.dupe(u8, result.get("stream").?.string);
+    }
+    return error.ResultNotFound;
+}
+
+fn ioReadResult(ctx: *testing.TestContext, msg_id: i64, expect_eof: bool) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = msg.object;
+        const got = obj.get("id") orelse continue;
+        if (got != .integer or got.integer != msg_id) continue;
+        const result = obj.get("result").?.object;
+        try testing.expectEqual(true, result.get("base64Encoded").?.bool);
+        try testing.expectEqual(expect_eof, result.get("eof").?.bool);
+        const data = result.get("data").?.string;
+        const decoder = std.base64.standard.Decoder;
+        const out = try testing.arena_allocator.alloc(u8, try decoder.calcSizeForSlice(data));
+        try decoder.decode(out, data);
+        return out;
+    }
+    return error.ResultNotFound;
 }
 
 test "cdp.frame: getLayoutMetrics" {

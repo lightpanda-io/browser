@@ -552,9 +552,13 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         if (target_name.len == 0) {
             break :blk target.ownerFrame(frame);
         }
-        break :blk frame.resolveTargetFrame(target_name) orelse {
-            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-            return;
+        break :blk switch (frame.resolveTargetFrame(target_name)) {
+            .frame => |f| f,
+            .blank => {
+                try element.focus(frame);
+                _ = try target.ownerFrame(frame).openBlankTarget(element, href);
+                return;
+            },
         };
     };
 

@@ -39,6 +39,7 @@ const Label = @import("../browser/webapi/element/html/Label.zig");
 
 const Connection = @import("Connection.zig");
 const Incrementing = @import("id.zig").Incrementing;
+const network_domain = @import("domains/network.zig");
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const log = lp.log;
@@ -96,6 +97,9 @@ frame_arena: std.heap.ArenaAllocator,
 // (or altogether eliminate) our use of this.
 browser_context_arena: std.heap.ArenaAllocator,
 
+// Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
+streams: @import("domains/io.zig").Streams,
+
 pub fn init(
     self: *CDP,
     app: *App,
@@ -115,6 +119,7 @@ pub fn init(
         .message_arena = std.heap.ArenaAllocator.init(allocator),
         .notification_arena = std.heap.ArenaAllocator.init(allocator),
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+        .streams = .{ .allocator = allocator },
     };
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
@@ -140,6 +145,7 @@ pub fn deinit(self: *CDP) void {
     self.message_arena.deinit();
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
+    self.streams.deinit();
     self.conn.deinit();
 }
 // Called by the Server run loop when readable bytes arrive on the CDP
@@ -343,10 +349,14 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
     } else {
         dispatchCommand(&command, input.method) catch |err| {
             switch (err) {
-                error.UnknownDomain, error.UnknownMethod => lp.metrics.cdp_unknown_commands.incr(),
-                else => {},
+                error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
+                    lp.metrics.cdp_unknown_commands.incr();
+                    // Chrome's code and wording; drivers feature-detect on it.
+                    const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
+                    command.sendError(-32601, message, .{}) catch return err;
+                },
+                else => command.sendError(-31998, @errorName(err), .{}) catch return err,
             }
-            command.sendError(-31998, @errorName(err), .{}) catch return err;
         };
     }
 }
@@ -384,6 +394,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
     switch (domain.len) {
         2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
             asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
+            asUint(u16, "IO") => return @import("domains/io.zig").processMessage(command),
             else => {},
         },
         3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
@@ -410,7 +421,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
             asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
-            asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
+            asUint(u56, "Network") => return network_domain.processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
             asUint(u56, "Console") => return @import("domains/console.zig").processMessage(command),
             else => {},
@@ -505,7 +516,9 @@ pub const BrowserContext = struct {
 
     const CapturedResponse = struct {
         must_encode: bool,
-        data: std.ArrayList(u8),
+        // null once evicted (size limit). We keep the map entry so that we
+        // can give an "evicted" error instead of "unknown"
+        data: ?std.ArrayList(u8),
     };
 
     // Key for `captured_responses` / `captured_requests`. Documents are
@@ -606,8 +619,10 @@ pub const BrowserContext = struct {
     // memory longer than they have to. In fact, the main request is only
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
-    // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(CapturedKey, CapturedResponse),
+    // to store them.
+    captured_responses_size: usize = 0,
+    captured_responses: std.AutoArrayHashMapUnmanaged(CapturedKey, CapturedResponse),
+    network_limits: network_domain.BufferLimits = .{},
 
     notification: *Notification,
 
@@ -713,6 +728,7 @@ pub const BrowserContext = struct {
         // rely on those notifications to do our normal cleanup?)
 
         self.notification.unregisterAll(self);
+        self.clearCapturedResponses();
 
         // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
@@ -842,7 +858,22 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn networkEnable(self: *BrowserContext) !void {
+    pub fn networkEnable(self: *BrowserContext, limits: network_domain.BufferLimits) !void {
+        const previous = self.network_limits;
+        self.network_limits = limits;
+        if (limits.resource < previous.resource) {
+            // evict responses which are over the new small limit
+            for (self.captured_responses.values()) |*resp| {
+                const data = resp.data orelse continue;
+                if (data.items.len > limits.resource) {
+                    self.evictCapturedResponse(resp);
+                }
+            }
+        }
+        if (limits.total < previous.total) {
+            self.ensureCapturedSpace(0);
+        }
+
         try self.notification.register(.http_request_fail, self, onHttpRequestFail);
         try self.notification.register(.http_request_start, self, onHttpRequestStart);
         try self.notification.register(.http_request_done, self, onHttpRequestDone);
@@ -858,6 +889,41 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_response_data, self);
         self.notification.unregister(.http_response_header_done, self);
         self.notification.unregister(.http_request_served_from_cache, self);
+        self.clearCapturedResponses();
+    }
+
+    pub fn clearCapturedResponses(self: *BrowserContext) void {
+        const allocator = self.cdp.allocator;
+        for (self.captured_responses.values()) |*resp| {
+            if (resp.data) |*data| {
+                data.deinit(allocator);
+            }
+        }
+        self.captured_responses.deinit(allocator);
+        self.captured_responses = .empty;
+        self.captured_responses_size = 0;
+    }
+
+    fn evictCapturedResponse(self: *BrowserContext, resp: *CapturedResponse) void {
+        if (resp.data) |*data| {
+            self.captured_responses_size -= data.items.len;
+            data.deinit(self.cdp.allocator);
+            resp.data = null;
+        }
+    }
+
+    // Evict captured responses, ordered by age, until we can fit `size` more bytes
+    fn ensureCapturedSpace(self: *BrowserContext, size: usize) void {
+        for (self.captured_responses.values()) |*resp| {
+            if (self.captured_responses_size + size <= self.network_limits.total) {
+                return;
+            }
+            const data = resp.data orelse continue;
+            if (data.items.len == 0) {
+                continue;
+            }
+            self.evictCapturedResponse(resp);
+        }
     }
 
     pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
@@ -1005,7 +1071,7 @@ pub const BrowserContext = struct {
             const transfer = msg.transfer;
             const key = keyFromTransfer(transfer);
             const body = transfer.req.body orelse "";
-            if (body.len == 0 or body.len > @import("domains/network.zig").max_post_data_size) {
+            if (body.len == 0 or body.len > network_domain.max_post_data_size) {
                 _ = self.captured_requests.remove(key);
             } else {
                 const owned_body = try self.frame_arena.dupe(u8, body);
@@ -1013,7 +1079,7 @@ pub const BrowserContext = struct {
             }
         }
         defer self.resetNotificationArena();
-        try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
+        try network_domain.httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
@@ -1024,7 +1090,7 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpRequestFail(self, msg);
+        return network_domain.httpRequestFail(self, msg);
     }
 
     pub fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
@@ -1053,14 +1119,18 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
 
-        const arena = self.frame_arena;
-
         // Prepare the captured response value.
         const key = keyFromTransfer(msg.transfer);
-        const gop = try self.captured_responses.getOrPut(arena, key);
+        const gop = try self.captured_responses.getOrPut(self.cdp.allocator, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
-                .data = .empty,
+                .data = blk: {
+                    const cl = msg.transfer.getContentLength() orelse break :blk .empty;
+                    if (cl > self.network_limits.resource) {
+                        break :blk null;
+                    }
+                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, cl);
+                },
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
@@ -1071,7 +1141,7 @@ pub const BrowserContext = struct {
                             break :blk true;
                         }
 
-                        if (std.mem.eql(u8, "UTF-8", mime.charsetString())) {
+                        if (std.ascii.eqlIgnoreCase("UTF-8", mime.charsetString())) {
                             break :blk false;
                         }
                     }
@@ -1080,22 +1150,33 @@ pub const BrowserContext = struct {
             };
         }
 
-        return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
+        return network_domain.httpResponseHeaderDone(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpRequestDone(self, msg);
+        return network_domain.httpRequestDone(self, msg);
     }
 
     pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const arena = self.frame_arena;
 
         const key = keyFromTransfer(msg.transfer);
         const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
-        return resp.data.appendSlice(arena, msg.data);
+        const data = &(resp.data orelse return);
+        const chunk = msg.data;
+        const limits = &self.network_limits;
+        if (data.items.len + chunk.len > limits.resource or chunk.len > limits.total) {
+            return self.evictCapturedResponse(resp);
+        }
+        // Can evict `resp` itself when it's the oldest, hence the re-check.
+        self.ensureCapturedSpace(chunk.len);
+        if (resp.data == null) {
+            return;
+        }
+        try data.appendSlice(self.cdp.allocator, chunk);
+        self.captured_responses_size += chunk.len;
     }
 
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
@@ -1106,7 +1187,7 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpServedFromCache(self, msg);
+        return network_domain.httpServedFromCache(self, msg);
     }
 
     pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
@@ -1423,17 +1504,17 @@ test "cdp: invalid json" {
     try ctx.processMessage(.{
         .method = "Target",
     });
-    try ctx.expectSentError(-31998, "InvalidMethod", .{});
+    try ctx.expectSentError(-32601, "'Target' wasn't found", .{});
 
     try ctx.processMessage(.{
         .method = "Unknown.domain",
     });
-    try ctx.expectSentError(-31998, "UnknownDomain", .{});
+    try ctx.expectSentError(-32601, "'Unknown.domain' wasn't found", .{});
 
     try ctx.processMessage(.{
         .method = "Target.over9000",
     });
-    try ctx.expectSentError(-31998, "UnknownMethod", .{});
+    try ctx.expectSentError(-32601, "'Target.over9000' wasn't found", .{});
 }
 
 test "cdp: invalid sessionId" {

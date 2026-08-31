@@ -2,7 +2,6 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
 
 const log = lp.log;
@@ -27,7 +26,7 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, run_mode: Config.RunMode, interactive: bool) !Self {
+        pub fn init(app: *App) !Self {
             const disabled = isDisabled();
             if (lp.IS_DEBUG == false and lp.IS_TEST == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
@@ -38,7 +37,7 @@ fn TelemetryT(comptime P: type) type {
             const provider = try app.allocator.create(P);
             errdefer app.allocator.destroy(provider);
 
-            try P.init(provider, app, iid, run_mode, interactive);
+            try P.init(provider, app, iid);
 
             return .{
                 .disabled = disabled,
@@ -168,14 +167,14 @@ test "telemetry: always disabled in debug builds" {
     try testing.expectEqual(true, isDisabled());
 
     const FailingProvider = struct {
-        fn init(_: *@This(), _: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {}
+        fn init(_: *@This(), _: *App, _: ?[36]u8) !void {}
         fn deinit(_: *@This()) void {}
         pub fn send(_: *@This(), _: Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app, .serve, false);
+    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.record(.{ .run = {} });
 }
@@ -199,7 +198,7 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve, false);
+    var telemetry = try TelemetryT(MockProvider).init(testing.test_app);
     defer telemetry.deinit(testing.test_app.allocator);
     telemetry.disabled = false;
     const mock = telemetry.provider;
@@ -218,7 +217,7 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayList(Event),
 
-    fn init(self: *MockProvider, app: *App, _: ?[36]u8, _: Config.RunMode, _: bool) !void {
+    fn init(self: *MockProvider, app: *App, _: ?[36]u8) !void {
         self.* = .{
             .events = .empty,
             .allocator = app.allocator,

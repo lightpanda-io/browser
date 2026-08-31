@@ -35,16 +35,32 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         callFunctionOn,
         releaseObject,
         getProperties,
+        releaseObjectGroup,
+        awaitPromise,
+        compileScript,
+        runScript,
+        queryObjects,
+        globalLexicalScopeNames,
+        removeBinding,
+        terminateExecution,
+        getExceptionDetails,
+        discardConsoleEntries,
+        getHeapUsage,
+        getIsolateId,
+        setCustomObjectFormatterEnabled,
+        setMaxCallStackSizeToCapture,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
         .enable => return enable(cmd),
         .disable => return disable(cmd),
+        // Bookkeeping that can neither observe nor change the page's global.
+        .releaseObjectGroup, .discardConsoleEntries, .getHeapUsage, .getIsolateId, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => return sendInspector(cmd),
         else => {
             const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
             bc.main_world_touched = true;
-            return sendInspector(cmd, action);
+            return sendInspector(cmd);
         },
     }
 }
@@ -52,68 +68,20 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 fn enable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     try bc.runtimeEnable();
-    return sendInspector(cmd, .enable);
+    return sendInspector(cmd);
 }
 
 fn disable(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     bc.runtimeDisable();
-    return sendInspector(cmd, .disable);
+    return sendInspector(cmd);
 }
 
-fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
-    // save script in file at debug mode
-    if (lp.IS_DEBUG) {
-        try logInspector(cmd, action);
-    }
-
+fn sendInspector(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // the result to return is handled directly by the inspector.
     bc.callInspector(cmd.input.json);
-}
-
-fn logInspector(cmd: *CDP.Command, action: anytype) !void {
-    const script = switch (action) {
-        .evaluate => blk: {
-            const params = (try cmd.params(struct {
-                expression: []const u8,
-                // contextId: ?u8 = null,
-                // returnByValue: ?bool = null,
-                // awaitPromise: ?bool = null,
-                // userGesture: ?bool = null,
-            })) orelse return error.InvalidParams;
-
-            break :blk params.expression;
-        },
-        .callFunctionOn => blk: {
-            const params = (try cmd.params(struct {
-                functionDeclaration: []const u8,
-                // objectId: ?[]const u8 = null,
-                // executionContextId: ?u8 = null,
-                // arguments: ?[]struct {
-                //     value: ?[]const u8 = null,
-                //     objectId: ?[]const u8 = null,
-                // } = null,
-                // returnByValue: ?bool = null,
-                // awaitPromise: ?bool = null,
-                // userGesture: ?bool = null,
-            })) orelse return error.InvalidParams;
-
-            break :blk params.functionDeclaration;
-        },
-        else => return,
-    };
-    const id = cmd.input.id orelse return error.RequiredId;
-    const name = try std.fmt.allocPrint(cmd.arena, "id_{d}.js", .{id});
-
-    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
-    var dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
-    defer dir.close(lp.io);
-
-    const f = try dir.createFile(lp.io, name, .{});
-    defer f.close(lp.io);
-    try f.writeStreamingAll(lp.io, script);
 }
 
 const RemoteObject = struct {
@@ -170,6 +138,20 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
 }
 
 const testing = @import("../testing.zig");
+
+test "cdp.runtime: inspector-handled methods pass through" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-RT", .url = "hi.html", .target_id = "FID-0000000RTP".* });
+    try ctx.processMessage(.{ .id = 50, .method = "Runtime.enable" });
+
+    try ctx.processMessage(.{ .id = 51, .method = "Runtime.releaseObjectGroup", .params = .{ .objectGroup = "handles" } });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+
+    try ctx.processMessage(.{ .id = 52, .method = "Runtime.discardConsoleEntries" });
+    try ctx.expectSentResult(null, .{ .id = 52 });
+}
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {
     testing.silenceLog(&.{.js});

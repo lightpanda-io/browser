@@ -35,6 +35,7 @@ const TouchEvent = @import("event/TouchEvent.zig");
 const WheelEvent = @import("event/WheelEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
+const Label = @import("element/html/Label.zig");
 
 const log = lp.log;
 
@@ -50,7 +51,8 @@ pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
 pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
     const AXNode = @import("../../cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
-    return (try axnode.getName(frame, frame.call_arena)) orelse "";
+    var labels: Label.LabelByForIndex = .{};
+    return (try axnode.getName(frame, frame.call_arena, &labels)) orelse "";
 }
 
 // Implements testdriver's `click`: a full trusted primary-button click

@@ -660,13 +660,48 @@ handler runs, abort() cancels the re-send and no load is delivered.
       // Per spec the blob response entity body is cached: the same object comes
       // back on every access.
       testing.expectEqual(req.response, req.response);
-      // TODO: should be 'application/octet-stream'. Mime keeps a content-type
-      // enum, not the header text, and Mime.contentTypeString() has no entry
-      // for it, so the type is lost on the way to the Blob.
-      testing.expectEqual('', req.response.type);
+      testing.expectEqual('application/octet-stream', req.response.type);
     });
 
     testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int8Array(await req.response.arrayBuffer()));
+  }
+</script>
+
+<script id=xhr_blob_type type=module>
+  {
+    // The blob's type is the final MIME type with its parameters, not the
+    // essence Mime.zig keeps. The spec re-serializes it ("text/html;charset=utf-8");
+    // we report the header text as-is, lowercased by Blob.
+    const state = await testing.async();
+
+    const blobType = (path, override) => new Promise((resolve) => {
+      const req = new XMLHttpRequest();
+      req.onload = () => { resolve(req.response.type) };
+      req.open('GET', 'http://127.0.0.1:9582' + path);
+      req.responseType = 'blob';
+      if (override !== undefined) {
+        req.overrideMimeType(override);
+      }
+      req.send();
+    });
+
+    let types;
+    Promise.all([
+      blobType('/xhr'),
+      blobType('/xhr/no_content_type'),
+      blobType('/xhr', 'text/plain;charset=iso-8859-1'),
+      blobType('/xhr', 'nonsense'),
+    ]).then((t) => { types = t; state.resolve() });
+
+    await state.done(() => {
+      testing.expectEqual('text/html; charset=utf-8', types[0]);
+      // Absent a Content-Type, "get a response MIME type" yields text/xml.
+      testing.expectEqual('text/xml', types[1]);
+      // overrideMimeType() wins over the response's own Content-Type.
+      testing.expectEqual('text/plain;charset=iso-8859-1', types[2]);
+      // An unparseable override is application/octet-stream.
+      testing.expectEqual('application/octet-stream', types[3]);
+    });
   }
 </script>
 

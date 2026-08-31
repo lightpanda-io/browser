@@ -459,7 +459,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
         const name = decl.name;
         const val = decl.value;
         if (std.ascii.eqlIgnoreCase(name, "display")) {
-            props.display_none = std.ascii.eqlIgnoreCase(val, "none");
+            props.display = Display.parse(val);
         } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
             props.visibility_hidden = std.ascii.eqlIgnoreCase(val, "hidden") or std.ascii.eqlIgnoreCase(val, "collapse");
         } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
@@ -611,8 +611,13 @@ pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, opt
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements"
 /// via `isElementHidden`.
 pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
-    self.rebuildIfDirty() catch return false;
-    return self.isElementHidden(el, .{}, access);
+    return self.display(el, access) == .none;
+}
+
+/// Own property, no ancestor walk; honors the UA hidden-element rules.
+pub fn display(self: *StyleManager, el: *Element, comptime access: InlineAccess) Display {
+    self.rebuildIfDirty() catch return .other;
+    return self.resolve(el, .{}, access).display orelse .other;
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
@@ -676,25 +681,34 @@ pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
 
 /// Check if a single element (not ancestors) is hidden.
 fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
+    return self.resolve(el, options, access).hidden();
+}
+
+const Resolved = struct {
+    display: ?Display = null,
+    visibility_hidden: ?bool = null,
+    opacity_zero: ?bool = null,
+
+    fn hidden(self: Resolved) bool {
+        return self.display == .none or (self.visibility_hidden orelse false) or (self.opacity_zero orelse false);
+    }
+};
+
+/// A hiding inline value returns early, so only `hidden()` is exact then.
+fn resolve(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) Resolved {
     // Track best match per property (value + priority)
     // Initialize priority to INLINE_PRIORITY for properties we don't care about - this makes
     // the loop naturally skip them since no stylesheet rule can have priority >= INLINE_PRIORITY
-    var display_none: ?bool = null;
+    var r: Resolved = .{};
     var display_priority: u64 = 0;
-
-    var visibility_hidden: ?bool = null;
     var visibility_priority: u64 = 0;
-
-    var opacity_zero: ?bool = null;
     var opacity_priority: u64 = 0;
 
     // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
     if (options.check_display) {
         if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
-            if (std.ascii.eqlIgnoreCase(value, "none")) {
-                return true; // Early exit for hiding value
-            }
-            display_none = false;
+            r.display = Display.parse(value);
+            if (r.display == .none) return r;
             display_priority = INLINE_PRIORITY;
         }
     } else {
@@ -705,9 +719,10 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     if (options.check_visibility) {
         if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse")) {
-                return true;
+                r.visibility_hidden = true;
+                return r;
             }
-            visibility_hidden = false;
+            r.visibility_hidden = false;
             visibility_priority = INLINE_PRIORITY;
         }
     } else {
@@ -720,9 +735,10 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     if (options.check_opacity) {
         if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
             if (std.ascii.eqlIgnoreCase(value, "0")) {
-                return true;
+                r.opacity_zero = true;
+                return r;
             }
-            opacity_zero = false;
+            r.opacity_zero = false;
             opacity_priority = INLINE_PRIORITY;
         }
     } else {
@@ -730,16 +746,14 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     }
 
     if (display_priority == INLINE_PRIORITY and visibility_priority == INLINE_PRIORITY and opacity_priority == INLINE_PRIORITY) {
-        return false;
+        return r;
     }
 
     // Helper to check a single rule
     const Ctx = struct {
-        display_none: *?bool,
+        r: *Resolved,
         display_priority: *u64,
-        visibility_hidden: *?bool,
         visibility_priority: *u64,
-        opacity_zero: *?bool,
         opacity_priority: *u64,
         el: *Element,
         frame: *Frame,
@@ -763,7 +777,7 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
                 }
 
                 // Logic for property dominance
-                const dominated = (props.display_none == null or p <= ctx.display_priority.*) and
+                const dominated = (props.display == null or p <= ctx.display_priority.*) and
                     (props.visibility_hidden == null or p <= ctx.visibility_priority.*) and
                     (props.opacity_zero == null or p <= ctx.opacity_priority.*);
 
@@ -771,16 +785,16 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
 
                 if (matchesSelector(ctx.el, selector, ctx.frame)) {
                     // Update best priorities
-                    if (props.display_none != null and p > ctx.display_priority.*) {
-                        ctx.display_none.* = props.display_none;
+                    if (props.display != null and p > ctx.display_priority.*) {
+                        ctx.r.display = props.display;
                         ctx.display_priority.* = p;
                     }
                     if (props.visibility_hidden != null and p > ctx.visibility_priority.*) {
-                        ctx.visibility_hidden.* = props.visibility_hidden;
+                        ctx.r.visibility_hidden = props.visibility_hidden;
                         ctx.visibility_priority.* = p;
                     }
                     if (props.opacity_zero != null and p > ctx.opacity_priority.*) {
-                        ctx.opacity_zero.* = props.opacity_zero;
+                        ctx.r.opacity_zero = props.opacity_zero;
                         ctx.opacity_priority.* = p;
                     }
                 }
@@ -788,11 +802,9 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
         }
     };
     const ctx = Ctx{
-        .display_none = &display_none,
+        .r = &r,
         .display_priority = &display_priority,
-        .visibility_hidden = &visibility_hidden,
         .visibility_priority = &visibility_priority,
-        .opacity_zero = &opacity_zero,
         .opacity_priority = &opacity_priority,
         .el = el,
         .frame = self.frame,
@@ -826,11 +838,11 @@ fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOp
     // `<div class="x" hidden>` must report visible.
     if (options.check_display and options.ua_display_none and display_priority == 0) {
         if (matchesUaDisplayNoneRule(el)) {
-            display_none = true;
+            r.display = .none;
         }
     }
 
-    return (display_none orelse false) or (visibility_hidden orelse false) or (opacity_zero orelse false);
+    return r;
 }
 
 /// Check if an element has pointer-events:none.
@@ -1048,7 +1060,7 @@ fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties 
     const decl = style.asCSSStyleDeclaration();
 
     if (decl.findProperty(comptime .wrap("display"))) |property| {
-        props.display_none = property._value.eqlSliceIgnoreCase("none");
+        props.display = Display.parse(property._value.str());
     }
 
     if (decl.findProperty(comptime .wrap("visibility"))) |property| {
@@ -1123,15 +1135,30 @@ fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) boo
     return SelectorList.matches(node, selector, node, frame);
 }
 
+/// Only the values the dumpers act on; everything else is `other`.
+pub const Display = enum {
+    none,
+    flex,
+    grid,
+    other,
+
+    fn parse(value: []const u8) Display {
+        if (std.ascii.eqlIgnoreCase(value, "none")) return .none;
+        if (std.ascii.eqlIgnoreCase(value, "flex") or std.ascii.eqlIgnoreCase(value, "inline-flex")) return .flex;
+        if (std.ascii.eqlIgnoreCase(value, "grid") or std.ascii.eqlIgnoreCase(value, "inline-grid")) return .grid;
+        return .other;
+    }
+};
+
 const VisibilityProperties = struct {
-    display_none: ?bool = null,
+    display: ?Display = null,
     visibility_hidden: ?bool = null,
     opacity_zero: ?bool = null,
     pointer_events_none: ?bool = null,
 
     // return true if any field in VisibilityProperties is not null
     fn isRelevant(self: VisibilityProperties) bool {
-        return self.display_none != null or
+        return self.display != null or
             self.visibility_hidden != null or
             self.opacity_zero != null or
             self.pointer_events_none != null;

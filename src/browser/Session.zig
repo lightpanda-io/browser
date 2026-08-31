@@ -86,6 +86,10 @@ _nav_cursor: usize = 0,
 // `commitPendingPage`).
 _tool_frame_override: ?u32 = null,
 
+// A popup the last tool action opened (target=_blank). Tools act on it, as
+// a user whose click opened a tab would, until it goes away.
+_followed_popup: ?u32 = null,
+
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
 // CDP target IDs stay unique across BrowserContext lifecycle on a single
@@ -457,6 +461,12 @@ pub fn currentFrame(self: *Session) ?*Frame {
         // No pages[0] fallthrough: the override targets one specific page.
         return self.findFrameByFrameId(frame_id);
     }
+    if (self._followed_popup) |frame_id| {
+        if (self.findFrameByFrameId(frame_id)) |frame| {
+            return frame;
+        }
+        self._followed_popup = null;
+    }
     if (self.pages.items.len == 0) {
         return null;
     }
@@ -470,6 +480,11 @@ pub fn currentFrame(self: *Session) ?*Frame {
 /// See `_tool_frame_override`. Pass null to clear.
 pub fn setToolFrameOverride(self: *Session, frame_id: ?u32) void {
     self._tool_frame_override = frame_id;
+}
+
+/// See `_followed_popup`.
+pub fn followPopup(self: *Session, frame_id: u32) void {
+    self._followed_popup = frame_id;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
