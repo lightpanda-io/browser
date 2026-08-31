@@ -23,21 +23,30 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const SafeString = @import("../SafeString.zig");
 
-const Config = @import("../../Config.zig");
-const URL = @import("../../browser/URL.zig");
-const Mime = @import("../../browser/Mime.zig");
-const Notification = @import("../../Notification.zig");
+const Config = @import("../../../Config.zig");
+const URL = @import("../../../browser/URL.zig");
+const Mime = @import("../../../browser/Mime.zig");
+const Notification = @import("../../../Notification.zig");
 
-const HttpClient = @import("../../network/HttpClient.zig");
-const Cache = @import("../../network/cache/Cache.zig");
-const Headers = @import("../../network/HttpClient.zig").Headers;
-const Transfer = @import("../../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../../network/HttpClient.zig");
+const Cache = @import("../../../network/cache/Cache.zig");
+const Headers = @import("../../../network/HttpClient.zig").Headers;
+const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const CdpStorage = @import("storage.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 pub const max_post_data_size = 64 * 1024;
+
+// Network.enable's buffer parameters.
+pub const BufferLimits = struct {
+    // total bytes that we'll capture before evicting older entries
+    total: usize = 200 * 1000 * 1000,
+    // max bytes-per-capture that we'll retain
+    resource: usize = 20 * 1000 * 1000,
+    post_data: usize = max_post_data_size,
+};
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
@@ -103,8 +112,26 @@ fn emulateNetworkConditions(cmd: *CDP.Command) !void {
 }
 
 fn enable(cmd: *CDP.Command) !void {
+    const Params = struct {
+        maxTotalBufferSize: ?u32 = null,
+        maxResourceBufferSize: ?u32 = null,
+        maxPostDataSize: ?u32 = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
     const bc = try cmd.requireBrowserContext();
-    try bc.networkEnable();
+
+    var limits: BufferLimits = .{};
+    if (params.maxTotalBufferSize) |max| {
+        limits.total = max;
+    }
+    if (params.maxResourceBufferSize) |max| {
+        limits.resource = max;
+    }
+    if (params.maxPostDataSize) |max| {
+        // 0 is Chrome's "no limit".
+        limits.post_data = if (max == 0) std.math.maxInt(usize) else max;
+    }
+    try bc.networkEnable(limits);
     return cmd.sendResult(null, .{});
 }
 
@@ -181,7 +208,7 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
+const Cookie = @import("../../../browser/webapi/storage/storage.zig").Cookie;
 
 // Only matches the cookie on provided parameters
 fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, path: ?[]const u8) bool {
@@ -325,19 +352,22 @@ fn getResponseBody(cmd: *CDP.Command) !void {
     const key = try keyFromRequestId(params.requestId);
     const bc = try cmd.requireBrowserContext();
     const resp = bc.captured_responses.getPtr(key) orelse return error.RequestNotFound;
+    const data = resp.data orelse {
+        return cmd.sendError(-32000, "Request content was evicted from inspector cache", .{});
+    };
 
     // must_encode trusts the declared charset; a server can declare UTF-8 and
     // still send invalid bytes.
-    if (!resp.must_encode and std.unicode.utf8ValidateSlice(resp.data.items)) {
+    if (!resp.must_encode and std.unicode.utf8ValidateSlice(data.items)) {
         return cmd.sendResult(.{
-            .body = resp.data.items,
+            .body = data.items,
             .base64Encoded = false,
         }, .{});
     }
 
-    const encoded_len = std.base64.standard.Encoder.calcSize(resp.data.items.len);
+    const encoded_len = std.base64.standard.Encoder.calcSize(data.items.len);
     const encoded = try cmd.arena.alloc(u8, encoded_len);
-    _ = std.base64.standard.Encoder.encode(encoded, resp.data.items);
+    _ = std.base64.standard.Encoder.encode(encoded, data.items);
 
     return cmd.sendResult(.{
         .body = encoded,
@@ -403,7 +433,7 @@ pub fn httpRequestStart(arena: Allocator, bc: *CDP.BrowserContext, msg: *const N
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
         .documentURL = frame.url,
-        .request = RequestWriter.init(arena, transfer),
+        .request = RequestWriter.init(arena, transfer, bc.network_limits.post_data),
         .initiator = .{ .type = "other" },
         .redirectResponse = if (msg.redirect_response)
             ResponseWriter.init(arena, transfer)
@@ -459,11 +489,13 @@ pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.Req
 pub const RequestWriter = struct {
     arena: Allocator,
     transfer: *Transfer,
+    max_post_data: usize,
 
-    pub fn init(arena: Allocator, transfer: *Transfer) RequestWriter {
+    pub fn init(arena: Allocator, transfer: *Transfer, max_post_data: usize) RequestWriter {
         return .{
             .arena = arena,
             .transfer = transfer,
+            .max_post_data = max_post_data,
         };
     }
 
@@ -500,7 +532,7 @@ pub const RequestWriter = struct {
         }
 
         if (request.body) |body| {
-            if (body.len <= max_post_data_size) {
+            if (body.len <= self.max_post_data) {
                 try jws.objectField("postData");
                 try jws.write(SafeString.wrap(body));
 
@@ -1240,6 +1272,190 @@ test "cdp.Network: POST body exposed as postData" {
         .params = .{ .requestId = "REQ-4294967295" },
     });
     try ctx.expectSentError(-31998, "RequestNotFound", .{ .id = 3 });
+}
+
+// Drives POST /echo_body (the response echoes the body, so its size is the
+// request body's) to completion and returns the wire requestId.
+const EchoDriver = struct {
+    done: bool = false,
+    err: ?anyerror = null,
+
+    fn doneCallback(raw: *anyopaque) !void {
+        const self: *EchoDriver = @ptrCast(@alignCast(raw));
+        self.done = true;
+    }
+
+    fn errorCallback(raw: *anyopaque, err: anyerror) void {
+        const self: *EchoDriver = @ptrCast(@alignCast(raw));
+        self.err = err;
+    }
+
+    fn run(bc: *CDP.BrowserContext, frame_id: u32, body: []const u8) ![14]u8 {
+        const client = &bc.cdp.browser.http_client;
+        var request_id: [14]u8 = undefined;
+        _ = std.fmt.bufPrint(&request_id, "REQ-{d:0>10}", .{client.next_request_id +% 1}) catch unreachable;
+
+        var driver: EchoDriver = .{};
+        try client.request(.{
+            .frame_id = frame_id,
+            .loader_id = 1,
+            .method = .POST,
+            .url = "http://127.0.0.1:9582/echo_body",
+            .body = body,
+            .cookie_jar = null,
+            .cookie_origin = "http://127.0.0.1:9582/",
+            .resource_type = .fetch,
+            .notification = bc.session.notification,
+            .ctx = &driver,
+            .done_callback = doneCallback,
+            .error_callback = errorCallback,
+            .shutdown_callback = HttpClient.noopShutdown,
+        }, null);
+
+        for (0..50) |_| {
+            if (driver.done or driver.err != null) break;
+            _ = try client.tick(20);
+        }
+        try testing.expectEqual(null, driver.err);
+        try testing.expect(driver.done);
+        return request_id;
+    }
+};
+
+test "cdp.Network: enable maxResourceBufferSize evicts oversized bodies" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RBS", .session_id = "SID-RBS" });
+    const page = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+        .params = .{ .maxResourceBufferSize = 4 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const big = try EchoDriver.run(bc, page.frame_id, "12345678");
+    const small = try EchoDriver.run(bc, page.frame_id, "123");
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &big },
+    });
+    try ctx.expectSentError(-32000, "Request content was evicted from inspector cache", .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &small },
+    });
+    try ctx.expectSentResult(.{ .body = "123", .base64Encoded = false }, .{ .id = 3 });
+    try testing.expectEqual(3, bc.captured_responses_size);
+
+    // Re-enabling with a tighter limit evicts what's already captured.
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Network.enable",
+        .params = .{ .maxResourceBufferSize = 2 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &small },
+    });
+    try ctx.expectSentError(-32000, "Request content was evicted from inspector cache", .{ .id = 5 });
+    try testing.expectEqual(0, bc.captured_responses_size);
+}
+
+test "cdp.Network: enable maxTotalBufferSize evicts oldest bodies first" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-TBS", .session_id = "SID-TBS" });
+    const page = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+        .params = .{ .maxTotalBufferSize = 10 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const first = try EchoDriver.run(bc, page.frame_id, "aaaaaa");
+    const second = try EchoDriver.run(bc, page.frame_id, "bbbbbb");
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &first },
+    });
+    try ctx.expectSentError(-32000, "Request content was evicted from inspector cache", .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &second },
+    });
+    try ctx.expectSentResult(.{ .body = "bbbbbb", .base64Encoded = false }, .{ .id = 3 });
+    try testing.expectEqual(6, bc.captured_responses_size);
+
+    // Network.disable releases everything retained.
+    try ctx.processMessage(.{ .id = 4, .method = "Network.disable" });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expectEqual(0, bc.captured_responses.count());
+    try testing.expectEqual(0, bc.captured_responses_size);
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Network.getResponseBody",
+        .params = .{ .requestId = &second },
+    });
+    try ctx.expectSentError(-31998, "RequestNotFound", .{ .id = 5 });
+}
+
+test "cdp.Network: enable maxPostDataSize omits inline postData" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-PDS", .session_id = "SID-PDS" });
+    const page = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Network.enable",
+        .params = .{ .maxPostDataSize = 8 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+
+    const body = "{\"source\":\"xhr\",\"pageSize\":100}";
+    const request_id = try EchoDriver.run(bc, page.frame_id, body);
+
+    try ctx.expectSentEvent("Network.requestWillBeSent", .{
+        .requestId = &request_id,
+        .request = .{ .method = "POST", .hasPostData = true },
+    }, .{ .session_id = "SID-PDS" });
+
+    // The subset matcher can't assert absence; look at the event directly.
+    var seen = false;
+    for (ctx.received.items) |received| {
+        const method = received.object.get("method") orelse continue;
+        if (!std.mem.eql(u8, method.string, "Network.requestWillBeSent")) continue;
+        const request = received.object.get("params").?.object.get("request").?.object;
+        try testing.expectEqual(null, request.get("postData"));
+        try testing.expectEqual(null, request.get("postDataEntries"));
+        seen = true;
+    }
+    try testing.expect(seen);
+
+    // Retention is independent of the inline limit.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Network.getRequestPostData",
+        .params = .{ .requestId = &request_id },
+    });
+    try ctx.expectSentResult(.{ .postData = body }, .{ .id = 2 });
 }
 
 test "cdp.Network: redirect hop precedes Fetch pause and carries redirectResponse" {

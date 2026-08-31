@@ -492,6 +492,82 @@ test "MCP - evaluate: object return serializes as JSON" {
     } }, out.written());
 }
 
+test "MCP - click on a target=_blank link follows the new window" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_target_blank.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#nt" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html") != null);
+
+    out.clearRetainingCapacity();
+    const get_url =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 2,
+        \\  "method": "tools/call",
+        \\  "params": { "name": "getUrl", "arguments": {} }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "http://localhost:9582/src/browser/tests/mcp_actions.html" }},
+    } }, out.written());
+
+    // navigation from inside the followed popup
+    out.clearRetainingCapacity();
+    const navigate =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 3,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "evaluate",
+        \\    "arguments": { "script": "location.href = 'mcp_target_blank.html'" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, navigate);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":false") != null);
+
+    out.clearRetainingCapacity();
+    try router.handleMessage(server, testing.arena_allocator, get_url);
+    try testing.expectJson(.{ .id = 2, .result = .{
+        .content = &.{.{ .type = "text", .text = "http://localhost:9582/src/browser/tests/mcp_target_blank.html" }},
+    } }, out.written());
+}
+
+test "MCP - submitting a target=_blank form follows the new window" {
+    var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_target_blank.html", &out.writer);
+    defer server.deinit();
+
+    const click =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "click",
+        \\    "arguments": { "selector": "#fs" }
+        \\  }
+        \\}
+    ;
+    try router.handleMessage(server, testing.arena_allocator, click);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Opened a new window; tools now act on it. Page url: http://localhost:9582/src/browser/tests/mcp_actions.html?q=1") != null);
+}
+
 test "MCP - evaluate: localStorage persists across navigations and is origin-scoped" {
     var out: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     const server = try testLoadPage("http://localhost:9582/src/browser/tests/mcp_actions.html", &out.writer);

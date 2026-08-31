@@ -19,9 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const js = @import("../../browser/js/js.zig");
 const CDP = @import("../CDP.zig");
-const Notification = @import("../../Notification.zig");
+const js = @import("../../../browser/js/js.zig");
+const Notification = @import("../../../Notification.zig");
 
 const Allocator = std.mem.Allocator;
 

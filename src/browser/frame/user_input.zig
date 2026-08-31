@@ -18,7 +18,7 @@
 
 // Synthetic user input driving the DOM: mouse, wheel, keyboard, focus
 // navigation and text insertion. These are mostly fed by CDP's Input domain
-// (src/cdp/domains/input.zig) and by EventManager's default activation
+// (src/server/cdp/domains/input.zig) and by EventManager's default activation
 // behavior. Form submission itself lives on the Frame (it's a navigation
 // concern); the activation paths here call into it.
 
@@ -552,9 +552,13 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         if (target_name.len == 0) {
             break :blk target.ownerFrame(frame);
         }
-        break :blk frame.resolveTargetFrame(target_name) orelse {
-            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-            return;
+        break :blk switch (frame.resolveTargetFrame(target_name)) {
+            .frame => |f| f,
+            .blank => {
+                try element.focus(frame);
+                _ = try target.ownerFrame(frame).openBlankTarget(element, href);
+                return;
+            },
         };
     };
 

@@ -21,9 +21,9 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 
-const Node = @import("../Node.zig");
-const DOMNode = @import("../../browser/webapi/Node.zig");
-const Robots = @import("../../network/Robots.zig");
+const Robots = @import("../../../network/Robots.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const NodeRegistry = @import("../../../NodeRegistry.zig");
 
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
@@ -78,6 +78,7 @@ fn configureCDP(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         disableSetCacheDisabled: ?bool = null,
         obeyRobots: ?bool = null,
+        httpVersion: ?lp.Config.HttpVersion = null,
     })) orelse return error.InvalidParams;
 
     if (params.disableSetCacheDisabled) |value| {
@@ -85,6 +86,9 @@ fn configureCDP(cmd: *CDP.Command) !void {
     }
     if (params.obeyRobots) |value| {
         try cmd.cdp.browser.http_client.obeyRobots(value);
+    }
+    if (params.httpVersion) |value| {
+        cmd.cdp.browser.http_client.setHttpVersion(value);
     }
 
     return cmd.sendResult(null, .{});
@@ -114,7 +118,7 @@ fn getSemanticTree(cmd: anytype) !void {
         format: ?enum { text } = null,
         prune: ?bool = null,
         interactiveOnly: ?bool = null,
-        backendNodeId: ?Node.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         maxDepth: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -156,7 +160,7 @@ fn getSemanticTree(cmd: anytype) !void {
 
 fn getMarkdown(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -179,7 +183,7 @@ fn getMarkdown(cmd: anytype) !void {
 
 fn getInteractiveElements(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -201,7 +205,7 @@ fn getInteractiveElements(cmd: anytype) !void {
 
 fn getNodeDetails(cmd: anytype) !void {
     const Params = struct {
-        backendNodeId: Node.Id,
+        backendNodeId: NodeRegistry.Id,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
@@ -272,8 +276,8 @@ fn detectForms(cmd: anytype) !void {
 
 fn clickNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
@@ -293,8 +297,8 @@ fn clickNode(cmd: anytype) !void {
 
 fn fillNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         text: []const u8,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
@@ -315,8 +319,8 @@ fn fillNode(cmd: anytype) !void {
 
 fn scrollNode(cmd: anytype) !void {
     const Params = struct {
-        nodeId: ?Node.Id = null,
-        backendNodeId: ?Node.Id = null,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         x: ?i32 = null,
         y: ?i32 = null,
     };
@@ -453,6 +457,39 @@ test "cdp.lp: configureCDP toggles setCacheDisabled handling" {
     });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = "BSID-1" });
     try testing.expectEqual(false, ctx.cdp().disable_set_cache_disabled);
+}
+
+test "cdp.lp: configureCDP sets the HTTP version on this connection's client" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+    try testing.expectEqual(.auto, client.http_version);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "1.1" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(.@"1.1", client.http_version);
+
+    // Unsupported versions are rejected, not silently ignored.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "3" },
+    });
+    try testing.expect((try ctx.getSentMessage(1)).?.object.get("error") != null);
+    try testing.expectEqual(.@"1.1", client.http_version);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "auto" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(.auto, client.http_version);
 }
 
 test "cdp.lp: getMarkdown" {

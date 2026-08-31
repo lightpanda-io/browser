@@ -19,19 +19,19 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const browser_tools = lp.tools;
-const BrowserTool = browser_tools.Tool;
-const CDPNode = @import("../cdp/Node.zig");
 const Schema = @import("Schema.zig");
+const NodeRegistry = @import("../NodeRegistry.zig");
 
 const v8 = lp.js.v8;
+const browser_tools = lp.tools;
+const BrowserTool = browser_tools.Tool;
 
 const Runtime = @This();
 
 allocator: std.mem.Allocator,
 app: *lp.App,
 session: *lp.Session,
-registry: *CDPNode.Registry,
+registry: *NodeRegistry,
 env: lp.js.Env,
 context: v8.Global,
 has_context: bool,
@@ -121,7 +121,7 @@ pub fn init(
     allocator: std.mem.Allocator,
     app: *lp.App,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
 ) InitError!*Runtime {
     const self = try allocator.create(Runtime);
     errdefer allocator.destroy(self);
@@ -1001,7 +1001,7 @@ fn terminateRuntimeSoon(runtime: *Runtime) void {
 test "agent script runtime: goto and evaluate dispatch through browser tools" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1020,7 +1020,7 @@ test "agent script runtime: goto and evaluate dispatch through browser tools" {
 }
 
 test "agent script runtime: Page must be called with new" {
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1031,7 +1031,7 @@ test "agent script runtime: Page must be called with new" {
 }
 
 test "agent script runtime: a method on an un-navigated page errors" {
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1047,7 +1047,7 @@ test "agent script runtime: a method on an un-navigated page errors" {
 test "agent script runtime: page.close stales the handle" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1067,7 +1067,7 @@ test "agent script runtime: page.close stales the handle" {
 test "agent script runtime: parallel gotos coexist and route per page" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1091,7 +1091,7 @@ test "agent script runtime: parallel gotos coexist and route per page" {
 test "agent script runtime: goto resolves $LP_* placeholders" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1114,7 +1114,7 @@ extern fn unsetenv(name: [*:0]u8) c_int;
 test "agent script runtime: goto with invalid arguments rejects instead of crashing" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1133,7 +1133,7 @@ test "agent script runtime: goto with invalid arguments rejects instead of crash
 test "agent script runtime: a tool-triggered navigation keeps the handle routable" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1153,7 +1153,7 @@ test "agent script runtime: a tool-triggered navigation keeps the handle routabl
 test "agent script runtime: re-goto on the same page object replaces its page" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1173,7 +1173,7 @@ test "agent script runtime: a failed navigation rejects the goto promise" {
 
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1194,7 +1194,7 @@ test "agent script runtime: a failed navigation rejects the goto promise" {
 test "agent script runtime: extract returns a JavaScript object" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1248,7 +1248,7 @@ test "agent script runtime: extract returns a JavaScript object" {
 test "agent script runtime: extract tolerates list selectors that match nothing" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1276,7 +1276,7 @@ test "agent script runtime: extract tolerates list selectors that match nothing"
 test "agent script runtime: strict-mode scripts can call primitives" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1292,7 +1292,7 @@ test "agent script runtime: strict-mode scripts can call primitives" {
 }
 
 test "agent script runtime: promise microtasks run to completion" {
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1312,7 +1312,7 @@ test "agent script runtime: promise microtasks run to completion" {
 test "agent script runtime: primitives re-entered from argument callbacks stay isolated" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1339,7 +1339,7 @@ test "agent script runtime: primitives re-entered from argument callbacks stay i
 test "agent script runtime: terminate interrupts local JavaScript" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1356,7 +1356,7 @@ test "agent script runtime: terminate interrupts local JavaScript" {
 test "agent script runtime: agent variables persist and page globals are isolated" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1380,7 +1380,7 @@ test "agent script runtime: agent variables persist and page globals are isolate
 test "agent script runtime: page evaluate cannot see agent primitives or bindings" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1397,7 +1397,7 @@ test "agent script runtime: page evaluate cannot see agent primitives or binding
 }
 
 test "agent script runtime: console is available in agent context" {
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1418,7 +1418,7 @@ test "agent script runtime: console is available in agent context" {
 test "agent script runtime: tool errors throw and stop execution" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1444,7 +1444,7 @@ test "agent script runtime: tool errors throw and stop execution" {
 test "agent script runtime: builtin argument marshalling (positional + options)" {
     defer testing.test_session.closeAllPages();
 
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
@@ -1500,7 +1500,7 @@ test "agent script runtime: builtin argument marshalling (positional + options)"
 }
 
 test "agent script runtime: top-level await runs in an async wrapper" {
-    var registry = CDPNode.Registry.init(testing.allocator);
+    var registry = NodeRegistry.init(testing.allocator);
     defer registry.deinit();
 
     const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);

@@ -232,6 +232,11 @@ fn caPathValidator(
     }
 }
 
+pub const HttpVersion = enum {
+    auto,
+    @"1.1",
+};
+
 pub const LoadResources = packed struct(u4) {
     image: bool = false,
     iframe: bool = false,
@@ -249,6 +254,7 @@ const CommonOptions = .{
     .{ .name = "http_nav_delay", .type = ?u32 },
     .{ .name = "http_nav_burst", .type = ?u32 },
     .{ .name = "http_timeout", .type = ?u31 },
+    .{ .name = "http_version", .type = HttpVersion, .default = .auto },
     .{ .name = "http_connect_timeout", .type = ?u31 },
     .{ .name = "http_header", .type = HttpHeader, .multiple = true, .validator = httpHeaderValidator },
     .{ .name = "http_max_response_size", .type = ?usize },
@@ -380,6 +386,8 @@ const Commands = cli.Builder(.{
             .{ .name = "host", .type = []const u8, .default = "127.0.0.1" },
             .{ .name = "port", .type = u16, .default = 9222 },
             .{ .name = "advertise_host", .type = ?[]const u8 },
+            // Repeatable; one server can speak several on the same port.
+            .{ .name = "protocol", .type = Protocol, .multiple = true },
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
@@ -536,6 +544,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
+        else => unreachable,
+    };
+}
+
+pub fn httpVersion(self: *const Config) HttpVersion {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.http_version,
         else => unreachable,
     };
 }
@@ -806,6 +821,19 @@ pub fn adblockLists(self: *const Config) ?std.mem.SplitIterator(u8, .scalar) {
         else => unreachable,
     } orelse return null;
     return std.mem.splitScalar(u8, paths, ',');
+}
+
+pub const Protocol = enum {
+    cdp,
+    webdriver,
+};
+
+pub fn protocols(self: *const Config) []const Protocol {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.protocol.items.len == 0) &.{.cdp} else opts.protocol.items,
+        .mcp => &.{.cdp},
+        else => unreachable,
+    };
 }
 
 pub fn maxConnections(self: *const Config) u16 {
@@ -1165,6 +1193,31 @@ test "Config: parseArgs refuses a mozilla user-agent" {
     const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--user-agent", "mozilla/1.0" };
     const proc_args: std.process.Args = .{ .vector = &argv };
     try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+}
+
+test "Config: parseArgs --http-version" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.auto, config.httpVersion());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-version", "1.1" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(.@"1.1", config.httpVersion());
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-version", "3" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
 }
 
 test "Config: validateUserAgent" {

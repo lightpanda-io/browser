@@ -22,8 +22,8 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
-const URL = @import("../../browser/URL.zig");
-const js = @import("../../browser/js/js.zig");
+const URL = @import("../../../browser/URL.zig");
+const js = @import("../../../browser/js/js.zig");
 
 const log = lp.log;
 

@@ -530,6 +530,14 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .proxy, if (proxy) |p| p.ptr else null);
     }
 
+    pub fn setHttpVersion(self: *const Connection, version: Config.HttpVersion) !void {
+        const v: libcurl.CurlHttpVersion = switch (version) {
+            .auto => .none,
+            .@"1.1" => .v1_1,
+        };
+        try libcurl.curl_easy_setopt(self._easy, .http_version, v);
+    }
+
     pub fn setFollowLocation(self: *const Connection, follow: bool) !void {
         try libcurl.curl_easy_setopt(self._easy, .follow_location, @as(c_long, if (follow) 2 else 0));
     }

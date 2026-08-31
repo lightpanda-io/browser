@@ -19,26 +19,28 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const App = @import("../App.zig");
-const Inbox = @import("../Inbox.zig");
-const Notification = @import("../Notification.zig");
+const App = @import("../../App.zig");
+const Inbox = @import("../../Inbox.zig");
+const Notification = @import("../../Notification.zig");
 
-const WS = @import("../network/WS.zig");
-const http = @import("../network/http.zig");
+const WS = @import("../../network/WS.zig");
+const http = @import("../../network/http.zig");
 const Server = @import("../Server.zig");
-const Transfer = @import("../network/HttpClient.zig").Transfer;
+const HttpClient = @import("../../network/HttpClient.zig");
 
-const js = @import("../browser/js/js.zig");
-const Browser = @import("../browser/Browser.zig");
-const Session = @import("../browser/Session.zig");
-const Frame = @import("../browser/Frame.zig");
-const Page = @import("../browser/Page.zig");
-const Mime = @import("../browser/Mime.zig");
-const Element = @import("../browser/webapi/Element.zig");
-const Label = @import("../browser/webapi/element/html/Label.zig");
+const js = @import("../../browser/js/js.zig");
+const Browser = @import("../../browser/Browser.zig");
+const Session = @import("../../browser/Session.zig");
+const Frame = @import("../../browser/Frame.zig");
+const Page = @import("../../browser/Page.zig");
+const Mime = @import("../../browser/Mime.zig");
+const Element = @import("../../browser/webapi/Element.zig");
+const Label = @import("../../browser/webapi/element/html/Label.zig");
 
-const Connection = @import("Connection.zig");
+const Connection = @import("../Connection.zig");
+const Driver = @import("../Driver.zig");
 const Incrementing = @import("id.zig").Incrementing;
+const network_domain = @import("domains/network.zig");
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const log = lp.log;
@@ -63,7 +65,7 @@ browser: Browser,
 allocator: Allocator,
 
 // Server run-loop read-side handle for the CDP socket. Populated in
-// init; Server.handleConnection calls registerLink(&cdp.link) after the
+// init; Server.serve calls registerLink(&cdp.link) after the
 // worker-side handshake completes, and unregisterLink before teardown.
 link: Server.Link,
 
@@ -82,8 +84,8 @@ browser_session_id: ?[]const u8 = null,
 browser_context: ?BrowserContext,
 disable_set_cache_disabled: bool = false,
 
-// Re-used arena for processing a message. We're assuming that we're getting
-// 1 message at a time.
+// Re-used arena for processing a message. Works because we strictly process
+// one message at a time.
 message_arena: std.heap.ArenaAllocator,
 
 // Used for processing notifications within a browser context.
@@ -103,7 +105,6 @@ pub fn init(
     self: *CDP,
     app: *App,
     socket: posix.socket_t,
-    http_responses: Connection.HttpResponses,
 ) !void {
     const allocator = app.allocator;
 
@@ -121,14 +122,16 @@ pub fn init(
         .streams = .{ .allocator = allocator },
     };
 
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
+    const driver: Driver = .init(.{ .cdp = self });
+
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, driver);
     const http_client = &self.browser.http_client;
 
-    try self.conn.init(app, socket, http_responses, &http_client.inbox);
+    try self.conn.init(app, socket, .cdp, &http_client.inbox);
     errdefer self.conn.deinit();
 
     self.link = .{
-        .cdp = self,
+        .driver = driver,
         .state = .live,
         .socket = socket,
         .handles = http_client.handles,
@@ -152,42 +155,6 @@ pub fn deinit(self: *CDP) void {
 // into the worker's inbox. Returns false if a close frame was seen (or a
 // fatal frame error) so the loop drops the link from its poll set.
 //
-// One network read can carry more bytes than the reader's current
-// free space — large CDP messages (Page.addScriptToEvaluateOnNewDocument,
-// Runtime evaluation results, etc.) routinely exceed 16 KB, and a
-// single read can contain multiple messages, or part of messages. We loop: feed
-// what fits, run processMessages (which extracts complete frames, compacts the
-// reader, and grows the buffer if it sees a frame header larger than current
-// capacity), repeat until the chunk is drained.
-pub fn onData(self: *CDP, data: []const u8) anyerror!bool {
-    var remaining = data;
-    while (remaining.len > 0) {
-        const n = self.conn.feedBytes(remaining);
-        remaining = remaining[n..];
-        if ((try self.conn.processMessages()) == false) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Called by the Server run loop when it drops the link unsolicited (peer
-// EOF, read error, poll HUP/ERR). Push a disconnect into the inbox so the
-// worker's drainInbox surfaces error.ClientDisconnected.
-pub fn onLinkDisconnect(self: *CDP, err: ?anyerror) void {
-    const arena = self.browser.arena_pool.acquire(.tiny, "cdp disconnect") catch |e| switch (e) {
-        error.OutOfMemory => @panic("OOM"),
-    };
-
-    self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
-}
-
-// Called by the Server run loop to try to force the Worker to shutdown.
-// Protects against a stuck worker.
-pub fn terminateFromServer(self: *CDP) void {
-    self.browser.env.requestTerminate();
-}
-
 // Called in the Worker to dispatch a single CDP message bubbled up by
 // HttpClient.drainInbox. The Server run loop already parsed the JSON
 // when it pushed the message to the inbox, so we skip straight to
@@ -215,84 +182,8 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
     return self.dispatch(arena.allocator(), .{ .cdp = self }, msg);
 }
 
-// Called in the worker when a PING message is received
-pub fn onPing(self: *CDP, body: []const u8) void {
-    self.conn.sendPong(body) catch |err| {
-        log.warn(.app, "CDP pong", .{ .err = err });
-    };
-}
-
-// Called in the Worker when a peer-initiated close with CLOSE_NORMAL. The worker
-// loop tears down immediately after; drainInbox returns
-// error.ClientDisconnected once we return.
-pub fn onClose(self: *CDP) void {
-    self.conn.send(&WS.CLOSE_NORMAL) catch |err| {
-        log.warn(.app, "CDP close reply", .{ .err = err });
-    };
-}
-
-// Called in the Worker when the peer disconnected (peer EOF, fatal frame error,
-// or right after a peer close was replied to). drainInbox returns
-// error.ClientDisconnected, which the worker loop catches to tear down.
-//
-// If `err` is a recognized WS framing error, send the matching close
-// frame back to the peer before tearing down — that's how clients
-// observe protocol violations (close code 1002 / 1009 / etc.).
-pub fn onDisconnect(self: *CDP, err: ?anyerror) void {
-    if (err) |e| {
-        if (WS.errorReply(e)) |close_frame| {
-            self.conn.send(close_frame) catch {};
-        }
-    }
-    log.info(.cdp, "CDP disconnect", .{ .err = err });
-}
-
 pub fn sendJSON(self: *CDP, message: anytype) !void {
     try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
-}
-
-pub fn tick(self: *CDP) !bool {
-    // terminatePending means someone decided this browser must die (e.g. the
-    // heap limit was reached). Nothing in the CDP path ever calls cancelTerminate
-    // so the flag can't be a stale leftover here. Exit.
-    if (self.browser.env.terminatePending()) {
-        log.warn(.cdp, "closing connection", .{ .reason = "pending terminate" });
-        // The worker thread is the sole writer of this socket, so sending the
-        // close frame here can't interleave with another write.
-        self.conn.send(&WS.CLOSE_GOING_AWAY) catch |err| {
-            log.warn(.app, "CDP terminate close", .{ .err = err });
-        };
-        return false;
-    }
-
-    // Liveness is enforced by TCP keepalive configured in
-    // Server.configureSocket; the wakeup lets V8 run or terminate.
-    const wait_ms: u32 = 1000; // 1s
-
-    self.pageWait(wait_ms) catch |wait_err| switch (wait_err) {
-        error.NoPage => {
-            // No active page yet (or a teardown is in flight). Fall
-            // back to ticking the http client directly so CDP messages
-            // still get dispatched.
-            _ = self.browser.http_client.tick(wait_ms) catch |err| switch (err) {
-                error.ClientDisconnected => return false,
-                else => {
-                    log.err(.app, "http tick", .{ .err = err });
-                    return false;
-                },
-            };
-        },
-        error.ClientDisconnected => return false,
-        else => return wait_err,
-    };
-    return true;
-}
-
-fn pageWait(self: *CDP, ms: u32) !void {
-    const bc = &(self.browser_context orelse return error.NoPage);
-    const page = bc.page_handle orelse return error.NoPage;
-    var runner = bc.session.runner(.{});
-    return runner.waitForFrameCDP(page.frame_id, ms, .done);
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -315,7 +206,7 @@ pub fn dispatch(self: *CDP, arena: Allocator, sender: Command.Sender, str: []con
 // keeping `str` and the backing storage for `input`'s string slices
 // alive for the duration of the call.
 fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []const u8, input: InputMessage) !void {
-    lp.metrics.cdp_commands.incr();
+    lp.metrics.serve_commands.incr(.cdp);
 
     var command = Command{
         .input = .{
@@ -349,7 +240,7 @@ fn dispatchParsed(self: *CDP, arena: Allocator, sender: Command.Sender, str: []c
         dispatchCommand(&command, input.method) catch |err| {
             switch (err) {
                 error.InvalidMethod, error.UnknownDomain, error.UnknownMethod => {
-                    lp.metrics.cdp_unknown_commands.incr();
+                    lp.metrics.serve_unknown_commands.incr(.cdp);
                     // Chrome's code and wording; drivers feature-detect on it.
                     const message = std.fmt.allocPrint(command.arena, "'{s}' wasn't found", .{input.method}) catch return err;
                     command.sendError(-32601, message, .{}) catch return err;
@@ -420,7 +311,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
             asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
-            asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
+            asUint(u56, "Network") => return network_domain.processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
             asUint(u56, "Console") => return @import("domains/console.zig").processMessage(command),
             else => {},
@@ -512,10 +403,13 @@ pub fn sendEvent(self: *CDP, method: []const u8, p: anytype, opts: SendEventOpts
 pub const BrowserContext = struct {
     const Node = @import("Node.zig");
     const AXNode = @import("AXNode.zig");
+    const NodeRegistry = @import("../../NodeRegistry.zig");
 
     const CapturedResponse = struct {
         must_encode: bool,
-        data: std.ArrayList(u8),
+        // null once evicted (size limit). We keep the map entry so that we
+        // can give an "evicted" error instead of "unknown"
+        data: ?std.ArrayList(u8),
     };
 
     // Key for `captured_responses` / `captured_requests`. Documents are
@@ -581,8 +475,13 @@ pub const BrowserContext = struct {
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,
-    node_registry: Node.Registry,
+    node_registry: NodeRegistry,
     node_search_list: Node.Search.List,
+
+    // Node ids a DOM.setChildNodes event was already sent for. CDP protocol
+    // bookkeeping; ids are never reused within a registry's lifetime, so
+    // entries evicted by resetFrame can linger harmlessly until reset.
+    set_child_nodes_sent: std.AutoHashMapUnmanaged(NodeRegistry.Id, void) = .empty,
 
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
@@ -616,8 +515,10 @@ pub const BrowserContext = struct {
     // memory longer than they have to. In fact, the main request is only
     // ever streamed. So if CDP is the only thing that needs bodies in
     // memory for an arbitrary amount of time, then that's where we're going
-    // to store the,
-    captured_responses: std.AutoHashMapUnmanaged(CapturedKey, CapturedResponse),
+    // to store them.
+    captured_responses_size: usize = 0,
+    captured_responses: std.AutoArrayHashMapUnmanaged(CapturedKey, CapturedResponse),
+    network_limits: network_domain.BufferLimits = .{},
 
     notification: *Notification,
 
@@ -649,7 +550,7 @@ pub const BrowserContext = struct {
         const inspector_session = browser.env.inspector.?.startSession(self);
         errdefer browser.env.inspector.?.stopSession();
 
-        var registry = Node.Registry.init(allocator);
+        var registry = NodeRegistry.init(allocator);
         errdefer registry.deinit();
 
         self.* = .{
@@ -723,6 +624,7 @@ pub const BrowserContext = struct {
         // rely on those notifications to do our normal cleanup?)
 
         self.notification.unregisterAll(self);
+        self.clearCapturedResponses();
 
         // If the session has a frame, we need to clear it first. The page
         // context is always nested inside of the isolated world context,
@@ -731,6 +633,7 @@ pub const BrowserContext = struct {
 
         self.node_registry.deinit();
         self.node_search_list.deinit();
+        self.set_child_nodes_sent.deinit(self.cdp.allocator);
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
@@ -749,6 +652,7 @@ pub const BrowserContext = struct {
     pub fn reset(self: *BrowserContext) void {
         self.node_registry.reset();
         self.node_search_list.reset();
+        self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
     pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
@@ -790,7 +694,7 @@ pub const BrowserContext = struct {
         return world;
     }
 
-    pub fn nodeWriter(self: *BrowserContext, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
+    pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
         return .{
             .root = root,
             .depth = opts.depth,
@@ -799,7 +703,7 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn axnodeWriter(self: *BrowserContext, temp_arena: *lp.Arena, root: *const Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
+    pub fn axnodeWriter(self: *BrowserContext, temp_arena: *lp.Arena, root: *const NodeRegistry.Node, opts: AXNode.Writer.Opts) !AXNode.Writer {
         // Bind the writer to the frame that owns the root node. Name resolution
         // (`Label.findLabelByFor` against `ownerDocument`) and visibility
         // checks (`frame._style_manager`) are per-frame; getting this wrong on
@@ -852,7 +756,22 @@ pub const BrowserContext = struct {
         };
     }
 
-    pub fn networkEnable(self: *BrowserContext) !void {
+    pub fn networkEnable(self: *BrowserContext, limits: network_domain.BufferLimits) !void {
+        const previous = self.network_limits;
+        self.network_limits = limits;
+        if (limits.resource < previous.resource) {
+            // evict responses which are over the new small limit
+            for (self.captured_responses.values()) |*resp| {
+                const data = resp.data orelse continue;
+                if (data.items.len > limits.resource) {
+                    self.evictCapturedResponse(resp);
+                }
+            }
+        }
+        if (limits.total < previous.total) {
+            self.ensureCapturedSpace(0);
+        }
+
         try self.notification.register(.http_request_fail, self, onHttpRequestFail);
         try self.notification.register(.http_request_start, self, onHttpRequestStart);
         try self.notification.register(.http_request_done, self, onHttpRequestDone);
@@ -868,6 +787,41 @@ pub const BrowserContext = struct {
         self.notification.unregister(.http_response_data, self);
         self.notification.unregister(.http_response_header_done, self);
         self.notification.unregister(.http_request_served_from_cache, self);
+        self.clearCapturedResponses();
+    }
+
+    pub fn clearCapturedResponses(self: *BrowserContext) void {
+        const allocator = self.cdp.allocator;
+        for (self.captured_responses.values()) |*resp| {
+            if (resp.data) |*data| {
+                data.deinit(allocator);
+            }
+        }
+        self.captured_responses.deinit(allocator);
+        self.captured_responses = .empty;
+        self.captured_responses_size = 0;
+    }
+
+    fn evictCapturedResponse(self: *BrowserContext, resp: *CapturedResponse) void {
+        if (resp.data) |*data| {
+            self.captured_responses_size -= data.items.len;
+            data.deinit(self.cdp.allocator);
+            resp.data = null;
+        }
+    }
+
+    // Evict captured responses, ordered by age, until we can fit `size` more bytes
+    fn ensureCapturedSpace(self: *BrowserContext, size: usize) void {
+        for (self.captured_responses.values()) |*resp| {
+            if (self.captured_responses_size + size <= self.network_limits.total) {
+                return;
+            }
+            const data = resp.data orelse continue;
+            if (data.items.len == 0) {
+                continue;
+            }
+            self.evictCapturedResponse(resp);
+        }
     }
 
     pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
@@ -1015,7 +969,7 @@ pub const BrowserContext = struct {
             const transfer = msg.transfer;
             const key = keyFromTransfer(transfer);
             const body = transfer.req.body orelse "";
-            if (body.len == 0 or body.len > @import("domains/network.zig").max_post_data_size) {
+            if (body.len == 0 or body.len > network_domain.max_post_data_size) {
                 _ = self.captured_requests.remove(key);
             } else {
                 const owned_body = try self.frame_arena.dupe(u8, body);
@@ -1023,7 +977,7 @@ pub const BrowserContext = struct {
             }
         }
         defer self.resetNotificationArena();
-        try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
+        try network_domain.httpRequestStart(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
@@ -1034,7 +988,7 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpRequestFail(self, msg);
+        return network_domain.httpRequestFail(self, msg);
     }
 
     pub fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
@@ -1052,7 +1006,7 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
 
-    fn keyFromTransfer(transfer: *const Transfer) CDP.BrowserContext.CapturedKey {
+    fn keyFromTransfer(transfer: *const HttpClient.Transfer) CDP.BrowserContext.CapturedKey {
         return if (transfer.req.resource_type == .document)
             .{ .kind = .loader, .id = transfer.req.loader_id }
         else
@@ -1063,14 +1017,18 @@ pub const BrowserContext = struct {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
 
-        const arena = self.frame_arena;
-
         // Prepare the captured response value.
         const key = keyFromTransfer(msg.transfer);
-        const gop = try self.captured_responses.getOrPut(arena, key);
+        const gop = try self.captured_responses.getOrPut(self.cdp.allocator, key);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
-                .data = .empty,
+                .data = blk: {
+                    const cl = msg.transfer.getContentLength() orelse break :blk .empty;
+                    if (cl > self.network_limits.resource) {
+                        break :blk null;
+                    }
+                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, cl);
+                },
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
                 .must_encode = blk: {
@@ -1081,7 +1039,7 @@ pub const BrowserContext = struct {
                             break :blk true;
                         }
 
-                        if (std.mem.eql(u8, "UTF-8", mime.charsetString())) {
+                        if (std.ascii.eqlIgnoreCase("UTF-8", mime.charsetString())) {
                             break :blk false;
                         }
                     }
@@ -1090,22 +1048,33 @@ pub const BrowserContext = struct {
             };
         }
 
-        return @import("domains/network.zig").httpResponseHeaderDone(self.notification_arena, self, msg);
+        return network_domain.httpResponseHeaderDone(self.notification_arena, self, msg);
     }
 
     pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpRequestDone(self, msg);
+        return network_domain.httpRequestDone(self, msg);
     }
 
     pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        const arena = self.frame_arena;
 
         const key = keyFromTransfer(msg.transfer);
         const resp = self.captured_responses.getPtr(key) orelse lp.assert(false, "onHttpResponseData missing captured response", .{});
 
-        return resp.data.appendSlice(arena, msg.data);
+        const data = &(resp.data orelse return);
+        const chunk = msg.data;
+        const limits = &self.network_limits;
+        if (data.items.len + chunk.len > limits.resource or chunk.len > limits.total) {
+            return self.evictCapturedResponse(resp);
+        }
+        // Can evict `resp` itself when it's the oldest, hence the re-check.
+        self.ensureCapturedSpace(chunk.len);
+        if (resp.data == null) {
+            return;
+        }
+        try data.appendSlice(self.cdp.allocator, chunk);
+        self.captured_responses_size += chunk.len;
     }
 
     pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
@@ -1116,7 +1085,7 @@ pub const BrowserContext = struct {
 
     pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
-        return @import("domains/network.zig").httpServedFromCache(self, msg);
+        return network_domain.httpServedFromCache(self, msg);
     }
 
     pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
@@ -1530,7 +1499,7 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     try testing.expectError(error.ClientDisconnected, client.tick(0));
 }
 
-test "cdp: tick sends a close frame on pending terminate" {
+test "cdp: run sends a close frame on pending terminate" {
     testing.expectLog(&.{.cdp});
 
     var ctx = try testing.context();
@@ -1542,7 +1511,9 @@ test "cdp: tick sends a close frame on pending terminate" {
     // terminating-state asserts.
     defer cdp.browser.env.cancelTerminate();
 
-    try testing.expectEqual(false, try cdp.tick());
+    // The pending terminate makes the first tick the last one, so run returns.
+    const driver: Driver = .init(.{ .cdp = cdp });
+    driver.run();
 
     // The client should receive a close frame (code 1001, going away), not
     // just an abrupt socket close.
@@ -1578,7 +1549,7 @@ test "cdp: syncRequest short-circuits after disconnect" {
         .cookie_origin = "",
         .resource_type = .fetch,
         .notification = undefined,
-        .shutdown_callback = @import("../network/HttpClient.zig").noopShutdown,
+        .shutdown_callback = HttpClient.noopShutdown,
     }, null);
     try testing.expectError(error.ClientDisconnected, transfer.submitSync());
 }

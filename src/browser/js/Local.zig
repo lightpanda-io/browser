@@ -88,6 +88,14 @@ pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
     return .{ .local = self, .handle = handle };
 }
 
+// StringToBigInt semantics: arbitrary precision, sign-aware, and it never
+// consults the page's globals. Fails on non-numeric digits.
+pub fn newBigInt(self: *const Local, digits: []const u8) !js.Value {
+    const str: *const v8.Value = @ptrCast(self.isolate.initStringHandle(digits));
+    const handle = v8.v8__Value__ToBigInt(str, self.handle) orelse return error.JsException;
+    return .{ .local = self, .handle = @ptrCast(handle) };
+}
+
 pub fn newNumber(self: *const Local, f: f64) !js.Value {
     return .{
         .local = self,
@@ -1227,7 +1235,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getInt64();
                 }
-                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
+                return jsInt64ToZig(i64, try js_value.toF64());
             },
             else => {},
         },
@@ -1250,7 +1258,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getUint64();
                 }
-                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
+                return jsInt64ToZig(u64, try js_value.toF64());
             },
             else => {},
         },
@@ -1270,6 +1278,20 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
         return @intCast(maybe);
     }
     return error.InvalidArgument;
+}
+
+// A JS number can't carry a full 64-bit integer, it needs to be represented as
+// a f64 with fractions rounded towards zero.
+fn jsInt64ToZig(comptime T: type, number: f64) !T {
+    if (!std.math.isFinite(number)) {
+        return error.InvalidArgument;
+    }
+    const truncated = @trunc(number);
+    const min: f64 = if (@typeInfo(T).int.signedness == .signed) -std.math.maxInt(i54) else 0;
+    if (truncated < min or truncated > std.math.maxInt(i54)) {
+        return error.InvalidArgument;
+    }
+    return @intFromFloat(truncated);
 }
 
 // Every WebApi type has a class_id as T.JsApi.Meta.class_id. We use this to create

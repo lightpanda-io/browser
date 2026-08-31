@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const AXNode = @import("../cdp/AXNode.zig");
+const AXNode = @import("../server/cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const Frame = @import("Frame.zig");

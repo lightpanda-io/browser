@@ -1189,4 +1189,67 @@
     });
 }
 </script>
+<!-- put()/add() structured-clone the value at call time: the record is the
+     clone as of the call (later mutation of the argument is not stored), a
+     generated key is injected into the clone rather than the caller's object,
+     and an unserializable value throws DataCloneError synchronously. -->
+<script id="write_clones_at_call_time" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("clone-at-call-db", 1);
+    open.onupgradeneeded = (e) => {
+        e.target.result.createObjectStore("s", { keyPath: "id", autoIncrement: true });
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        const store = tx.objectStore("s");
+        const record = { data: "before" };
+        store.put(record);
+        record.data = "after";
+        store.put(record); // same object again: still no key on it, so a 2nd record
+        let threw = null;
+        try {
+            store.put({ id: 3, fn: () => {} });
+        } catch (err) {
+            threw = err.name;
+        }
+        tx.oncomplete = () => {
+            const all = db.transaction("s").objectStore("s").getAll();
+            all.onsuccess = () => state.resolve({ all: all.result, record, threw });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual([{ data: "before", id: 1 }, { data: "after", id: 2 }], got.all);
+        testing.expectEqual({ data: "after" }, got.record);
+        testing.expectEqual("DataCloneError", got.threw);
+    });
+}
+</script>
+
+<!-- A version above 2^32 (Date.now() is a common choice) survives the round
+     trip as a Number; out-of-range versions are a TypeError. -->
+<script id="open_version_64bit" type=module>
+{
+    const state = await testing.async();
+    const version = 1788161539190;
+    const open = indexedDB.open("big-version-db", version);
+    let upgrade = null;
+    open.onupgradeneeded = (e) => {
+        upgrade = { oldVersion: e.oldVersion, newVersion: e.newVersion };
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        state.resolve({ upgrade, version: db.version, type: typeof db.version });
+    };
+    await state.done((got) => {
+        testing.expectEqual({ oldVersion: 0, newVersion: version }, got.upgrade);
+        testing.expectEqual(version, got.version);
+        testing.expectEqual("number", got.type);
+    });
+    for (const bad of [-1, 0.5, NaN, Infinity, "foo", 2 ** 53]) {
+        testing.expectError("TypeError", () => indexedDB.open("big-version-db", bad));
+    }
+}
+</script>
 </body>

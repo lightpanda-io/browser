@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const CDP = @import("../CDP.zig");
-const Notification = @import("../../Notification.zig");
+const Notification = @import("../../../Notification.zig");
 
 const Allocator = std.mem.Allocator;
 

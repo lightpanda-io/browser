@@ -67,6 +67,10 @@ _arena: *lp.Arena,
 // a v8 Global reset is only idempotent through a single instance.
 _globals: std.ArrayList(*js.GlobalSlot) = .empty,
 
+// V8-owned data queued for a write. Only ever appended to, so an index into it
+// is a stable handle (see holdClone).
+_clones: std.ArrayList(CloneSlot) = .empty,
+
 // objectStore() must return the same object for a given name within one
 // transaction (per spec); this also keeps repeated lookups off sqlite.
 _stores: std.ArrayList(*IDBObjectStore) = .empty,
@@ -87,6 +91,10 @@ _gate_waiter: Engine.GateWaiter,
 // capture the scheduler's generation here and reject any request made in a
 // later generation (see assertActive).
 _active_turn: u64 = 0,
+// Set while a value is being structured-cloned for a write: user getters that
+// run during the clone must see the transaction as inactive (spec: the clone
+// happens with the transaction's active flag cleared).
+_cloning: bool = false,
 
 // The transaction can be freed when v8 doesn't reference it (or any child,
 // e.g. an IDBRequest), when we have no scheduled drain AND when we aren't
@@ -182,6 +190,9 @@ pub fn deinit(self: *IDBTransaction, _: *Page) void {
     for (self._globals.items) |slot| {
         slot.reset();
     }
+    for (self._clones.items) |*slot| {
+        slot.release();
+    }
     self._arena.release();
 }
 
@@ -201,6 +212,36 @@ pub fn persist(self: *IDBTransaction, value: js.Value) !*js.GlobalSlot {
     errdefer slot.reset();
     try self._globals.append(self._arena.allocator(), slot);
     return slot;
+}
+
+const CloneSlot = struct {
+    // optional because it can  be released twice, once after write and then
+    // on deinit.
+    _serialized: ?js.Value.Serialized,
+
+    fn release(self: *CloneSlot) void {
+        if (self._serialized) |serialized| {
+            serialized.deinit();
+            self._serialized = null;
+        }
+    }
+};
+
+// Wraps a js.Value.Serialized so that we're able to manage it. This not only
+// avoids a copy, it means we don't have to (1) bloat the transaction's arena
+// or (2) have a per-request arena
+pub fn holdClone(self: *IDBTransaction, serialized: js.Value.Serialized) !usize {
+    errdefer serialized.deinit();
+    try self._clones.append(self._arena.allocator(), .{ ._serialized = serialized });
+    return self._clones.items.len - 1;
+}
+
+pub fn cloneBytes(self: *const IDBTransaction, clone: usize) []const u8 {
+    return self._clones.items[clone]._serialized.?.bytes();
+}
+
+pub fn releaseClone(self: *IDBTransaction, clone: usize) void {
+    self._clones.items[clone].release();
 }
 
 pub fn dupe(self: *IDBTransaction, value: []const u8) ![]const u8 {
@@ -341,7 +382,7 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
 // the upgradeneeded dispatch for a versionchange transaction) and again by each
 // delivered batch.
 pub fn assertActive(self: *const IDBTransaction) !void {
-    if (self._settled or self._committing) {
+    if (self._settled or self._committing or self._cloning) {
         return error.TransactionInactiveError;
     }
     if (self._active_turn != self._exec.js.scheduler.generation) {

@@ -507,7 +507,9 @@ pub fn deinit(self: *Frame) void {
     // Unregister CookieStore from session notifications before the JS
     // context (and thus the scheduler) is destroyed, otherwise a late
     // mutation could schedule a callback that never runs.
-    if (self.window._cookie_store) |cs| cs.detach();
+    if (self.window._cookie_store) |cs| {
+        cs.detach();
+    }
 
     const page = self._page;
 
@@ -560,6 +562,8 @@ pub fn deinit(self: *Frame) void {
         browser.reportJsHeap();
     }
 
+    // fired the last moment the js context is still alive
+    page.session.notification.dispatch(.frame_destroyed, self);
     browser.env.destroyContext(self.js);
 
     // Must be after context is destroyed. A finalizer can reach into the *Worker
@@ -2180,10 +2184,14 @@ pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
 
 pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
-        const owned_id = self.dupeString(id) catch return;
-        id_maps.removed_ids.put(self.arena, owned_id, {}) catch |err| {
+        const gop = id_maps.removed_ids.getOrPut(self.arena, id) catch |err| {
             log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
+            return;
         };
+        if (gop.found_existing == false) {
+            gop.key_ptr.* = self.dupeString(id) catch return;
+            gop.value_ptr.* = {};
+        }
     }
 }
 
@@ -3395,21 +3403,25 @@ pub const QueuedNavigation = struct {
     navigation_type: NavigationType,
 };
 
+pub const TargetFrame = union(enum) {
+    frame: *Frame,
+    blank,
+};
+
 /// Resolves a target attribute value (e.g., "_self", "_parent", "_top", or frame name)
-/// to the appropriateFrame to navigate.
-/// Returns null if the target is "_blank" (which would open a new window/tab).
+/// to the Frame to navigate.
 /// Note: Callers should handle empty target separately (for owner document resolution).
-pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
+pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) TargetFrame {
     if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
-        return self;
+        return .{ .frame = self };
     }
 
     if (std.ascii.eqlIgnoreCase(target_name, "_blank")) {
-        return null;
+        return .blank;
     }
 
     if (std.ascii.eqlIgnoreCase(target_name, "_parent")) {
-        return self.parent orelse self;
+        return .{ .frame = self.parent orelse self };
     }
 
     if (std.ascii.eqlIgnoreCase(target_name, "_top")) {
@@ -3417,13 +3429,13 @@ pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
         while (frame.parent) |f| {
             frame = f;
         }
-        return frame;
+        return .{ .frame = frame };
     }
 
     // Named frame lookup: search current frame's descendants first, then from root
     // This follows the HTML spec's "implementation-defined" search order.
     if (findFrameByName(self, target_name)) |f| {
-        return f;
+        return .{ .frame = f };
     }
 
     // If not found in descendants, search from root (catches siblings and ancestors' descendants)
@@ -3433,13 +3445,33 @@ pub fn resolveTargetFrame(self: *Frame, target_name: []const u8) ?*Frame {
     }
     if (root != self) {
         if (findFrameByName(root, target_name)) |f| {
-            return f;
+            return .{ .frame = f };
         }
     }
 
     // If no frame found with that name, navigate in current frame
     // (this matches browser behavior - unknown targets act like _self)
-    return self;
+    return .{ .frame = self };
+}
+
+/// Per spec the opener is withheld unless the element has rel=opener.
+pub fn openBlankTarget(self: *Frame, element: *Element, url: []const u8) !*Frame {
+    return self.openPopup(.{
+        .url = url,
+        .name = "",
+        .opener = if (hasRelToken(element, "opener")) self.window else null,
+    });
+}
+
+fn hasRelToken(element: *Element, token: []const u8) bool {
+    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return false;
+    var it = std.mem.tokenizeAny(u8, rel, &std.ascii.whitespace);
+    while (it.next()) |t| {
+        if (std.ascii.eqlIgnoreCase(t, token)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
@@ -3502,14 +3534,11 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         break :blk form_element.getAttributeSafe(comptime .wrap("target"));
     };
 
-    const target_frame = blk: {
+    const target: TargetFrame = blk: {
         const target_name = target_name_ orelse {
-            break :blk form_element.ownerFrame(self);
+            break :blk .{ .frame = form_element.ownerFrame(self) };
         };
-        break :blk self.resolveTargetFrame(target_name) orelse {
-            log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
-            return;
-        };
+        break :blk self.resolveTargetFrame(target_name);
     };
 
     if (submit_opts.fire_event) {
@@ -3670,6 +3699,12 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         action = try URL.concatQueryString(arena.allocator(), action, buf.written());
     }
 
+    // Opened only once the submission goes ahead, so an aborted one leaves
+    // no stray window.
+    const target_frame = switch (target) {
+        .frame => |f| f,
+        .blank => try form_element.ownerFrame(self).openBlankTarget(form_element, ""),
+    };
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
 }
 

@@ -23,10 +23,10 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 
-const js = @import("../../browser/js/js.zig");
-const URL = @import("../../browser/URL.zig");
-const Frame = @import("../../browser/Frame.zig");
-const Notification = @import("../../Notification.zig");
+const js = @import("../../../browser/js/js.zig");
+const URL = @import("../../../browser/URL.zig");
+const Frame = @import("../../../browser/Frame.zig");
+const Notification = @import("../../../Notification.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -551,7 +551,7 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
         // controlled via Network.configureDurableMessages (which we don't
         // support).
         bc.captured_requests = .empty;
-        bc.captured_responses = .empty;
+        bc.clearCapturedResponses();
     }
 }
 

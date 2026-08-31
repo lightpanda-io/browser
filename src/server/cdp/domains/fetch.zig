@@ -19,8 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const http = @import("../../network/http.zig");
-const Notification = @import("../../Notification.zig");
+const http = @import("../../../network/http.zig");
+const Notification = @import("../../../Notification.zig");
 
 const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
@@ -209,7 +209,7 @@ pub fn requestIntercept(arena: Allocator, bc: *CDP.BrowserContext, intercept: *c
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(transfer.req.frame_id),
-        .request = network.RequestWriter.init(arena, transfer),
+        .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
         .resourceType = transfer.req.resource_type.string(),
         .networkId = &id.toRequestId(transfer), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
@@ -435,7 +435,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: *CDP.BrowserContext, intercept:
     try bc.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(intercept_id),
         .frameId = &id.toFrameId(request.frame_id),
-        .request = network.RequestWriter.init(arena, transfer),
+        .request = network.RequestWriter.init(arena, transfer, bc.network_limits.post_data),
         .resourceType = request.resource_type.string(),
         .authChallenge = .{
             .origin = "", // TODO get origin, could be the proxy address for example.

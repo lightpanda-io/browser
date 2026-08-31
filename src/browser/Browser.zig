@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const CDP = @import("../cdp/CDP.zig");
 const Watchdog = @import("../Watchdog.zig");
+const Driver = @import("../server/Driver.zig");
 const Notification = @import("../Notification.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
@@ -112,7 +112,7 @@ pub fn nextFrameId(self: *Browser) u32 {
     return id;
 }
 
-pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
+pub fn init(self: *Browser, app: *App, opts: InitOpts, driver: ?Driver) !void {
     const allocator = app.allocator;
 
     var env = try js.Env.init(app, opts.env);
@@ -131,7 +131,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .watchdog_entry = undefined,
     };
     self.env.protectHeapLimit();
-    try self.http_client.init(app, cdp);
+    try self.http_client.init(app, driver);
 
     self.watchdog_entry = .{
         .env = &self.env,

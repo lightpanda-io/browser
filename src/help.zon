@@ -48,6 +48,14 @@
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.
+    \\  --protocol <PROTOCOL>
+    \\          Automation protocol to serve. Can be passed multiple times to
+    \\          serve several on the same port.
+    \\          Defaults to cdp.
+    \\          Allowed values:
+    \\              cdp        Chrome DevTools Protocol (WebSocket on /).
+    \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
+    \\                         classic WebDriver session endpoints.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -418,6 +426,11 @@
     \\  --http-timeout <INT>
     \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
     \\          Defaults to 10000.
+    \\  --http-version <VERSION>
+    \\          HTTP version to negotiate. "1.1" never offers HTTP/2. "auto"
+    \\          picks the best available option.
+    \\          Defaults to "auto".
+    \\          Allowed values: "auto", "1.1".
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.

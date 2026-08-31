@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Frame = @import("Frame.zig");
+const StyleManager = @import("StyleManager.zig");
 const URL = @import("URL.zig");
 
 const Node = @import("webapi/Node.zig");
@@ -102,13 +103,19 @@ fn isSignificantText(node: *Node) bool {
 // Own state only; the dump root is exempt so a scoped dump of a hidden
 // subtree still renders it.
 fn isVisibleElement(el: *Element, frame: *Frame) bool {
+    return visibleDisplay(el, frame) != null;
+}
+
+/// Null when the element doesn't render.
+fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     const tag = el.getTag();
-    if (tag.isMetadata() or tag == .svg) return false;
-    if (frame._style_manager.hasDisplayNone(el, .scan)) return false;
+    if (tag.isMetadata() or tag == .svg) return null;
+    const display = frame._style_manager.display(el, .scan);
+    if (display == .none) return null;
     if (el.getAttributeSafe(comptime .wrap("aria-hidden"))) |v| {
-        if (std.ascii.eqlIgnoreCase(v, "true")) return false;
+        if (std.ascii.eqlIgnoreCase(v, "true")) return null;
     }
-    return true;
+    return display;
 }
 
 fn getAnchorLabel(el: *Element) ?[]const u8 {
@@ -164,13 +171,29 @@ const Context = struct {
         }
     }
 
+    fn getRenderDisplay(self: *Context, el: *Element, force_slot: bool) ?StyleManager.Display {
+        const display = visibleDisplay(el, self.frame) orelse {
+            if (el.asNode() == self.root) {
+                return StyleManager.Display.other;
+            } else {
+                return null;
+            }
+        };
+        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return null;
+        if (!force_slot and el.getAttributeSafe(comptime .wrap("slot")) != null) return null;
+        return display;
+    }
+
     fn render(self: *Context, node: *Node) error{WriteFailed}!void {
         switch (node._type) {
             .document, .document_fragment => {
-                try self.renderChildren(node);
+                try self.renderChildren(node, false);
             },
             .element => {
-                try self.renderElement(node.subtype(Node.Element));
+                const el = node.subtype(Node.Element);
+                if (self.getRenderDisplay(el, self.force_slot)) |display| {
+                    try self.renderElement(el, display);
+                }
             },
             .cdata => {
                 if (node.is(Node.CData.Text)) |_| {
@@ -187,10 +210,29 @@ const Context = struct {
         }
     }
 
-    fn renderChildren(self: *Context, parent: *Node) !void {
+    /// `boxed`: flex/grid items are separate boxes however inline their tags
+    /// are, and the whitespace between them doesn't render.
+    fn renderChildren(self: *Context, parent: *Node, boxed: bool) error{WriteFailed}!void {
         var it = parent.childrenIterator();
+        var separate = false;
         while (it.next()) |child| {
-            try self.render(child);
+            if (!boxed) {
+                try self.render(child);
+                continue;
+            }
+            if (child.is(Element)) |el| {
+                const display = self.getRenderDisplay(el, self.force_slot) orelse continue;
+                if (separate and !el.getTag().isBlock() and !self.state.last_char_was_newline) {
+                    try self.writer.writeByte(' ');
+                }
+                try self.renderElement(el, display);
+            } else if (child.is(Node.CData.Text)) |_| {
+                const text = std.mem.trim(u8, child.subtype(Node.CData).getData().str(), &std.ascii.whitespace);
+                if (text.len == 0) continue;
+                if (separate and !self.state.last_char_was_newline) try self.writer.writeByte(' ');
+                try self.renderText(text);
+            } else continue;
+            separate = true;
         }
     }
 
@@ -199,7 +241,7 @@ const Context = struct {
     fn renderSlotContent(self: *Context, slot: *Slot) !void {
         const assigned = slot.assignedNodes(null, self.frame) catch return;
         if (assigned.len == 0) {
-            return self.renderChildren(slot.asNode());
+            return self.renderChildren(slot.asNode(), false);
         }
         for (assigned) |node| {
             // ensures that we don't skip this element when rending it.
@@ -209,22 +251,11 @@ const Context = struct {
         self.force_slot = false;
     }
 
-    fn renderElement(self: *Context, el: *Element) !void {
-        const force_slot = self.force_slot;
+    fn renderElement(self: *Context, el: *Element, display: StyleManager.Display) !void {
         self.force_slot = false;
 
         const tag = el.getTag();
-
-        if (el.asNode() != self.root and !isVisibleElement(el, self.frame)) return;
-        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return;
-
-        if (!force_slot) {
-            if (el.getAttributeSafe(comptime .wrap("slot")) != null) {
-                // This element has a slot attribute, and we aren't forcing slot
-                // rendering (i.e. this is the light-DOM), skip it.
-                return;
-            }
-        }
+        const boxed = display == .flex or display == .grid;
 
         // Ensure block elements start on a new line
         if (tag.isBlock() and !self.state.in_table) {
@@ -348,7 +379,7 @@ const Context = struct {
                 const href = if (href_raw) |h| URL.resolve(frame.local_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
 
                 if (info.has_block) {
-                    try self.renderChildren(el.asNode());
+                    try self.renderChildren(el.asNode(), boxed);
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
                         try self.writer.writeByte('[');
@@ -367,7 +398,7 @@ const Context = struct {
                 }
                 try self.writer.writeByte('[');
                 if (info.has_visible) {
-                    try self.renderChildren(el.asNode());
+                    try self.renderChildren(el.asNode(), boxed);
                 } else {
                     try self.writer.writeAll(label orelse "");
                 }
@@ -404,9 +435,9 @@ const Context = struct {
         // early-return tags above can never be valid shadow hosts, so only this
         // generic path needs the check.
         if (el.hostedShadowRoot(self.frame)) |shadow| {
-            try self.renderChildren(shadow.asNode());
+            try self.renderChildren(shadow.asNode(), boxed);
         } else {
-            try self.renderChildren(el.asNode());
+            try self.renderChildren(el.asNode(), boxed);
         }
 
         switch (tag) {
@@ -615,6 +646,36 @@ test "browser.markdown: table" {
         \\| Cell 1 | Cell 2 |
         \\
     );
+}
+
+test "browser.markdown: flex and grid items are separated" {
+    try testMarkdownHTML(
+        \\<a href="/p" style="display:flex">Title<b>Aug 04 2026</b></a>
+    , "[Title **Aug 04 2026**](http://localhost/p)\n");
+    try testMarkdownHTML(
+        \\<div style="display:grid"><span>a</span><span>b</span> <span style="display:none">x</span><span>c</span></div>
+    , "a b c\n");
+    try testMarkdownHTML(
+        \\<div style="display:inline-flex"> lead <b>x</b> tail </div>
+    , "lead **x** tail\n");
+    try testMarkdownHTML(
+        \\<div style="display:flex"><div>a</div><div>b</div></div>
+    , "a\nb\n");
+}
+
+test "browser.markdown: flex from a stylesheet" {
+    var page = try testing.pageTest("markdown_flex.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump(frame.window._document.asNode(), .{}, &aw.writer, frame);
+    try testing.expectString(
+        \\[Title **Aug 04 2026**](http://127.0.0.1:9582/p)
+        \\
+        \\Title**date**
+        \\
+    , aw.written());
 }
 
 test "browser.markdown: nested lists" {
