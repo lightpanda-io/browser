@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const interactive = @import("browser/interactive.zig");
 const SelectorPath = @import("browser/SelectorPath.zig");
 
@@ -27,8 +26,10 @@ const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
 const Label = @import("browser/webapi/element/html/Label.zig");
 const Node = @import("browser/webapi/Node.zig");
-const AXNode = @import("cdp/AXNode.zig");
-const CDPNode = @import("cdp/Node.zig");
+const AXNode = @import("server/cdp/AXNode.zig");
+
+const NodeRegistry = @import("NodeRegistry.zig");
+const isAllWhitespace = @import("string.zig").isAllWhitespace;
 
 const log = lp.log;
 const Frame = lp.Frame;
@@ -36,7 +37,7 @@ const Frame = lp.Frame;
 const Self = @This();
 
 dom_node: *Node,
-registry: *CDPNode.Registry,
+registry: *NodeRegistry,
 frame: *Frame,
 arena: std.mem.Allocator,
 prune: bool = true,
@@ -96,7 +97,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: CDPNode.Id,
+    id: NodeRegistry.Id,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
@@ -549,7 +550,7 @@ const TextVisitor = struct {
 };
 
 pub const NodeDetails = struct {
-    backendNodeId: CDPNode.Id,
+    backendNodeId: NodeRegistry.Id,
     tag_name: []const u8,
     role: []const u8,
     name: ?[]const u8,
@@ -655,7 +656,7 @@ pub const NodeDetails = struct {
 pub fn getNodeDetails(
     arena: std.mem.Allocator,
     node: *Node,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     frame: *Frame,
 ) !NodeDetails {
     const cdp_node = try registry.register(node);
@@ -737,7 +738,7 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});
@@ -761,7 +762,7 @@ test "SemanticTree backendDOMNodeId" {
 }
 
 test "SemanticTree max_depth" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});

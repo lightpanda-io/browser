@@ -24,14 +24,14 @@ const App = @import("App.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
-const CDPNode = @import("cdp/Node.zig");
+const NodeRegistry = @import("NodeRegistry.zig");
 
 const ToolSession = @This();
 
 browser: Browser,
 session: *Session,
 notification: *Notification,
-registry: CDPNode.Registry,
+registry: NodeRegistry,
 
 /// Leaves the browser's isolate entered, like `Browser.init`; callers
 /// sharing one thread between several isolates park it with

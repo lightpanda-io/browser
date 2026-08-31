@@ -72,6 +72,7 @@ mem_pool: std.heap.MemoryPool(Listener),
 
 const EventListeners = struct {
     frame_remove: List = .{},
+    frame_destroyed: List = .{},
     frame_created: List = .{},
     frame_navigate: List = .{},
     frame_navigated: List = .{},
@@ -102,6 +103,7 @@ const EventListeners = struct {
 
 const Events = union(enum) {
     frame_remove: FrameRemove,
+    frame_destroyed: *const Frame,
     frame_created: *Frame,
     frame_navigate: *const FrameNavigate,
     frame_navigated: *const FrameNavigated,

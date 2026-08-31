@@ -507,11 +507,11 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     return page;
 }
 
-const TestHTTPServer = @import("TestHTTPServer.zig");
+const Server = @import("server/Server.zig");
 const TestWSServer = @import("TestWSServer.zig");
+const TestHTTPServer = @import("TestHTTPServer.zig");
 
-const Server = @import("Server.zig");
-var test_cdp_server: ?*Server = null;
+pub var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -613,6 +613,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
     test_cdp_server.?.run();

@@ -20,7 +20,7 @@ const std = @import("std");
 
 const CDP = @import("CDP.zig");
 
-pub const base = @import("../testing.zig");
+pub const base = @import("../../testing.zig");
 
 const json = std.json;
 const posix = std.posix;
@@ -57,7 +57,7 @@ pub const TestContext = struct {
 
     pub fn cdp(self: *TestContext) *CDP {
         if (!self.cdp_initialized) {
-            self.cdp_.init(base.test_app, self.cdp_socket, "json-version") catch |err| @panic(@errorName(err));
+            self.cdp_.init(base.test_app, self.cdp_socket) catch |err| @panic(@errorName(err));
             self.cdp_initialized = true;
         }
         return &self.cdp_;

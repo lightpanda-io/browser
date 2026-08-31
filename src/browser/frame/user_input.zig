@@ -18,7 +18,7 @@
 
 // Synthetic user input driving the DOM: mouse, wheel, keyboard, focus
 // navigation and text insertion. These are mostly fed by CDP's Input domain
-// (src/cdp/domains/input.zig) and by EventManager's default activation
+// (src/server/cdp/domains/input.zig) and by EventManager's default activation
 // behavior. Form submission itself lives on the Frame (it's a navigation
 // concern); the activation paths here call into it.
 

@@ -56,6 +56,50 @@ pub const OpCode = enum(u8) {
     pong = 128 | 10,
 };
 
+// Server->client frames have a variable-length header: 2 to 10 bytes
+// depending on the payload length. Writes the header into `buf` and returns
+// the used prefix.
+pub fn frameHeader(buf: *[10]u8, op_code: OpCode, payload_len: usize) []const u8 {
+    const len = payload_len;
+    buf[0] = @intFromEnum(op_code);
+
+    if (len <= 125) {
+        buf[1] = @intCast(len);
+        return buf[0..2];
+    }
+
+    if (len < 65536) {
+        buf[1] = 126;
+        buf[2] = @intCast((len >> 8) & 0xFF);
+        buf[3] = @intCast(len & 0xFF);
+        return buf[0..4];
+    }
+
+    buf[1] = 127;
+    buf[2] = 0;
+    buf[3] = 0;
+    buf[4] = 0;
+    buf[5] = 0;
+    buf[6] = @intCast((len >> 24) & 0xFF);
+    buf[7] = @intCast((len >> 16) & 0xFF);
+    buf[8] = @intCast((len >> 8) & 0xFF);
+    buf[9] = @intCast(len & 0xFF);
+    return buf[0..10];
+}
+
+// Frames a text message serialized with its first 10 bytes reserved for the
+// header. Since the header is variable-length, it's written right-aligned
+// against the payload — the returned slice may not start at buf.items[0].
+pub fn fillHeader(buf: std.ArrayList(u8)) []const u8 {
+    var header_buf: [10]u8 = undefined;
+    const header = frameHeader(&header_buf, .text, buf.items.len - 10);
+    const start = 10 - header.len;
+
+    const message = buf.items;
+    @memcpy(message[start..10], header);
+    return message[start..];
+}
+
 // We'll grow our buffer up to cdp-max-message-size (default 1MB), but should
 // try to reclaim some of that space. A lot of drivers send large messages
 // upfront (e.g. page.addScriptToEvaluateOnNewDocument) and then settle into
