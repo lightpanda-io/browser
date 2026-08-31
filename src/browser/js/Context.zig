@@ -406,7 +406,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 }
 
 fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
-    const evaluated = mod.evaluate() catch {
+    const evaluated = mod.evaluate() catch |err| {
+        if (err == error.InvalidModuleStatus) {
+            log.err(.js, "evaluate module status", .{
+                .specifier = url,
+                .status = @tagName(mod.getStatus()),
+                .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+            });
+            return err;
+        }
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
         }
@@ -883,8 +891,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 }
             }
 
-            const evaluated = mod.evaluate() catch {
-                if (comptime lp.IS_DEBUG) {
+            const evaluated = mod.evaluate() catch |err| {
+                if (err == error.InvalidModuleStatus) {
+                    log.err(.js, "dynamic module status", .{
+                        .specifier = specifier,
+                        .status = @tagName(mod.getStatus()),
+                        .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+                    });
+                } else if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
