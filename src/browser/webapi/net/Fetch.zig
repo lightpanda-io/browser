@@ -235,7 +235,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
         }
     }
 
-    if (self._no_cors) {
+    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
         return;
     }
 
