@@ -431,7 +431,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .method = .GET,
         .resource_type = .worker,
         .origin = self.origin,
-        .request_mode = .same_origin,
+        .request_mode = .no_cors,
         .credentials_mode = .same_origin,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
