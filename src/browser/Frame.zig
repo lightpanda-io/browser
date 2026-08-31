@@ -2180,10 +2180,14 @@ pub fn removeElementId(self: *Frame, element: *Element, id: []const u8) void {
 
 pub fn removeElementIdWithMaps(self: *Frame, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
-        const owned_id = self.dupeString(id) catch return;
-        id_maps.removed_ids.put(self.arena, owned_id, {}) catch |err| {
+        const gop = id_maps.removed_ids.getOrPut(self.arena, id) catch |err| {
             log.warn(.frame, "removeElementIdWithMaps", .{ .err = err });
+            return;
         };
+        if (gop.found_existing == false) {
+            gop.key_ptr.* = self.dupeString(id) catch return;
+            gop.value_ptr.* = {};
+        }
     }
 }
 
