@@ -416,11 +416,11 @@
     \\          navigations are spaced by --http-nav-delay again.
     \\          Defaults to 1.
     \\  --http-nav-delay <INT>
-    \\          Minimum time in ms between two top-level navigations to the same
-    \\          host (see --http-nav-burst). The spacing grows with the number
-    \\          of navigations sent to the host, and comes back down when the
-    \\          host is left alone. Disable by setting to 0.
-    \\          Defaults to 0.
+    \\          Fixed time in ms between two top-level navigations to the same
+    \\          host (see --http-nav-burst). Set to 0 to disable rate limiting.
+    \\          By default the delay is dynamic: it starts at 20ms, grows with
+    \\          the number of navigations sent to the host, and comes back
+    \\          down when the host is left alone.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.

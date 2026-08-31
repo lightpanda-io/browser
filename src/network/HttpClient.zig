@@ -4766,7 +4766,7 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
     // of putting it on the wire — .queued IS "entered the pipeline".
     net.available = .{};
     net.conn_mutex = .init;
-    net.rate_limiter = @import("RateLimiter.zig").init(testing.allocator, 60_000, 1);
+    net.rate_limiter = @import("RateLimiter.zig").init(testing.allocator, 60_000, 1, .fixed);
     defer net.rate_limiter.?.deinit();
 
     var client: Client = undefined;

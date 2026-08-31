@@ -26,8 +26,17 @@ const Allocator = std.mem.Allocator;
 
 const RateLimiter = @This();
 
-// The interval grows by one base interval every `burst * RAMP_BURSTS`
-// navigations: the more we ask a host, the more we space our requests.
+// In adaptive mode the interval grows with the host's pressure and comes
+// back down when the host is left alone. In fixed mode the interval never
+// changes: the user asked for an exact spacing with --http-nav-delay.
+pub const Mode = enum { fixed, adaptive };
+
+// Base interval used in adaptive mode, when no --http-nav-delay is given.
+pub const ADAPTIVE_INTERVAL_MS: u64 = 20;
+
+// In adaptive mode, the interval grows by one base interval every
+// `burst * RAMP_BURSTS` navigations: the more we ask a host, the more we
+// space our requests.
 pub const RAMP_BURSTS: u64 = 10;
 
 // Each `COOLDOWN_INTERVALS` base intervals a host is left alone forgives one
@@ -61,7 +70,8 @@ cooldown_ms: u64,
 max_ms: u64,
 
 // Pressure at which the cap is reached; pressure never grows past it, so a
-// host hammered for hours still recovers in bounded time.
+// host hammered for hours still recovers in bounded time. 0 in fixed mode:
+// pressure never accumulates and the interval stays at interval_ms.
 pressure_max: u64,
 
 // hostname (no port) -> per-host state
@@ -88,7 +98,7 @@ const Host = struct {
     clock: u64,
 };
 
-pub fn init(allocator: Allocator, interval_ms: u64, burst: u32) RateLimiter {
+pub fn init(allocator: Allocator, interval_ms: u64, burst: u32, mode: Mode) RateLimiter {
     const b: u64 = @max(burst, 1);
     const ramp_step = b * RAMP_BURSTS;
     return .{
@@ -98,7 +108,10 @@ pub fn init(allocator: Allocator, interval_ms: u64, burst: u32) RateLimiter {
         .ramp_step = ramp_step,
         .cooldown_ms = interval_ms * COOLDOWN_INTERVALS,
         .max_ms = interval_ms * MAX_INTERVALS,
-        .pressure_max = (MAX_INTERVALS - 1) * ramp_step,
+        .pressure_max = switch (mode) {
+            .adaptive => (MAX_INTERVALS - 1) * ramp_step,
+            .fixed => 0,
+        },
     };
 }
 
@@ -140,7 +153,7 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
     };
     gop.value_ptr.* = .{
         .tat = now + self.interval_ms,
-        .pressure = 1,
+        .pressure = @min(1, self.pressure_max),
         .clock = now,
     };
 
@@ -198,7 +211,7 @@ fn sweep(self: *RateLimiter, now: u64) void {
 
 const testing = @import("../testing.zig");
 test "RateLimiter: reserve" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
     // idle host starts now, then serializes at the interval
@@ -216,7 +229,7 @@ test "RateLimiter: reserve" {
 }
 
 test "RateLimiter: burst" {
-    var rl = RateLimiter.init(testing.allocator, 100, 3);
+    var rl = RateLimiter.init(testing.allocator, 100, 3, .adaptive);
     defer rl.deinit();
 
     // an idle host absorbs `burst` navigations at once
@@ -241,14 +254,14 @@ test "RateLimiter: burst" {
     try testing.expectEqual(5100, try rl.reserve("a.test", 5000));
 
     // burst = 0 is treated as 1
-    var strict = RateLimiter.init(testing.allocator, 100, 0);
+    var strict = RateLimiter.init(testing.allocator, 100, 0, .adaptive);
     defer strict.deinit();
     try testing.expectEqual(0, strict.tau);
     try testing.expectEqual(10, strict.ramp_step);
 }
 
 test "RateLimiter: pressure ramp" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
     // 10 navigations queued at once: the host is now under 10 units of
@@ -272,7 +285,7 @@ test "RateLimiter: pressure ramp" {
 }
 
 test "RateLimiter: pressure cooldown" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
     for (0..10) |_| {
@@ -303,7 +316,7 @@ test "RateLimiter: pressure cooldown" {
 }
 
 test "RateLimiter: pressure cap" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
     // hammer the host: the interval grows up to 60x the base and no further
@@ -322,8 +335,28 @@ test "RateLimiter: pressure cap" {
     try testing.expectEqual(6000, rl.intervalFor(rl.pressure_max * 2));
 }
 
+test "RateLimiter: fixed mode" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .fixed);
+    defer rl.deinit();
+
+    // pressure never accumulates: the spacing stays at the base interval,
+    // no matter how many navigations the host gets
+    var last: u64 = 0;
+    for (0..50) |_| {
+        last = try rl.reserve("a.test", 1000);
+    }
+    try testing.expectEqual(1000 + 49 * 100, last);
+    try testing.expectEqual(0, rl.hosts.get("a.test").?.pressure);
+
+    // with no pressure to cool down, an idle host is swept as soon as its
+    // TAT is in the past
+    rl.sweep_at = 2;
+    _ = try rl.reserve("b.test", 50_000);
+    try testing.expect(rl.hosts.get("a.test") == null);
+}
+
 test "RateLimiter: sweep" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
     rl.sweep_at = 4;
 
@@ -352,7 +385,7 @@ test "RateLimiter: sweep" {
 }
 
 test "RateLimiter: sweep keeps pressured hosts" {
-    var rl = RateLimiter.init(testing.allocator, 100, 1);
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
     rl.sweep_at = 2;
 
