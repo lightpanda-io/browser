@@ -192,6 +192,10 @@ cache: *Cache,
 serve_mode: bool,
 obey_robots: bool,
 
+// Applied to every transfer at configureConn, so a CDP change takes effect
+// on the next request, not on in-flight ones.
+http_version: lp.Config.HttpVersion,
+
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
 
@@ -236,6 +240,7 @@ pub fn init(self: *Client, app: *lp.App, cdp: ?*CDP) !void {
 
         .serve_mode = config.mode == .serve,
         .obey_robots = config.obeyRobots(),
+        .http_version = config.httpVersion(),
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
@@ -323,6 +328,10 @@ pub fn obeyRobots(self: *Client, enable: bool) !void {
     if (self.obey_robots == enable) return;
     try self.ensureNoActiveConnection();
     self.obey_robots = enable;
+}
+
+pub fn setHttpVersion(self: *Client, version: lp.Config.HttpVersion) void {
+    self.http_version = version;
 }
 
 pub fn disableCache(self: *Client, disable: bool) void {
@@ -2703,6 +2712,7 @@ pub const Transfer = struct {
         try conn.setFollowLocation(false);
         try conn.setProxy(client.http_proxy);
         try conn.setTlsVerify(client.tls_verify, client.use_proxy);
+        try conn.setHttpVersion(client.http_version);
 
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
@@ -3686,6 +3696,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
     client.cache = &Cache.noop;
     client.serve_mode = false;
     client.obey_robots = false;
+    client.http_version = .auto;
     client.robots = .{
         .network = undefined,
         .single_flight = .init(testing.allocator),

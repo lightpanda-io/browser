@@ -78,6 +78,7 @@ fn configureCDP(cmd: *CDP.Command) !void {
     const params = (try cmd.params(struct {
         disableSetCacheDisabled: ?bool = null,
         obeyRobots: ?bool = null,
+        httpVersion: ?lp.Config.HttpVersion = null,
     })) orelse return error.InvalidParams;
 
     if (params.disableSetCacheDisabled) |value| {
@@ -85,6 +86,9 @@ fn configureCDP(cmd: *CDP.Command) !void {
     }
     if (params.obeyRobots) |value| {
         try cmd.cdp.browser.http_client.obeyRobots(value);
+    }
+    if (params.httpVersion) |value| {
+        cmd.cdp.browser.http_client.setHttpVersion(value);
     }
 
     return cmd.sendResult(null, .{});
@@ -453,6 +457,39 @@ test "cdp.lp: configureCDP toggles setCacheDisabled handling" {
     });
     try ctx.expectSentResult(null, .{ .id = 3, .session_id = "BSID-1" });
     try testing.expectEqual(false, ctx.cdp().disable_set_cache_disabled);
+}
+
+test "cdp.lp: configureCDP sets the HTTP version on this connection's client" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const client = &ctx.cdp().browser.http_client;
+    try testing.expectEqual(.auto, client.http_version);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "1.1" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expectEqual(.@"1.1", client.http_version);
+
+    // Unsupported versions are rejected, not silently ignored.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "3" },
+    });
+    try testing.expect((try ctx.getSentMessage(1)).?.object.get("error") != null);
+    try testing.expectEqual(.@"1.1", client.http_version);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.configureCDP",
+        .params = .{ .httpVersion = "auto" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(.auto, client.http_version);
 }
 
 test "cdp.lp: getMarkdown" {
