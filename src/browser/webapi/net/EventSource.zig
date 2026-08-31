@@ -162,8 +162,6 @@ fn asEventTarget(self: *EventSource) *EventTarget {
 
 fn connect(self: *EventSource) !void {
     const exec = self._exec;
-    const session = exec.session;
-
     self._skip_lf = false;
     self._bom_checked = false;
     self._line_buf.clearRetainingCapacity();
@@ -180,13 +178,9 @@ fn connect(self: *EventSource) !void {
         .ctx = self,
         .url = self._url,
         .method = .GET,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
-        .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.siteForCookies(),
+        .cookies = cookie_support,
         .resource_type = .eventsource,
         .streaming = true,
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,

@@ -131,7 +131,7 @@ const Events = union(enum) {
     download_will_begin: *const DownloadWillBegin,
     download_progress: *const DownloadProgress,
 };
-const EventType = std.meta.FieldEnum(Events);
+pub const EventType = std.meta.FieldEnum(Events);
 
 pub const FrameRemove = struct {};
 
@@ -483,7 +483,7 @@ pub fn dispatch(self: *Notification, comptime event: EventType, data: ArgType(ev
 }
 
 // Given an event type enum, returns the type of arg the event emits
-fn ArgType(comptime event: Notification.EventType) type {
+pub fn ArgType(comptime event: Notification.EventType) type {
     inline for (std.meta.fields(Notification.Events)) |f| {
         if (std.mem.eql(u8, f.name, @tagName(event))) {
             return f.type;

@@ -133,12 +133,8 @@ pub fn origin(self: *const Execution) ?[]const u8 {
     };
 }
 
-// a Worker inherits its creating document's; `Frame` walks its ancestor chain.
 pub fn siteForCookies(self: *const Execution) Cookie.SiteForCookies {
-    return switch (self.js.global) {
-        .frame => |frame| frame.siteForCookies(),
-        .worker => |worker| worker.site_for_cookies,
-    };
+    return self.httpOwner().siteForCookies();
 }
 
 // HttpClient.Owner of the current global (Frame or WGS). Used by code
@@ -179,17 +175,5 @@ pub fn console(self: *const Execution) *Console {
     return switch (self.js.global) {
         .frame => |frame| frame.window.getConsole(),
         .worker => |worker| worker.getConsole(),
-    };
-}
-
-pub fn frameId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._frame_id,
-    };
-}
-
-pub fn loaderId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._loader_id,
     };
 }

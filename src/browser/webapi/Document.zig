@@ -19,14 +19,15 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
-const Window = @import("Window.zig");
-const URL = @import("../URL.zig");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
+const URL = @import("../URL.zig");
+const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
+
 const Node = @import("Node.zig");
+const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
 const Parser = @import("../parser/Parser.zig");
@@ -1638,6 +1639,8 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
+
 test "WebApi: Document" {
     try testing.htmlRunner("document", .{});
 }
@@ -1655,12 +1658,13 @@ test "Document: cookie access from a cross-site frame" {
 
     // victim.example embedded by attacker.example: the ancestor chain is
     // cross-site, so the frame has no site for cookies.
-    var top: Frame = undefined;
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
     top.parent = null;
-    top.url = "https://attacker.example/";
     frame.url = "https://victim.example/inner";
-    frame.parent = &top;
-    defer frame.parent = null;
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
 
     try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
     try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
@@ -1681,7 +1685,7 @@ test "Document: cookie access from a cross-site frame" {
 
     // The same jar seen from a same-site chain: everything applies, and the
     // dropped writes really were dropped rather than hidden.
-    top.url = "https://victim.example/";
+    top_url = "https://victim.example/";
     try testing.expectEqual("strict=1; lax=2; default=3; none=4; set_none=8", try doc.getCookie(frame));
     _ = try doc.setCookie("set_strict=5; SameSite=Strict", frame);
     _ = try doc.setCookie("set_default=7", frame);
@@ -1689,7 +1693,7 @@ test "Document: cookie access from a cross-site frame" {
 
     // Back in the cross-site context, the newly written cookies obey the
     // same visibility rules.
-    top.url = "https://attacker.example/";
+    top_url = "https://attacker.example/";
     try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
 }
 
