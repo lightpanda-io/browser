@@ -132,7 +132,7 @@ pub fn deinit(self: *EventSource, _: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
 
     if (self._on_open) |func| {
@@ -241,7 +241,7 @@ fn deactivate(self: *EventSource) void {
     self._active = false;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
     self.releaseRef(self._exec.page);
 }

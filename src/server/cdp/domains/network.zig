@@ -397,14 +397,18 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // notification is tied to), without a frame.
     lp.assert(bc.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
 
+    // Consumer-side cancel (stopLoading, xhr.abort, AbortController, ...):
+    const canceled = msg.err == error.TransferCanceled;
+    const error_text: []const u8 = if (canceled) "net::ERR_ABORTED" else @errorName(msg.err);
+
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = msg.err,
-        .canceled = false,
+        .errorText = error_text,
+        .canceled = canceled,
         .blockedReason = msg.blocked_reason,
     }, .{ .session_id = session_id });
 }

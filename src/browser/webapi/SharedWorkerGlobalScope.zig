@@ -135,7 +135,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
 // Called from Page.deinit of the owning (creating) page.
 pub fn deinit(self: *SharedWorkerGlobalScope) void {
     if (self._http_transfer) |transfer| {
-        transfer.abort(error.Abort);
+        transfer.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();

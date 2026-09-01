@@ -65,7 +65,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .navigate => return navigate(cmd),
         .navigateToHistoryEntry => return navigateToHistoryEntry(cmd),
         .reload => return doReload(cmd),
-        .stopLoading => return cmd.sendResult(null, .{}),
+        .stopLoading => return stopLoading(cmd),
         .close => return close(cmd),
         .captureScreenshot => return captureScreenshot(cmd),
         .printToPDF => return printToPDF(cmd),
@@ -313,6 +313,13 @@ fn navigate(cmd: *CDP.Command) !void {
         return frame.navigate(encoded_url, opts);
     }
     try session.initiateRootNavigation(frame._frame_id, encoded_url, opts);
+}
+
+fn stopLoading(cmd: *CDP.Command) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    bc.session.stopLoading(frame._frame_id);
+    return cmd.sendResult(null, .{});
 }
 
 // Fast path that allows using the initial about:blank Frame as-is. Only safe
@@ -569,7 +576,10 @@ pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.F
         .result = .{
             .frameId = &id.toFrameId(event.frame_id),
             .loaderId = &id.toLoaderId(event.loader_id),
-            .errorText = @errorName(event.err),
+            .errorText = switch (event.err) {
+                error.TransferCanceled => "net::ERR_ABORTED",
+                else => |err| @errorName(err),
+            },
         },
         .sessionId = session_id,
     });
@@ -1598,6 +1608,74 @@ test "cdp.frame: reload" {
         try ctx.processMessage(.{ .id = 32, .method = "Page.reload", .params = .{ .ignoreCache = true } });
         try testing.waitForPage(bc);
     }
+}
+
+test "cdp.page: stopLoading finishes a streaming document with what has arrived" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SL1", .session_id = "SID-SL1", .target_id = "TID-SL1-000000".* });
+    _ = try bc.session.createPage();
+    try ctx.processMessage(.{ .id = 40, .method = "Page.navigate", .params = .{ .url = "http://127.0.0.1:9582/stop_loading/streaming.html" } });
+
+    // Tick until the first chunk has arrived; the server holds the rest back.
+    var runner = bc.session.runner(.{});
+    const frame_id = bc.page_handle.?.frame_id;
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
+        _ = try runner.tickForFrame(frame_id, 20, .{});
+        const frame = bc.mainFrame() orelse unreachable;
+        if (bc.session.browser.http_client.findTransfer(frame._req_id)) |transfer| {
+            if (std.mem.indexOf(u8, transfer.res.buffer.items, "first") != null) {
+                break;
+            }
+        }
+        if (attempts == 200) {
+            return error.FirstChunkNeverArrived;
+        }
+    }
+
+    try ctx.processMessage(.{ .id = 41, .method = "Page.stopLoading" });
+    try ctx.expectSentResult(null, .{ .id = 41 });
+    try testing.waitForPage(bc);
+
+    // Blink semantics: the parser is cancelled, the document finishes with
+    // what arrived, and load fires. No "Navigation failed" placeholder.
+    const frame = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("document.readyState === 'complete' && document.getElementById('first') !== null && document.getElementById('second') === null && document.querySelector('h1') === null", null);
+    try testing.expect(v.toBool());
+}
+
+test "cdp.page: stopLoading cancels an uncommitted root navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SL2", .session_id = "SID-SL2", .target_id = "TID-SL2-000000".*, .url = "hi.html" });
+    const live = bc.mainPage() orelse unreachable;
+
+    // Slow origin: no headers arrive before we stop, so the navigation never commits.
+    try ctx.processMessage(.{ .id = 50, .method = "Page.navigate", .params = .{ .url = "http://127.0.0.1:9582/src/browser/tests/hi.html?delay_ms=1000" } });
+    try testing.expect(bc.session.replacementOf(live) != null);
+
+    try ctx.processMessage(.{ .id = 51, .method = "Page.stopLoading" });
+    // The pending Page.navigate is answered the way Chrome answers a stopped one...
+    try ctx.expectSentResult(.{ .errorText = "net::ERR_ABORTED" }, .{ .id = 50, .session_id = "SID-SL2" });
+    try ctx.expectSentResult(null, .{ .id = 51 });
+
+    // ...and the live page is untouched and still scriptable.
+    try testing.expectEqual(null, bc.session.replacementOf(live));
+    try testing.expect(live == bc.mainPage().?);
+    const frame = bc.mainFrame() orelse unreachable;
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/hi.html"));
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("document.readyState === 'complete'", null);
+    try testing.expect(v.toBool());
 }
 
 test "cdp.frame: reload replays POST navigation" {

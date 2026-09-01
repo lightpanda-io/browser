@@ -399,7 +399,14 @@ pub fn getPinnedArena(self: *Session, size_or_bucket: anytype, debug: []const u8
     return self.arena_pool.acquirePinned(&self.browser.arena_account, size_or_bucket, debug);
 }
 
-// The live page for a top-level browsing context, by its root frame id.
+pub fn stopLoading(self: *Session, frame_id: u32) void {
+    const live = self.livePage(frame_id) orelse return;
+    if (self.replacementOf(live)) |pending| {
+        pending.frame.stopLoading();
+    }
+    live.frame.stopLoading();
+}
+
 pub fn livePage(self: *Session, frame_id: u32) ?*Page {
     for (self.pages.items) |page| {
         if (page.frame._frame_id == frame_id) {

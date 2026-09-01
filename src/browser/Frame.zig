@@ -1124,6 +1124,32 @@ pub fn abortTransfers(self: *Frame) void {
     http_client.abortOwner(&self._http_owner);
 }
 
+pub fn stopLoading(self: *Frame) void {
+    var i: usize = 0;
+    while (i < self.child_frames.items.len) : (i += 1) {
+        // Each frame will cancel its requests, which can fire JS callbacks
+        // which can destroy/change frames. Hence `while` instead of `for`.
+        self.child_frames.items[i].stopLoading();
+    }
+
+    if (self._queued_navigation) |qn| {
+        const queued = self._page.queued_navigation;
+        if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
+            _ = queued.swapRemove(idx);
+        }
+        qn.arena.release();
+        self._queued_navigation = null;
+    }
+
+    const http_client = &self._session.browser.http_client;
+    if (http_client.findTransfer(self._req_id)) |transfer| {
+        // the main navigation is still transfering, force it to finish now,
+        // with whatever it has
+        _ = transfer.finishEarly();
+    }
+    http_client.cancelRequests(&self._http_owner);
+}
+
 pub fn documentIsLoaded(self: *Frame) void {
     if (self._load_state != .parsing) {
         // Ideally, documentIsLoaded would only be called once, but if a
@@ -1809,7 +1835,8 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Frame = @ptrCast(@alignCast(ctx));
 
     self._last_navigate_error = err;
-    log.err(.frame, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
+    const level: log.Level = if (err == error.TransferCanceled) .info else .err;
+    log.log(.frame, level, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
 
     // A navigation that fails before any response headers arrive never
     // reaches the frame_navigated dispatch in frameHeaderCallback, so the

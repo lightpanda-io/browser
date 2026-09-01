@@ -860,6 +860,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         => .tls,
         error.ResponseTooLarge => .too_large,
         error.Abort,
+        error.TransferCanceled,
         error.AbortedByCallback,
         error.AbortAuthChallenge,
         error.SyncWaitInterrupted,
