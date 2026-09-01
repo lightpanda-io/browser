@@ -491,3 +491,34 @@
     testing.expectEqual('d2', select.options[1].value)
   }
 </script>
+
+<select id="single">
+  <option id="s1" value="1" selected>1</option>
+  <option id="s2" value="2">2</option>
+  <optgroup><option id="s3" value="3">3</option></optgroup>
+</select>
+<select id="multi" multiple>
+  <option id="m1" selected>1</option>
+  <option id="m2">2</option>
+</select>
+
+<script id="option_selected_deselects_siblings">
+{
+  $('#s2').selected = true;
+  testing.expectEqual(true, $('#s2').selected);
+  testing.expectEqual(false, $('#s1').selected);
+  testing.expectEqual('2', $('#single').value);
+
+  $('#s3').selected = true;
+  testing.expectEqual(false, $('#s2').selected);
+  testing.expectEqual('3', $('#single').value);
+
+  $('#m2').selected = true;
+  testing.expectEqual(true, $('#m1').selected);
+  testing.expectEqual(true, $('#m2').selected);
+
+  const orphan = document.createElement('option');
+  orphan.selected = true;
+  testing.expectEqual(true, orphan.selected);
+}
+</script>
