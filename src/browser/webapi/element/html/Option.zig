@@ -26,6 +26,7 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Select = @import("Select.zig");
 
 const String = lp.String;
 
@@ -79,10 +80,25 @@ pub fn getSelected(self: *const Option) bool {
 }
 
 pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
-    // TODO: When setting selected=true, may need to unselect other options
-    // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
+    if (selected) {
+        if (self.ownerSelect()) |select| {
+            if (!select.asConstElement().hasAttributeSafe(comptime .wrap("multiple"))) {
+                select.deselectOthers(self);
+            }
+        }
+    }
     frame.domChanged();
+}
+
+/// The <select> this option belongs to, directly or through an <optgroup>.
+fn ownerSelect(self: *Option) ?*Select {
+    var node = self.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Select)) |select| return select;
+        if (n.is(Element.Html.OptGroup) == null) return null;
+    }
+    return null;
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {

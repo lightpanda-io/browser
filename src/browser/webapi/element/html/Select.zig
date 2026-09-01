@@ -91,6 +91,13 @@ const OptionIterator = struct {
     }
 };
 
+pub fn deselectOthers(self: *const Select, keep: *const Option) void {
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        if (option != keep) option._selected = false;
+    }
+}
+
 // Resolves the option whose selectedness contributes to the select's value
 // per HTML §form-elements§selectedness-setting-algorithm: an explicitly
 // selected non-disabled option, falling back to the first non-disabled
