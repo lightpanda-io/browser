@@ -64,7 +64,7 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     if (element.is(Element.Html)) |html| {
         switch (html._type) {
-            .button, .input, .textarea, .select => if (element.isDisabled()) return,
+            .button, .input, .textarea, .select, .option, .optgroup => if (element.isDisabled()) return,
             else => {},
         }
     }
