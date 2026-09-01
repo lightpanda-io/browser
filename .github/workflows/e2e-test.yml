@@ -107,6 +107,7 @@ jobs:
         name: build LP args
         run: |
           args="--http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
+          args="$args --protocol cdp --protocol webdriver"
           [ "${{ matrix.proxy }}" = "true" ] && args="$args --http-proxy http://127.0.0.1:3000"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
@@ -116,7 +117,7 @@ jobs:
           echo "value=$args" >> "$GITHUB_OUTPUT"
 
       - run: |
-          ./lightpanda serve --port 9222 --protocol cdp --protocol webdriver ${{ steps.args.outputs.value }} &
+          ./lightpanda serve --port 9222 ${{ steps.args.outputs.value }} &
 
       - run: |
           go run runner/main.go
@@ -163,6 +164,7 @@ jobs:
         name: build LP args
         run: |
           args="--http-cache-dir /tmp/lp-cache --load-resources worker --load-resources iframe"
+          args="$args --protocol cdp --protocol webdriver"
           [ "${{ matrix.robotstxt }}" = "true" ] && args="$args --obey-robots"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-key-file private_key.pem"
           [ "${{ matrix.wba }}" = "true" ] && args="$args --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}"
@@ -281,7 +283,7 @@ jobs:
           fi
 
           mkdir -p $CG_ROOT/$CG
-          cgexec -g memory:$CG ./lightpanda serve --insecure-disable-tls-host-verification & echo $! > LPD.pid
+          cgexec -g memory:$CG ./lightpanda serve --protocol cdp --insecure-disable-tls-host-verification & echo $! > LPD.pid
 
           sleep 2
 
