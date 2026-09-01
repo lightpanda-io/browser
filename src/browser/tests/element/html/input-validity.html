@@ -279,3 +279,24 @@
   testing.expectEqual(false, el.validity.patternMismatch);
 }
 </script>
+
+<input id="date-low" type="date" min="2024-01-01" value="2023-12-31">
+<input id="date-ok" type="date" min="2024-01-01" max="2024-12-31" value="2024-06-15">
+<input id="time-high" type="time" max="17:00" value="17:30">
+<input id="month-low" type="month" min="2024-02" value="2024-01">
+<input id="week-ok" type="week" min="2024-W01" value="2024-W10">
+
+<script id="date_time_ranges">
+  {
+    testing.expectEqual(true, $('#date-low').validity.rangeUnderflow);
+    testing.expectEqual(false, $('#date-low').validity.rangeOverflow);
+    testing.expectEqual(false, $('#date-ok').validity.rangeUnderflow);
+    testing.expectEqual(false, $('#date-ok').validity.rangeOverflow);
+    testing.expectEqual(true, $('#time-high').validity.rangeOverflow);
+    testing.expectEqual(true, $('#month-low').validity.rangeUnderflow);
+    testing.expectEqual(false, $('#week-ok').validity.rangeUnderflow);
+    $('#date-ok').value = '2025-01-01';
+    testing.expectEqual(true, $('#date-ok').validity.rangeOverflow);
+    testing.expectEqual(false, $('#date-ok').checkValidity());
+  }
+</script>
