@@ -158,3 +158,10 @@
   testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
 
+
+<script id=sendBeacon>
+  // Nothing is sent, but "queued" keeps callers off their sync-XHR fallback.
+  testing.expectEqual(true, navigator.sendBeacon('/analytics'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'payload'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', new Blob(['x'])));
+</script>
