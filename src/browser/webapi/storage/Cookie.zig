@@ -584,8 +584,6 @@ pub const Jar = struct {
         request_time: ?u64 = null,
         is_navigation: bool = true,
         prefix: ?[]const u8 = null,
-        // null means there is no initiating document (a browser-initiated
-        // request), which is treated as same-site with any target.
         origin_url: ?SiteForCookies = null,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
@@ -653,7 +651,6 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
 }
 
 pub fn areSameSite(maybe_origin_url: ?SiteForCookies, target_host: []const u8) bool {
-    // No initiating document (browser-initiated request).
     const origin_url = switch (maybe_origin_url orelse return true) {
         .none => return false,
         .url => |url| url,
@@ -1054,8 +1051,7 @@ test "Jar: forRequest with a null site-for-cookies" {
 
     // .none is the site-for-cookies of a frame whose ancestor chain contains
     // a cross-site document. Even though the target here is the cookies' own
-    // site, the request is cross-site: Strict is withheld. (Lax still rides
-    // navigations; whether a subframe load should count as one is #240.)
+    // site, the request is cross-site: Strict is withheld.
     try expectCookies("lax=2; none=3", &jar, victim_url, .{
         .origin_url = .none,
         .is_http = true,
