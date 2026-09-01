@@ -394,11 +394,7 @@ pub fn insertAdjacentHTML(
 
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
     switch (self._type) {
-        inline .button, .input, .textarea, .select => |tag| {
-            if (self.subtype(Subtype(tag)).getDisabled()) {
-                return;
-            }
-        },
+        .button, .input, .textarea, .select, .option, .optgroup => if (self.asElement().isDisabled()) return,
         else => {},
     }
 

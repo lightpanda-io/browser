@@ -735,7 +735,7 @@ pub fn hasDisabledConcept(self: *const Element) bool {
     };
 }
 
-pub fn isDisabled(self: *Element) bool {
+pub fn isDisabled(self: *const Element) bool {
     if (!self.hasDisabledConcept()) {
         return false;
     }
@@ -749,7 +749,7 @@ pub fn isDisabled(self: *Element) bool {
     // <optgroup disabled>. It does NOT inherit from <select disabled> or
     // an ancestor <fieldset disabled>.
     if (self.getTag() == .option) {
-        if (self.asNode()._parent) |parent_node| {
+        if (self.asConstNode()._parent) |parent_node| {
             if (parent_node.is(Element)) |parent_el| {
                 if (parent_el.getTag() == .optgroup and
                     parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
@@ -761,7 +761,7 @@ pub fn isDisabled(self: *Element) bool {
         return false;
     }
 
-    const element_node = self.asNode();
+    const element_node = self.asConstNode();
     var current: ?*Node = element_node._parent;
     while (current) |node| {
         current = node._parent;

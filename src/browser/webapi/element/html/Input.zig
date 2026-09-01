@@ -207,7 +207,7 @@ pub fn getWillValidate(self: *const Input) bool {
     // - element has a datalist ancestor
     return switch (self._input_type) {
         .hidden, .button, .reset => false,
-        else => !self.getDisabled() and !self.hasDatalistAncestor(),
+        else => !self.asConstElement().isDisabled() and !self.hasDatalistAncestor(),
     };
 }
 
@@ -582,8 +582,6 @@ fn codepointCount(value: []const u8) usize {
 }
 
 pub fn getDisabled(self: *const Input) bool {
-    // TODO: Also check for disabled fieldset ancestors
-    // (but not if we're inside a <legend> of that fieldset)
     return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
