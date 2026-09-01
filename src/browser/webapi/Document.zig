@@ -1256,6 +1256,29 @@ pub fn hasFocus(_: *Document) bool {
     return true;
 }
 
+/// No editing pipeline or clipboard, so no command is supported. Reporting
+/// that keeps callers on their feature-detection fallbacks.
+pub fn execCommand(_: *Document, command: []const u8, _: ?bool, _: ?[]const u8) bool {
+    log.debug(.not_implemented, "Document.execCommand", .{ .command = command });
+    return false;
+}
+
+pub fn queryCommandSupported(_: *const Document, _: []const u8) bool {
+    return false;
+}
+
+pub fn queryCommandValue(_: *const Document, _: []const u8) []const u8 {
+    return "";
+}
+
+pub fn getDesignMode(_: *const Document) []const u8 {
+    return "off";
+}
+
+pub fn setDesignMode(_: *Document, value: []const u8) void {
+    log.debug(.not_implemented, "Document.designMode", .{ .value = value });
+}
+
 pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
@@ -1602,6 +1625,13 @@ pub const JsApi = struct {
         }
     }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+    pub const execCommand = bridge.function(Document.execCommand, .{});
+    pub const queryCommandSupported = bridge.function(Document.queryCommandSupported, .{});
+    pub const queryCommandEnabled = bridge.function(Document.queryCommandSupported, .{});
+    pub const queryCommandState = bridge.function(Document.queryCommandSupported, .{});
+    pub const queryCommandIndeterm = bridge.function(Document.queryCommandSupported, .{});
+    pub const queryCommandValue = bridge.function(Document.queryCommandValue, .{});
+    pub const designMode = bridge.accessor(Document.getDesignMode, Document.setDesignMode, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });
     pub const characterSet = bridge.accessor(Document.getCharset, null, .{});

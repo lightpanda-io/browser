@@ -443,3 +443,20 @@
     testing.expectEqual(1, acss.length);
   }
 </script>
+
+<script id=execCommand>
+  {
+    // No editing pipeline or clipboard: every command is unsupported, so
+    // callers stay on their feature-detection fallbacks instead of throwing.
+    testing.expectEqual(false, document.queryCommandSupported('copy'));
+    testing.expectEqual(false, document.queryCommandEnabled('copy'));
+    testing.expectEqual(false, document.queryCommandState('bold'));
+    testing.expectEqual(false, document.queryCommandIndeterm('bold'));
+    testing.expectEqual('', document.queryCommandValue('fontName'));
+    testing.expectEqual(false, document.execCommand('copy'));
+    testing.expectEqual(false, document.execCommand('insertText', false, 'x'));
+    testing.expectEqual('off', document.designMode);
+    document.designMode = 'on';
+    testing.expectEqual('off', document.designMode);
+  }
+</script>
