@@ -407,7 +407,9 @@ fn failRequest(cmd: *CDP.Command) !void {
         return cmd.sendResult(null, .{});
     };
 
-    defer transfer.abortParked(error.Abort);
+    // The client is cancelling the request: consumers see it as a cancel
+    // (XHR fires abort, not error), like any other Transfer.cancel().
+    defer transfer.abortParked(error.TransferCanceled);
 
     log.info(.cdp, "request intercept", .{
         .state = "fail",
