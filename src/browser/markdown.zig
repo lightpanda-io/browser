@@ -19,18 +19,17 @@
 const std = @import("std");
 
 const Frame = @import("Frame.zig");
+const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
 const URL = @import("URL.zig");
 
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
-const TreeWalker = @import("webapi/TreeWalker.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 const LimitedWriter = @import("../LimitedWriter.zig");
-const dump_html = @import("dump.zig");
-const Strip = dump_html.Opts.Strip;
+const Strip = RenderTree.Strip;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
@@ -62,107 +61,15 @@ fn shouldAddSpacing(tag: Element.Tag) bool {
     };
 }
 
-fn isLayoutBlock(tag: Element.Tag) bool {
-    return switch (tag) {
-        .main, .section, .article, .nav, .aside, .header, .footer, .div, .ul, .ol => true,
-        else => false,
-    };
-}
-
-pub fn isStandaloneAnchor(el: *Element, frame: *Frame) bool {
-    const node = el.asNode();
-    const parent = node.parentNode() orelse return false;
-    const parent_el = parent.is(Element) orelse return false;
-
-    if (!isLayoutBlock(parent_el.getTag())) return false;
-
-    var prev = node.previousSibling();
-    while (prev) |p| : (prev = p.previousSibling()) {
-        if (isSignificantText(p)) return false;
-        if (p.is(Element)) |pe| {
-            if (isVisibleElement(pe, frame)) break;
-        }
-    }
-
-    var next = node.nextSibling();
-    while (next) |n| : (next = n.nextSibling()) {
-        if (isSignificantText(n)) return false;
-        if (n.is(Element)) |ne| {
-            if (isVisibleElement(ne, frame)) break;
-        }
-    }
-
-    return true;
-}
-
-fn isSignificantText(node: *Node) bool {
-    const text = node.is(Node.CData.Text) orelse return false;
-    return !isAllWhitespace(text.ownData());
-}
-
-// Own state only; the dump root is exempt so a scoped dump of a hidden
-// subtree still renders it.
-fn isVisibleElement(el: *Element, frame: *Frame) bool {
-    return visibleDisplay(el, frame) != null;
-}
-
-/// Null when the element doesn't render.
-fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
-    const tag = el.getTag();
-    if (tag.isMetadata() or tag == .svg) return null;
-    const display = frame._style_manager.display(el, .scan);
-    if (display == .none) return null;
-    if (el.getAttributeSafe(comptime .wrap("aria-hidden"))) |v| {
-        if (std.ascii.eqlIgnoreCase(v, "true")) return null;
-    }
-    return display;
-}
-
 fn getAnchorLabel(el: *Element) ?[]const u8 {
     return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
-}
-
-pub const ContentInfo = struct {
-    has_visible: bool,
-    has_block: bool,
-};
-
-pub fn analyzeContent(root: *Node, frame: *Frame) ContentInfo {
-    var result: ContentInfo = .{ .has_visible = false, .has_block = false };
-    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
-    while (tw.next()) |node| {
-        if (isSignificantText(node)) {
-            result.has_visible = true;
-            if (result.has_block) return result;
-        } else if (node.is(Element)) |el| {
-            if (!isVisibleElement(el, frame)) {
-                tw.skipChildren();
-            } else {
-                const tag = el.getTag();
-                if (tag == .img) {
-                    result.has_visible = true;
-                    if (result.has_block) return result;
-                }
-                if (tag.isBlock()) {
-                    result.has_block = true;
-                    if (result.has_visible) return result;
-                }
-            }
-        }
-    }
-    return result;
 }
 
 const Context = struct {
     state: State,
     writer: *std.Io.Writer,
     frame: *Frame,
-    root: *Node,
-    strip: Strip,
-
-    // When there's a slot-attribute, we skip rendering, unless this flag has
-    // bet set to true.
-    force_slot: bool = false,
+    tree: RenderTree,
 
     fn ensureNewline(self: *Context) !void {
         if (!self.state.last_char_was_newline) {
@@ -171,89 +78,57 @@ const Context = struct {
         }
     }
 
-    fn getRenderDisplay(self: *Context, el: *Element, force_slot: bool) ?StyleManager.Display {
-        const display = visibleDisplay(el, self.frame) orelse {
-            if (el.asNode() == self.root) {
-                return StyleManager.Display.other;
-            } else {
-                return null;
-            }
-        };
-        if (dump_html.shouldStripElement(el, self.strip, self.frame)) return null;
-        if (!force_slot and el.getAttributeSafe(comptime .wrap("slot")) != null) return null;
-        return display;
-    }
-
     fn render(self: *Context, node: *Node) error{WriteFailed}!void {
         switch (node._type) {
-            .document, .document_fragment => {
-                try self.renderChildren(node, false);
-            },
-            .element => {
-                const el = node.subtype(Node.Element);
-                if (self.getRenderDisplay(el, self.force_slot)) |display| {
-                    try self.renderElement(el, display);
+            .document, .document_fragment => try self.renderChildren(node, false),
+            else => {
+                if (self.tree.classify(node, .{})) |child| {
+                    try self.renderChild(child);
                 }
             },
-            .cdata => {
-                if (node.is(Node.CData.Text)) |_| {
-                    var text = node.subtype(Node.CData).getData().str();
-                    if (self.state.pre_node) |pre| {
-                        if (node.parentNode() == pre and node.nextSibling() == null) {
-                            text = std.mem.trimEnd(u8, text, " \t\r\n");
-                        }
-                    }
-                    try self.renderText(text);
-                }
-            },
-            else => {},
         }
     }
 
-    /// `boxed`: flex/grid items are separate boxes however inline their tags
-    /// are, and the whitespace between them doesn't render.
-    fn renderChildren(self: *Context, parent: *Node, boxed: bool) error{WriteFailed}!void {
-        var it = parent.childrenIterator();
-        var separate = false;
-        while (it.next()) |child| {
-            if (!boxed) {
-                try self.render(child);
-                continue;
-            }
-            if (child.is(Element)) |el| {
-                const display = self.getRenderDisplay(el, self.force_slot) orelse continue;
-                if (separate and !el.getTag().isBlock() and !self.state.last_char_was_newline) {
+    fn renderChild(self: *Context, child: RenderTree.Child) error{WriteFailed}!void {
+        switch (child.what) {
+            .element => |display| {
+                const el = child.node.subtype(Node.Element);
+                if (child.separated and !el.getTag().isBlock() and !self.state.last_char_was_newline) {
                     try self.writer.writeByte(' ');
                 }
                 try self.renderElement(el, display);
-            } else if (child.is(Node.CData.Text)) |_| {
-                const text = std.mem.trim(u8, child.subtype(Node.CData).getData().str(), &std.ascii.whitespace);
-                if (text.len == 0) continue;
-                if (separate and !self.state.last_char_was_newline) try self.writer.writeByte(' ');
+            },
+            .text => |text| {
+                if (child.separated and !self.state.last_char_was_newline) {
+                    try self.writer.writeByte(' ');
+                }
                 try self.renderText(text);
-            } else continue;
-            separate = true;
+            },
         }
     }
 
-    // Render a <slot>'s assigned light-DOM nodes, or its own children as
-    // fallback. Same as dump's dumpSlotContent.
-    fn renderSlotContent(self: *Context, slot: *Slot) !void {
-        const assigned = slot.assignedNodes(null, self.frame) catch return;
-        if (assigned.len == 0) {
-            return self.renderChildren(slot.asNode(), false);
+    fn renderChildren(self: *Context, parent: *Node, boxed: bool) error{WriteFailed}!void {
+        var it = self.tree.children(parent, boxed);
+        while (it.next()) |child| {
+            try self.renderChild(child);
         }
-        for (assigned) |node| {
-            // ensures that we don't skip this element when rending it.
-            self.force_slot = true;
-            try self.render(node);
+    }
+
+    fn renderContent(self: *Context, el: *Element, boxed: bool) error{WriteFailed}!void {
+        var it = self.tree.content(el, boxed);
+        while (it.next()) |child| {
+            try self.renderChild(child);
         }
-        self.force_slot = false;
+    }
+
+    fn renderSlotContent(self: *Context, slot: *Slot) error{WriteFailed}!void {
+        var it = self.tree.slotted(slot);
+        while (it.next()) |child| {
+            try self.renderChild(child);
+        }
     }
 
     fn renderElement(self: *Context, el: *Element, display: StyleManager.Display) !void {
-        self.force_slot = false;
-
         const tag = el.getTag();
         const boxed = display == .flex or display == .grid;
 
@@ -370,7 +245,7 @@ const Context = struct {
             },
             .anchor => {
                 const frame = self.frame;
-                const info = analyzeContent(el.asNode(), frame);
+                const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
                 const href_raw = el.getAttributeSafe(comptime .wrap("href"));
 
@@ -379,7 +254,7 @@ const Context = struct {
                 const href = if (href_raw) |h| URL.resolve(frame.local_arena, frame.base(), h, .{ .encoding = frame.charset }) catch h else null;
 
                 if (info.has_block) {
-                    try self.renderChildren(el.asNode(), boxed);
+                    try self.renderContent(el, boxed);
                     if (href) |h| {
                         if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
                         try self.writer.writeByte('[');
@@ -392,13 +267,13 @@ const Context = struct {
                     return;
                 }
 
-                const standalone = isStandaloneAnchor(el, frame);
+                const standalone = RenderTree.isStandaloneAnchor(el, frame);
                 if (standalone) {
                     if (!self.state.last_char_was_newline) try self.writer.writeByte('\n');
                 }
                 try self.writer.writeByte('[');
                 if (info.has_visible) {
-                    try self.renderChildren(el.asNode(), boxed);
+                    try self.renderContent(el, boxed);
                 } else {
                     try self.writer.writeAll(label orelse "");
                 }
@@ -428,17 +303,7 @@ const Context = struct {
             else => {},
         }
 
-        // Composed tree: a shadow host renders its shadow tree in place of its
-        // light-DOM children (light DOM is visible only through <slot>). Applies
-        // to open and closed roots alike. markdown is always a rendered-content
-        // path (cf. dump.zig's default .rendered mode), so we always pierce; the
-        // early-return tags above can never be valid shadow hosts, so only this
-        // generic path needs the check.
-        if (el.hostedShadowRoot(self.frame)) |shadow| {
-            try self.renderChildren(shadow.asNode(), boxed);
-        } else {
-            try self.renderChildren(el.asNode(), boxed);
-        }
+        try self.renderContent(el, boxed);
 
         switch (tag) {
             .pre => {
@@ -559,8 +424,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
             .state = .{},
             .writer = &lw.writer,
             .frame = frame,
-            .root = node,
-            .strip = opts.strip,
+            .tree = .{ .frame = frame, .root = node, .strip = opts.strip },
         };
         ctx.render(node) catch |err| switch (err) {
             error.WriteFailed => {
@@ -579,8 +443,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
         .state = .{},
         .writer = writer,
         .frame = frame,
-        .root = node,
-        .strip = opts.strip,
+        .tree = .{ .frame = frame, .root = node, .strip = opts.strip },
     };
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
