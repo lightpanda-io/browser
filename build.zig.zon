@@ -4,45 +4,17 @@
     .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/dca81b538a52d5102181517ad87d9105629f94ec.tar.gz",
-            .hash = "v8-0.0.0-xddH6z0NAwA01BzbfQvo1wkOV6f2CjoNatGvv8mUn92X",
-        },
-        // .v8 = .{ .path = "../zig-v8-fork" },
-        .brotli = .{
-            // v1.2.0
-            .url = "https://github.com/google/brotli/archive/028fb5a23661f123017c060daa546b55cf4bde29.tar.gz",
-            .hash = "N-V-__8AAJudKgCQCuIiH6MJjAiIJHfg_tT_Ew-0vZwVkCo_",
-        },
-        .zlib = .{
-            .url = "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
-            .hash = "N-V-__8AAJ2cNgAgfBtAw33Bxfu1IWISDeKKSr3DAqoAysIJ",
-        },
-        .nghttp2 = .{
-            .url = "https://github.com/nghttp2/nghttp2/releases/download/v1.69.0/nghttp2-1.69.0.tar.gz",
-            .hash = "N-V-__8AAMHpvwChC6orFCDB8MeiumT6OlfmKfmrWlak7Int",
-        },
-        .@"boringssl-zig" = .{
-            .url = "git+https://github.com/lightpanda-io/boringssl-zig.git#f07cc58fa4a051eb0985287e691db5dbb0e7e76f",
-            .hash = "boringssl-0.1.0-VtJeWd1OAAAQ5AuNOZGP5a_5ZyNn5BfeE-jiKqEm2gsE",
-        },
-        // .@"boringssl-zig" = .{ .path = "../boringssl-zig" },
-        .curl = .{
-            .url = "https://github.com/curl/curl/releases/download/curl-8_20_0/curl-8.20.0.tar.gz",
-            .hash = "N-V-__8AAHM9RQHjzJo8Wn4dbGPqNOC21zZJJA9PcCj7FPF5",
-        },
-        .sqlite3 = .{
-            .url = "https://github.com/allyourcodebase/sqlite3/archive/7a615f5af79009cd733e3480658586d9b0d28b35.tar.gz",
-            .hash = "sqlite3-3.53.2-DMxLWuAOAAA_Px0arJOIOaP4AKEu5prbsQgPMA35W1zz",
-        },
-        .zenai = .{
-            .url = "git+https://github.com/lightpanda-io/zenai.git#be5d2e70d3dcc9866041dbdbcfa1f18799601a30",
-            .hash = "zenai-0.0.0-iOY_VE23BgCNT-WtrAC6BM1J_G98bSk6kD0v8g09XWYA",
-        },
-        .isocline = .{
-            .url = "git+https://github.com/arrufat/isocline#ec538faf435c616a6b38716f53980b5815c30f8a",
-            .hash = "N-V-__8AAHhtEwBIqx5nOoiGo_FLAG8gpiVC6XzZn1teMKd0",
-        },
+        // 以下 8 个依赖全部本地化（.path）：服务器 GitHub 直连慢，编译时从本地源码取。
+        // 原 url/hash 见上游 build.zig.zon（git log / 上游仓库）。
+        .v8 = .{ .path = ".local-deps/zig-v8-fork-dca81b538a52d5102181517ad87d9105629f94ec" },
+        .brotli = .{ .path = ".local-deps/brotli-028fb5a23661f123017c060daa546b55cf4bde29" },
+        .zlib = .{ .path = ".local-deps/zlib-1.3.2" },
+        .nghttp2 = .{ .path = ".local-deps/nghttp2-1.69.0" },
+        .@"boringssl-zig" = .{ .path = ".local-deps/boringssl-zig" },
+        .curl = .{ .path = ".local-deps/curl-curl-8_20_0" },
+        .sqlite3 = .{ .path = ".local-deps/sqlite3-7a615f5af79009cd733e3480658586d9b0d28b35" },
+        .zenai = .{ .path = ".local-deps/zenai" },
+        .isocline = .{ .path = ".local-deps/isocline" },
     },
     .paths = .{""},
 }

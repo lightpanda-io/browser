@@ -1216,6 +1216,8 @@ pub fn pendingLoadCompleted(self: *Frame) void {
         self.documentIsComplete();
     } else {
         self._pending_loads = pending_loads - 1;
+        // Sub-resource finished loading -> record Resource Timing entry (CDP networkidle detection relies on resource count)
+        self.performance().recordResourceLoad();
     }
 }
 
@@ -2420,6 +2422,9 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
         return self.fireElementEvent(element, comptime .wrap("error"));
     };
     sheet._href = try self.arena.dupe(u8, resolved);
+
+    // 子资源（外部样式表）加载完成 -> 记录 Resource Timing 条目
+    self.performance().recordResourceLoad();
 
     try self.fireElementEvent(element, comptime .wrap("load"));
 }

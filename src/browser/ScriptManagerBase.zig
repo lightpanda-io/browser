@@ -785,6 +785,12 @@ pub const Script = struct {
             log.debug(.http, "script fetch complete", .{ .req = self.url });
         }
 
+        // 子资源（外部脚本）加载完成 -> 记录 Resource Timing 条目
+        switch (self.manager.owner) {
+            .frame => |frame| frame.performance().recordResourceLoad(),
+            .worker => {},
+        }
+
         const manager = self.manager;
         switch (self.extra) {
             .frame => |fe| switch (fe.mode) {

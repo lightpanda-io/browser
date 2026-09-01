@@ -371,6 +371,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 script.source = .{ .remote = response.body };
                 script.status = response.status;
                 script.complete = true;
+
+                // 子资源（同步外部脚本）加载完成 -> 记录 Resource Timing 条目
+                frame.performance().recordResourceLoad();
             }
             handover = true;
         }
@@ -530,6 +533,13 @@ const PreloadedScript = struct {
         script.complete = true;
         if (comptime lp.IS_DEBUG) {
             log.debug(.http, "script fetch complete", .{ .req = script.url });
+        }
+
+        // 子资源（预取的外部脚本）加载完成 -> 记录 Resource Timing 条目
+        const mgr: *ScriptManager = @fieldParentPtr("base", script.manager);
+        switch (mgr.base.owner) {
+            .frame => |frame| frame.performance().recordResourceLoad(),
+            .worker => {},
         }
 
         const self: *ScriptManager = @fieldParentPtr("base", script.manager);

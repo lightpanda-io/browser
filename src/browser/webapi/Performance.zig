@@ -36,6 +36,8 @@ const Performance = @This();
 _time_origin: u64,
 _entries: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
+// Resource Timing resource count (incremented in Frame.pendingLoadCompleted; getEntriesByType('resource') returns this many synthetic entries)
+_resource_count: u32 = 0,
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 
@@ -213,7 +215,28 @@ pub fn getEntries(self: *const Performance) []*Entry {
     return self._entries.items;
 }
 
+/// Record one loaded sub-resource (called from Frame.pendingLoadCompleted, no allocation needed).
+/// Purpose: make getEntriesByType('resource') non-empty so CDP automation can use resource count for network-idle detection.
+pub fn recordResourceLoad(self: *Performance) void {
+    self._resource_count += 1;
+}
+
 pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, exec: *const Execution) ![]const *Entry {
+    // Resource Timing: synthesize entries per resource count (no real URL/duration, but the count reflects loaded sub-resources).
+    // Previously returned empty array, breaking CDP networkidle detection (polling resource.length for stability) - see issue #3359.
+    if (std.mem.eql(u8, entry_type, "resource")) {
+        var result: std.ArrayList(*Entry) = .empty;
+        for (0..self._resource_count) |_| {
+            const entry = try exec.arena.create(Entry);
+            entry.* = Entry{
+                ._type = .resource,
+                ._name = "",
+                ._start_time = 0.0,
+            };
+            try result.append(exec.arena, entry);
+        }
+        return result.items;
+    }
     return filterEntriesByType(exec.local_arena, self._entries.items, entry_type);
 }
 
