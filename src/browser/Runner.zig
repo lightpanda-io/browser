@@ -592,6 +592,8 @@ test "Runner: waits out a throttled navigation" {
     // 127.0.0.1's slot so the navigation below has to wait ~300ms.
     const network = http_client.network;
     network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 300, 1, .fixed);
+    // the test server is local, and loopback is normally never throttled
+    network.rate_limiter.?.exempt_loopback = false;
     defer {
         network.rate_limiter.?.deinit();
         network.rate_limiter = null;

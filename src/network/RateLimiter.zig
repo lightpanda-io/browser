@@ -93,6 +93,11 @@ mutex: std.Io.Mutex = .init,
 // Idle entries are swept once the map reaches this size
 sweep_at: usize = 256,
 
+// Loopback hosts (localhost, 127.0.0.1, [::1]) are exempt: the limiter
+// protects remote hosts, not local servers. Tests turn this off to
+// throttle a local test server.
+exempt_loopback: bool = true,
+
 const Host = struct {
     // Theoretical arrival time (TAT): the time the host's reservations would
     // have reached if every one had been spaced by its interval. A host is
@@ -137,6 +142,10 @@ pub fn deinit(self: *RateLimiter) void {
 // Reserve the next navigation slot for the given host. Returns the time the
 // request can run at (can be 0, for now).
 pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
+    if (self.exempt_loopback and isLoopback(host)) {
+        return now;
+    }
+
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
@@ -190,6 +199,9 @@ pub fn observe(self: *RateLimiter, host: []const u8, feedback: Feedback, now: u6
     if (self.pressure_max == 0) {
         return;
     }
+    if (self.exempt_loopback and isLoopback(host)) {
+        return;
+    }
 
     const intervals: u64 = switch (feedback.status) {
         // the server explicitly asked to back off
@@ -232,6 +244,14 @@ pub fn observe(self: *RateLimiter, host: []const u8, feedback: Feedback, now: u6
     if (!gop.found_existing and self.hosts.count() >= self.sweep_at) {
         self.sweep(now);
     }
+}
+
+// True for the loopback names URL.getHostname can produce: an IPv6 host
+// keeps its brackets ("[::1]").
+fn isLoopback(host: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(host, "localhost") or
+        std.mem.eql(u8, host, "127.0.0.1") or
+        std.mem.eql(u8, host, "[::1]");
 }
 
 // Effective interval for a host under the given pressure: one extra base
@@ -468,6 +488,24 @@ test "RateLimiter: observe fixed mode" {
     try rl.observe("a.test", .{ .status = 429, .retry_after_ms = 5000 }, 1010);
     try testing.expectEqual(0, rl.hosts.get("a.test").?.pressure);
     try testing.expectEqual(1100, try rl.reserve("a.test", 1050));
+}
+
+test "RateLimiter: loopback is exempt" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
+    defer rl.deinit();
+
+    // loopback hosts are never delayed and never tracked
+    try testing.expectEqual(1000, try rl.reserve("localhost", 1000));
+    try testing.expectEqual(1000, try rl.reserve("LOCALHOST", 1000));
+    try testing.expectEqual(1000, try rl.reserve("127.0.0.1", 1000));
+    try testing.expectEqual(1000, try rl.reserve("[::1]", 1000));
+    try rl.observe("127.0.0.1", .{ .status = 429, .retry_after_ms = 5000 }, 1000);
+    try testing.expectEqual(0, rl.hosts.count());
+
+    // tests can turn the exemption off to throttle a local server
+    rl.exempt_loopback = false;
+    try testing.expectEqual(1000, try rl.reserve("127.0.0.1", 1000));
+    try testing.expectEqual(1100, try rl.reserve("127.0.0.1", 1000));
 }
 
 test "RateLimiter: fixed mode" {

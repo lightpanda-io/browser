@@ -422,6 +422,7 @@
     \\          the number of navigations sent to the host and with its errors
     \\          (429, 503, Retry-After, other 5xx, no answer), and comes back
     \\          down when the host is left alone.
+    \\          localhost, 127.0.0.1 and [::1] are never rate limited.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.
