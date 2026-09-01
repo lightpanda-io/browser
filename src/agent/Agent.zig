@@ -180,7 +180,7 @@ stream_enabled: bool,
 /// by `endStreamedText`, which also emits the closing newline.
 stream_active: bool = false,
 /// True when any assistant text streamed during the current turn, so `runTurn`
-/// skips the buffered `printAssistant` that would double-print it.
+/// skips the buffered `printMarkdown` that would double-print it.
 streamed_text: bool = false,
 available_providers: []const []const u8,
 /// Cached reachability of each `local_providers` entry, so the per-keystroke
@@ -571,7 +571,7 @@ fn runTurn(self: *Agent, input: TurnInput) bool {
             // turn-wide flag: the stream accumulator reconstructs `t` from the
             // same deltas it emitted, and the synthesis fallback also streams, so
             // `streamed_text` implies `t` was already shown in full.
-            if (!self.streamed_text) self.terminal.printAssistant(t);
+            if (!self.streamed_text) self.terminal.printMarkdown(t);
         } else if (self.last_turn_refused)
             self.terminal.printInfo("(model declined to respond — safety refusal)", .{})
         else
@@ -625,11 +625,11 @@ fn runRepl(self: *Agent) void {
             // Surface console output: slash commands (and thus /consoleLogs)
             // are unreachable in JS mode, so a console must echo logs itself.
             const logs = std.mem.trimEnd(u8, self.ts.session.drainConsoleMessages(), "\n");
-            if (logs.len > 0) self.printData(logs);
+            if (logs.len > 0) self.printData(.consoleLogs, logs);
             if (result.is_error) {
                 self.terminal.printError("{s}", .{result.text});
             } else {
-                self.printData(result.text);
+                self.printData(.evaluate, result.text);
                 self.recordSaveRaw(line);
             }
             continue :repl;
@@ -1495,17 +1495,19 @@ fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResu
         else => return,
     };
     if (cmd.producesData() and !result.is_error) {
-        self.printData(result.text);
+        self.printData(tc.tool, result.text);
         return;
     }
     self.terminal.printToolOutcome(tc.name(), result.text, result.is_error);
 }
 
-/// Re-indent JSON for the terminal; MCP keeps renderJson's compact form.
-fn printData(self: *Agent, text: []const u8) void {
+/// Only `markdown` is rendered as markdown; the rest is JSON (re-indented
+/// here, MCP keeps renderJson's compact form) or verbatim text.
+fn printData(self: *Agent, tool: browser_tools.Tool, text: []const u8) void {
+    if (tool == .markdown) return self.terminal.printMarkdown(text);
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
-    self.terminal.printAssistant(Terminal.reindentJson(arena.allocator(), text) orelse text);
+    self.terminal.printPlain(Terminal.reindentJson(arena.allocator(), text) orelse text);
 }
 
 /// Tracks whether a `/load`-run script emitted any `console.*` output, deciding
