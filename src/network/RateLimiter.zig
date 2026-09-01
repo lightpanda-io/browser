@@ -80,6 +80,8 @@ cooldown_ms: u64,
 // Cap on the effective interval (see MAX_INTERVALS).
 max_ms: u64,
 
+mode: Mode,
+
 // Pressure at which the cap is reached; pressure never grows past it, so a
 // host hammered for hours still recovers in bounded time. 0 in fixed mode:
 // pressure never accumulates and the interval stays at interval_ms.
@@ -119,6 +121,7 @@ pub fn init(allocator: Allocator, interval_ms: u64, burst: u32, mode: Mode) Rate
     const ramp_step = b * RAMP_BURSTS;
     return .{
         .allocator = allocator,
+        .mode = mode,
         .interval_ms = interval_ms,
         .tau = interval_ms * (b - 1),
         .ramp_step = ramp_step,
@@ -158,12 +161,22 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         const start = @max(now, h.tat -| self.tau);
         h.tat = @max(h.tat, start) + interval;
         h.pressure = @min(h.pressure + 1, self.pressure_max);
-        log.debug(.rate_limit, "navigation reserved", .{
-            .host = host,
-            .pressure = h.pressure,
-            .interval_ms = interval,
-            .wait_ms = start - now,
-        });
+
+        const wait = start - now;
+        // log.debug(.rate_limit, "navigation reserved", .{
+        //     .host = host,
+        //     .pressure = h.pressure,
+        //     .interval_ms = interval,
+        //     .wait_ms = wait,
+        // });
+        if (wait > 0) {
+            const level: lp.log.Level = if (self.mode == .adaptive) .warn else .debug;
+            lp.log.log(.rate_limit, level, "navigation delayed", .{
+                .host = host,
+                .wait_ms = wait,
+                .tips = "use `--http-nav-delay 0` to disable the rate limiter",
+            });
+        }
         return start;
     }
 
