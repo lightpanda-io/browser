@@ -24,6 +24,10 @@ const color = @import("../../color.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
+const context2d = @import("context2d.zig");
+const TextMetrics = @import("TextMetrics.zig");
+const CanvasGradient = @import("CanvasGradient.zig");
+const CanvasPattern = @import("CanvasPattern.zig");
 
 const Execution = js.Execution;
 
@@ -37,6 +41,7 @@ _canvas: *Canvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_state: context2d.State = .{},
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -101,6 +106,56 @@ pub fn getImageData(
     return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
 }
 
+pub fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._state.font;
+}
+
+pub fn setFont(self: *CanvasRenderingContext2D, value: []const u8, exec: *const Execution) !void {
+    return self._state.setFont(value, exec);
+}
+
+pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8, exec: *const Execution) !*TextMetrics {
+    return self._state.measureText(text, exec);
+}
+
+pub fn setLineDash(self: *CanvasRenderingContext2D, segments: []const f64, exec: *const Execution) !void {
+    return self._state.setLineDash(segments, exec);
+}
+
+pub fn getLineDash(self: *const CanvasRenderingContext2D) []const f64 {
+    return self._state.line_dash;
+}
+
+pub fn roundRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: ?js.Value) void {}
+pub fn ellipse(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
+pub fn isPointInPath(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value, _: ?js.Value) bool {
+    return false;
+}
+pub fn isPointInStroke(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value) bool {
+    return false;
+}
+
+pub fn createLinearGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createRadialGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createConicGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createPattern(_: *const CanvasRenderingContext2D, _: js.Value, repetition_: ?[]const u8, exec: *const Execution) !*CanvasPattern {
+    const repetition = repetition_ orelse "repeat";
+    const known = [_][]const u8{ "", "repeat", "repeat-x", "repeat-y", "no-repeat" };
+    for (known) |k| {
+        if (std.mem.eql(u8, repetition, k)) return CanvasPattern.init(k, exec);
+    }
+    return error.SyntaxError;
+}
+
 pub fn save(_: *CanvasRenderingContext2D) void {}
 pub fn restore(_: *CanvasRenderingContext2D) void {}
 pub fn scale(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -139,7 +194,30 @@ pub const JsApi = struct {
     };
 
     pub const canvas = bridge.accessor(CanvasRenderingContext2D.getCanvas, null, .{});
-    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const font = bridge.accessor(CanvasRenderingContext2D.getFont, CanvasRenderingContext2D.setFont, .{});
+    pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});
+    pub const setLineDash = bridge.function(CanvasRenderingContext2D.setLineDash, .{});
+    pub const getLineDash = bridge.function(CanvasRenderingContext2D.getLineDash, .{});
+    pub const lineDashOffset = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const roundRect = bridge.function(CanvasRenderingContext2D.roundRect, .{ .noop = true });
+    pub const ellipse = bridge.function(CanvasRenderingContext2D.ellipse, .{ .noop = true });
+    pub const isPointInPath = bridge.function(CanvasRenderingContext2D.isPointInPath, .{});
+    pub const isPointInStroke = bridge.function(CanvasRenderingContext2D.isPointInStroke, .{});
+    pub const createLinearGradient = bridge.function(CanvasRenderingContext2D.createLinearGradient, .{});
+    pub const createRadialGradient = bridge.function(CanvasRenderingContext2D.createRadialGradient, .{});
+    pub const createConicGradient = bridge.function(CanvasRenderingContext2D.createConicGradient, .{});
+    pub const createPattern = bridge.function(CanvasRenderingContext2D.createPattern, .{});
+    pub const shadowBlur = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const shadowColor = bridge.property("rgba(0, 0, 0, 0)", .{ .template = false, .readonly = false });
+    pub const shadowOffsetX = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const shadowOffsetY = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const filter = bridge.property("none", .{ .template = false, .readonly = false });
+    pub const imageSmoothingEnabled = bridge.property(true, .{ .template = false, .readonly = false });
+    pub const imageSmoothingQuality = bridge.property("low", .{ .template = false, .readonly = false });
+    pub const direction = bridge.property("ltr", .{ .template = false, .readonly = false });
+    pub const letterSpacing = bridge.property("0px", .{ .template = false, .readonly = false });
+    pub const wordSpacing = bridge.property("0px", .{ .template = false, .readonly = false });
+    pub const fontKerning = bridge.property("auto", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
     pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
@@ -184,6 +262,10 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../../testing.zig");
+test {
+    _ = context2d;
+}
+
 test "WebApi: CanvasRenderingContext2D" {
     try testing.htmlRunner("canvas/canvas_rendering_context_2d.html", .{});
 }

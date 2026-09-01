@@ -171,3 +171,72 @@
   testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
 }
 </script>
+
+<script id=CanvasRenderingContext2D#measureText>
+{
+  const ctx = document.createElement("canvas").getContext("2d");
+  testing.expectEqual("10px sans-serif", ctx.font);
+  let m = ctx.measureText("ab");
+  testing.expectEqual(true, m instanceof TextMetrics);
+  testing.expectEqual(12, m.width);
+
+  ctx.font = "bold 20px Arial";
+  testing.expectEqual("bold 20px Arial", ctx.font);
+  m = ctx.measureText("hello");
+  testing.expectEqual(60, m.width);
+  testing.expectEqual(16, m.actualBoundingBoxAscent);
+  testing.expectEqual(4, m.actualBoundingBoxDescent);
+  testing.expectEqual(60, m.actualBoundingBoxRight);
+  testing.expectEqual(0, m.actualBoundingBoxLeft);
+  testing.expectEqual(0, ctx.measureText("").width);
+
+  // Invalid font strings are ignored.
+  ctx.font = "bold";
+  testing.expectEqual("bold 20px Arial", ctx.font);
+  ctx.font = "12pt serif";
+  testing.expectEqual(16 * 0.6 * 3, ctx.measureText("abc").width);
+}
+</script>
+
+<script id=CanvasRenderingContext2D#noops>
+{
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.setLineDash([4, 2]);
+  testing.expectEqual("4,2", ctx.getLineDash().join());
+  ctx.setLineDash([3]);
+  testing.expectEqual("3,3", ctx.getLineDash().join());
+  ctx.setLineDash([-1]);
+  testing.expectEqual("3,3", ctx.getLineDash().join());
+  ctx.setLineDash([]);
+  testing.expectEqual(0, ctx.getLineDash().length);
+  ctx.lineDashOffset = 2;
+  testing.expectEqual(2, ctx.lineDashOffset);
+
+  ctx.roundRect(0, 0, 10, 10, 2);
+  ctx.roundRect(0, 0, 10, 10, [1, 2]);
+  ctx.ellipse(5, 5, 4, 3, 0, 0, Math.PI * 2);
+  testing.expectEqual(false, ctx.isPointInPath(1, 1));
+  testing.expectEqual(false, ctx.isPointInStroke(1, 1));
+
+  const gradient = ctx.createLinearGradient(0, 0, 10, 0);
+  testing.expectEqual(true, gradient instanceof CanvasGradient);
+  gradient.addColorStop(0, "red");
+  gradient.addColorStop(1, "blue");
+  testing.expectError("IndexSizeError", () => gradient.addColorStop(2, "red"));
+  testing.expectEqual(true, ctx.createRadialGradient(0, 0, 1, 0, 0, 5) instanceof CanvasGradient);
+  testing.expectEqual(true, ctx.createConicGradient(0, 5, 5) instanceof CanvasGradient);
+  ctx.fillStyle = gradient;
+  ctx.strokeStyle = gradient;
+  ctx.fillRect(0, 0, 10, 10);
+
+  const pattern = ctx.createPattern(document.createElement("canvas"), "repeat");
+  testing.expectEqual(true, pattern instanceof CanvasPattern);
+  pattern.setTransform();
+  testing.expectError("SyntaxError", () => ctx.createPattern(document.createElement("canvas"), "sideways"));
+
+  testing.expectEqual(0, ctx.shadowBlur);
+  testing.expectEqual("none", ctx.filter);
+  ctx.shadowColor = "red";
+  testing.expectEqual("red", ctx.shadowColor);
+}
+</script>
