@@ -372,3 +372,20 @@
     testing.expectEqual(7, r1.value.num);
   })();
 </script>
+
+<script id=queuing_strategies>
+  {
+    const count = new CountQueuingStrategy({ highWaterMark: 3 });
+    testing.expectEqual(3, count.highWaterMark);
+    testing.expectEqual(1, count.size('anything'));
+
+    const bytes = new ByteLengthQueuingStrategy({ highWaterMark: 1024 });
+    testing.expectEqual(1024, bytes.highWaterMark);
+    testing.expectEqual(4, bytes.size(new Uint8Array(4)));
+    testing.expectEqual(8, bytes.size(new ArrayBuffer(8)));
+    testing.expectError('TypeError', () => bytes.size(7));
+
+    const stream = new ReadableStream({}, count);
+    testing.expectEqual('function', typeof stream.getReader);
+  }
+</script>
