@@ -94,6 +94,8 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
 
     app.telemetry.record(.{ .run = {} });
 
+    logConfigTips(app.config);
+
     defer if (app.config.dumpMetricsOnExit()) {
         var writer = std.Io.File.stdout().writerStreaming(lp.io, &.{});
         lp.metrics.write(&writer.interface);
@@ -395,4 +397,18 @@ fn mcpThread(allocator: std.mem.Allocator, app: *App, cdp_server: ?*lp.Server, e
         err_out.* = err;
         log.fatal(.mcp, "mcp error", .{ .err = err });
     };
+}
+
+fn logConfigTips(config: *const Config) void {
+    var count: usize = 0;
+    var tips: [2]log.KV = undefined;
+    if (config.obeyRobots() == false) {
+        tips[count] = .init("robots", "use '--obey-robots' to use a sites robots.txt");
+        count += 1;
+    }
+
+    if (count > 0) {
+        tips[count] = .init("meta", "use '--log-filter note' to silence this message");
+        log.logKVs(.note, .note, "config tips", tips[0 .. count + 1]);
+    }
 }

@@ -566,7 +566,10 @@ pub fn activity(self: *const Client) Activity {
 //                refs to page / session / V8 state; dispatching a
 //                command that frees that state would UAF on unwind.
 //                Cherry-pick only Fetch interception responses
-const DrainMode = enum { all, sync_wait };
+// .terminal    - pops only close/disconnect: the connection is going away and
+//                nothing else may be dispatched, but the peer still gets its
+//                close reason.
+const DrainMode = enum { all, sync_wait, terminal };
 
 // One-shot convenience: create and submit in a single call.
 pub fn request(self: *Client, req: Request, owner: ?*Owner) anyerror!void {
@@ -1310,6 +1313,10 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     _ = try self.handles.perform();
 }
 
+pub fn drainTerminal(self: *Client) !void {
+    return self.drainInbox(.terminal);
+}
+
 // Drain any client messages the Network thread pushed into our inbox
 // and dispatch them via the driver callbacks. Returns
 // error.ClientDisconnected if the inbox surfaced a disconnect message,
@@ -1322,6 +1329,7 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
         const msg = switch (mode) {
             .all => self.inbox.pop(),
             .sync_wait => self.inbox.popIf(allowDuringSyncWait),
+            .terminal => self.inbox.popIf(isTerminal),
         } orelse return;
 
         defer msg.deinit();
@@ -1366,6 +1374,13 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
         .bidi => false,
+    };
+}
+
+fn isTerminal(msg: *Inbox.Message) bool {
+    return switch (msg.payload) {
+        .close, .disconnect => true,
+        .ping, .cdp, .bidi => false,
     };
 }
 

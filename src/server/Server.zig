@@ -151,7 +151,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const listener = try bindListener(app.config, &bound_address);
     errdefer _ = std.c.close(listener);
     pollfds[1] = .{ .fd = listener, .events = posix.POLL.IN, .revents = 0 };
-    log.note(.app, "server running", .{ .address = bound_address });
+    log.note(.note, "server running", .{ .address = bound_address });
 
     const port = bound_address.getPort();
     const json_version_response = try buildJSONVersionResponse(app, port);
