@@ -77,11 +77,13 @@ pub fn onData(self: *const Driver, data: []const u8) anyerror!bool {
 
 // Server run loop. Called when it drops the link unsolicited (peer EOF, ...)
 pub fn onLinkDisconnect(self: *const Driver, err: ?anyerror) void {
-    self.browser.env.requestTerminate();
     const arena = self.browser.arena_pool.acquire(.tiny, "driver disconnect") catch |e| switch (e) {
         error.OutOfMemory => @panic("OOM"),
     };
+    // order matters, this ensures that the disconnect message is in the inbox
+    // when tick() discovers the terminatePending flag is set.
     self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
+    self.browser.env.requestTerminate();
 }
 
 // Worker thread. We're processing messages from the inbox.
@@ -134,8 +136,12 @@ pub fn run(self: *const Driver) void {
 // One iteration of the worker loop. Returns false to disconnect.
 fn tick(self: *const Driver) !bool {
     if (self.browser.env.terminatePending()) {
-        // terminatePending means someone decided this browser must die
-        // (e.g. the heap limit was reached).
+        // Maybe something bad happened (e.g. watchdog) or maybe the client
+        // just disconnected. Check the inbox to see if there's a disconnect
+        // message and, if so, it'll handle it directly.
+        self.browser.http_client.drainTerminal() catch |err| switch (err) {
+            error.ClientDisconnected => return false,
+        };
         log.warn(self.scope, "closing connection", .{ .reason = "pending terminate" });
         // The worker thread is the sole writer of this socket, so sending
         // the close frame here can't interleave with another write.
