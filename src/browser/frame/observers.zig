@@ -57,6 +57,10 @@ pub const Intersection = struct {
     observers: std.ArrayList(*IntersectionObserver) = .empty,
     check_scheduled: bool = false,
     delivery_scheduled: bool = false,
+
+    // Delivery sessions run against this document. Reset per navigation, since
+    // Frame.init re-initializes the whole struct.
+    deliveries: u32 = 0,
 };
 
 // ResizeObserver bookkeeping for a frame.
@@ -129,6 +133,10 @@ pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {
 
 pub fn hasMutationObservers(frame: *const Frame) bool {
     return frame._mutation.observers.first != null;
+}
+
+pub fn hasIntersectionObservers(frame: *const Frame) bool {
+    return frame._intersection.observers.items.len > 0;
 }
 
 pub fn checkIntersections(frame: *Frame) !void {
@@ -298,11 +306,46 @@ pub fn performScheduledIntersectionChecks(frame: *Frame) void {
     };
 }
 
+// An element is reported at most once (IntersectionObserver._tracked), so
+// bounded observation means bounded deliveries: measured over a static page, an
+// ad-heavy news hub and a storefront, no document needed more than 7 sessions.
+// A page that observes a fresh sentinel from inside its own callback never
+// settles, because we report every attached element as fully visible and its
+// replacement sentinel therefore intersects immediately. Observed: a storefront
+// paginating itself to page 10 over 68 sessions, exhausting the timer table
+// until the watchdog killed the navigation.
+const INTERSECTION_RUNAWAY_LIMIT = 32;
+
+// No observer on the frame can make progress once this path is reached.
+fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
+    // The page can keep creating observers after the disconnect (a framework
+    // re-mounting its lazy loader will), and each one trips this path again, so
+    // only the crossing itself is logged.
+    if (frame._intersection.deliveries == INTERSECTION_RUNAWAY_LIMIT + 1) {
+        log.err(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
+    }
+
+    var i = frame._intersection.observers.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (i >= frame._intersection.observers.items.len) {
+            continue;
+        }
+        frame._intersection.observers.items[i].disconnect(frame);
+    }
+}
+
 pub fn deliverIntersections(frame: *Frame) void {
     if (!frame._intersection.delivery_scheduled) {
         return;
     }
     frame._intersection.delivery_scheduled = false;
+
+    frame._intersection.deliveries += 1;
+    if (frame._intersection.deliveries > INTERSECTION_RUNAWAY_LIMIT) {
+        disconnectRunawayIntersectionObservers(frame);
+        return;
+    }
 
     // Iterate backwards so an observer disconnecting during its callback is safe.
     var i = frame._intersection.observers.items.len;

@@ -402,6 +402,42 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+test "WebApi: runaway IntersectionObserver delivery is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Infinite scroll: the callback observes a fresh sentinel, which we report
+    // as intersecting the moment it is attached, so the page never settles.
+    try ls.local.eval(
+        \\(function() {
+        \\  const list = document.createElement('div');
+        \\  const io = new IntersectionObserver((entries) => {
+        \\    for (const entry of entries) {
+        \\      if (!entry.isIntersecting) continue;
+        \\      io.unobserve(entry.target);
+        \\      io.observe(list.appendChild(document.createElement('div')));
+        \\    }
+        \\  });
+        \\  io.observe(list.appendChild(document.createElement('div')));
+        \\})()
+    , null);
+
+    for (0..200) |_| {
+        frame.js.env.runMicrotasks();
+        try frame.js.env.runMacrotasks();
+        if (!Frame.observers.hasIntersectionObservers(frame)) break;
+    }
+
+    try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
+}
+
 test "WebApi: IntersectionObserver" {
     try testing.htmlRunner("intersection_observer", .{});
 }
