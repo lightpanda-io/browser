@@ -46,6 +46,7 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
 const idb = @import("storage/idb/idb.zig");
 const CookieStore = @import("storage/CookieStore.zig");
+const Cookie = @import("storage/Cookie.zig");
 const MessagePort = @import("MessagePort.zig");
 const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
@@ -78,6 +79,8 @@ local_arena: Allocator,
 url: [:0]const u8,
 // Same-origin constraint: a worker's origin is inherited from its parent frame.
 origin: ?[]const u8 = null,
+// Inherited from the creating frame, like origin.
+site_for_cookies: Cookie.SiteForCookies,
 buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
@@ -148,6 +151,10 @@ pub fn init(
             .url = url,
             .arena = arena,
             .origin = frame.origin,
+            .site_for_cookies = switch (frame.siteForCookies()) {
+                .none => .none,
+                .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+            },
             .js = undefined,
             ._call_arena = call_arena,
             ._local_arena = local_arena,
@@ -423,7 +430,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         .document_frame_id = self._frame._frame_id,
         .loader_id = self._loader_id,
         .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
+        .cookie_origin = self.site_for_cookies,
         .resource_type = .script,
         .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own

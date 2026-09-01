@@ -28,7 +28,8 @@ const Driver = @import("../server/Driver.zig");
 const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
-const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
+const Cookie = @import("../browser/webapi/storage/Cookie.zig");
+const CookieJar = Cookie.Jar;
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -605,7 +606,12 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // These are all small, so duping them into the transfer's arena is
         // cheap and can solve some nasty UAF.
         owned.url = try arena.dupeZ(u8, req.url);
-        owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
+        if (req.cookie_origin) |cookie_origin| {
+            owned.cookie_origin = switch (cookie_origin) {
+                .none => .none,
+                .url => |url| .{ .url = try arena.dupeZ(u8, url) },
+            };
+        }
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
         }
@@ -1774,7 +1780,7 @@ pub const Request = struct {
     url: [:0]const u8,
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
-    cookie_origin: [:0]const u8,
+    cookie_origin: ?Cookie.SiteForCookies,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
@@ -3800,7 +3806,7 @@ fn testTransfer(arena: *lp.Arena) Transfer {
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -3978,7 +3984,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4063,7 +4069,7 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .xhr,
             .notification = undefined,
             .shutdown_callback = Ctx.shutdownCallback,
@@ -4149,7 +4155,7 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .xhr,
             .notification = undefined,
             .shutdown_callback = Ctx.shutdownCallback,
@@ -4210,7 +4216,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
                 .method = .GET,
                 .url = "http://example.com/",
                 .cookie_jar = null,
-                .cookie_origin = "",
+                .cookie_origin = .none,
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4278,7 +4284,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .url = "http://example.com/start",
                 .body = "payload",
                 .cookie_jar = null,
-                .cookie_origin = "",
+                .cookie_origin = .none,
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4322,7 +4328,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
                 .url = "http://example.com/start",
                 .body = "payload",
                 .cookie_jar = null,
-                .cookie_origin = "",
+                .cookie_origin = .none,
                 .resource_type = .document,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4390,7 +4396,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4458,7 +4464,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
             .method = .GET,
             .url = "http://example.com/",
             .cookie_jar = null,
-            .cookie_origin = "",
+            .cookie_origin = .none,
             .resource_type = .document,
             .notification = undefined,
             .shutdown_callback = noopShutdown,
@@ -4536,7 +4542,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .method = .GET,
                 .url = "http://example.com/",
                 .cookie_jar = null,
-                .cookie_origin = "",
+                .cookie_origin = .none,
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4573,7 +4579,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
                 .method = .GET,
                 .url = "http://example.com/",
                 .cookie_jar = null,
-                .cookie_origin = "",
+                .cookie_origin = .none,
                 .resource_type = .xhr,
                 .notification = undefined,
                 .shutdown_callback = noopShutdown,
@@ -4637,7 +4643,7 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
                     .method = .GET,
                     .url = url,
                     .cookie_jar = null,
-                    .cookie_origin = "",
+                    .cookie_origin = .none,
                     .resource_type = .document,
                     .notification = undefined,
                     .shutdown_callback = noopShutdown,

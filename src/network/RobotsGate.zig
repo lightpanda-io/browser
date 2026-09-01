@@ -117,7 +117,7 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
         .cookie_jar = null,
-        .cookie_origin = owned_url,
+        .cookie_origin = .{ .url = owned_url },
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
