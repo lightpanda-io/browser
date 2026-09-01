@@ -46,6 +46,7 @@ _name: []const u8,
 _version: i64,
 _txn: ?*IDBTransaction = null, // only set during upgradeneeded
 _on_error: ?js.Function.Global = null,
+_on_abort: ?js.Function.Global = null,
 
 pub fn init(exec: *Execution, engine: *Engine, database_id: i64, name: []const u8, version: i64) !*IDBDatabase {
     return exec._factory.eventTarget(IDBDatabase{
@@ -232,6 +233,17 @@ pub fn setOnError(self: *IDBDatabase, setter: ?FunctionSetter) void {
     } else null;
 }
 
+pub fn getOnAbort(self: *const IDBDatabase) ?js.Function.Global {
+    return self._on_abort;
+}
+
+pub fn setOnAbort(self: *IDBDatabase, setter: ?FunctionSetter) void {
+    self._on_abort = if (setter) |s| switch (s) {
+        .func => |f| f,
+        .anything => null,
+    } else null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IDBDatabase);
 
@@ -249,4 +261,5 @@ pub const JsApi = struct {
     pub const transaction = bridge.function(IDBDatabase.transaction, .{});
     pub const close = bridge.function(IDBDatabase.close, .{});
     pub const onerror = bridge.accessor(IDBDatabase.getOnError, IDBDatabase.setOnError, .{});
+    pub const onabort = bridge.accessor(IDBDatabase.getOnAbort, IDBDatabase.setOnAbort, .{});
 };
