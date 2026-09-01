@@ -1222,8 +1222,8 @@ test "Config: parseArgs --http-version" {
 
 test "Config: validateUserAgent" {
     try validateUserAgent("Lightpanda/1.0");
-    try std.testing.expectError(error.Reserved, validateUserAgent("mozilla/1.0"));
-    try std.testing.expectError(error.Reserved, validateUserAgent("Mozilla/5.0"));
+    // Fork: allow browser UAs (Mozilla/5.0 ...) so anti-bot sites accept us via CDP setUserAgentOverride
+    try validateUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36");
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
 }
 
@@ -1302,7 +1302,7 @@ test "Config: httpHeaders accessor" {
 fn userAgentValidator(allocator: Allocator, args: *std.process.Args.Iterator, ua: *?[]const u8) !void {
     const str = args.next() orelse return error.MissingArgument;
     validateUserAgent(str) catch |err| {
-        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII and can't contain Mozilla" });
+        log.fatal(.app, "invalid user-agent", .{ .err = err, .hint = "must be printable ASCII" });
         return error.InvalidArgument;
     };
 
@@ -1314,10 +1314,6 @@ pub fn validateUserAgent(ua: []const u8) !void {
         if (!std.ascii.isPrint(c)) {
             return error.NonPrintable;
         }
-    }
-
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
-        return error.Reserved;
     }
 }
 
