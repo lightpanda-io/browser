@@ -1702,7 +1702,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
         // failing (callback_error) is not the host's fault.
         if (transfer.req.throttle and transfer.res.callback_error == null) {
             if (self.network.rate_limiter) |*rl| {
-                rl.observe(URL.getHostname(transfer.req.url), .{}, lp.datetime.milliTimestamp(.boot));
+                rl.observe(URL.getHostname(transfer.req.url), .{}, lp.datetime.milliTimestamp(.boot)) catch |err| {
+                    // rate limit is best effort.
+                    log.warn(.http, "rate limit observe", .{ .err = err });
+                };
             }
         }
         self.removeConn(msg.conn);
@@ -1722,7 +1725,10 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
             rl.observe(URL.getHostname(transfer.req.url), .{
                 .status = status,
                 .retry_after_ms = getRetryAfterMs(msg.conn, status),
-            }, lp.datetime.milliTimestamp(.boot));
+            }, lp.datetime.milliTimestamp(.boot)) catch |err| {
+                // rate limit is best effort.
+                log.warn(.http, "rate limit observe", .{ .err = err });
+            };
         }
     }
 
