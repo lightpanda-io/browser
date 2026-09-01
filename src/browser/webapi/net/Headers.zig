@@ -16,8 +16,8 @@ _guard: Guard = .none,
 
 // What mutation JS can make
 pub const Guard = enum {
-    none,      // don't block anything
-    response,  // block forbidden response headers
+    none, // don't block anything
+    response, // block forbidden response headers
     immutable, // block everythig
 };
 
