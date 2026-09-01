@@ -47,9 +47,11 @@ V8_TXT=$ROOT/orderfile/v8.txt
 mkdir -p "$OUT"
 
 # Fault-around is a global knob: whatever happens, put it back.
-if [ ! -f "$FAULT_AROUND" ]; then
+# debugfs is 0700 root, so every probe under it has to run as root.
+if ! mountpoint -q /sys/kernel/debug; then
     sudo mount -t debugfs none /sys/kernel/debug
 fi
+sudo test -f "$FAULT_AROUND" || { echo "$FAULT_AROUND missing: kernel lacks CONFIG_DEBUG_FS fault-around knob" >&2; exit 2; }
 FAULT_AROUND_DEFAULT=$(sudo cat "$FAULT_AROUND")
 set_fault_around() { echo "$1" | sudo tee "$FAULT_AROUND" > /dev/null; }
 
