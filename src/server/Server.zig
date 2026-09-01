@@ -824,14 +824,7 @@ fn getClientAddress(socket: posix.socket_t) !sys_net.IpAddress {
 }
 
 fn buildJSONHttpResponse(allocator: Allocator, comptime body_format: []const u8, args: anytype) ![]const u8 {
-    const body_len = std.fmt.count(body_format, args);
-    const response_format =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        body_format;
-    return try std.fmt.allocPrint(allocator, response_format, .{body_len} ++ args);
+    return Handshake.buildResponse(allocator, "200 OK", "application/json; charset=UTF-8", body_format, args);
 }
 
 fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {

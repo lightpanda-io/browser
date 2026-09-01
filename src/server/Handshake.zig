@@ -32,6 +32,7 @@ const bidi_session = @import("bidi/session.zig");
 
 const log = lp.log;
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 const Handshake = @This();
 
@@ -153,35 +154,33 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.InvalidRequest;
     }
 
-    // The classic WebDriver session bootstrap is the only thing with a body.
-    if (std.mem.startsWith(u8, request, "POST ") or std.mem.startsWith(u8, request, "DELETE ")) {
-        if (!self.options.protocols.webdriver) {
-            return error.NotFound;
-        }
-        return self.handleWebDriverRequest(request, head_len);
-    }
+    const method, const target, _, _ = header_parser.parseRequest(request) catch {
+        return error.InvalidRequest;
+    };
 
-    const is_get = std.mem.startsWith(u8, request, "GET ");
-    if (!is_get and !std.mem.startsWith(u8, request, "PUT ")) {
-        return error.NotFound;
+    switch (method) {
+        // The classic WebDriver session bootstrap is the only thing with a body.
+        .post, .delete => {
+            if (!self.options.protocols.webdriver) {
+                return error.NotFound;
+            }
+            return self.handleWebDriverRequest(request, head_len);
+        },
+        .get, .put => {},
+        else => return error.NotFound,
     }
+    const is_get = method == .get;
 
-    // GETs are body-less: the header block is the request. A PUT body is
-    // ignored rather than waited on — /json/new takes its argument in the URL.
+    // GETs are body-less; a PUT body is ignored rather than waited on.
     if (is_get and head_len != request.len) {
         return .more;
     }
 
-    const url_end = std.mem.indexOfScalarPos(u8, request, 4, ' ') orelse {
-        return error.InvalidRequest;
-    };
-
     // Routing ignores the query string, as Chrome does.
-    const url = request[4..url_end];
-    const path, const query = if (std.mem.indexOfScalar(u8, url, '?')) |i|
-        .{ url[0..i], url[i + 1 ..] }
+    const path, const query = if (std.mem.indexOfScalar(u8, target, '?')) |i|
+        .{ target[0..i], target[i + 1 ..] }
     else
-        .{ url, "" };
+        .{ target, "" };
 
     // Only /json/new takes PUT (required since Chrome 66; GET kept for
     // older clients).
@@ -226,7 +225,6 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return .{ .upgrade = .cdp };
     }
 
-    // The /json routes match with or without a trailing slash.
     const route = if (path.len > 1 and path[path.len - 1] == '/') path[0 .. path.len - 1] else path;
 
     if (std.mem.eql(u8, route, "/json/version")) {
@@ -376,15 +374,9 @@ fn sendWebDriver(self: *Handshake, comptime status: []const u8, value: anytype) 
     try std.json.Stringify.value(.{ .value = value }, .{}, &aw.writer);
     const body = aw.written();
 
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 " ++ status ++ "\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        "{s}", .{ body.len, body });
+    const response = try buildResponse(allocator, status, "application/json; charset=UTF-8", "{s}", .{body});
     defer allocator.free(response);
-    try self.send(response);
-    self.shutdown();
-    return .close;
+    return self.sendAndClose(response);
 }
 
 fn upgrade(self: *Handshake, request: []u8) !void {
@@ -514,11 +506,7 @@ fn sendMetrics(self: *Handshake) !void {
     lp.metrics.write(&aw.writer);
     const body = aw.written();
 
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\r\n" ++
-        "{s}", .{ body.len, body });
+    const response = try buildResponse(allocator, "200 OK", "text/plain; version=0.0.4; charset=utf-8", "{s}", .{body});
     defer allocator.free(response);
     try self.send(response);
 }
@@ -567,14 +555,19 @@ fn shutdown(self: *Handshake) void {
     sys_net.shutdown(self.socket, .recv) catch {};
 }
 
+const response_head_format =
+    "HTTP/1.1 {s}\r\n" ++
+    "Content-Length: {d}\r\n" ++
+    "Connection: Close\r\n" ++
+    "Content-Type: {s}\r\n\r\n";
+
+pub fn buildResponse(allocator: Allocator, comptime status: []const u8, comptime content_type: []const u8, comptime body_format: []const u8, args: anytype) ![]const u8 {
+    const body_len = std.fmt.count(body_format, args);
+    return std.fmt.allocPrint(allocator, response_head_format ++ body_format, .{ status, body_len, content_type } ++ args);
+}
+
 fn staticResponse(comptime content_type: []const u8, comptime body: []const u8) []const u8 {
-    return std.fmt.comptimePrint(
-        "HTTP/1.1 200 OK\r\n" ++
-            "Content-Length: {d}\r\n" ++
-            "Connection: Close\r\n" ++
-            "Content-Type: " ++ content_type ++ "; charset=UTF-8\r\n\r\n",
-        .{body.len},
-    ) ++ body;
+    return std.fmt.comptimePrint(response_head_format, .{ "200 OK", body.len, content_type ++ "; charset=UTF-8" }) ++ body;
 }
 
 const target_activated_response = staticResponse("text/plain", "Target activated");

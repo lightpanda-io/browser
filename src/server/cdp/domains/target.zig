@@ -173,7 +173,6 @@ fn createTarget(cmd: *CDP.Command) !void {
     const frame = try setupTarget(cmd, bc);
     const target_id = &bc.target_id.?;
 
-    // attach to the target only if auto attach is set.
     if (cmd.cdp.target_auto_attach) {
         try doAttachtoTarget(cmd, target_id);
     }
@@ -191,10 +190,8 @@ fn createTarget(cmd: *CDP.Command) !void {
     }, .{});
 }
 
-// Target setup for flat-protocol clients that skip the Target handshake.
-// Attaching is required even though they never use the session id: page
-// events (including the Page.navigate response) are only emitted to an
-// attached session.
+// Attaching is required even though flat-protocol clients never use the
+// session id: page events are only emitted to an attached session.
 pub fn createImplicitTarget(cmd: *CDP.Command) !void {
     const bc = try cmd.createBrowserContext();
     _ = try setupTarget(cmd, bc);
