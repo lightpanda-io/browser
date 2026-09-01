@@ -50,6 +50,7 @@ _txn: Txn = .none,
 // Same request can show up multiple times in txn._requests, but it should only
 // be executed/fired in its last append (to preserve ordering).
 _txn_index: usize = 0,
+_abort_reason: ?anyerror = null,
 _cursor: ?*IDBCursor = null,
 _source: Source = .{ .none = null },
 _ready_state: ReadyState = .pending,
@@ -185,6 +186,23 @@ pub fn failed(self: *const IDBRequest) bool {
     return self._error != null;
 }
 
+// Whether the success/error event for the current operation has fired. A
+// re-armed cursor request (continue/advance) is pending again even though
+// its state is done from the previous iteration; a versionchange request runs
+// eagerly (op cleared) but still awaits delivery.
+pub fn delivered(self: *const IDBRequest) bool {
+    return self._op == .none and self._ready_state == .done;
+}
+
+// The transaction aborted before this request's event fired: it now fails with
+// AbortError and no result. Delivery happens from the abort task.
+pub fn failWithAbort(self: *IDBRequest) void {
+    self._op = .none;
+    self.clearOwnedResult();
+    self._result = .{ .none = js.Undefined{} };
+    self._error = error.AbortError;
+}
+
 pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
     if (self._error != null) {
@@ -202,6 +220,18 @@ pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, 
     self._ready_state = .done;
     const event = try IDBVersionChangeEvent.initTrusted(.wrap("upgradeneeded"), old_version, new_version, exec);
     try exec.dispatch(self.asEventTarget(), event.asEvent(), self._on_upgrade_needed, .{ .context = "IDBRequest.upgradeneeded" });
+
+    // A throwing listener aborts the upgrade (after every listener ran).
+    if (event.asEvent()._listeners_did_throw) {
+        switch (self._txn) {
+            .borrowed => |txn| if (!txn.aborted()) {
+                txn.abortWith(exec, error.AbortError) catch |err| {
+                    log.warn(.storage, "idb upgradeneeded abort", .{ .err = err });
+                };
+            },
+            .owned, .none => {},
+        }
+    }
 }
 
 pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {

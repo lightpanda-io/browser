@@ -532,6 +532,7 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
 
     const arena = exec.call_arena;
     const local = exec.js.local.?;
+    var violated = false;
 
     {
         // we reach directly in to _engine.conn here to avoid copying the values out
@@ -542,7 +543,17 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
         var seen: std.ArrayList([]const u8) = .empty;
         while (try rows.next()) |row| {
             const value = try js.Value.deserialize(local, row.get([]const u8, 1));
-            try self.addIndexEntries(local, arena, &seen, index_id, opts.unique, opts.multiEntry, owned_key_path, value, row.get([]const u8, 0));
+            self.addIndexEntries(local, arena, &seen, index_id, opts.unique, opts.multiEntry, owned_key_path, value, row.get([]const u8, 0)) catch |err| switch (err) {
+                error.Constraint => {
+                    // Existing rows violate the new unique index. This doesn't
+                    // surface as an error here. Instead, this will look like it
+                    // succeeded, but we'll asynchronously deliver a constraint
+                    // error
+                    violated = true;
+                    break;
+                },
+                else => return err,
+            };
         }
     }
 
@@ -556,6 +567,9 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
     idb_index._created = true;
     try self._engine.releaseSavepoint();
     try self._indexes.append(txn._arena.allocator(), idb_index);
+    if (violated) {
+        try txn.queueAbort(error.ConstraintError);
+    }
     return idb_index;
 }
 

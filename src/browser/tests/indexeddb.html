@@ -1189,6 +1189,7 @@
     });
 }
 </script>
+
 <!-- put()/add() structured-clone the value at call time: the record is the
      clone as of the call (later mutation of the argument is not stored), a
      generated key is injected into the clone rather than the caller's object,
@@ -1250,6 +1251,68 @@
     for (const bad of [-1, 0.5, NaN, Infinity, "foo", 2 ** 53]) {
         testing.expectError("TypeError", () => indexedDB.open("big-version-db", bad));
     }
+}
+</script>
+
+<!-- abort() delivers the pending requests' error events and the abort event
+     from a task, so handlers attached right after the call still see them; the
+     abort event bubbles to the connection. -->
+<script id="abort_delivery_is_async" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("abort-async-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("s", "readonly");
+        const req = tx.objectStore("s").get(1);
+        tx.abort();
+        const events = [];
+        req.onerror = () => events.push("req:" + req.error.name + ":" + req.readyState);
+        req.onsuccess = () => events.push("req:success");
+        tx.onabort = () => events.push("tx:abort");
+        db.onabort = () => {
+            events.push("db:abort");
+            state.resolve(events);
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(["req:AbortError:done", "tx:abort", "db:abort"], got);
+    });
+}
+</script>
+
+<!-- createIndex({unique}) over records that violate it: the index is created,
+     the requests already queued deliver, then the transaction aborts with
+     ConstraintError and the open request fails with AbortError. -->
+<script id="create_unique_index_over_duplicates" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("unique-dupes-db", 1);
+    const events = [];
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const tx = e.target.transaction;
+        const store = db.createObjectStore("s");
+        store.put({ v: "x" }, 1).onsuccess = () => events.push("put1");
+        store.put({ v: "x" }, 2).onsuccess = () => events.push("put2");
+        const index = store.createIndex("by_v", "v", { unique: true });
+        events.push("created:" + (index instanceof IDBIndex));
+        const late = store.put({ v: "y" }, 3);
+        late.onsuccess = () => events.push("put3:success");
+        late.onerror = () => events.push("put3:" + late.error.name);
+        tx.onabort = () => events.push("abort:" + tx.error.name);
+        tx.oncomplete = () => events.push("complete");
+    };
+    open.onsuccess = () => state.resolve({ events, success: true });
+    open.onerror = (e) => {
+        e.preventDefault();
+        state.resolve({ events, error: open.error.name });
+    };
+    await state.done((got) => {
+        testing.expectEqual("AbortError", got.error);
+        testing.expectEqual(["created:true", "put1", "put2", "put3:AbortError", "abort:ConstraintError"], got.events);
+    });
 }
 </script>
 </body>
