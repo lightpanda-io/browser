@@ -654,11 +654,8 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     }
 }
 
-pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
-    return frame._factory.eventTarget(MediaQueryList{
-        ._proto = undefined,
-        ._media = try frame.dupeString(query),
-    });
+pub fn matchMedia(_: *const Window, query: []const u8, exec: *const js.Execution) !*MediaQueryList {
+    return MediaQueryList.init(query, exec);
 }
 
 pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {

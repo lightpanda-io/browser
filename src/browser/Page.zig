@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("js/js.zig");
 
 const Frame = @import("Frame.zig");
+const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 const Session = @import("Session.zig");
 const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
@@ -130,6 +131,9 @@ popups: std.ArrayList(*Frame) = .empty,
 // ideal from a memory point of view).
 closed_frames: std.ArrayList(*Frame) = .empty,
 
+// Every matchMedia() result, so a viewport change can fire their `change`.
+media_query_lists: std.ArrayList(*MediaQueryList) = .empty,
+
 // SharedWorkerGlobalScopes created by this Page's frames (also registered in
 // session.shared_workers so other pages can connect).
 shared_workers: std.ArrayList(*SharedWorkerGlobalScope) = .empty,
@@ -157,6 +161,10 @@ destroying: bool = false,
 // every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
     return self.session.browser.getViewport();
+}
+
+pub fn viewportChanged(self: *Page) void {
+    for (self.media_query_lists.items) |mql| mql.viewportChanged();
 }
 
 // Initialize a Page and its root Frame.

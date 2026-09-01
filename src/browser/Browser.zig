@@ -189,6 +189,12 @@ pub fn clearPermissions(self: *Browser) void {
 
 // The viewport every consumer should read: the runtime override if set,
 // otherwise the compile-time default.
+pub fn setViewportOverride(self: *Browser, viewport: ?Viewport) void {
+    self.viewport_override = viewport;
+    const session = &(self.session orelse return);
+    for (session.pages.items) |page| page.viewportChanged();
+}
+
 pub fn getViewport(self: *const Browser) Viewport {
     return self.viewport_override orelse Viewport.default;
 }
