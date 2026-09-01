@@ -46,6 +46,17 @@ pub const COOLDOWN_INTERVALS: u64 = 10;
 // The interval never grows beyond `MAX_INTERVALS` base intervals.
 pub const MAX_INTERVALS: u64 = 60;
 
+// Pressure added, in base intervals, when a host answers 429 or 503: the
+// server asked us to back off.
+pub const OVERLOAD_INTERVALS: u64 = 5;
+
+// Pressure added, in base intervals, when a host answers another 5xx or
+// does not answer at all (timeout, connection error).
+pub const FAILURE_INTERVALS: u64 = 1;
+
+// A Retry-After header is honored up to this delay.
+pub const RETRY_AFTER_MAX_MS: u64 = 60_000;
+
 allocator: Allocator,
 
 // Minimum gap between two navigations to the same host.
@@ -161,6 +172,54 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         self.sweep(now);
     }
     return now;
+}
+
+pub const Feedback = struct {
+    // HTTP status of the response; 0 when no response arrived (timeout,
+    // connection error).
+    status: u16 = 0,
+
+    // Retry-After header of the response, when present.
+    retry_after_ms: ?u64 = null,
+};
+
+// Record the outcome of a throttled navigation. An overloaded or failing
+// host gets extra pressure, so the next navigations to it are spaced more.
+// Fixed mode ignores feedback: the user asked for an exact spacing.
+pub fn observe(self: *RateLimiter, host: []const u8, feedback: Feedback, now: u64) void {
+    if (self.pressure_max == 0) {
+        return;
+    }
+
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    // Unknown host: it was swept, or never reserved (e.g. a redirect landed
+    // on another host). Nothing to adjust.
+    const h = self.hosts.getPtr(host) orelse return;
+    self.cooldown(h, now);
+
+    const intervals: u64 = switch (feedback.status) {
+        // the server explicitly asked to back off
+        429, 503 => OVERLOAD_INTERVALS,
+        // no response at all, or another server error
+        0, 500...502, 504...599 => FAILURE_INTERVALS,
+        else => 0,
+    };
+    if (intervals == 0 and feedback.retry_after_ms == null) {
+        return;
+    }
+
+    h.pressure = @min(h.pressure + intervals * self.ramp_step, self.pressure_max);
+    if (feedback.retry_after_ms) |ms| {
+        h.tat = @max(h.tat, now + @min(ms, RETRY_AFTER_MAX_MS));
+    }
+    log.debug(.rate_limit, "response observed", .{
+        .host = host,
+        .status = feedback.status,
+        .pressure = h.pressure,
+        .retry_after_ms = feedback.retry_after_ms,
+    });
 }
 
 // Effective interval for a host under the given pressure: one extra base
@@ -333,6 +392,59 @@ test "RateLimiter: pressure cap" {
     try testing.expectEqual(rl.pressure_max, rl.hosts.get("a.test").?.pressure);
     try testing.expectEqual(6000, rl.intervalFor(rl.pressure_max));
     try testing.expectEqual(6000, rl.intervalFor(rl.pressure_max * 2));
+}
+
+test "RateLimiter: observe overload" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
+    defer rl.deinit();
+
+    // a 429 adds 5 base intervals of pressure at once
+    try testing.expectEqual(1000, try rl.reserve("a.test", 1000));
+    rl.observe("a.test", .{ .status = 429 }, 1050);
+    try testing.expectEqual(51, rl.hosts.get("a.test").?.pressure);
+
+    // navigations are now spaced by 100 * (1 + 51/10) = 600
+    try testing.expectEqual(1100, try rl.reserve("a.test", 1100));
+    try testing.expectEqual(1700, try rl.reserve("a.test", 1100));
+
+    // Retry-After pushes the next slot directly
+    rl.observe("a.test", .{ .status = 503, .retry_after_ms = 5000 }, 2000);
+    try testing.expectEqual(7000, try rl.reserve("a.test", 2100));
+
+    // and is honored up to RETRY_AFTER_MAX_MS only
+    rl.observe("a.test", .{ .status = 429, .retry_after_ms = 3_600_000 }, 10_000);
+    try testing.expectEqual(70_000, try rl.reserve("a.test", 10_100));
+}
+
+test "RateLimiter: observe failures" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
+    defer rl.deinit();
+
+    try testing.expectEqual(1000, try rl.reserve("a.test", 1000));
+
+    // a server error, or no response at all, adds one base interval each
+    rl.observe("a.test", .{ .status = 500 }, 1010);
+    rl.observe("a.test", .{}, 1020);
+    try testing.expectEqual(21, rl.hosts.get("a.test").?.pressure);
+
+    // a success adds nothing
+    rl.observe("a.test", .{ .status = 200 }, 1030);
+    try testing.expectEqual(21, rl.hosts.get("a.test").?.pressure);
+
+    // an unknown host is ignored
+    rl.observe("b.test", .{ .status = 429 }, 1030);
+    try testing.expect(rl.hosts.get("b.test") == null);
+}
+
+test "RateLimiter: observe fixed mode" {
+    var rl = RateLimiter.init(testing.allocator, 100, 1, .fixed);
+    defer rl.deinit();
+
+    // fixed mode ignores feedback: the user asked for an exact spacing
+    try testing.expectEqual(1000, try rl.reserve("a.test", 1000));
+    rl.observe("a.test", .{ .status = 429, .retry_after_ms = 5000 }, 1010);
+    try testing.expectEqual(0, rl.hosts.get("a.test").?.pressure);
+    try testing.expectEqual(1100, try rl.reserve("a.test", 1050));
 }
 
 test "RateLimiter: fixed mode" {

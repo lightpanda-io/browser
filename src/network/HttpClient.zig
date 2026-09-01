@@ -1456,6 +1456,17 @@ pub fn isRedirectStatus(status: u16) bool {
     };
 }
 
+// Read the Retry-After header of a 429/503 response and convert it to ms.
+// Only the delay-seconds form is supported; the HTTP-date form is ignored.
+fn getRetryAfterMs(conn: *const http.Connection, status: u16) ?u64 {
+    if (status != 429 and status != 503) {
+        return null;
+    }
+    const hdr = conn.getResponseHeader("retry-after", 0) orelse return null;
+    const seconds = std.fmt.parseInt(u64, std.mem.trim(u8, hdr.value, " "), 10) catch return null;
+    return seconds *| std.time.ms_per_s;
+}
+
 fn processMessages(self: *Client) !bool {
     var processed = false;
     while (try self.handles.readMessage()) |msg| {
@@ -1687,6 +1698,13 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // callbacks run later, from dispatch(), never from here.
 
     if (effective_err != null and !is_conn_close_recv) {
+        // A host that does not answer gets more spacing. Our own callback
+        // failing (callback_error) is not the host's fault.
+        if (transfer.req.throttle and transfer.res.callback_error == null) {
+            if (self.network.rate_limiter) |*rl| {
+                rl.observe(URL.getHostname(transfer.req.url), .{}, lp.datetime.milliTimestamp(.boot));
+            }
+        }
         self.removeConn(msg.conn);
         transfer._conn = null;
         transfer.failAsync(transfer.res.callback_error orelse effective_err.?);
@@ -1694,6 +1712,19 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
+
+    // Tell the rate limiter how the host answered: an overloaded host
+    // (429, 503, Retry-After, 5xx) gets more spacing before the next
+    // navigations to it.
+    if (transfer.req.throttle) {
+        if (self.network.rate_limiter) |*rl| {
+            const status = try msg.conn.getResponseCode();
+            rl.observe(URL.getHostname(transfer.req.url), .{
+                .status = status,
+                .retry_after_ms = getRetryAfterMs(msg.conn, status),
+            }, lp.datetime.milliTimestamp(.boot));
+        }
+    }
 
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
