@@ -1140,6 +1140,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/set_cookie")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_hidden=1; Path=/set_cookie_scope" },
+                .{ .name = "X-Visible", .value = "yes" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect_same_echo_headers")) {
         // Same-origin 302 to /echo_headers: Authorization must survive the hop.
         return req.respond("", .{

@@ -518,3 +518,18 @@
     });
   }
 </script>
+
+<script id=fetch_forbidden_response_header type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/set_cookie');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('yes', response.headers.get('x-visible'));
+      testing.expectEqual(null, response.headers.get('set-cookie'));
+      testing.expectEqual(0, response.headers.getSetCookie().length);
+      testing.expectEqual(false, [...response.headers.keys()].includes('set-cookie'));
+    });
+  }
+</script>
