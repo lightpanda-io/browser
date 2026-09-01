@@ -65,6 +65,10 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
     return try std.mem.join(exec.local_arena, ", ", all_values);
 }
 
+pub fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
+    return self._list.getAll(exec.local_arena, "set-cookie");
+}
+
 pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool {
     const normalized_name = normalizeHeaderName(name, exec.buf);
     return self._list.has(normalized_name, null);
@@ -143,6 +147,7 @@ pub const JsApi = struct {
     pub const append = bridge.function(Headers.append, .{});
     pub const delete = bridge.function(Headers.delete, .{});
     pub const get = bridge.function(Headers.get, .{});
+    pub const getSetCookie = bridge.function(Headers.getSetCookie, .{});
     pub const has = bridge.function(Headers.has, .{});
     pub const set = bridge.function(Headers.set, .{});
     pub const keys = bridge.function(Headers.keys, .{});

@@ -79,6 +79,7 @@ pub const PseudoElement = enum {
 
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
+pub const PartListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 
@@ -1024,6 +1025,17 @@ pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
     const class_list = try self.getClassList(frame);
     try class_list.setValue(value, frame);
+}
+
+pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_part_lists.getOrPut(frame.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
+            ._element = self,
+            ._attribute_name = comptime .wrap("part"),
+        });
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
@@ -2431,6 +2443,7 @@ pub const JsApi = struct {
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
+    pub const part = bridge.accessor(Element.getPartList, null, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

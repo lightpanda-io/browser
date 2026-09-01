@@ -364,3 +364,19 @@
   testing.expectEqual(1, authEntries.length);
 }
 </script>
+
+<script id=getSetCookie>
+{
+  const headers = new Headers();
+  testing.expectEqual(0, headers.getSetCookie().length);
+
+  headers.append('Set-Cookie', 'a=1; Path=/');
+  headers.append('set-cookie', 'b=2; HttpOnly');
+  // get() joins, which corrupts cookies that themselves contain commas.
+  testing.expectEqual('a=1; Path=/, b=2; HttpOnly', headers.get('Set-Cookie'));
+  const cookies = headers.getSetCookie();
+  testing.expectEqual(2, cookies.length);
+  testing.expectEqual('a=1; Path=/', cookies[0]);
+  testing.expectEqual('b=2; HttpOnly', cookies[1]);
+}
+</script>
