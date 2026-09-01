@@ -754,3 +754,19 @@ handler runs, abort() cancels the re-send and no load is delivered.
     testing.expectEqual('9000!!!', first.over);
   }
 </script>
+
+<script id=xhr_forbidden_response_header type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = (event) => state.resolve(event);
+    req.open('GET', 'http://127.0.0.1:9582/set_cookie');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual('yes', req.getResponseHeader('X-Visible'));
+      testing.expectEqual(null, req.getResponseHeader('Set-Cookie'));
+      testing.expectEqual(false, req.getAllResponseHeaders().toLowerCase().includes('set-cookie'));
+    });
+  }
+</script>

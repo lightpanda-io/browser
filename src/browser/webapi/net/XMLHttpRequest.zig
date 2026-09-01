@@ -634,6 +634,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
+        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
         const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena.allocator(), joined);
     }

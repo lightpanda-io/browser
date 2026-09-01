@@ -137,6 +137,16 @@ pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function.Global {
     return definition.constructor;
 }
 
+pub fn getName(self: *CustomElementRegistry, constructor: js.Function) ?[]const u8 {
+    var it = self._definitions.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.*.constructor.isEqual(constructor)) {
+            return entry.key_ptr.*;
+        }
+    }
+    return null;
+}
+
 pub fn upgrade(self: *CustomElementRegistry, root: *Node, frame: *Frame) !void {
     try upgradeNode(self, root, frame);
 }
@@ -319,6 +329,7 @@ pub const JsApi = struct {
 
     pub const define = bridge.function(CustomElementRegistry.define, .{ .ce_reactions = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
+    pub const getName = bridge.function(CustomElementRegistry.getName, .{});
     pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{ .ce_reactions = true });
     pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{});
 };

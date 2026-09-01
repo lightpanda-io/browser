@@ -364,3 +364,63 @@
   testing.expectEqual(1, authEntries.length);
 }
 </script>
+
+<script id=getSetCookie>
+{
+  const headers = new Headers();
+  testing.expectEqual(0, headers.getSetCookie().length);
+
+  headers.append('Set-Cookie', 'a=1; Path=/');
+  headers.append('set-cookie', 'b=2; HttpOnly');
+  // get() joins, which corrupts cookies that themselves contain commas.
+  testing.expectEqual('a=1; Path=/, b=2; HttpOnly', headers.get('Set-Cookie'));
+  const cookies = headers.getSetCookie();
+  testing.expectEqual(2, cookies.length);
+  testing.expectEqual('a=1; Path=/', cookies[0]);
+  testing.expectEqual('b=2; HttpOnly', cookies[1]);
+}
+</script>
+
+<script id=guard>
+{
+  // Set-Cookie is a forbidden response header: a response-guarded Headers
+  // ignores it however it arrives.
+  const res = new Response();
+  res.headers.append('Set-Cookie', 'a=1');
+  res.headers.set('sEt-cOokIe', 'b=2');
+  testing.expectEqual(0, res.headers.getSetCookie().length);
+  testing.expectEqual(null, res.headers.get('set-cookie'));
+
+  const from_init = new Response('', {headers: {'Set-Cookie': 'a=1', 'X-Keep': 'yes'}});
+  testing.expectEqual(0, from_init.headers.getSetCookie().length);
+  testing.expectEqual('yes', from_init.headers.get('x-keep'));
+
+  // A standalone Headers is unguarded and keeps them, but filling a Response
+  // from one still drops them.
+  const plain = new Headers({'Set-Cookie': 'a=1'});
+  testing.expectEqual(1, plain.getSetCookie().length);
+  testing.expectEqual(0, new Response('', {headers: plain}).headers.getSetCookie().length);
+
+  // clone() carries the guard over.
+  const cloned = from_init.clone();
+  cloned.headers.append('Set-Cookie', 'a=1');
+  testing.expectEqual(0, cloned.headers.getSetCookie().length);
+  testing.expectEqual('yes', cloned.headers.get('x-keep'));
+}
+</script>
+
+<script id=guard_immutable>
+{
+  const redirect = Response.redirect('http://127.0.0.1:9582/hi.html', 302);
+  testing.expectEqual('http://127.0.0.1:9582/hi.html', redirect.headers.get('location'));
+
+  for (const headers of [Response.error().headers, redirect.headers]) {
+    let threw = 0;
+    try { headers.append('x-a', '1'); } catch (e) { if (e instanceof TypeError) threw += 1; }
+    try { headers.set('x-a', '1'); } catch (e) { if (e instanceof TypeError) threw += 1; }
+    try { headers.delete('x-a'); } catch (e) { if (e instanceof TypeError) threw += 1; }
+    testing.expectEqual(3, threw);
+    testing.expectEqual(null, headers.get('x-a'));
+  }
+}
+</script>
