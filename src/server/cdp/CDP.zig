@@ -40,13 +40,15 @@ const Label = @import("../../browser/webapi/element/html/Label.zig");
 const Connection = @import("../Connection.zig");
 const Driver = @import("../Driver.zig");
 const Incrementing = @import("id.zig").Incrementing;
+
+const fetch = @import("domains/fetch.zig");
 const network_domain = @import("domains/network.zig");
-const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 const log = lp.log;
 const json = std.json;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
+const InterceptState = fetch.InterceptState;
 
 pub const URL_BASE = "chrome://newtab/";
 
@@ -824,8 +826,10 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn fetchEnable(self: *BrowserContext, authRequests: bool, session_id: []const u8) !void {
+    pub fn fetchEnable(self: *BrowserContext, patterns: ?[]const fetch.RequestPattern, authRequests: bool, session_id: []const u8) !void {
         self.fetchDisable(); //in case of multiple calls
+        errdefer self.fetchDisable();
+        try self.intercept_state.setPatterns(patterns);
         self.fetch_session_id = session_id;
         try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
         if (authRequests) {
@@ -843,6 +847,7 @@ pub const BrowserContext = struct {
     pub fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
+        self.intercept_state.clearPatterns();
         self.fetch_session_id = null;
     }
 
