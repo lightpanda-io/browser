@@ -88,6 +88,8 @@ _default_checked: bool = false,
 _value: ?[]const u8 = null,
 _checked: bool = false,
 _checked_dirty: bool = false,
+// Only user edits count for tooLong/tooShort; script and attribute values don't.
+_user_edited: bool = false,
 _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
@@ -156,6 +158,12 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     }
     // This should _not_ call setAttribute. It updates the current state only
     self._value = try self.sanitizeValue(true, value, frame);
+    self._user_edited = false;
+}
+
+pub fn setUserValue(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.setValue(value, frame);
+    self._user_edited = true;
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
@@ -393,8 +401,8 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     }
     const value = self._value orelse return false;
     if (value.len == 0) return false;
+    // An empty pattern is still a pattern: ^(?:)$ matches only "".
     const pattern = self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse return false;
-    if (pattern.len == 0) return false;
 
     // Per HTML spec, anchor the pattern with ^(?:...)$ and compile under the
     // "v" (Unicode sets) flag. An invalid pattern is ignored — V8 throws and
@@ -416,9 +424,7 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
 }
 
 pub fn suffersTooLong(self: *const Input) bool {
-    // Per spec, only the dirty value flag triggers tooLong / tooShort. We treat
-    // the presence of an explicit _value (vs. attribute-derived _default_value)
-    // as an approximation of dirty.
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     const max = self.getMaxLength();
     if (max < 0) return false;
@@ -426,6 +432,7 @@ pub fn suffersTooLong(self: *const Input) bool {
 }
 
 pub fn suffersTooShort(self: *const Input) bool {
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     if (value.len == 0) return false;
     const min = self.getMinLength();
@@ -846,10 +853,34 @@ fn stepBy(self: *Input, n: i32, frame: *Frame) !void {
 
     // A range with no value sits at its sanitized default, not at 0.
     const current = try self.sanitizeValue(false, self.getValue(), frame);
-    var next = (valueToNumber(typ, current) orelse 0) + @as(f64, @floatFromInt(n)) * step;
-    if (valueToNumber(typ, self.getMin())) |min| next = @max(next, min);
-    if (valueToNumber(typ, self.getMax())) |max| next = @min(next, max);
-    return self.setValueAsNumber(next, frame);
+    const before = valueToNumber(typ, current) orelse 0;
+    if (n == 0) return;
+    const base = self.stepBase();
+    const rungs = (before - base) / step;
+    const steps: f64 = @floatFromInt(n);
+    var value = if (@abs(rungs - @round(rungs)) > 1e-9)
+        // Off the ladder: the snap to the next rung counts as the first step
+        // (what browsers do; the spec text ignores n here).
+        base + (if (n < 0) @floor(rungs) + steps + 1 else @ceil(rungs) + steps - 1) * step
+    else
+        before + steps * step;
+    if (valueToNumber(typ, self.getMin())) |min| {
+        if (value < min) value = base + @ceil((min - base) / step - 1e-9) * step;
+    }
+    if (valueToNumber(typ, self.getMax())) |max| {
+        if (value > max) value = base + @floor((max - base) / step + 1e-9) * step;
+    }
+    // Clamping never moves against the direction of travel.
+    if ((n < 0 and value > before) or (n > 0 and value < before)) return;
+    return self.setValueAsNumber(value, frame);
+}
+
+/// HTML "step base": min, else the value content attribute, else the type's default.
+fn stepBase(self: *const Input) f64 {
+    const typ = self._input_type;
+    if (valueToNumber(typ, self.getMin())) |min| return min;
+    if (valueToNumber(typ, self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "")) |v| return v;
+    return if (typ == .week) -259_200_000 else 0;
 }
 
 /// The step in value-as-number units; null for step="any".
@@ -869,10 +900,6 @@ fn allowedValueStep(self: *const Input) ?f64 {
     };
     const parsed = if (isValidFloatingPoint(attr)) std.fmt.parseFloat(f64, attr) catch default else default;
     return (if (parsed > 0) parsed else default) * scale;
-}
-
-pub fn showPicker(_: *const Input) void {
-    lp.log.debug(.not_implemented, "Input.showPicker", .{});
 }
 
 /// HTML "value as number": floats for number/range; for the date types,
@@ -986,7 +1013,7 @@ fn formatDate(civil: Civil, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(civil.year)), @as(u64, @intCast(civil.month)), @as(u64, @intCast(civil.day)) }) catch null;
 }
 
-/// Shortest valid time string: seconds and fraction only when non-zero.
+/// Normalized time string: seconds only when needed, fraction always 3 digits.
 fn formatTime(ms_in_day: f64, buf: []u8) ?[]const u8 {
     const total: u64 = @floor(ms_in_day);
     const hour = total / 3_600_000;
@@ -999,8 +1026,7 @@ fn formatTime(ms_in_day: f64, buf: []u8) ?[]const u8 {
     if (millis == 0) {
         return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second }) catch null;
     }
-    const text = std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hour, minute, second, millis }) catch return null;
-    return std.mem.trimEnd(u8, text, "0");
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hour, minute, second, millis }) catch null;
 }
 
 // Howard Hinnant's civil-from-days and days-from-civil.
@@ -1428,7 +1454,6 @@ pub const JsApi = struct {
     pub const valueAsDate = bridge.accessor(Input.getValueAsDate, Input.setValueAsDate, .{});
     pub const stepUp = bridge.function(Input.stepUp, .{});
     pub const stepDown = bridge.function(Input.stepDown, .{});
-    pub const showPicker = bridge.function(Input.showPicker, .{});
     pub const files = bridge.accessor(Input.getFiles, Input.setFiles, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
@@ -1559,6 +1584,7 @@ pub const Build = struct {
         clone._value = source._value;
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
+        clone._user_edited = source._user_edited;
         clone._selection_direction = source._selection_direction;
         clone._selection_start = source._selection_start;
         clone._selection_end = source._selection_end;
