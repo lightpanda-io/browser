@@ -219,6 +219,10 @@ pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
 pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, new_version: u64) !void {
     self._ready_state = .done;
     const event = try IDBVersionChangeEvent.initTrusted(.wrap("upgradeneeded"), old_version, new_version, exec);
+    // Keep the event alive past dispatch: we read _listeners_did_throw below.
+    event.asEvent().acquireRef();
+    defer _ = event.asEvent().releaseRef(exec.page);
+
     try exec.dispatch(self.asEventTarget(), event.asEvent(), self._on_upgrade_needed, .{ .context = "IDBRequest.upgradeneeded" });
 
     // A throwing listener aborts the upgrade (after every listener ran).
