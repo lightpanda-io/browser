@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,7 +16,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const Execution = js.Execution;
 
@@ -24,6 +27,7 @@ const Execution = js.Execution;
 /// 0.8em and descent 0.2em, as in a generic sans-serif face.
 const TextMetrics = @This();
 
+_rc: lp.RC = .{},
 _width: f64,
 _ascent: f64,
 _descent: f64,
@@ -34,6 +38,18 @@ pub fn init(width: f64, font_size: f64, exec: *const Execution) !*TextMetrics {
         ._ascent = font_size * 0.8,
         ._descent = font_size * 0.2,
     });
+}
+
+pub fn deinit(self: *TextMetrics, page: *Page) void {
+    page.factory.destroy(self);
+}
+
+pub fn acquireRef(self: *TextMetrics) void {
+    self._rc.acquire();
+}
+
+pub fn releaseRef(self: *TextMetrics, page: *Page) void {
+    self._rc.release(self, page);
 }
 
 pub fn getWidth(self: *const TextMetrics) f64 {

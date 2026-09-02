@@ -20,8 +20,6 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 
-const color = @import("../../color.zig");
-
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
 const context2d = @import("context2d.zig");
@@ -38,27 +36,26 @@ const CanvasRenderingContext2D = @This();
 /// Reference to the parent canvas element.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/canvas
 _canvas: *Canvas,
-/// Fill color.
-/// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
-_fill_style: color.RGBA = color.RGBA.Named.black,
 _state: context2d.State = .{},
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
 }
 
-pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *Execution) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(exec.local_arena);
-    try self._fill_style.format(&w.writer);
-    return w.written();
+pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+    return self._state.getStyle(.fill, exec);
 }
 
-pub fn setFillStyle(
-    self: *CanvasRenderingContext2D,
-    value: []const u8,
-) !void {
-    // Prefer the same fill_style if fails.
-    self._fill_style = color.RGBA.parse(value) catch self._fill_style;
+pub fn setFillStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
+    self._state.setStyle(.fill, value);
+}
+
+pub fn getStrokeStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+    return self._state.getStyle(.stroke, exec);
+}
+
+pub fn setStrokeStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
+    self._state.setStyle(.stroke, value);
 }
 
 const WidthOrImageData = union(enum) {
@@ -107,7 +104,7 @@ pub fn getImageData(
 }
 
 pub fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
-    return self._state.font;
+    return self._state.font();
 }
 
 pub fn setFont(self: *CanvasRenderingContext2D, value: []const u8, exec: *const Execution) !void {
@@ -123,7 +120,7 @@ pub fn setLineDash(self: *CanvasRenderingContext2D, segments: []const f64, exec:
 }
 
 pub fn getLineDash(self: *const CanvasRenderingContext2D) []const f64 {
-    return self._state.line_dash;
+    return self._state.lineDash();
 }
 
 pub fn roundRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: ?js.Value) void {}
@@ -164,7 +161,6 @@ pub fn translate(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
-pub fn setStrokeStyle(_: *CanvasRenderingContext2D, _: []const u8) void {}
 pub fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
@@ -220,7 +216,7 @@ pub const JsApi = struct {
     pub const fontKerning = bridge.property("auto", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
-    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.accessor(CanvasRenderingContext2D.getStrokeStyle, CanvasRenderingContext2D.setStrokeStyle, .{});
     pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
     pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
