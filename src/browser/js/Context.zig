@@ -206,6 +206,12 @@ pub fn deinit(self: *Context) void {
     const env = self.env;
     defer self.arena.release();
 
+    // Disposal GCs below can trip the near-heap-limit callback. There's no JS
+    // left in this context to stop, so it must not arm a termination.
+    const was_tearing_down = env.tearing_down;
+    env.tearing_down = true;
+    defer env.tearing_down = was_tearing_down;
+
     // Unlink any IndexedDB gate participants first: the session-scoped engine
     // must never wake a waiter into this scheduler once it's torn down.
     self.page.session.idb.detachContext(self);

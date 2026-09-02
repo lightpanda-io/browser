@@ -203,13 +203,6 @@ pub fn newSession(self: *Browser, notification: *Notification) !*Session {
 }
 
 pub fn closeSession(self: *Browser) void {
-    const env = &self.env;
-
-    // Teardown GC must not arm a new termination.
-    const was_tearing_down = env.tearing_down;
-    env.tearing_down = true;
-    defer env.tearing_down = was_tearing_down;
-
     if (self.session) |*session| {
         session.deinit();
         self.session = null;

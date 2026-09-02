@@ -104,7 +104,7 @@ terminate_mutex: std.Io.Mutex = .init,
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
 
-// Set while V8 contexts are being destroyed.
+// Set while a V8 context (or the isolate) is being disposed.
 tearing_down: bool = false,
 
 heap_limit_protected: bool = false,
