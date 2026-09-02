@@ -271,21 +271,31 @@ test "adblock.pattern: hostname filters cover subdomains" {
     try testing.expect(!try testMatch(arena, "||ads.example.com^", "https://example.com/ads.example.com"));
 }
 
-test "adblock.pattern: caret-less hostname filters end on a label boundary" {
+test "adblock.pattern: caret-less hostname filters match the hostname or a subdomain" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The real EasyPrivacy shape "||coinimp.com$third-party": without a '^'
-    // the next label may continue ("coinimp.com.evil.org") but the last one
-    // may not ("coinimp.community" is someone else's site).
+    // The real EasyPrivacy shape "||coinimp.com$third-party": uBO reads it
+    // as "||coinimp.com^", so "coinimp.com.evil.org" — evil.org's hostname,
+    // not a subdomain of coinimp.com — is out.
     try testing.expect(try testMatch(arena, "||coinimp.com", "https://coinimp.com/miner.js"));
     try testing.expect(try testMatch(arena, "||coinimp.com", "https://sub.coinimp.com/x"));
-    try testing.expect(try testMatch(arena, "||coinimp.com", "https://coinimp.com.evil.org/x"));
     try testing.expect(try testMatch(arena, "||coinimp.com", "https://coinimp.com:8080/x"));
+    try testing.expect(!try testMatch(arena, "||coinimp.com", "https://coinimp.com.evil.org/x"));
     try testing.expect(!try testMatch(arena, "||coinimp.com", "https://coinimp.community/miner.js"));
 
-    // A filter hostname ending in '.' carries its own boundary.
+    // `||host|` is that same filter once more.
+    try testing.expect(try testMatch(arena, "||coinimp.com|", "https://sub.coinimp.com/x"));
+    try testing.expect(!try testMatch(arena, "||coinimp.com|", "https://coinimp.com.evil.org/x"));
+
+    // `||host*` is NOT: uBO keeps a trailing '*' after a short run, and the
+    // pattern stays a label-anchored prefix.
+    try testing.expect(try testMatch(arena, "||coinimp.com*", "https://coinimp.com.evil.org/x"));
+    try testing.expect(try testMatch(arena, "||coinimp.com*", "https://coinimp.community/miner.js"));
+
+    // A filter hostname ending in '.' names no hostname; it stays a prefix
+    // and carries its own boundary.
     try testing.expect(try testMatch(arena, "||adform.", "https://adform.net/banner"));
     try testing.expect(try testMatch(arena, "||adform.", "https://track.adform.co.uk/x"));
     try testing.expect(!try testMatch(arena, "||adform", "https://adformat.example/x"));
