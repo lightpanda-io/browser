@@ -58,9 +58,12 @@ pub const Intersection = struct {
     check_scheduled: bool = false,
     delivery_scheduled: bool = false,
 
-    // Delivery sessions run against this document. Reset per navigation, since
-    // Frame.init re-initializes the whole struct.
-    deliveries: u32 = 0,
+    // Deliveries closer together than INTERSECTION_QUIET_MS form one burst.
+    // Frame.init re-initializes the whole struct, so a navigation starts fresh.
+    burst_start_ms: u64 = 0,
+    last_delivery_ms: u64 = 0,
+    burst_deliveries: u32 = 0,
+    runaway: bool = false,
 };
 
 // ResizeObserver bookkeeping for a frame.
@@ -306,22 +309,35 @@ pub fn performScheduledIntersectionChecks(frame: *Frame) void {
     };
 }
 
-// An element is reported at most once (IntersectionObserver._tracked), so
-// bounded observation means bounded deliveries: measured over a static page, an
-// ad-heavy news hub and a storefront, no document needed more than 7 sessions.
-// A page that observes a fresh sentinel from inside its own callback never
-// settles, because we report every attached element as fully visible and its
-// replacement sentinel therefore intersects immediately. Observed: a storefront
-// paginating itself to page 10 over 68 sessions, exhausting the timer table
-// until the watchdog killed the navigation.
-const INTERSECTION_RUNAWAY_LIMIT = 32;
+// We report every attached element as fully visible, so a page that observes a
+// fresh sentinel from inside its own callback never settles: the replacement
+// intersects the moment it is attached. Observed on a storefront paginating
+// itself past page 18 at ~30 deliveries/s until the watchdog killed the page.
+//
+// A delivery count cannot separate this from a busy but healthy page: airbnb
+// legitimately needs up to ~50 deliveries per load, and the runaway had already
+// exhausted the timer table by ~70. Duration does separate them. Healthy pages
+// go quiet within 5s of their first delivery; the runaway never does. Bursts
+// are measured from their own start rather than from page load so that lazy
+// loading triggered minutes later, by a scroll or a click, is not penalized.
+// Gaps inside a healthy burst stayed under 800ms; the runaway paused once for
+// 1.1s on a network stall.
+//
+// A chain that re-observes synchronously never leaves the microtask checkpoint,
+// so the clock alone would let it spin for the full limit. The per-burst count
+// exists for that case only; at 20x the busiest healthy page it is not a tuning
+// knob.
+pub const INTERSECTION_RUNAWAY_MS = 10_000;
+pub const INTERSECTION_QUIET_MS = 2_000;
+pub const INTERSECTION_BURST_LIMIT = 1024;
 
 // No observer on the frame can make progress once this path is reached.
 fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
     // The page can keep creating observers after the disconnect (a framework
     // re-mounting its lazy loader will), and each one trips this path again, so
     // only the crossing itself is logged.
-    if (frame._intersection.deliveries == INTERSECTION_RUNAWAY_LIMIT + 1) {
+    if (!frame._intersection.runaway) {
+        frame._intersection.runaway = true;
         log.err(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
     }
 
@@ -341,8 +357,17 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
     frame._intersection.delivery_scheduled = false;
 
-    frame._intersection.deliveries += 1;
-    if (frame._intersection.deliveries > INTERSECTION_RUNAWAY_LIMIT) {
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (now - frame._intersection.last_delivery_ms > INTERSECTION_QUIET_MS) {
+        frame._intersection.burst_start_ms = now;
+        frame._intersection.burst_deliveries = 0;
+        frame._intersection.runaway = false;
+    }
+    frame._intersection.last_delivery_ms = now;
+    frame._intersection.burst_deliveries += 1;
+
+    const too_long = now - frame._intersection.burst_start_ms > INTERSECTION_RUNAWAY_MS;
+    if (too_long or frame._intersection.burst_deliveries > INTERSECTION_BURST_LIMIT) {
         disconnectRunawayIntersectionObservers(frame);
         return;
     }
