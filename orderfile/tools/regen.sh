@@ -112,8 +112,14 @@ printf '/* unordered profile build, %s */\n' "$(date +%s%N)" > "$OUT/empty.ld"
 zig build "$@" -Dorderfile="$OUT/empty.ld" --verbose-link 2> "$OUT/link.log" \
     || { cat "$OUT/link.log" >&2; exit 1; }
 cp zig-out/bin/lightpanda "$OUT/unordered"
-grep -m1 -F 'lightpanda_zcu.o' "$OUT/link.log" | sed 's/^error: ld\.lld //' > "$OUT/link.line"
+# The verbose-link line is "ld.lld <args>", indented, and prefixed with
+# "error: " on some paths; only the args replay under `zig ld.lld`.
+grep -m1 -F 'lightpanda_zcu.o' "$OUT/link.log" | sed -E 's/^[[:space:]]*(error: )?ld\.lld //' > "$OUT/link.line"
 [ -s "$OUT/link.line" ] || { echo "no ld.lld line in $OUT/link.log" >&2; exit 1; }
+case $(head -c 1 "$OUT/link.line") in
+    -) ;;
+    *) echo "link line is not an ld.lld invocation: $(cut -c 1-100 "$OUT/link.line")" >&2; exit 1 ;;
+esac
 
 # Link inputs -> objects/archives for gen_order.py; the V8 archive is
 # handled separately (its symbols go to v8.txt).
