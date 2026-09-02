@@ -57,6 +57,12 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
         return resolver.promise();
     };
+
+    if (request._mode == .navigate) {
+        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
+        return resolver.promise();
+    }
+
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
     request.acquireRef();
@@ -109,7 +115,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             .cors => .cors,
             .@"no-cors" => .no_cors,
             .@"same-origin" => .same_origin,
-            .navigate => .navigate,
+            .navigate => @panic("fetch can't be navigate mode"),
         },
         .origin = exec.origin(),
         .redirect = switch (request._redirect) {
