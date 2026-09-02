@@ -237,6 +237,7 @@ const CorsKey = struct {
     url: []const u8,
     origin: []const u8,
     method: http.Method,
+    wants_credentials: bool,
     // lowercased and sorted.
     authored_headers: []const []const u8,
 
@@ -248,6 +249,8 @@ const CorsKey = struct {
         try buf.appendSlice(arena, self.origin);
         try buf.append(arena, 0);
         try buf.appendSlice(arena, @tagName(self.method));
+        try buf.append(arena, 0);
+        try buf.append(arena, if (self.wants_credentials) 1 else 0);
         try buf.append(arena, 0);
 
         for (self.authored_headers) |h| {
@@ -471,6 +474,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .url = url,
         .origin = origin,
         .method = transfer.req.method,
+        .wants_credentials = transfer.req.credentials_mode == .include,
         .authored_headers = header_names.items,
     };
     const key = try cors_key.build(transfer.arena.allocator());
