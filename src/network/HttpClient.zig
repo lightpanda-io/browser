@@ -4228,6 +4228,7 @@ fn testTransfer(arena: *lp.Arena) Transfer {
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .document,
@@ -4458,6 +4459,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .document,
@@ -4540,6 +4542,7 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .xhr,
@@ -4623,6 +4626,7 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .xhr,
@@ -4681,6 +4685,7 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
                 .credentials_mode = .omit,
                 .request_mode = .no_cors,
                 .resource_type = .document,
@@ -4745,6 +4750,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .req = .{
                 .method = .POST,
                 .url = "http://example.com/start",
+                .origin = null,
                 .body = "payload",
                 .credentials_mode = .omit,
                 .request_mode = .no_cors,
@@ -4786,6 +4792,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .req = .{
                 .method = .POST,
                 .url = "http://example.com/start",
+                .origin = null,
                 .body = "payload",
                 .credentials_mode = .omit,
                 .request_mode = .no_cors,
@@ -4852,6 +4859,7 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .document,
@@ -4917,7 +4925,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
-            .origin = "",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .document,
@@ -4993,6 +5001,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
                 .credentials_mode = .omit,
                 .request_mode = .no_cors,
                 .resource_type = .xhr,
@@ -5027,6 +5036,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
                 .credentials_mode = .omit,
                 .request_mode = .no_cors,
                 .resource_type = .xhr,
@@ -5088,6 +5098,7 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
                 .req = .{
                     .method = .GET,
                     .url = url,
+                    .origin = null,
                     .credentials_mode = .omit,
                     .request_mode = .no_cors,
                     .resource_type = .document,

@@ -512,8 +512,6 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .document_frame_id = transfer.req.document_frame_id,
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
-        .cookie_jar = null,
-        .cookie_origin = transfer.req.cookie_origin,
         .origin = transfer.req.origin,
         .credentials_mode = .omit,
         .request_mode = .no_cors,

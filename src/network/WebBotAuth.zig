@@ -244,6 +244,7 @@ test "signRequest: adds headers with correct names" {
         .req = .{
             .method = .GET,
             .url = "https://example.com/",
+            .origin = null,
             .credentials_mode = .omit,
             .request_mode = .no_cors,
             .resource_type = .document,

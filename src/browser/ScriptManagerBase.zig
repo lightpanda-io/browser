@@ -55,6 +55,12 @@ pub const Owner = union(enum) {
         };
     }
 
+    pub fn origin(self: Owner) ?[]const u8 {
+        return switch (self) {
+            inline else => |g| g.origin,
+        };
+    }
+
     pub fn jsContext(self: Owner) *js.Context {
         return switch (self) {
             inline else => |g| g.js,
