@@ -63,7 +63,7 @@ def emit(hotfile, prefix):
             seen.add((fname, sec)); by_file.setdefault(fname, []).append(sec)
     stats[prefix + " sections"] = len(seen); stats[prefix + " files"] = len(by_file)
     # LLD unquotes section names but not the file pattern, so that one stays bare.
-    lines = [f'    *{esc(f)}(' + " ".join(f'"{esc(s)}"' for s in secs) + ")" for f, secs in by_file.items()]
+    lines = [f'    *{esc(f)}(\n' + "\n".join(f'      "{esc(s)}"' for s in secs) + "\n    )" for f, secs in by_file.items()]
     if v8_archive: lines.insert(0, f'    *("{prefix}.hot.*")')
     return lines
 t = emit(hot_text, ".text"); r = emit(hot_rodata, ".rodata")

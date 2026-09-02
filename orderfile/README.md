@@ -33,8 +33,9 @@ below), with no change in run duration.
   of every input-section description, so the script scopes patterns to their
   object file (`*api.o(...)`). The shipped script covers Zig/Rust/C only
   (~4k patterns, ~2s of link). Once V8's functions are addressable (below) the
-  script grows to ~26k patterns and the release link to ~26s; one pattern per
-  line instead of per file would make that 85s. Debug builds pay nothing.
+  script grows to ~26k patterns and the release link to ~26s; one description
+  per pattern instead of per file would make that 85s (the line breaks inside
+  a description are free, they exist for the diff). Debug builds pay nothing.
 - The prebuilt V8 archive is compiled with `-fno-unique-section-names`
   (Chromium hardcodes it), so all of V8's function sections are named `.text`
   and the script cannot address them. `mark_hot_sections.zig` (run
@@ -54,12 +55,6 @@ below), with no change in run duration.
   `mark_hot_sections.zig` and `gen_order.py` both skip `Builtins_*`.
 
 ## Regenerating the profile
-
-`.github/workflows/orderfile.yml` regenerates `lightpanda.ld` and `v8.txt`
-every Monday (00:02 UTC) and opens a pull request from the `orderfile-regen`
-branch with the result (a re-run refreshes that PR rather than opening
-another); it can also be run from the Actions tab. It only runs
-`orderfile/tools/regen.sh`, which works the same locally:
 
 ```bash
 # root for /sys/kernel/debug/fault_around_bytes; ../demo checked out with
