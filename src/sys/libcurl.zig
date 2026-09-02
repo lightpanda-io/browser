@@ -239,6 +239,7 @@ pub const CurlHttpVersion = enum(c_long) {
 
 pub const CurlMOption = enum(c.CURLMoption) {
     max_host_connections = c.CURLMOPT_MAX_HOST_CONNECTIONS,
+    max_connects = c.CURLMOPT_MAXCONNECTS,
 };
 
 pub const CurlInfo = enum(c.CURLINFO) {
@@ -742,7 +743,7 @@ pub fn curl_multi_cleanup(multi: *CurlM) ErrorMulti!void {
 pub fn curl_multi_setopt(multi: *CurlM, comptime option: CurlMOption, value: anytype) ErrorMulti!void {
     const opt: c.CURLMoption = @intFromEnum(option);
     const code = switch (option) {
-        .max_host_connections => blk: {
+        .max_host_connections, .max_connects => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .comptime_int, .int => @intCast(value),
                 else => @compileError("expected integer for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
