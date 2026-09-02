@@ -502,6 +502,10 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     }
 
     const event = error_event.asEvent();
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer _ = event.releaseRef(self._page);
+
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.

@@ -94,6 +94,10 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
+    // Keep the event alive past dispatch so we can read defaultPrevented.
+    keydown_event.asEvent().acquireRef();
+    defer _ = keydown_event.asEvent().releaseRef(frame._page);
+
     frame._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
