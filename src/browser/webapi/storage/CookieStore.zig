@@ -23,7 +23,6 @@ const js = @import("../../js/js.zig");
 const URL = @import("../../URL.zig");
 const Notification = @import("../../../Notification.zig");
 
-const Frame = @import("../../Frame.zig");
 const Cookie = @import("Cookie.zig");
 const EventTarget = @import("../EventTarget.zig");
 const CookieChangeEvent = @import("../event/CookieChangeEvent.zig");
@@ -616,6 +615,8 @@ pub const CookieListItem = struct {
 };
 
 const testing = @import("../../../testing.zig");
+const HttpClient = @import("../../../network/HttpClient.zig");
+
 test "WebApi: CookieStore" {
     try testing.htmlRunner("cookie_store.html", .{});
 }
@@ -629,12 +630,13 @@ test "CookieStore: cross-site frame" {
 
     // victim.example embedded by attacker.example: the ancestor chain is
     // cross-site, so the frame has no site for cookies.
-    var top: Frame = undefined;
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
     top.parent = null;
-    top.url = "https://attacker.example/";
     frame.url = "https://victim.example/inner";
-    frame.parent = &top;
-    defer frame.parent = null;
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
 
     try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
     try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
@@ -662,7 +664,7 @@ test "CookieStore: cross-site frame" {
 
     // The same jar seen from a same-site chain: everything applies, and the
     // rejected writes really were rejected rather than hidden.
-    top.url = "https://victim.example/";
+    top_url = "https://victim.example/";
     {
         const items = try matchCookies(exec, null, null, false);
         try testing.expectEqual(4, items.len);
@@ -687,7 +689,7 @@ test "CookieStore: cross-site frame" {
 
     // Back in the cross-site context, the Strict cookie written same-site is
     // hidden again.
-    top.url = "https://attacker.example/";
+    top_url = "https://attacker.example/";
     {
         const items = try matchCookies(exec, null, null, false);
         try testing.expectEqual(1, items.len);

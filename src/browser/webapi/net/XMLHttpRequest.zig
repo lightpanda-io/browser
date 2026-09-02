@@ -303,8 +303,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
-    const session = exec.session;
-
     // Only add cookies for same-origin or when withCredentials is true
     const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
 
@@ -316,14 +314,10 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .ctx = self,
         .url = self._url,
         .method = self._method,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
         .body = self._request_body,
-        .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.siteForCookies(),
+        .cookies = cookie_support,
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,

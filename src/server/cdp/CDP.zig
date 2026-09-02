@@ -1536,14 +1536,9 @@ test "cdp: syncRequest short-circuits after disconnect" {
     // installed. The latch check runs before any req field is read, so the
     // rest are placeholders.
     const transfer = try client.newRequest(.{
-        .frame_id = 0,
-        .loader_id = 0,
         .method = .GET,
         .url = "http://127.0.0.1:9582/",
-        .cookie_jar = null,
-        .cookie_origin = .none,
         .resource_type = .fetch,
-        .notification = undefined,
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);
     try testing.expectError(error.ClientDisconnected, transfer.submitSync());
