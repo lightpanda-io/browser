@@ -115,7 +115,7 @@ const Host = struct {
     // lost to rounding.
     clock: u64,
 
-    // log_msg indicates is a rate limited host has already been notified to
+    // log_msg indicates if a rate limited host has already been notified to
     // the user via a log message.
     log_msg: bool = false,
 };
