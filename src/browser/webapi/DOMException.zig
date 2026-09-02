@@ -34,7 +34,6 @@ pub fn init(message: ?[]const u8, name: ?[]const u8) DOMException {
         ._custom_message = message,
     };
 }
-
 pub fn fromError(err: anyerror) ?DOMException {
     return switch (err) {
         error.SyntaxError => .{ ._code = .syntax_error },
@@ -249,7 +248,15 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DOMException.init, .{});
+    pub const constructor = bridge.constructor(struct {
+        fn constructor(m_: ?[]const u8, n_: ?[]const u8, exec: *const js.Execution) !DOMException {
+            return init(
+                if (m_) |m| try exec.dupeString(m) else null,
+                if (n_) |n| try exec.dupeString(n) else null,
+            );
+        }
+    }.constructor, .{});
+
     pub const code = bridge.accessor(DOMException.getCode, null, .{});
     pub const name = bridge.accessor(DOMException.getName, null, .{});
     pub const message = bridge.accessor(DOMException.getMessage, null, .{});

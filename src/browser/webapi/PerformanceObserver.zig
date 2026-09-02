@@ -73,7 +73,6 @@ const ObserveOptions = struct {
     type: ?[]const u8 = null,
 };
 
-/// TODO: Support `buffered` option.
 pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec: *const Execution) !void {
     const options: ObserveOptions = maybe_options orelse .{};
     // Update threshold.
@@ -127,9 +126,11 @@ pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec:
     // Per spec, buffered is only valid with the type option, not entryTypes.
     // Delivery is async via a queued task, not synchronous.
     if (options.buffered and options.type != null and !self.hasRecords()) {
-        for (self._performance._entries.items) |entry| {
-            if (self.interested(entry)) {
-                try self._entries.append(self._arena, entry);
+        for ([_][]const *Performance.Entry{ self._performance._entries.items, self._performance._resources.items }) |list| {
+            for (list) |entry| {
+                if (self.interested(entry)) {
+                    try self._entries.append(self._arena, entry);
+                }
             }
         }
         if (self.hasRecords()) {
@@ -157,7 +158,7 @@ pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
 }
 
 pub fn getSupportedEntryTypes() []const []const u8 {
-    return &.{ "mark", "measure" };
+    return &.{ "mark", "measure", "resource" };
 }
 
 /// Returns true if observer interested with given entry.
@@ -216,11 +217,13 @@ pub const EntryList = struct {
     }
 
     pub fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByType(exec.local_arena, self._entries, entry_type);
+        const kind = Performance.Entry.Type.Enum.parse(entry_type) orelse return &.{};
+        return Performance.filterEntriesByType(exec.local_arena, self._entries, kind);
     }
 
     pub fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByName(exec.local_arena, self._entries, name, entry_type);
+        const kind = if (entry_type) |t| (Performance.Entry.Type.Enum.parse(t) orelse return &.{}) else null;
+        return Performance.filterEntriesByName(exec.local_arena, self._entries, name, kind);
     }
 
     pub const JsApi = struct {
