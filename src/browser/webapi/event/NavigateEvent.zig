@@ -25,7 +25,7 @@ const Frame = @import("../../Frame.zig");
 const Event = @import("../Event.zig");
 const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig");
 const NavigationType = @import("../navigation/root.zig").NavigationType;
-const AbortSignal = @import("../AbortSignal.zig");
+const NavigationDestination = @import("../navigation/NavigationDestination.zig");
 
 const String = lp.String;
 
@@ -38,31 +38,28 @@ _navigation_type: NavigationType,
 _can_intercept: bool,
 _user_initiated: bool,
 _hash_change: bool,
-_signal: *AbortSignal,
 _download_request: ?[]const u8,
 _info: ?js.Value.Global,
 _has_ua_visual_transition: bool,
+_destination: *NavigationDestination,
 
 _intercepted: bool = false,
 
 const NavigateEventOptions = struct {
-    navigationType: ?[]const u8 = null,
     canIntercept: bool = false,
-    userInitiated: bool = false,
-    hashChange: bool = false,
-    signal: *AbortSignal,
+    destination: *NavigationDestination,
     downloadRequest: ?[]const u8 = null,
-    info: ?js.Value = null,
     hasUAVisualTransition: bool = false,
+    hashChange: bool = false,
+    info: ?js.Value = null,
+    navigationType: ?[]const u8 = null,
+    userInitiated: bool = false,
+    // TODO: formData
+    // TODO: signal
+    // TODO: sourceElement
 };
 
 const Options = Event.inheritOptions(NavigateEvent, NavigateEventOptions);
-
-const InterceptOptions = struct {
-    handler: ?js.Function = null,
-    focusReset: ?[]const u8 = null,
-    scroll: ?[]const u8 = null,
-};
 
 pub fn init(typ: []const u8, opts: Options, frame: *Frame) !*NavigateEvent {
     const arena = try frame.getArena(.tiny, "NavigateEvent");
@@ -102,8 +99,9 @@ fn initWithTrusted(
             ._can_intercept = opts.canIntercept,
             ._user_initiated = opts.userInitiated,
             ._hash_change = opts.hashChange,
-            ._signal = opts.signal,
-            ._form_data = opts.formData,
+            // TODO: signal
+            // TODO: formData
+            // TODO: sourceElement
             ._download_request = opts.downloadRequest,
             ._info = info,
             ._has_ua_visual_transition = opts.hasUAVisualTransition,
@@ -125,6 +123,10 @@ pub fn getCanIntercept(self: *const NavigateEvent) bool {
     return self._can_intercept;
 }
 
+pub fn getDestination(self: *const NavigateEvent) *NavigationDestination {
+    return self._destination;
+}
+
 pub fn getUserInitiated(self: *const NavigateEvent) bool {
     return self._user_initiated;
 }
@@ -133,24 +135,27 @@ pub fn getHashChange(self: *const NavigateEvent) bool {
     return self._hash_change;
 }
 
-pub fn getSignal(self: *NavigateEvent) *AbortSignal {
-    return self._signal;
-}
-
 pub fn getDownloadRequest(self: *const NavigateEvent) ?[]const u8 {
     return self._download_request;
 }
 
-pub fn getInfo(self: *const NavigateEvent, exec: *const js.Execution) js.Value {
+pub fn getInfo(self: *const NavigateEvent, exec: *const js.Execution) ?js.Value {
     if (self._info) |info| {
         return exec.js.local.?.toLocal(info);
     }
-    return exec.js.local.?.undefined_();
+
+    return null;
 }
 
 pub fn getHasUAVisualTransition(self: *const NavigateEvent) bool {
     return self._has_ua_visual_transition;
 }
+
+const InterceptOptions = struct {
+    focusReset: ?[]const u8 = null,
+    handler: ?js.Function = null,
+    scroll: ?[]const u8 = null,
+};
 
 // https://html.spec.whatwg.org/#dom-navigateevent-intercept
 // TODO: this only records interception state; it does not yet hook into
@@ -187,9 +192,9 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(NavigateEvent.init, .{});
     pub const navigationType = bridge.accessor(NavigateEvent.getNavigationType, null, .{});
     pub const canIntercept = bridge.accessor(NavigateEvent.getCanIntercept, null, .{});
+    pub const destination = bridge.accessor(NavigateEvent.getDestination, null, .{});
     pub const userInitiated = bridge.accessor(NavigateEvent.getUserInitiated, null, .{});
     pub const hashChange = bridge.accessor(NavigateEvent.getHashChange, null, .{});
-    pub const signal = bridge.accessor(NavigateEvent.getSignal, null, .{});
     pub const downloadRequest = bridge.accessor(NavigateEvent.getDownloadRequest, null, .{});
     pub const info = bridge.accessor(NavigateEvent.getInfo, null, .{});
     pub const hasUAVisualTransition = bridge.accessor(NavigateEvent.getHasUAVisualTransition, null, .{});
