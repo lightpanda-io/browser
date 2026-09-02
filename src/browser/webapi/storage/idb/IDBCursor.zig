@@ -88,6 +88,10 @@ pub const Direction = enum {
     fn reverse(self: Direction) bool {
         return self == .prev or self == .prevunique;
     }
+
+    fn unique(self: Direction) bool {
+        return self == .nextunique or self == .prevunique;
+    }
 };
 
 // What this cursor iterates — used only by the `source` accessor.
@@ -186,7 +190,9 @@ pub fn beforeDeliver(self: *IDBCursor) void {
 pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void {
     try self.assertIterable();
 
-    if (key_arg) |k| {
+    // An explicit `undefined` is an absent optional argument, not a key.
+    if (key_arg != null and !key_arg.?.isUndefined()) {
+        const k = key_arg.?;
         // Key conversion (DataError) must run before the got-value flag is
         // cleared, so a failing continue() leaves the cursor re-iterable.
         const encoded = try Key.encodeValue(self._txn._arena.allocator(), k);
@@ -205,7 +211,7 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
 
 pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: js.Value, exec: *Execution) !void {
     // Only meaningful on an index cursor with a directed (non-unique) direction.
-    if (self._index_id == null or self._direction == .nextunique or self._direction == .prevunique) {
+    if (self._index_id == null or self._direction.unique()) {
         return error.InvalidAccessError;
     }
     try self.assertIterable();
@@ -330,13 +336,16 @@ fn iterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
     const store_id = self._store._store_id;
 
     if (self._index_id) |index_id| {
+        const unique = self._direction.unique();
         const from_key, const from_pk, const pk_inclusive = switch (seek) {
             .first => .{ startSentinel(reverse), startSentinel(reverse), false },
-            .next => .{ self._key.?, self._primary_key.?, false },
+            // A unique direction moves past every record of the current key:
+            // the far sentinel makes the same-key branch of the seek unmatchable.
+            .next => .{ self._key.?, if (unique) startSentinel(!reverse) else self._primary_key.?, false },
             .to => |t| .{ t, startSentinel(reverse), false },
             .to_primary => |tp| .{ tp.key, tp.primary_key, true },
         };
-        const rec = try self._engine.indexCursorSeek(arena, store_id, index_id, self._bounds, reverse, from_key, from_pk, pk_inclusive, !self._key_only, offset);
+        const rec = try self._engine.indexCursorSeek(arena, store_id, index_id, self._bounds, reverse, unique, from_key, from_pk, pk_inclusive, !self._key_only, offset);
         if (rec) |r| try self.position(r.key, r.primary_key, r.value) else self.exhaust();
     } else {
         const from_op, const from_key = switch (seek) {
