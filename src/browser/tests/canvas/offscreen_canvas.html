@@ -96,3 +96,14 @@
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
 }
 </script>
+
+<script id=OffscreenCanvasRenderingContext2D#measureText>
+{
+  const ctx = new OffscreenCanvas(10, 10).getContext("2d");
+  ctx.font = "16px sans-serif";
+  testing.expectEqual(48, ctx.measureText("hello").width);
+  ctx.setLineDash([1, 2]);
+  testing.expectEqual("1,2", ctx.getLineDash().join());
+  testing.expectEqual(true, ctx.createLinearGradient(0, 0, 1, 1) instanceof CanvasGradient);
+}
+</script>
