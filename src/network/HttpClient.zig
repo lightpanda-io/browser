@@ -407,59 +407,32 @@ fn clearUrlBlocklist(self: *Client) void {
 /// Every reason a request is refused before it reaches the network:
 /// `--block-urls` patterns and the `--adblock-lists` filters both land here
 /// so that no call site can apply one without the other.
-fn isUrlBlocked(self: *const Client, req: *const Request) bool {
+fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
+    const req = &transfer.req;
     if (req.internal) return false;
     if (self.url_blocklist) |*blocklist| {
         if (blocklist.isBlocked(req.url)) return true;
     }
-    return self.isAdblocked(req);
+    return self.isAdblocked(transfer);
 }
 
-/// Longest URL we will match filters against.
-/// Anything past this is not a resource a filter list has an opinion about.
-const ADBLOCK_URL_MAX = 8 * 1024;
-
-fn isAdblocked(self: *const Client, req: *const Request) bool {
+fn isAdblocked(self: *const Client, transfer: *const Transfer) bool {
     const blocker = if (self.network.adblocker) |*b| b else return false;
-
-    var url_buf: [ADBLOCK_URL_MAX]u8 = undefined;
-    const url = normalizeForAdblock(req.url, &url_buf) orelse return false;
-
-    var source_buf: [253]u8 = undefined;
-    const top_level = req.resource_type == .document and !req.is_subframe;
-    const source_host = if (top_level) "" else URL.getOriginHostname(req.cookie_origin);
-    const source = if (source_host.len == 0 or source_host.len > source_buf.len)
-        ""
-    else
-        std.ascii.lowerString(&source_buf, source_host);
-
-    return blocker.match(.init(url, source, adblockResourceType(req))) == .blocked;
+    var buffers: AdBlocker.Request.Buffers = undefined;
+    const target = AdBlocker.Request.fromHttp(
+        &transfer.req,
+        adblockSourceUrl(transfer),
+        &buffers,
+    ) orelse return false;
+    return blocker.match(target) == .blocked;
 }
 
-fn normalizeForAdblock(url: [:0]const u8, buf: []u8) ?[]const u8 {
-    const end = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
-    const trimmed = url[0..end];
-
-    const upper = for (trimmed, 0..) |c, i| {
-        if (std.ascii.isUpper(c)) break i;
-    } else return trimmed;
-
-    if (trimmed.len > buf.len) return null;
-    const out = buf[0..trimmed.len];
-    @memcpy(out[0..upper], trimmed[0..upper]);
-    _ = std.ascii.lowerString(out[upper..], trimmed[upper..]);
-    return out;
-}
-
-fn adblockResourceType(req: *const Request) AdBlocker.ResourceTypes {
-    return switch (req.resource_type) {
-        .document => if (req.is_subframe) .{ .subdocument = true } else .{ .document = true },
-        .script => .{ .script = true },
-        .stylesheet => .{ .stylesheet = true },
-        .xhr, .fetch => .{ .xmlhttprequest = true },
-        .image => .{ .image = true },
-        .eventsource => .{ .other = true },
-    };
+fn adblockSourceUrl(transfer: *const Transfer) ?[]const u8 {
+    var owner: *const Owner = transfer.owner orelse return null;
+    if (transfer.req.resource_type == .document) {
+        owner = owner.parent orelse return null;
+    }
+    return owner.documentUrl();
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
@@ -1040,7 +1013,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
             continue :sw SubmitFrom.after_intercept;
         },
         .after_intercept => {
-            if (self.isUrlBlocked(&transfer.req)) {
+            if (self.isUrlBlocked(transfer)) {
                 log.info(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
             }
@@ -1656,7 +1629,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         });
                     }
 
-                    if (self.isUrlBlocked(&transfer.req)) {
+                    if (self.isUrlBlocked(transfer)) {
                         log.info(.http, "blocked url", .{ .url = transfer.req.url });
                         self.removeConn(msg.conn);
                         transfer._conn = null;
@@ -2086,6 +2059,18 @@ pub const Owner = struct {
     notification: *Notification,
 
     const Blob = @import("../browser/webapi/Blob.zig");
+
+    /// The URL of the document this owner's requests belong to.
+    /// Handles `about:` case also.
+    pub fn documentUrl(self: *const Owner) ?[:0]const u8 {
+        var source = self;
+        while (true) {
+            if (source.url) |url| {
+                if (!std.mem.startsWith(u8, url.*, "about:")) return url.*;
+            }
+            source = source.parent orelse return null;
+        }
+    }
 
     // RFC 6265bis "site for cookies"
     pub fn siteForCookies(self: *const Owner) Cookie.SiteForCookies {
@@ -3718,14 +3703,14 @@ const Synthetic = struct {
 
 const testing = @import("../testing.zig");
 
-// Only the transfer list matters to the tests using it: they build their
-// transfers by hand and never go through newRequest.
-fn testOwner() Owner {
+// Only the transfer list, the url and the parent matter to the tests using
+// it: they build their transfers by hand and never go through newRequest.
+fn testOwner(url: ?*const [:0]const u8, parent: ?*const Owner) Owner {
     return .{
         .blob_urls = undefined,
         .origin = undefined,
-        .url = null,
-        .parent = null,
+        .url = url,
+        .parent = parent,
         .frame_id = 0,
         .document_frame_id = 0,
         .loader_id = 0,
@@ -3947,26 +3932,48 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
 const TestRequest = struct {
     url: [:0]const u8,
     document: [:0]const u8 = "",
+    /// The page embedding `document`, when the test wants a deeper chain.
+    parent_document: [:0]const u8 = "",
     resource_type: Request.ResourceType = .document,
     is_subframe: bool = false,
     internal: bool = false,
 };
 
 fn testIsUrlBlocked(client: *const Client, opts: TestRequest) bool {
-    const req: Request = .{
-        .frame_id = 0,
-        .loader_id = 0,
-        .method = .GET,
-        .url = opts.url,
-        .cookie_jar = null,
-        .cookie_origin = opts.document,
-        .resource_type = opts.resource_type,
-        .is_subframe = opts.is_subframe,
-        .internal = opts.internal,
-        .notification = undefined,
-        .shutdown_callback = noopShutdown,
+    // The owner chain a real request carries: [0] the embedding page,
+    // [1] the request's document, [2] the frame being navigated — whose url
+    // slot already holds the target, so its context is its parent's.
+    var chain: [3]Owner = undefined;
+    chain[0] = testOwner(
+        if (opts.parent_document.len == 0) null else &opts.parent_document,
+        null,
+    );
+    chain[1] = testOwner(
+        if (opts.document.len == 0) null else &opts.document,
+        if (opts.parent_document.len == 0) null else &chain[0],
+    );
+    chain[2] = testOwner(&opts.url, if (opts.document.len == 0) null else &chain[1]);
+
+    var transfer: Transfer = .{
+        .arena = undefined,
+        .owner = if (opts.resource_type == .document)
+            &chain[2]
+        else if (opts.document.len == 0)
+            null
+        else
+            &chain[1],
+        .req = .{
+            .method = .GET,
+            .url = opts.url,
+            .resource_type = opts.resource_type,
+            .is_subframe = opts.is_subframe,
+            .internal = opts.internal,
+            .shutdown_callback = noopShutdown,
+        },
+        .client = undefined,
+        .start_time = 0,
     };
-    return client.isUrlBlocked(&req);
+    return client.isUrlBlocked(&transfer);
 }
 
 test "HttpClient: adblock verdicts apply per request" {
@@ -4039,6 +4046,35 @@ test "HttpClient: adblock verdicts apply per request" {
         .url = "https://partied.example.com/",
         .document = "https://news.com/",
         .is_subframe = true,
+    }));
+
+    // The context is the issuing frame's document even under a cross-site
+    // ancestor (the canonical ad iframe) — site-for-cookies semantics would
+    // collapse this chain to nothing and lose the party.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://partied.example.com/x.js",
+        .document = "https://adprovider.com/frame.html",
+        .parent_document = "https://news.com/",
+        .resource_type = .script,
+    }));
+
+    // A document hostname DNS could not carry is nothing a filter list has
+    // an opinion about: the request is let through, not matched sourceless.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://ads.example.com/pixel.gif",
+        .document = "https://news.com/",
+        .resource_type = .image,
+    }));
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://ads.example.com/pixel.gif",
+        .document = "https://" ++ "a" ** 254 ++ ".com/",
+        .resource_type = .image,
+    }));
+    // Same for a URL too long to normalize (uppercase forces the copy).
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://ads.example.com/" ++ "A" ** (8 * 1024),
+        .document = "https://news.com/",
+        .resource_type = .image,
     }));
 }
 
@@ -4201,21 +4237,21 @@ test "HttpClient: Fetch header overrides restore after one hop" {
 
 test "HttpClient: Owner.siteForCookies" {
     var top_url: [:0]const u8 = "http://attacker.example/attacker-nested";
-    var top = testOwner();
+    var top = testOwner(null, null);
     top.url = &top_url;
 
     var middle_url: [:0]const u8 = "http://victim.example/nested-middle";
-    var middle = testOwner();
+    var middle = testOwner(null, null);
     middle.url = &middle_url;
     middle.parent = &top;
 
     var inner_url: [:0]const u8 = "http://victim.example/inner";
-    var inner = testOwner();
+    var inner = testOwner(null, null);
     inner.url = &inner_url;
     inner.parent = &middle;
 
     // A worker has no site of its own; it takes its creating document's.
-    var worker = testOwner();
+    var worker = testOwner(null, null);
     worker.parent = &inner;
 
     // A top-level document is its own site.
@@ -4268,7 +4304,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner = testOwner();
+    var owner = testOwner(null, null);
 
     const Ctx = struct {
         client: *Client,
@@ -4338,7 +4374,7 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner = testOwner();
+    var owner = testOwner(null, null);
 
     const Ctx = struct {
         client: *Client,
@@ -4415,7 +4451,7 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner = testOwner();
+    var owner = testOwner(null, null);
 
     const Ctx = struct {
         client: *Client,
@@ -4715,7 +4751,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner = testOwner();
+    var owner = testOwner(null, null);
 
     const Ctx = struct {
         client: *Client,
@@ -4786,7 +4822,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner = testOwner();
+    var owner = testOwner(null, null);
 
     const Ctx = struct {
         client: *Client,
