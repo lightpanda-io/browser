@@ -397,14 +397,18 @@ pub fn httpRequestFail(bc: *CDP.BrowserContext, msg: *const Notification.Request
     // notification is tied to), without a frame.
     lp.assert(bc.session.hasPage(), "CDP.network.httpRequestFail null frame", .{});
 
+    // Consumer-side cancel (stopLoading, xhr.abort, AbortController, ...):
+    const canceled = msg.err == error.TransferCanceled;
+    const error_text: []const u8 = if (canceled) "net::ERR_ABORTED" else @errorName(msg.err);
+
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
         .requestId = &id.toRequestId(msg.transfer),
         .timestamp = lp.datetime.timestamp(.boot),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
-        .errorText = msg.err,
-        .canceled = false,
+        .errorText = error_text,
+        .canceled = canceled,
         .blockedReason = msg.blocked_reason,
     }, .{ .session_id = session_id });
 }
@@ -565,7 +569,7 @@ pub const RequestWriter = struct {
                 try SafeString.writeObjectField(jws, hdr.name);
                 try jws.write(SafeString.wrap(hdr.value));
             }
-            if (try request.getCookieString(transfer.arena.allocator())) |cookies| {
+            if (try transfer.getCookieString(transfer.arena.allocator())) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
             }
@@ -1173,8 +1177,6 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "https://blocked.test/script.js",
-        .cookie_jar = null,
-        .cookie_origin = "https://blocked.test/",
         .resource_type = .script,
         .notification = bc.session.notification,
         .ctx = &error_context,
@@ -1199,8 +1201,6 @@ test "cdp.Network: setBlockedURLs blocks requests with inspector reason" {
         .loader_id = 1,
         .method = .GET,
         .url = "http://127.0.0.1:9582/redirect-no-fragment",
-        .cookie_jar = null,
-        .cookie_origin = "http://127.0.0.1:9582/",
         .resource_type = .script,
         .notification = bc.session.notification,
         .ctx = &error_context,
@@ -1240,8 +1240,6 @@ test "cdp.Network: POST body exposed as postData" {
         .method = .POST,
         .url = "http://127.0.0.1:9582/echo_body",
         .body = body,
-        .cookie_jar = null,
-        .cookie_origin = "http://127.0.0.1:9582/",
         .resource_type = .fetch,
         .notification = bc.session.notification,
         .shutdown_callback = HttpClient.noopShutdown,
@@ -1302,8 +1300,6 @@ const EchoDriver = struct {
             .method = .POST,
             .url = "http://127.0.0.1:9582/echo_body",
             .body = body,
-            .cookie_jar = null,
-            .cookie_origin = "http://127.0.0.1:9582/",
             .resource_type = .fetch,
             .notification = bc.session.notification,
             .ctx = &driver,
@@ -1505,8 +1501,6 @@ test "cdp.Network: redirect hop precedes Fetch pause and carries redirectRespons
         .loader_id = 7,
         .method = .GET,
         .url = start_url,
-        .cookie_jar = null,
-        .cookie_origin = start_url,
         .resource_type = .script,
         .notification = bc.session.notification,
         .ctx = &callback_context,

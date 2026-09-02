@@ -174,7 +174,17 @@ pub fn init(
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
 
-    self._http_owner = .init(&frame._page.blob_urls, &self.origin);
+    self._http_owner = .{
+        .blob_urls = &frame._page.blob_urls,
+        .origin = &self.origin,
+        .url = null,
+        .parent = &frame._http_owner,
+        .frame_id = frame_id,
+        .document_frame_id = frame._frame_id,
+        .loader_id = loader_id,
+        .cookie_jar = &session.cookie_jar,
+        .notification = session.notification,
+    };
 
     self._script_manager = ScriptManagerBase.init(
         arena,
@@ -275,9 +285,7 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
-    var r = req;
-    r.document_frame_id = self._frame._frame_id;
-    return self._session.browser.http_client.newRequest(r, &self._http_owner);
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -419,13 +427,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     const transfer = http_client.newRequest(.{
         .url = resolved_url,
         .method = .GET,
-        .frame_id = self._frame_id,
-        .document_frame_id = self._frame._frame_id,
-        .loader_id = self._loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
         .resource_type = .script,
-        .notification = session.notification,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });

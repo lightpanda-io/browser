@@ -532,12 +532,15 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
-    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .insecure_disable_tls_host_verification = true,
-        .user_agent_suffix = "internal-tester",
-        .ws_max_concurrent = 50,
-        .load_resources = .{ .worker = true, .iframe = true },
-    } });
+    test_config = try Config.init(test_allocator, "test", .{
+        .serve = .{
+            .insecure_disable_tls_host_verification = true,
+            .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
+            .load_resources = .{ .worker = true, .iframe = true },
+            .watchdog_ms = 0,
+        },
+    });
 
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
@@ -865,6 +868,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/stop_loading/streaming.html")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        });
+        try res.writer.writeAll("<html><body><p id=first>first</p>");
+        try res.writer.flush();
+        try res.flush();
+        lp.io.sleep(.fromMilliseconds(1500), .awake) catch {};
+        try res.writer.writeAll("<p id=second>second</p></body></html>");
+        try res.writer.flush();
+        return res.end();
+    }
+
     if (std.mem.eql(u8, path, "/sse/streaming")) {
         sse_flag.store(false, .release);
         var send_buffer: [1024]u8 = undefined;
@@ -1136,6 +1157,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set_cookie")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_hidden=1; Path=/set_cookie_scope" },
+                .{ .name = "X-Visible", .value = "yes" },
             },
         });
     }

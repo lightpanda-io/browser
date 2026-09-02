@@ -451,6 +451,14 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
     return true;
 }
 
+// RFC 6265bis "site for cookies" of a request's initiator.
+pub const SiteForCookies = union(enum) {
+    // Matches no site, used for a frame whose ancestor chain contains a cross-site document.
+    none,
+    // Same-site when the target host is same-site with this URL's host.
+    url: [:0]const u8,
+};
+
 pub const Jar = struct {
     allocator: Allocator,
     cookies: std.ArrayList(Cookie),
@@ -575,11 +583,11 @@ pub const Jar = struct {
         request_time: ?u64 = null,
         is_navigation: bool = true,
         prefix: ?[]const u8 = null,
-        origin_url: ?[:0]const u8 = null,
+        origin_url: SiteForCookies,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
         const target = PreparedUri.init(target_url);
-        const same_site = try areSameSite(opts.origin_url, target.host);
+        const same_site = areSameSite(opts.origin_url, target.host);
 
         removeExpired(self, opts.request_time);
 
@@ -641,15 +649,18 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
     return true;
 }
 
-fn areSameSite(origin_url_: ?[:0]const u8, target_host: []const u8) !bool {
-    const origin_url = origin_url_ orelse return true;
-    const origin_host = URL.getHostname(origin_url);
+pub fn areSameSite(origin_url: SiteForCookies, target_host: []const u8) bool {
+    return switch (origin_url) {
+        .none => false,
+        .url => |url| areHostsSameSite(URL.getHostname(url), target_host),
+    };
+}
 
-    // common case
+pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
+    // Common case.
     if (std.mem.eql(u8, target_host, origin_host)) {
         return true;
     }
-
     return std.mem.eql(u8, findSecondLevelDomain(target_host), findSecondLevelDomain(origin_host));
 }
 
@@ -854,7 +865,7 @@ test "Jar: forRequest" {
 
     {
         // test with no cookies
-        try expectCookies("", &jar, test_url, .{ .is_http = true });
+        try expectCookies("", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true });
     }
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "global1=1"), now, true);
@@ -868,113 +879,113 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, url2, "domain1=9;domain=test.lightpanda.io"), now, true);
 
     // nothing fancy here
-    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .is_http = true });
-    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = test_url, .is_navigation = false, .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_navigation = false, .is_http = true });
 
     // We have a cookie where Domain=lightpanda.io
     // This should _not_ match xyxlightpanda.io
     try expectCookies("", &jar, "http://anothersitelightpanda.io/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // matching path without trailing /
     try expectCookies("global1=1; global2=2; path1=3", &jar, "http://lightpanda.io/about", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // incomplete prefix path
     try expectCookies("global1=1; global2=2", &jar, "http://lightpanda.io/abou", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // path doesn't match
     try expectCookies("global1=1; global2=2", &jar, "http://lightpanda.io/aboutus", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // path doesn't match cookie directory
     try expectCookies("global1=1; global2=2", &jar, "http://lightpanda.io/docs", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // exact directory match
     try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // sub directory match
     try expectCookies("global1=1; global2=2; path2=4", &jar, "http://lightpanda.io/docs/more", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // secure
     try expectCookies("global1=1; global2=2; secure=5", &jar, "https://lightpanda.io/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // navigational cross domain, secure
     try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, "https://lightpanda.io/x/", .{
-        .origin_url = "https://example.com/",
+        .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
     });
 
     // navigational cross domain, insecure
     try expectCookies("global1=1; global2=2; sitelax=7", &jar, "http://lightpanda.io/x/", .{
-        .origin_url = "https://example.com/",
+        .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
     });
 
     // non-navigational cross domain, insecure
     try expectCookies("", &jar, "http://lightpanda.io/x/", .{
-        .origin_url = "https://example.com/",
+        .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .is_navigation = false,
     });
 
     // non-navigational cross domain, secure
     try expectCookies("sitenone=6", &jar, "https://lightpanda.io/x/", .{
-        .origin_url = "https://example.com/",
+        .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
         .is_navigation = false,
     });
 
     // non-navigational same origin
     try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, "http://lightpanda.io/x/", .{
-        .origin_url = "https://lightpanda.io/",
+        .origin_url = .{ .url = "https://lightpanda.io/" },
         .is_http = true,
         .is_navigation = false,
     });
 
     // exact domain match + suffix
     try expectCookies("global2=2; domain1=9", &jar, "http://test.lightpanda.io/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // domain suffix match + suffix
     try expectCookies("global2=2; domain1=9", &jar, "http://1.test.lightpanda.io/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     // non-matching domain
     try expectCookies("global2=2", &jar, "http://other.lightpanda.io/", .{
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
 
     const l = jar.cookies.items.len;
     try expectCookies("global1=1", &jar, test_url, .{
         .request_time = now + 100,
-        .origin_url = test_url,
+        .origin_url = .{ .url = test_url },
         .is_http = true,
     });
     try testing.expectEqual(l - 1, jar.cookies.items.len);
@@ -1001,19 +1012,62 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
 
     // Same-site navigation: cookie included.
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
-        .origin_url = victim_url,
+        .origin_url = .{ .url = victim_url },
         .is_http = true,
     });
 
     // Cross-site navigation from attacker.test: cookie excluded.
     try expectCookies("", &jar, "http://victim.example/transfer", .{
-        .origin_url = "http://attacker.test/strict-form",
+        .origin_url = .{ .url = "http://attacker.test/strict-form" },
         .is_http = true,
     });
 
-    // Browser-initiated navigation (origin_url=null) is treated as same-site.
+    // Browser-initiated navigation: the initiator is the destination itself.
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
+        .origin_url = .{ .url = "http://victim.example/transfer" },
         .is_http = true,
+    });
+}
+
+test "Jar: forRequest with .none site-for-cookies" {
+    const expectCookies = struct {
+        fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
+            var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer aw.deinit();
+            try jar.forRequest(target_url, &aw.writer, opts);
+            try testing.expectEqual(expected, aw.written());
+        }
+    }.expect;
+
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    const victim_url: [:0]const u8 = "https://victim.example/";
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "strict=1; Path=/; SameSite=Strict"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "lax=2; Path=/; SameSite=Lax"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "none=3; Path=/; SameSite=None; Secure"), now, true);
+
+    // .none is the site-for-cookies of a frame whose ancestor chain contains
+    // a cross-site document. Even though the target here is the cookies' own
+    // site, the request is cross-site: Strict is withheld.
+    try expectCookies("lax=2; none=3", &jar, victim_url, .{
+        .origin_url = .none,
+        .is_http = true,
+    });
+
+    // Sub-resources from such a frame only carry SameSite=None cookies.
+    try expectCookies("none=3", &jar, victim_url, .{
+        .origin_url = .none,
+        .is_http = true,
+        .is_navigation = false,
+    });
+
+    // Sanity: a same-site initiator still gets everything.
+    try expectCookies("strict=1; lax=2; none=3", &jar, victim_url, .{
+        .origin_url = .{ .url = victim_url },
+        .is_http = true,
+        .is_navigation = false,
     });
 }
 

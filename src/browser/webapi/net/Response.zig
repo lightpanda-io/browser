@@ -115,7 +115,7 @@ fn initWithArena(arena: *lp.Arena, body_: ?BodyInit, opts_: ?InitOpts, exec: *co
         }
     };
 
-    const headers = try Headers.init(opts.headers, exec);
+    const headers = try Headers.initGuarded(opts.headers, .response, exec);
     if (content_type) |ct| {
         if (!headers.has("content-type", exec)) {
             try headers.append("content-type", ct, exec);
@@ -151,7 +151,7 @@ pub fn createError(exec: *const Execution) !*Response {
         ._body = .empty,
         ._type = .@"error",
         ._is_redirected = false,
-        ._headers = try Headers.init(null, exec),
+        ._headers = try .initGuarded(null, .immutable, exec),
     };
     arena.report();
     return self;
@@ -171,7 +171,9 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     const location = try URL.resolve(arena.allocator(), exec.base(), url_, .{ .encoding = exec.charset.* });
 
     const headers = try Headers.init(null, exec);
+    // append location directly, then lock the headers
     try headers.set("location", location, exec);
+    headers._guard = .immutable;
 
     const self = try arena.create(Response);
     self.* = .{
@@ -204,7 +206,7 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
     const opts = opts_ orelse InitOpts{};
     const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
 
-    const headers = try Headers.init(opts.headers, exec);
+    const headers = try Headers.initGuarded(opts.headers, .response, exec);
     if (!headers.has("content-type", exec)) {
         try headers.append("content-type", "application/json", exec);
     }
@@ -226,7 +228,7 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
 
 pub fn deinit(self: *Response, _: *Page) void {
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
     self._arena.release();
@@ -553,7 +555,7 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._body = body,
         ._type = self._type,
         ._is_redirected = self._is_redirected,
-        ._headers = try Headers.init(.{ .obj = self._headers }, exec),
+        ._headers = try .initGuarded(.{ .obj = self._headers }, self._headers._guard, exec),
         ._http_transfer = null,
     };
     arena.report();

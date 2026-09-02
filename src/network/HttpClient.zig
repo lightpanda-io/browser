@@ -28,7 +28,8 @@ const Driver = @import("../server/Driver.zig");
 const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
-const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
+const Cookie = @import("../browser/webapi/storage/Cookie.zig");
+const CookieJar = Cookie.Jar;
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -524,6 +525,25 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
     // the owner itself is freed, no orphan transfer points at it.
 }
 
+// Unlike abortOwner, the owner intends to stay alive (e.g. window.stop()). Our
+// shutdown has to be a little nicer, i.e. firing error callbacks.
+pub fn cancelRequests(self: *Client, owner: *Owner) void {
+    const last_id = self.next_request_id;
+    while (true) {
+        // Don't walk the linked list "normally", instead keep poping the head...
+        // cancel() can run JS which can mutate / invalidate nodes
+        var n = owner.transfers.first;
+
+        const target = while (n) |node| : (n = node.next) {
+            const t: *Transfer = @fieldParentPtr("owner_node", node);
+            if (t.id <= last_id and !t._outcome_delivered and !t.isCompleteAwaitingDispatch()) {
+                break t;
+            }
+        } else return;
+        target.cancel();
+    }
+}
+
 // Point-in-time snapshot of the client's outstanding work
 pub const Activity = struct {
     // in-flight + buffered-awaiting-dispatch + parked-for-CDP-interception
@@ -605,7 +625,22 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         // These are all small, so duping them into the transfer's arena is
         // cheap and can solve some nasty UAF.
         owned.url = try arena.dupeZ(u8, req.url);
-        owned.cookie_origin = try arena.dupeZ(u8, req.cookie_origin);
+
+        var cookie_jar: ?*CookieJar = null;
+        if (owner) |o| {
+            if (owned.frame_id == 0) owned.frame_id = o.frame_id;
+            if (owned.loader_id == 0) owned.loader_id = o.loader_id;
+            if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
+            if (owned.notification == null) owned.notification = o.notification;
+            if (req.cookies) cookie_jar = o.cookie_jar;
+        }
+        // Resolved onto the transfer; the request's copy is left null so
+        // nothing reads the caller's (possibly short-lived) url through it.
+        const cookie_origin: Cookie.SiteForCookies = switch (req.cookie_origin orelse if (owner) |o| o.siteForCookies() else .none) {
+            .none => .none,
+            .url => |url| .{ .url = try arena.dupeZ(u8, url) },
+        };
+        owned.cookie_origin = null;
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
         }
@@ -622,6 +657,8 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         const t = try arena.create(Transfer);
         t.* = .{
             .req = owned,
+            .cookie_jar = cookie_jar,
+            .cookie_origin = cookie_origin,
             .client = self,
             .arena = arena,
             .id = self.incrReqId(),
@@ -945,10 +982,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
 
             if (self.serve_mode) {
                 transfer._notify_cdp = true;
-                transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+                transfer.notify(.http_request_start, &.{ .transfer = transfer });
 
                 var wait_for_interception = false;
-                transfer.req.notification.dispatch(.http_request_intercept, &.{
+                transfer.notify(.http_request_intercept, &.{
                     .transfer = transfer,
                     .wait_for_interception = &wait_for_interception,
                 });
@@ -1522,7 +1559,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // TODO give a way to configure the number of auth retries.
     if (transfer._auth_challenge != null and transfer._tries < 10) {
         var wait_for_interception = false;
-        transfer.req.notification.dispatch(
+        transfer.notify(
             .http_request_auth_required,
             &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception },
         );
@@ -1577,7 +1614,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                         // Chromium announces each redirect hop before pausing it
                         // for Fetch interception. Playwright uses redirectResponse
                         // to pair the new pause with a new Request.
-                        transfer.req.notification.dispatch(.http_request_start, &.{
+                        transfer.notify(.http_request_start, &.{
                             .transfer = transfer,
                             .redirect_response = true,
                         });
@@ -1593,7 +1630,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
 
                     if (self.serve_mode) { // e.g. cdp
                         var wait_for_interception = false;
-                        transfer.req.notification.dispatch(.http_request_intercept, &.{
+                        transfer.notify(.http_request_intercept, &.{
                             .transfer = transfer,
                             .wait_for_interception = &wait_for_interception,
                         });
@@ -1768,18 +1805,13 @@ pub const Request = struct {
     // ten segments, versus a TCP handshake plus a TLS one.
     const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
 
-    frame_id: u32,
-    loader_id: u32,
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,
-    cookie_jar: ?*CookieJar,
-    cookie_origin: [:0]const u8,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
     credentials: ?[:0]const u8 = null,
-    notification: *Notification,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 
@@ -1792,9 +1824,22 @@ pub const Request = struct {
     // fires.
     headers_only: bool = false,
 
-    // The document frame this request belongs to, for CDP attribution.
-    // This will be different than frame_id for Workers.
+    // Should only be set when they need to differ from the owner's.
+    frame_id: u32 = 0,
+    loader_id: u32 = 0,
+    // The document frame this request belongs to. Differs from frame_id for
+    // Workers.
     document_frame_id: ?u32 = null,
+    notification: ?*Notification = null,
+
+    // Send the owner's cookies and honour Set-Cookie. Off for a credential-less
+    // fetch / XHR / EventSource. Meaningless without an owner: there is no jar.
+    cookies: bool = true,
+
+    // The site for SameSite checks. null = the owner's (Owner.siteForCookies).
+    // Frame.navigate is the one caller with a reason to override it: the
+    // initiator of a top-level navigation isn't the frame being navigated.
+    cookie_origin: ?Cookie.SiteForCookies = null,
 
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
@@ -1831,22 +1876,6 @@ pub const Request = struct {
     // every caller decides — pass `HttpClient.noopShutdown` to opt out,
     // knowingly.
     shutdown_callback: ShutdownCallback,
-
-    pub fn getCookieString(self: *Request, arena: Allocator) !?[:0]const u8 {
-        const jar = self.cookie_jar orelse return null;
-        var aw: std.Io.Writer.Allocating = .init(arena);
-        try jar.forRequest(self.url, &aw.writer, .{
-            .is_http = true,
-            .origin_url = self.cookie_origin,
-            .is_navigation = self.resource_type == .document,
-        });
-        if (aw.written().len == 0) {
-            return null;
-        }
-        try aw.writer.writeByte(0);
-        const written = aw.written();
-        return written.ptr[0 .. written.len - 1 :0];
-    }
 };
 
 pub const SyncResponse = struct {
@@ -1940,7 +1969,7 @@ fn fulfillRedirect(
     errdefer |err| transfer.abortPipelineError(err);
 
     // retrieve cookies from the fulfilled response's headers.
-    if (transfer.req.cookie_jar) |jar| {
+    if (transfer.cookie_jar) |jar| {
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
                 try jar.populateFromResponse(transfer.req.url, hdr.value);
@@ -1999,13 +2028,47 @@ pub const Owner = struct {
     // it can change during navigation.
     origin: *const ?[]const u8,
 
+    // The owning Frame's URL slot, a pointer for the same reason. A worker
+    // has none: its site for cookies is its creating document's.
+    url: ?*const [:0]const u8,
+
+    // The parent frame's Owner; for a worker, its creating frame's. Outlives
+    // this Owner: child frames are torn down before their parent, a worker
+    // before its frame.
+    parent: ?*const Owner,
+
+    // Copied onto every request made through this owner, see Request.
+    frame_id: u32,
+    document_frame_id: u32,
+    loader_id: u32,
+    cookie_jar: *CookieJar,
+    notification: *Notification,
+
     const Blob = @import("../browser/webapi/Blob.zig");
 
-    pub fn init(blob_urls: *const Blob.UrlMap, origin: *const ?[]const u8) Owner {
-        return .{
-            .blob_urls = blob_urls,
-            .origin = origin,
-        };
+    // RFC 6265bis "site for cookies"
+    pub fn siteForCookies(self: *const Owner) Cookie.SiteForCookies {
+        var source = self;
+        while (source.parent) |parent| : (source = parent) {
+            const url = source.url orelse continue;
+            if (!std.mem.startsWith(u8, url.*, "about:")) break;
+        }
+        // Only a worker has no url, and a worker always hangs off a Frame.
+        const own_url = source.url.?.*;
+        const own_host = URL.getHostname(own_url);
+
+        var owner = source;
+        while (owner.parent) |parent| : (owner = parent) {
+            const parent_url = parent.url orelse continue;
+            const parent_host = URL.getHostname(parent_url.*);
+            if (parent_host.len == 0) {
+                continue;
+            }
+            if (Cookie.areHostsSameSite(parent_host, own_host) == false) {
+                return .none;
+            }
+        }
+        return .{ .url = own_url };
     }
 
     pub fn addTransfer(self: *Owner, t: *Transfer) void {
@@ -2050,6 +2113,11 @@ pub const Transfer = struct {
     req: Request,
     res: Response = .{},
     client: *Client,
+
+    // The owner's jar, unless the request opted out of cookies.
+    cookie_jar: ?*CookieJar = null,
+    // The site for SameSite checks: Request.cookie_origin, else the owner's.
+    cookie_origin: Cookie.SiteForCookies = .none,
 
     req_headers: std.ArrayList(RequestHeader) = .empty,
 
@@ -2401,13 +2469,24 @@ pub const Transfer = struct {
         self.client.graveyard.append(&self._node);
     }
 
-    // Cancel this transfer with `err`. Fires error_callback once (latched
+    // The consumer doesn't want this transfer. Reserved for things like
+    // xhr.abort(), an AbortController, a worker.terminate(), i.e. mostly JS
+    // driven (though, potentially indirectly).
+    // HeaderResult.abort on the other hand is more internal, e.g. ScriptManager
+    // getting a non-2xx response code.
+    // cancel results in a `error.TransferCanceled` and abort results in an
+    // error.Abort. Various places need to make the distinction between the two.
+    pub fn cancel(self: *Transfer) void {
+        self.abort(error.TransferCanceled);
+    }
+
+    // Fail this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if
     // deliver() is running our callbacks, detaches and lets deliver()
     // deinit when its loop exits.
     //
-    // This is the ONE entry point external callers should use to cancel
-    // a transfer. Don't reach for kill() or requestFailed() directly —
+    // abort() or cancel() are the only entry points external callers should use
+    // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
         // error_callback can run JS that tears this transfer down again
@@ -2419,6 +2498,37 @@ pub const Transfer = struct {
         self.requestFailed(err);
         self.state = state;
         self.detachOrDeinit();
+    }
+
+    // take whatever we have, and deliver it.
+    pub fn finishEarly(self: *Transfer) bool {
+        if (self.state != .inflight or self.req.streaming or self._cache_intent == .revalidate) {
+            return false;
+        }
+        const conn = self._conn orelse return false;
+        const status = conn.getResponseCode() catch 0;
+        if (status == 0 or (status >= 300 and status < 400)) {
+            // we don't have a status code yet, or it's a 3xx. Nothing to deliver.
+            return false;
+        }
+
+        self.materializeResponse(conn, .{}) catch return false;
+        self.client.removeConn(conn);
+        self._conn = null;
+        self._content_length = self.res.buffer.items.len;
+        self.bufferEvents(self.res.buffer.items) catch |err| {
+            self.failAsync(err);
+        };
+        return true;
+    }
+
+    // We have our events, and the last event is .done
+    fn isCompleteAwaitingDispatch(self: *const Transfer) bool {
+        if (self.state != .buffered) {
+            return false;
+        }
+        const events = self._events.items;
+        return events.len > 0 and events[events.len - 1] == .done;
     }
 
     // A pipeline entry point failed. The pipeline still owns the transfer in
@@ -2438,6 +2548,30 @@ pub const Transfer = struct {
         self.failAsync(err);
     }
 
+    pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
+        const jar = self.cookie_jar orelse return null;
+        const req = &self.req;
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        try jar.forRequest(req.url, &aw.writer, .{
+            .is_http = true,
+            .origin_url = self.cookie_origin,
+            .is_navigation = req.resource_type == .document,
+        });
+        if (aw.written().len == 0) {
+            return null;
+        }
+        try aw.writer.writeByte(0);
+        const written = aw.written();
+        return written.ptr[0 .. written.len - 1 :0];
+    }
+
+    // Mirrors the transfer to whoever the owner reports to (CDP). A request
+    // without attribution has nobody listening.
+    fn notify(self: *Transfer, comptime event: Notification.EventType, data: Notification.ArgType(event)) void {
+        const notification = self.req.notification orelse return;
+        notification.dispatch(event, data);
+    }
+
     // Owner-driven teardown: fires shutdown_callback (not error_callback)
     // and otherwise behaves like abort. Called by Client.abortOwner /
     // abortRequests when a Frame / WGS is being torn down. Any buffered,
@@ -2445,7 +2579,7 @@ pub const Transfer = struct {
     fn kill(self: *Transfer) void {
         if (self._notify_cdp and !self._notified_fail) {
             self._notified_fail = true;
-            self.req.notification.dispatch(.http_request_fail, &.{
+            self.notify(.http_request_fail, &.{
                 .transfer = self,
                 .err = error.Shutdown,
             });
@@ -2527,7 +2661,7 @@ pub const Transfer = struct {
         }
 
         if (self._notify_cdp) {
-            self.req.notification.dispatch(.http_request_fail, &.{
+            self.notify(.http_request_fail, &.{
                 .transfer = self,
                 .err = err,
                 .blocked_reason = if (err == error.UrlBlocked) .inspector else null,
@@ -2541,7 +2675,9 @@ pub const Transfer = struct {
     // A consumer callback failed mid-delivery: latch the failure, notify,
     // free. Only called from deliver().
     fn failDelivery(self: *Transfer, err: anyerror) void {
-        log.err(.http, "delivery callback", .{ .err = err, .req = self });
+        if (err != error.TransferCanceled) {
+            log.err(.http, "delivery callback", .{ .err = err, .req = self });
+        }
         self.requestFailed(err);
         self.finishDelivery();
     }
@@ -2700,7 +2836,7 @@ pub const Transfer = struct {
         const headers = try it.collect(arena.allocator());
         self.res.headers = headers.items;
 
-        if (self.req.cookie_jar) |jar| {
+        if (self.cookie_jar) |jar| {
             for (self.res.headers) |hdr| {
                 if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
                     jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
@@ -2765,7 +2901,7 @@ pub const Transfer = struct {
         try conn.commitHeaders();
 
         // Add cookies from cookie jar.
-        if (try self.req.getCookieString(self.arena.allocator())) |cookies| {
+        if (try self.getCookieString(self.arena.allocator())) |cookies| {
             try conn.setCookies(@ptrCast(cookies.ptr));
         }
 
@@ -3301,7 +3437,7 @@ pub const Transfer = struct {
 
         const req = &transfer.req;
         if (transfer._from_cache) {
-            req.notification.dispatch(
+            transfer.notify(
                 .http_request_served_from_cache,
                 &.{ .transfer = transfer },
             );
@@ -3330,7 +3466,7 @@ pub const Transfer = struct {
                 },
                 .header => {
                     if (transfer._notify_cdp) {
-                        req.notification.dispatch(.http_response_header_done, &.{
+                        transfer.notify(.http_response_header_done, &.{
                             .transfer = transfer,
                         });
                     }
@@ -3343,7 +3479,7 @@ pub const Transfer = struct {
                 },
                 .data => |chunk| {
                     if (transfer._notify_cdp) {
-                        req.notification.dispatch(.http_response_data, &.{
+                        transfer.notify(.http_response_data, &.{
                             .data = chunk,
                             .transfer = transfer,
                         });
@@ -3365,7 +3501,7 @@ pub const Transfer = struct {
                     std.mem.swap(std.ArrayList(u8), &res.buffer, &res.stream.spare);
                     const chunk = res.stream.spare.items;
                     if (transfer._notify_cdp) {
-                        req.notification.dispatch(.http_response_data, &.{
+                        transfer.notify(.http_response_data, &.{
                             .data = chunk,
                             .transfer = transfer,
                         });
@@ -3378,7 +3514,7 @@ pub const Transfer = struct {
                 .done => {
                     terminal = true;
                     if (transfer._notify_cdp) {
-                        req.notification.dispatch(.http_request_done, &.{
+                        transfer.notify(.http_request_done, &.{
                             .transfer = transfer,
                             .content_length = transfer._content_length,
                         });
@@ -3540,6 +3676,22 @@ const Synthetic = struct {
 };
 
 const testing = @import("../testing.zig");
+
+// Only the transfer list matters to the tests using it: they build their
+// transfers by hand and never go through newRequest.
+fn testOwner() Owner {
+    return .{
+        .blob_urls = undefined,
+        .origin = undefined,
+        .url = null,
+        .parent = null,
+        .frame_id = 0,
+        .document_frame_id = 0,
+        .loader_id = 0,
+        .cookie_jar = undefined,
+        .notification = undefined,
+    };
+}
 const AdBlocker = @import("adblock/AdBlocker.zig");
 
 // The Network every test client points at: only the fields a test actually
@@ -3795,14 +3947,9 @@ fn testTransfer(arena: *lp.Arena) Transfer {
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .document,
-            .notification = undefined,
             .shutdown_callback = noopShutdown,
         },
         .client = undefined,
@@ -3936,6 +4083,61 @@ test "HttpClient: Fetch header overrides restore after one hop" {
     try testing.expectEqual(2, transfer.req_headers.items.len);
 }
 
+test "HttpClient: Owner.siteForCookies" {
+    var top_url: [:0]const u8 = "http://attacker.example/attacker-nested";
+    var top = testOwner();
+    top.url = &top_url;
+
+    var middle_url: [:0]const u8 = "http://victim.example/nested-middle";
+    var middle = testOwner();
+    middle.url = &middle_url;
+    middle.parent = &top;
+
+    var inner_url: [:0]const u8 = "http://victim.example/inner";
+    var inner = testOwner();
+    inner.url = &inner_url;
+    inner.parent = &middle;
+
+    // A worker has no site of its own; it takes its creating document's.
+    var worker = testOwner();
+    worker.parent = &inner;
+
+    // A top-level document is its own site.
+    try testing.expectEqual("http://attacker.example/attacker-nested", top.siteForCookies().url);
+
+    // Cross-site with the top-level document: no site for cookies — for the
+    // directly-embedded frame and for the same-site-with-parent frame nested
+    // under it alike.
+    try testing.expectEqual(true, middle.siteForCookies() == .none);
+    try testing.expectEqual(true, inner.siteForCookies() == .none);
+    try testing.expectEqual(true, worker.siteForCookies() == .none);
+
+    // A fully same-site chain (subdomains included) keeps its site.
+    top_url = "http://victim.example/";
+    middle_url = "http://sub.victim.example/nested-middle";
+    try testing.expectEqual("http://victim.example/inner", inner.siteForCookies().url);
+    try testing.expectEqual("http://sub.victim.example/nested-middle", middle.siteForCookies().url);
+    try testing.expectEqual("http://victim.example/inner", worker.siteForCookies().url);
+
+    // about: documents inherit their creator's origin: transparent as an
+    // ancestor, and judged through their nearest real ancestor themselves.
+    middle_url = "about:blank";
+    try testing.expectEqual("http://victim.example/inner", inner.siteForCookies().url);
+    try testing.expectEqual("http://victim.example/", middle.siteForCookies().url);
+
+    top_url = "http://attacker.example/";
+    try testing.expectEqual(true, inner.siteForCookies() == .none);
+    try testing.expectEqual("http://attacker.example/", middle.siteForCookies().url);
+
+    // A worker under an about: document reads through it too.
+    worker.parent = &middle;
+    try testing.expectEqual("http://attacker.example/", worker.siteForCookies().url);
+
+    // A top-level about:blank has nothing to read through.
+    top_url = "about:blank";
+    try testing.expectEqual("about:blank", top.siteForCookies().url);
+}
+
 test "HttpClient: fulfillIntercepted survives a done_callback that tears down the owner" {
     // Regression: the fulfilled response's done_callback runs JS which
     // navigates / closes the page, re-entrantly killing the transfer
@@ -3950,7 +4152,7 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .init(undefined, undefined);
+    var owner = testOwner();
 
     const Ctx = struct {
         client: *Client,
@@ -3973,14 +4175,9 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .document,
-            .notification = undefined,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
             .done_callback = Ctx.doneCallback,
@@ -4025,7 +4222,7 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .init(undefined, undefined);
+    var owner = testOwner();
 
     const Ctx = struct {
         client: *Client,
@@ -4058,14 +4255,9 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .xhr,
-            .notification = undefined,
             .shutdown_callback = Ctx.shutdownCallback,
             .ctx = &ctx,
             .done_callback = Ctx.doneCallback,
@@ -4107,7 +4299,7 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .init(undefined, undefined);
+    var owner = testOwner();
 
     const Ctx = struct {
         client: *Client,
@@ -4144,14 +4336,9 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .xhr,
-            .notification = undefined,
             .shutdown_callback = Ctx.shutdownCallback,
             .ctx = &ctx,
             .header_callback = Ctx.headerCallback,
@@ -4205,14 +4392,9 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .arena = arena,
             .owner = null,
             .req = .{
-                .frame_id = 0,
-                .loader_id = 0,
                 .method = .GET,
                 .url = "http://example.com/",
-                .cookie_jar = null,
-                .cookie_origin = "",
                 .resource_type = .document,
-                .notification = undefined,
                 .shutdown_callback = noopShutdown,
             },
             .client = &client,
@@ -4272,15 +4454,10 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .arena = arena,
             .owner = null,
             .req = .{
-                .frame_id = 0,
-                .loader_id = 0,
                 .method = .POST,
                 .url = "http://example.com/start",
                 .body = "payload",
-                .cookie_jar = null,
-                .cookie_origin = "",
                 .resource_type = .document,
-                .notification = undefined,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
             },
@@ -4316,15 +4493,10 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .arena = arena,
             .owner = null,
             .req = .{
-                .frame_id = 0,
-                .loader_id = 0,
                 .method = .POST,
                 .url = "http://example.com/start",
                 .body = "payload",
-                .cookie_jar = null,
-                .cookie_origin = "",
                 .resource_type = .document,
-                .notification = undefined,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
             },
@@ -4385,14 +4557,9 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .document,
-            .notification = undefined,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
             .header_callback = Ctx.headerCallback,
@@ -4432,7 +4599,7 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .init(undefined, undefined);
+    var owner = testOwner();
 
     const Ctx = struct {
         client: *Client,
@@ -4453,14 +4620,9 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
         .arena = arena,
         .owner = null,
         .req = .{
-            .frame_id = 0,
-            .loader_id = 0,
             .method = .GET,
             .url = "http://example.com/",
-            .cookie_jar = null,
-            .cookie_origin = "",
             .resource_type = .document,
-            .notification = undefined,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
             .error_callback = Ctx.errorCallback,
@@ -4508,7 +4670,7 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
     defer client.processGraveyard();
     defer client.transfers.deinit(testing.allocator);
 
-    var owner: Owner = .init(undefined, undefined);
+    var owner = testOwner();
 
     const Ctx = struct {
         client: *Client,
@@ -4531,14 +4693,9 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .arena = arena,
             .owner = null,
             .req = .{
-                .frame_id = 0,
-                .loader_id = 0,
                 .method = .GET,
                 .url = "http://example.com/",
-                .cookie_jar = null,
-                .cookie_origin = "",
                 .resource_type = .xhr,
-                .notification = undefined,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,
                 .error_callback = Ctx.errorCallback,
@@ -4568,14 +4725,9 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .arena = arena,
             .owner = null,
             .req = .{
-                .frame_id = 0,
-                .loader_id = 0,
                 .method = .GET,
                 .url = "http://example.com/",
-                .cookie_jar = null,
-                .cookie_origin = "",
                 .resource_type = .xhr,
-                .notification = undefined,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,
                 .error_callback = Ctx.errorCallback,
@@ -4632,14 +4784,9 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
                 .arena = arena,
                 .owner = null,
                 .req = .{
-                    .frame_id = 0,
-                    .loader_id = 0,
                     .method = .GET,
                     .url = url,
-                    .cookie_jar = null,
-                    .cookie_origin = "",
                     .resource_type = .document,
-                    .notification = undefined,
                     .shutdown_callback = noopShutdown,
                     .ctx = undefined,
                     .throttle = throttle,

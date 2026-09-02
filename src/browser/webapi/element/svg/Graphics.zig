@@ -25,6 +25,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Factory = @import("../../../Factory.zig");
 const DOMRect = @import("../../DOMRect.zig");
+const DOMMatrix = @import("../../DOMMatrix.zig");
 const DOMMatrixReadOnly = @import("../../DOMMatrixReadOnly.zig");
 const SvgElement = @import("../Svg.zig");
 const AnimatedTransformList = @import("../../svg/AnimatedTransformList.zig");
@@ -128,6 +129,8 @@ pub const JsApi = struct {
     pub const requiredExtensions = bridge.accessor(Graphics.getRequiredExtensions, null, .{});
     pub const systemLanguage = bridge.accessor(Graphics.getSystemLanguage, null, .{});
     pub const getBBox = bridge.function(Graphics.getBBox, .{});
+    pub const getCTM = bridge.function(Graphics.getCTM, .{});
+    pub const getScreenCTM = bridge.function(Graphics.getScreenCTM, .{});
 };
 
 // SVGBoundingBoxOptions is not modelled: Chrome declares no parameter at all
@@ -216,6 +219,52 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
             .defs, .symbol, .svg, .switch_element, .use, .image, .text_content => {},
         }
     }
+}
+
+/// Composes `transform` attributes from the element up to, excluding, its
+/// nearest <svg>. Null when the element isn't in a document.
+pub fn getCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+    return currentTransformMatrix(self, .viewport, frame);
+}
+
+/// Like getCTM through every enclosing <svg>, offset by where the outermost
+/// one sits on the page. Nested viewport x/y are not applied.
+pub fn getScreenCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+    return currentTransformMatrix(self, .screen, frame);
+}
+
+fn currentTransformMatrix(self: *Graphics, space: enum { viewport, screen }, frame: *Frame) !?*DOMMatrix {
+    if (!self.asNode().isConnected()) {
+        return null;
+    }
+
+    var matrix = transformMatrix(self.asElement());
+    var outermost: ?*Element = if (self._type == .svg) self.asElement() else null;
+    var node = self.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        const element = n.is(Element) orelse break;
+        if (element._namespace != .svg) break;
+        const graphics = element.as(SvgElement).is(Graphics) orelse continue;
+        if (graphics._type == .svg) {
+            if (space == .viewport) break;
+            outermost = element;
+        }
+        matrix = transformMatrix(element).multiply(matrix);
+    }
+
+    if (space == .screen) {
+        if (outermost) |svg| {
+            const rect = svg.boundingClientRectValues(frame);
+            matrix = (PathData.Matrix{ .e = rect.x, .f = rect.y }).multiply(matrix);
+        }
+    }
+
+    return try DOMMatrix.create(.{
+        matrix.a, matrix.b, 0, 0,
+        matrix.c, matrix.d, 0, 0,
+        0,        0,        1, 0,
+        matrix.e, matrix.f, 0, 1,
+    }, true, frame._page);
 }
 
 fn transformMatrix(element: *Element) PathData.Matrix {

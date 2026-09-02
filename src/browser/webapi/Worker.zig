@@ -106,9 +106,6 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
         .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = resolved_url,
-        .notification = session.notification,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -139,7 +136,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 pub fn deinit(self: *Worker) void {
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
-        res.abort(error.Abort);
+        res.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();
@@ -324,7 +321,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
 pub fn terminate(self: *Worker) void {
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
 }

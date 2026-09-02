@@ -138,7 +138,7 @@ fn clearResponse(self: *XMLHttpRequest, page: *Page) void {
 
 pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
 
@@ -219,7 +219,7 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
     // Abort any in-progress request
     if (self._http_transfer) |transfer| {
-        transfer.abort(error.Abort);
+        transfer.cancel();
         self._http_transfer = null;
     }
     self._send_flag = false;
@@ -303,8 +303,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
-    const session = exec.session;
-
     // Only add cookies for same-origin or when withCredentials is true
     const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
 
@@ -316,14 +314,10 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .ctx = self,
         .url = self._url,
         .method = self._method,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
         .body = self._request_body,
-        .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.url.*,
+        .cookies = cookie_support,
         .resource_type = .xhr,
         .timeout_ms = self._timeout,
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -634,6 +628,9 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
+        if (Headers.isForbiddenResponseHeaderName(hdr.name)) {
+            continue;
+        }
         const joined = try std.fmt.allocPrint(self._arena.allocator(), "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena.allocator(), joined);
     }
@@ -714,10 +711,10 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
-    self.handleError(error.Abort);
+    self.handleError(error.TransferCanceled);
     if (self._http_transfer) |resp| {
         self._http_transfer = null;
-        resp.abort(error.Abort);
+        resp.cancel();
     }
     self.releaseSelfRef();
 }
@@ -731,7 +728,7 @@ fn handleError(self: *XMLHttpRequest, err: anyerror) void {
     };
 }
 fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
-    const is_abort = err == error.Abort;
+    const is_abort = err == error.TransferCanceled;
     const is_timeout = err == error.OperationTimedout;
 
     const new_state: ReadyState = if (is_abort) .unsent else .done;
@@ -750,7 +747,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = if (err == error.Abort) .debug else .err;
+    const level: log.Level = if (err == error.TransferCanceled) .debug else .err;
     log.log(.http, level, "error", .{
         .url = self._url,
         .err = err,

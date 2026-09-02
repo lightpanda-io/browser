@@ -394,11 +394,7 @@ pub fn insertAdjacentHTML(
 
 pub fn click(self: *HtmlElement, frame: *Frame) !void {
     switch (self._type) {
-        inline .button, .input, .textarea, .select => |tag| {
-            if (self.subtype(Subtype(tag)).getDisabled()) {
-                return;
-            }
-        },
+        .button, .input, .textarea, .select, .option, .optgroup => if (self.asElement().isDisabled()) return,
         else => {},
     }
 
@@ -611,6 +607,28 @@ pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 //
 // "contenteditable" is 15 bytes — past the comptime SSO limit — so the
 // String wrap runs at runtime, mirroring the pattern in interactive.zig.
+/// Reflects the attribute only; `isContentEditable` stays false regardless.
+pub fn getContentEditable(self: *HtmlElement) []const u8 {
+    const raw = self.asElement().getAttributeSafe(.wrap("contenteditable")) orelse return "inherit";
+    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "true")) return "true";
+    if (std.ascii.eqlIgnoreCase(raw, "false")) return "false";
+    if (std.ascii.eqlIgnoreCase(raw, "plaintext-only")) return "plaintext-only";
+    return "inherit";
+}
+
+pub fn setContentEditable(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
+    const el = self.asElement();
+    if (std.ascii.eqlIgnoreCase(value, "inherit")) {
+        return el.removeAttribute(.wrap("contenteditable"), frame);
+    }
+    inline for (.{ "true", "false", "plaintext-only" }) |keyword| {
+        if (std.ascii.eqlIgnoreCase(value, keyword)) {
+            return el.setAttributeSafe(.wrap("contenteditable"), .wrap(keyword), frame);
+        }
+    }
+    return error.SyntaxError;
+}
+
 pub fn getIsContentEditable(self: *HtmlElement) bool {
     var current: ?*Element = self.asElement();
     while (current) |el| : (current = el.parentElement()) {
@@ -1839,6 +1857,7 @@ pub const JsApi = struct {
     pub const showPopover = bridge.function(HtmlElement.showPopover, .{});
     pub const hidePopover = bridge.function(HtmlElement.hidePopover, .{});
     pub const togglePopover = bridge.function(HtmlElement.togglePopover, .{});
+    pub const contentEditable = bridge.accessor(HtmlElement.getContentEditable, HtmlElement.setContentEditable, .{ .ce_reactions = true });
     pub const isContentEditable = bridge.accessor(HtmlElement.getIsContentEditable, null, .{});
     pub const lang = bridge.accessor(HtmlElement.getLang, HtmlElement.setLang, .{ .ce_reactions = true });
     pub const nonce = bridge.accessor(HtmlElement.getNonce, HtmlElement.setNonce, .{ .ce_reactions = true });

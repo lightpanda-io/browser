@@ -38,6 +38,8 @@ pub const Proto = HtmlElement;
 
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 _value: ?[]const u8 = null,
+// Only user edits count for tooLong/tooShort; script and attribute values don't.
+_user_edited: bool = false,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -79,6 +81,12 @@ pub fn getValue(self: *const TextArea) []const u8 {
 pub fn setValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     const owned = try frame.arena.dupe(u8, value);
     self._value = owned;
+    self._user_edited = false;
+}
+
+pub fn setUserValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
+    try self.setValue(value, frame);
+    self._user_edited = true;
 }
 
 pub fn getDefaultValue(self: *const TextArea) []const u8 {
@@ -169,7 +177,7 @@ pub fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 pub fn getWillValidate(self: *const TextArea) bool {
-    return !self.getDisabled();
+    return !self.asConstElement().isDisabled();
 }
 
 pub fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
@@ -221,6 +229,7 @@ pub fn suffersValueMissing(self: *const TextArea) bool {
 }
 
 pub fn suffersTooLong(self: *const TextArea) bool {
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     const max = self.getMaxLength();
     if (max < 0) return false;
@@ -229,6 +238,7 @@ pub fn suffersTooLong(self: *const TextArea) bool {
 }
 
 pub fn suffersTooShort(self: *const TextArea) bool {
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     if (value.len == 0) return false;
     const min = self.getMinLength();

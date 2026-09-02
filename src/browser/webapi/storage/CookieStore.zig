@@ -66,7 +66,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
 
     // CookieStore exposes only cookies that script would see for the
     // current document — same filter as `match` (HttpOnly hidden,
-    // same-site treated as first-party against the document URL).
+    // SameSite judged against the global's site-for-cookies).
     const doc_url = exec.url.*;
     const target = Cookie.PreparedUri.init(doc_url);
     if (target.host.len == 0) {
@@ -84,7 +84,8 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .http_only = data.http_only,
         .same_site = data.same_site,
     };
-    if (!probe.appliesTo(&target, true, true, false)) {
+    const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
+    if (!probe.appliesTo(&target, same_site, false, false)) {
         return;
     }
 
@@ -377,11 +378,12 @@ fn matchCookies(
     // we're matching
     const normalized_name: ?[]const u8 = if (name) |n| std.mem.trim(u8, n, " \t") else null;
 
+    const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
     var items: std.ArrayList(CookieListItem) = .empty;
     for (session.cookie_jar.cookies.items) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
-        if (cookie.appliesTo(&target, true, true, false) == false) {
+        if (cookie.appliesTo(&target, same_site, false, false) == false) {
             continue;
         }
         if (normalized_name) |n| {
@@ -486,6 +488,10 @@ fn storeCookie(exec: *const Execution, init_: CookieInit, is_delete: bool) !void
         if (std.mem.indexOfAny(u8, d, ";\r\n\x00") != null) {
             return error.InvalidCookieDomain;
         }
+    }
+
+    if (init.sameSite != .none and Cookie.areSameSite(exec.siteForCookies(), URL.getHostname(url)) == false) {
+        return error.SameSiteBlocked;
     }
 
     const is_https = URL.isSecure(url);
@@ -609,6 +615,84 @@ pub const CookieListItem = struct {
 };
 
 const testing = @import("../../../testing.zig");
+const HttpClient = @import("../../../network/HttpClient.zig");
+
 test "WebApi: CookieStore" {
     try testing.htmlRunner("cookie_store.html", .{});
+}
+
+test "CookieStore: cross-site frame" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const exec = &frame.js.execution;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    // victim.example embedded by attacker.example: the ancestor chain is
+    // cross-site, so the frame has no site for cookies.
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
+    top.parent = null;
+    frame.url = "https://victim.example/inner";
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
+
+    try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
+    try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
+    try jar.populateFromResponse("https://victim.example/", "none=3; SameSite=None; Secure");
+
+    // getAll(): only SameSite=None is visible from a cross-site context.
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(1, items.len);
+        try testing.expectEqual("none", items[0].name.str());
+    }
+
+    // set(): the default (Strict) and Lax are rejected, None is stored.
+    // delete() is an expiring Strict set, so it is rejected too.
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "set_strict", .value = "4" }, false));
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "set_lax", .value = "5", .sameSite = .lax }, false));
+    try storeCookie(exec, .{ .name = "set_none", .value = "6", .sameSite = .none }, false);
+    try std.testing.expectError(error.SameSiteBlocked, storeCookie(exec, .{ .name = "none", .value = "", .expires = 0 }, true));
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(2, items.len);
+        try testing.expectEqual("none", items[0].name.str());
+        try testing.expectEqual("set_none", items[1].name.str());
+    }
+
+    // The same jar seen from a same-site chain: everything applies, and the
+    // rejected writes really were rejected rather than hidden.
+    top_url = "https://victim.example/";
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(4, items.len);
+        try testing.expectEqual("strict", items[0].name.str());
+        try testing.expectEqual("lax", items[1].name.str());
+        try testing.expectEqual("none", items[2].name.str());
+        try testing.expectEqual("set_none", items[3].name.str());
+    }
+    try storeCookie(exec, .{ .name = "set_strict", .value = "4" }, false);
+    try storeCookie(exec, .{ .name = "none", .value = "", .expires = 0 }, true);
+    {
+        // The jar swap-removes on delete, so only check membership here.
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(4, items.len);
+        var has_set_strict = false;
+        for (items) |item| {
+            try testing.expectEqual(false, std.mem.eql(u8, "none", item.name.str()));
+            if (std.mem.eql(u8, "set_strict", item.name.str())) has_set_strict = true;
+        }
+        try testing.expectEqual(true, has_set_strict);
+    }
+
+    // Back in the cross-site context, the Strict cookie written same-site is
+    // hidden again.
+    top_url = "https://attacker.example/";
+    {
+        const items = try matchCookies(exec, null, null, false);
+        try testing.expectEqual(1, items.len);
+        try testing.expectEqual("set_none", items[0].name.str());
+    }
 }

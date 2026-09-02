@@ -83,34 +83,26 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._manual_redirect = request._redirect == .manual,
     };
 
-    const session = exec.session;
-
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
-
-    const cookie_jar = switch (request._credentials) {
-        .omit => null,
-        .include => &session.cookie_jar,
-        .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
-    };
 
     const transfer = exec.newRequest(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
         .body = request._body,
         .resource_type = .fetch,
-        .cookie_jar = cookie_jar,
-        .cookie_origin = exec.url.*,
+        .cookies = switch (request._credentials) {
+            .omit => false,
+            .include => true,
+            .@"same-origin" => exec.isSameOrigin(request._url),
+        },
         .redirect = switch (request._redirect) {
             .follow => .follow,
             .manual => .manual,
             .@"error" => .@"error",
         },
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -146,7 +138,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return .abort;
+            return error.TransferCanceled;
         }
     }
 
@@ -214,7 +206,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     // Check if aborted
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return error.Abort;
+            return error.TransferCanceled;
         }
     }
 

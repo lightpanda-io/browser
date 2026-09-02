@@ -12,6 +12,14 @@ const Execution = js.Execution;
 const Headers = @This();
 
 _list: KeyValueList,
+_guard: Guard = .none,
+
+// What mutation JS can make
+pub const Guard = enum {
+    none, // don't block anything
+    response, // block forbidden response headers
+    immutable, // block everythig
+};
 
 pub const InitOpts = union(enum) {
     obj: *Headers,
@@ -20,7 +28,11 @@ pub const InitOpts = union(enum) {
 };
 
 pub fn init(opts_: ?InitOpts, exec: *const Execution) !*Headers {
-    const list = blk: {
+    return initGuarded(opts_, .none, exec);
+}
+
+pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Headers {
+    var list = blk: {
         const opts = opts_ orelse break :blk KeyValueList.init();
         switch (opts) {
             .obj => |obj| break :blk try KeyValueList.copy(exec.arena, obj._list),
@@ -37,18 +49,56 @@ pub fn init(opts_: ?InitOpts, exec: *const Execution) !*Headers {
         }
     };
 
+    if (guard == .response) {
+        // easier to use the KVL's creation upfront and then strip these out
+        list.delete("set-cookie", null);
+        list.delete("set-cookie2", null);
+    }
+
     return exec._factory.create(Headers{
         ._list = list,
+        ._guard = guard,
     });
+}
+
+pub fn isForbiddenResponseHeaderName(name: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(name, "set-cookie")) {
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "set-cookie2")) {
+        // yup, this is a real, never used / deprecated, header
+        return true;
+    }
+
+    return false;
+}
+
+const Mutation = enum { proceed, ignore };
+
+fn checkGuard(self: *const Headers, name: []const u8) !Mutation {
+    return switch (self._guard) {
+        .none => .proceed,
+        .immutable => error.TypeError,
+        .response => if (isForbiddenResponseHeaderName(name)) .ignore else .proceed,
+    };
 }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {
     const normalized_name = normalizeHeaderName(name, exec.buf);
+    const mutation = try self.checkGuard(normalized_name);
+    if (mutation == .ignore) {
+        return;
+    }
     try self._list.append(exec.arena, normalized_name, value);
 }
 
-pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) void {
+pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) !void {
     const normalized_name = normalizeHeaderName(name, exec.buf);
+    const mutation = try self.checkGuard(normalized_name);
+    if (mutation == .ignore) {
+        return;
+    }
     self._list.delete(normalized_name, null);
 }
 
@@ -65,6 +115,10 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
     return try std.mem.join(exec.local_arena, ", ", all_values);
 }
 
+pub fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
+    return self._list.getAll(exec.local_arena, "set-cookie");
+}
+
 pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool {
     const normalized_name = normalizeHeaderName(name, exec.buf);
     return self._list.has(normalized_name, null);
@@ -72,6 +126,10 @@ pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) bool 
 
 pub fn set(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {
     const normalized_name = normalizeHeaderName(name, exec.buf);
+    const mutation = try self.checkGuard(normalized_name);
+    if (mutation == .ignore) {
+        return;
+    }
     try self._list.set(exec.arena, normalized_name, value);
 }
 
@@ -143,6 +201,7 @@ pub const JsApi = struct {
     pub const append = bridge.function(Headers.append, .{});
     pub const delete = bridge.function(Headers.delete, .{});
     pub const get = bridge.function(Headers.get, .{});
+    pub const getSetCookie = bridge.function(Headers.getSetCookie, .{});
     pub const has = bridge.function(Headers.has, .{});
     pub const set = bridge.function(Headers.set, .{});
     pub const keys = bridge.function(Headers.keys, .{});

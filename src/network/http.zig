@@ -668,6 +668,9 @@ pub const Handles = struct {
         errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
         try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
+        // Default is 4x the attached easy handles, i.e. ~0 between page loads,
+        // so keepalive connections were evicted on every cross-site navigation.
+        try libcurl.curl_multi_setopt(multi, .max_connects, 4 * @as(u32, config.httpMaxConcurrent()));
 
         return .{ .multi = multi };
     }
@@ -860,6 +863,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         => .tls,
         error.ResponseTooLarge => .too_large,
         error.Abort,
+        error.TransferCanceled,
         error.AbortedByCallback,
         error.AbortAuthChallenge,
         error.SyncWaitInterrupted,

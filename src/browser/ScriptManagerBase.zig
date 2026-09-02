@@ -49,18 +49,6 @@ pub const Owner = union(enum) {
         };
     }
 
-    pub fn frameId(self: Owner) u32 {
-        return switch (self) {
-            inline else => |g| g._frame_id,
-        };
-    }
-
-    pub fn loaderId(self: Owner) u32 {
-        return switch (self) {
-            inline else => |g| g._loader_id,
-        };
-    }
-
     pub fn session(self: Owner) *Session {
         return switch (self) {
             inline else => |g| g._session,
@@ -257,17 +245,11 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     self.async_scripts.append(&script.node);
 
     const owner = self.owner;
-    const session = owner.session();
     owner.makeRequest(.{
         .ctx = script,
         .url = url,
         .method = .GET,
-        .frame_id = owner.frameId(),
-        .loader_id = owner.loaderId(),
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = owner.url(),
         .resource_type = .script,
-        .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -450,18 +432,12 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     defer self.endEvaluationWindow(was_evaluating);
 
     const owner = self.owner;
-    const session = self.owner.session();
     self.async_scripts.append(&script.node);
     owner.makeRequest(.{
         .ctx = script,
         .url = url,
         .method = .GET,
-        .frame_id = owner.frameId(),
-        .loader_id = owner.loaderId(),
         .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = owner.url(),
-        .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,

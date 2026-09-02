@@ -150,6 +150,36 @@ fn insertText(cmd: *CDP.Command) !void {
 const lp = @import("lightpanda");
 const testing = @import("../testing.zig");
 
+test "cdp.input: insertText is a user edit for tooLong" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.maxLength = 3;
+        \\inp.value = 'abcdef';
+        \\inp.focus();
+    , null);
+    try testing.expect((try ls.local.compileAndRun("inp.validity.tooLong === false", null)).isTrue());
+
+    try ctx.processMessage(.{ .id = 1, .method = "Input.insertText", .params = .{ .text = "g" } });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'abcdefg' && inp.validity.tooLong === true", null)).isTrue());
+
+    _ = try ls.local.compileAndRun("inp.value = 'abcdefgh'", null);
+    try testing.expect((try ls.local.compileAndRun("inp.validity.tooLong === false", null)).isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent mouseMoved fires hover events" {
     var ctx = try testing.context();
     defer ctx.deinit();

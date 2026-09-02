@@ -43,7 +43,7 @@ pub fn TextEntry(comptime T: type) type {
                 .full => {
                     // fully selected, replace the content.
                     const new_value = try arena.dupe(u8, str);
-                    try self.setValue(new_value, frame);
+                    try self.setUserValue(new_value, frame);
                     self._selection_start = @intCast(new_value.len);
                     self._selection_end = @intCast(new_value.len);
                     self._selection_direction = .none;
@@ -60,7 +60,7 @@ pub fn TextEntry(comptime T: type) type {
                         u8,
                         &.{ before, str, remaining },
                     );
-                    try self.setValue(new_value, frame);
+                    try self.setUserValue(new_value, frame);
 
                     const new_pos = range[0] + str.len;
                     self._selection_start = @intCast(new_pos);
@@ -72,7 +72,7 @@ pub fn TextEntry(comptime T: type) type {
                     // nothing selected, just insert at cursor.
                     const current_value = self.getValue();
                     const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
-                    try self.setValue(new_value, frame);
+                    try self.setUserValue(new_value, frame);
                 },
             }
             try dispatchInputEvent(self, str, "insertText", frame);
@@ -120,7 +120,7 @@ pub fn TextEntry(comptime T: type) type {
                 current_value[0..start],
                 current_value[@min(end, value_len)..],
             });
-            try self.setValue(new_value, frame);
+            try self.setUserValue(new_value, frame);
             self._selection_start = start;
             self._selection_end = start;
             self._selection_direction = .none;

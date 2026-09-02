@@ -19,9 +19,12 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
-const color = @import("../../color.zig");
 
 const ImageData = @import("../ImageData.zig");
+const context2d = @import("context2d.zig");
+const TextMetrics = @import("TextMetrics.zig");
+const CanvasGradient = @import("CanvasGradient.zig");
+const CanvasPattern = @import("CanvasPattern.zig");
 
 const Execution = js.Execution;
 
@@ -29,22 +32,22 @@ const Execution = js.Execution;
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvasRenderingContext2D
 const OffscreenCanvasRenderingContext2D = @This();
-/// Fill color.
-/// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
-_fill_style: color.RGBA = color.RGBA.Named.black,
+_state: context2d.State = .{},
 
-pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *Execution) ![]const u8 {
-    var w = std.Io.Writer.Allocating.init(exec.local_arena);
-    try self._fill_style.format(&w.writer);
-    return w.written();
+pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+    return self._state.getStyle(.fill, exec);
 }
 
-pub fn setFillStyle(
-    self: *OffscreenCanvasRenderingContext2D,
-    value: []const u8,
-) !void {
-    // Prefer the same fill_style if fails.
-    self._fill_style = color.RGBA.parse(value) catch self._fill_style;
+pub fn setFillStyle(self: *OffscreenCanvasRenderingContext2D, value: context2d.StyleInput) void {
+    self._state.setStyle(.fill, value);
+}
+
+pub fn getStrokeStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+    return self._state.getStyle(.stroke, exec);
+}
+
+pub fn setStrokeStyle(self: *OffscreenCanvasRenderingContext2D, value: context2d.StyleInput) void {
+    self._state.setStyle(.stroke, value);
 }
 
 const WidthOrImageData = union(enum) {
@@ -88,6 +91,56 @@ pub fn getImageData(
     return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
 }
 
+pub fn getFont(self: *const OffscreenCanvasRenderingContext2D) []const u8 {
+    return self._state.font();
+}
+
+pub fn setFont(self: *OffscreenCanvasRenderingContext2D, value: []const u8, exec: *const Execution) !void {
+    return self._state.setFont(value, exec);
+}
+
+pub fn measureText(self: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *const Execution) !*TextMetrics {
+    return self._state.measureText(text, exec);
+}
+
+pub fn setLineDash(self: *OffscreenCanvasRenderingContext2D, segments: []const f64, exec: *const Execution) !void {
+    return self._state.setLineDash(segments, exec);
+}
+
+pub fn getLineDash(self: *const OffscreenCanvasRenderingContext2D) []const f64 {
+    return self._state.lineDash();
+}
+
+pub fn roundRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: ?js.Value) void {}
+pub fn ellipse(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
+pub fn isPointInPath(_: *const OffscreenCanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value, _: ?js.Value) bool {
+    return false;
+}
+pub fn isPointInStroke(_: *const OffscreenCanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value) bool {
+    return false;
+}
+
+pub fn createLinearGradient(_: *const OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createRadialGradient(_: *const OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createConicGradient(_: *const OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+    return CanvasGradient.init(exec);
+}
+
+pub fn createPattern(_: *const OffscreenCanvasRenderingContext2D, _: js.Value, repetition_: ?[]const u8, exec: *const Execution) !*CanvasPattern {
+    const repetition = repetition_ orelse "repeat";
+    const known = [_][]const u8{ "", "repeat", "repeat-x", "repeat-y", "no-repeat" };
+    for (known) |k| {
+        if (std.mem.eql(u8, repetition, k)) return CanvasPattern.init(k, exec);
+    }
+    return error.SyntaxError;
+}
+
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -96,7 +149,6 @@ pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
 pub fn clearRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
@@ -125,10 +177,33 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const font = bridge.accessor(OffscreenCanvasRenderingContext2D.getFont, OffscreenCanvasRenderingContext2D.setFont, .{});
+    pub const measureText = bridge.function(OffscreenCanvasRenderingContext2D.measureText, .{});
+    pub const setLineDash = bridge.function(OffscreenCanvasRenderingContext2D.setLineDash, .{});
+    pub const getLineDash = bridge.function(OffscreenCanvasRenderingContext2D.getLineDash, .{});
+    pub const lineDashOffset = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const roundRect = bridge.function(OffscreenCanvasRenderingContext2D.roundRect, .{ .noop = true });
+    pub const ellipse = bridge.function(OffscreenCanvasRenderingContext2D.ellipse, .{ .noop = true });
+    pub const isPointInPath = bridge.function(OffscreenCanvasRenderingContext2D.isPointInPath, .{});
+    pub const isPointInStroke = bridge.function(OffscreenCanvasRenderingContext2D.isPointInStroke, .{});
+    pub const createLinearGradient = bridge.function(OffscreenCanvasRenderingContext2D.createLinearGradient, .{});
+    pub const createRadialGradient = bridge.function(OffscreenCanvasRenderingContext2D.createRadialGradient, .{});
+    pub const createConicGradient = bridge.function(OffscreenCanvasRenderingContext2D.createConicGradient, .{});
+    pub const createPattern = bridge.function(OffscreenCanvasRenderingContext2D.createPattern, .{});
+    pub const shadowBlur = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const shadowColor = bridge.property("rgba(0, 0, 0, 0)", .{ .template = false, .readonly = false });
+    pub const shadowOffsetX = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const shadowOffsetY = bridge.property(0.0, .{ .template = false, .readonly = false });
+    pub const filter = bridge.property("none", .{ .template = false, .readonly = false });
+    pub const imageSmoothingEnabled = bridge.property(true, .{ .template = false, .readonly = false });
+    pub const imageSmoothingQuality = bridge.property("low", .{ .template = false, .readonly = false });
+    pub const direction = bridge.property("ltr", .{ .template = false, .readonly = false });
+    pub const letterSpacing = bridge.property("0px", .{ .template = false, .readonly = false });
+    pub const wordSpacing = bridge.property("0px", .{ .template = false, .readonly = false });
+    pub const fontKerning = bridge.property("auto", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
-    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getStrokeStyle, OffscreenCanvasRenderingContext2D.setStrokeStyle, .{});
     pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
     pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });

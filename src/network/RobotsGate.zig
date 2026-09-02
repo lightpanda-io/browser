@@ -105,8 +105,8 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
 
     log.debug(.browser, "fetching robots.txt", .{ .robots_url = owned_url });
 
-    // Only the parent's frame/loader ids (CDP correlation) and notification
-    // carry over — no cookies, credentials, headers, or timeout.
+    // Ownerless: no cookies, credentials, headers, or timeout. We attribute to
+    // the parent for CDP correlation
     const fetch_transfer = try client.newRequest(.{
         .url = owned_url,
         .method = .GET,
@@ -116,8 +116,6 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .document_frame_id = transfer.req.document_frame_id,
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
-        .cookie_jar = null,
-        .cookie_origin = owned_url,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
