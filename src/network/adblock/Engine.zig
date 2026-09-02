@@ -34,6 +34,9 @@
 
 const std = @import("std");
 
+const URL = @import("../../browser/URL.zig");
+const HttpClient = @import("../HttpClient.zig");
+
 const domain = @import("domain.zig");
 const pattern = @import("pattern.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
@@ -69,6 +72,25 @@ pub const Request = struct {
     /// Exactly one bit set.
     kind: NetworkFilter.ResourceTypes,
     third_party: bool,
+    /// The URL's tokens, hashed once here so no engine retokenizes. A URL
+    /// long enough to overflow loses its last tokens.
+    tokens_buf: [URL_TOKENS_MAX]u32,
+    tokens_len: usize,
+
+    const URL_TOKENS_MAX = 128;
+
+    /// Longest URL `fromHttp` will normalize. Anything past this is not a
+    /// resource a filter list has an opinion about.
+    const URL_MAX = 8 * 1024;
+    /// DNS's own hostname limit.
+    const SOURCE_MAX = 253;
+
+    /// Backs the normalized text of a `fromHttp` request, which stays valid
+    /// only as long as the buffers do.
+    pub const Buffers = struct {
+        url: [URL_MAX]u8,
+        source: [SOURCE_MAX]u8,
+    };
 
     /// `url` must already be lowercased and fragment-free; `source_hostname`
     /// may be empty when there is no document context.
@@ -79,11 +101,77 @@ pub const Request = struct {
     ) Request {
         const parsed: pattern.Url = .init(url);
         const source = if (source_hostname.len == 0) parsed.hostname() else source_hostname;
-        return .{
+        var request: Request = .{
             .url = parsed,
             .source_hostname = source,
             .kind = kind,
             .third_party = domain.isThirdParty(parsed.hostname(), source),
+            .tokens_buf = undefined,
+            .tokens_len = 0,
+        };
+        var it: Tokens = .{ .text = url };
+        while (it.next()) |token| {
+            if (request.tokens_len == request.tokens_buf.len) break;
+            request.tokens_buf[request.tokens_len] = token;
+            request.tokens_len += 1;
+        }
+        return request;
+    }
+
+    /// Builds the request `req` is matched as, `source` being the URL (or
+    /// origin serialization) of the document it was issued from. null when
+    /// there is none.
+    pub fn fromHttp(
+        req: *const HttpClient.Request,
+        source_url: ?[]const u8,
+        buffers: *Buffers,
+    ) ?Request {
+        const url = normalizeUrl(req.url, &buffers.url) orelse return null;
+
+        // Matching top-level nav against the page it was clicked on would make
+        // every link third party.
+        const top_level = req.resource_type == .document and !req.is_subframe;
+        const source_host = if (top_level)
+            ""
+        else if (source_url) |u|
+            URL.getOriginHostname(u)
+        else
+            "";
+        if (source_host.len > buffers.source.len) return null;
+        const source = std.ascii.lowerString(&buffers.source, source_host);
+
+        return .init(url, source, resourceType(req));
+    }
+
+    inline fn tokens(self: *const Request) []const u32 {
+        return self.tokens_buf[0..self.tokens_len];
+    }
+
+    /// Lowercases `url` into `buf` with its fragment stripped; patterns are
+    /// stored lowercased, and no request URL carries a fragment onto the wire.
+    fn normalizeUrl(url: []const u8, buf: []u8) ?[]const u8 {
+        const end = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
+        const trimmed = url[0..end];
+
+        const upper = for (trimmed, 0..) |c, i| {
+            if (std.ascii.isUpper(c)) break i;
+        } else return trimmed;
+
+        if (trimmed.len > buf.len) return null;
+        const out = buf[0..trimmed.len];
+        @memcpy(out[0..upper], trimmed[0..upper]);
+        _ = std.ascii.lowerString(out[upper..], trimmed[upper..]);
+        return out;
+    }
+
+    fn resourceType(req: *const HttpClient.Request) NetworkFilter.ResourceTypes {
+        return switch (req.resource_type) {
+            .document => if (req.is_subframe) .{ .subdocument = true } else .{ .document = true },
+            .script => .{ .script = true },
+            .stylesheet => .{ .stylesheet = true },
+            .xhr, .fetch => .{ .xmlhttprequest = true },
+            .image => .{ .image = true },
+            .eventsource => .{ .other = true },
         };
     }
 };
@@ -99,8 +187,7 @@ const TOKENS_MAX = 32;
 /// The first filter that matches, or null.
 pub fn match(self: *const Engine, request: Request) ?*const NetworkFilter {
     if (self.filters.len != 0) {
-        var it: Tokens = .{ .text = request.url.text };
-        while (it.next()) |token| {
+        for (request.tokens()) |token| {
             const bucket = self.buckets.get(token) orelse continue;
             if (self.matchIn(bucket, request)) |filter| return filter;
         }
