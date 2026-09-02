@@ -172,17 +172,22 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     }
 }
 
-pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
+// Drops every observation without touching the frame's observer list
+pub fn reset(self: *IntersectionObserver, page: *Page) void {
     for (self._pending_entries.items) |entry| {
-        entry.deinit(frame._page);
+        entry.deinit(page);
     }
     self._pending_entries.clearRetainingCapacity();
     self._tracked.clearRetainingCapacity();
+    self._observing.clearRetainingCapacity();
+}
 
-    if (self._observing.items.len > 0) {
+pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
+    const registered = self._observing.items.len > 0;
+    self.reset(frame._page);
+    if (registered) {
         Frame.observers.unregisterIntersectionObserver(frame, self);
     }
-    self._observing.clearRetainingCapacity();
 }
 
 pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {

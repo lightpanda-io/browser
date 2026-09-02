@@ -341,14 +341,11 @@ fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
         log.err(.frame, "frame.IntersectionRunaway", .{ .type = frame._type, .url = frame.url });
     }
 
-    var i = frame._intersection.observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (i >= frame._intersection.observers.items.len) {
-            continue;
-        }
-        frame._intersection.observers.items[i].disconnect(frame);
+    for (frame._intersection.observers.items) |observer| {
+        observer.reset(frame._page);
+        observer.releaseRef(frame._page);
     }
+    frame._intersection.observers.clearRetainingCapacity();
 }
 
 pub fn deliverIntersections(frame: *Frame) void {
