@@ -408,7 +408,9 @@ fn isAdblocked(self: *const Client, transfer: *const Transfer) bool {
         adblockSourceUrl(transfer),
         &buffers,
     ) orelse return false;
-    return blocker.match(target) == .blocked;
+    const verdict = blocker.match(target);
+    lp.metrics.adblock_verdicts.incr(verdict);
+    return verdict == .blocked;
 }
 
 fn adblockSourceUrl(transfer: *const Transfer) ?[]const u8 {

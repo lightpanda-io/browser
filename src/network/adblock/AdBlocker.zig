@@ -129,6 +129,8 @@ pub fn fromConfig(allocator: Allocator, config: *const Config) !?AdBlocker {
 
     if (adblocker) |*blocker| {
         try blocker.build();
+        lp.metrics.adblock_rules.add(.loaded, @intCast(blocker.rules_loaded));
+        lp.metrics.adblock_rules.add(.skipped, @intCast(blocker.rules_skipped));
         log.info(.app, "adblock lists loaded", .{
             .loaded = blocker.rules_loaded,
             .skipped = blocker.rules_skipped,
