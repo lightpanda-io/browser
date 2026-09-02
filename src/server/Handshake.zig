@@ -32,6 +32,7 @@ const bidi_session = @import("bidi/session.zig");
 
 const log = lp.log;
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 const Handshake = @This();
 
@@ -53,7 +54,13 @@ pub const Protocols = struct {
 pub const Options = struct {
     protocols: Protocols,
     bidi_session_url: []const u8,
-    json_version_response: []const u8,
+    http_responses: HttpResponses,
+};
+
+pub const HttpResponses = struct {
+    version: []const u8,
+    list: []const u8,
+    new: []const u8,
 };
 
 app: *App,
@@ -147,51 +154,62 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.InvalidRequest;
     }
 
-    // The classic WebDriver session bootstrap is the only thing with a body.
-    if (std.mem.startsWith(u8, request, "POST ") or std.mem.startsWith(u8, request, "DELETE ")) {
-        if (!self.options.protocols.webdriver) {
-            return error.NotFound;
-        }
-        return self.handleWebDriverRequest(request, head_len);
-    }
-
-    if (std.mem.eql(u8, request[0..4], "GET ") == false) {
-        return error.NotFound;
-    }
-
-    // Everything else is a body-less GET: the header block is the request.
-    if (head_len != request.len) {
-        return .more;
-    }
-
-    const url_end = std.mem.indexOfScalarPos(u8, request, 4, ' ') orelse {
+    const method, const target, _, _ = header_parser.parseRequest(request) catch {
         return error.InvalidRequest;
     };
 
-    const url = request[4..url_end];
+    switch (method) {
+        // The classic WebDriver session bootstrap is the only thing with a body.
+        .post, .delete => {
+            if (!self.options.protocols.webdriver) {
+                return error.NotFound;
+            }
+            return self.handleWebDriverRequest(request, head_len);
+        },
+        .get, .put => {},
+        else => return error.NotFound,
+    }
+    const is_get = method == .get;
 
-    if (std.mem.eql(u8, url, "/metrics") and self.app.config.metricsEndpointEnabled()) {
+    // GETs are body-less; a PUT body is ignored rather than waited on.
+    if (is_get and head_len != request.len) {
+        return .more;
+    }
+
+    // Routing ignores the query string, as Chrome does.
+    const path, const query = if (std.mem.indexOfScalar(u8, target, '?')) |i|
+        .{ target[0..i], target[i + 1 ..] }
+    else
+        .{ target, "" };
+
+    // Only /json/new takes PUT (required since Chrome 66; GET kept for
+    // older clients).
+    if (!is_get and !std.mem.startsWith(u8, path, "/json/new")) {
+        return error.NotFound;
+    }
+
+    if (std.mem.eql(u8, path, "/metrics") and self.app.config.metricsEndpointEnabled()) {
         try self.sendMetrics();
         self.shutdown();
         return .close;
     }
 
     if (self.options.protocols.webdriver) {
-        if (std.mem.eql(u8, url, "/session")) {
+        if (std.mem.eql(u8, path, "/session")) {
             // /session is the path Firefox advertises its BiDi endpoint on
             try self.upgrade(request);
             return .{ .upgrade = .{ .bidi = null } };
         }
 
-        if (std.mem.startsWith(u8, url, "/session/") and url.len == "/session/".len + 36) {
+        if (std.mem.startsWith(u8, path, "/session/") and path.len == "/session/".len + 36) {
             // The URL a POST /session handed out; the session id is the suffix.
             var session_id: [36]u8 = undefined;
-            @memcpy(&session_id, url["/session/".len..]);
+            @memcpy(&session_id, path["/session/".len..]);
             try self.upgrade(request);
             return .{ .upgrade = .{ .bidi = session_id } };
         }
 
-        if (std.mem.eql(u8, url, "/status")) {
+        if (std.mem.eql(u8, path, "/status")) {
             // WebDriver's discovery endpoint; `ready` is whether a new session
             // can be created, which the bootstrap never refuses.
             return self.sendWebDriver("200 OK", .{ .ready = true, .message = "" });
@@ -202,38 +220,52 @@ fn handleHttpRequest(self: *Handshake, request: []u8, head_len: usize) !Result {
         return error.NotFound;
     }
 
-    if (std.mem.eql(u8, url, "/")) {
+    if (std.mem.eql(u8, path, "/")) {
         try self.upgrade(request);
         return .{ .upgrade = .cdp };
     }
 
-    if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
-        try self.send(self.options.json_version_response);
-        // Chromedp (a Go driver) does an http request to /json/version
-        // then to / (websocket upgrade) using a different connection.
-        // Since we only allow 1 connection at a time, the 2nd one (the
-        // websocket upgrade) blocks until the first one times out.
-        // We can avoid that by closing the connection. json_version_response
-        // has a Connection: Close header too.
-        self.shutdown();
-        return .close;
+    const route = if (path.len > 1 and path[path.len - 1] == '/') path[0 .. path.len - 1] else path;
+
+    if (std.mem.eql(u8, route, "/json/version")) {
+        return self.sendAndClose(self.options.http_responses.version);
     }
 
-    if (std.mem.eql(u8, url, "/json/list") or std.mem.eql(u8, url, "/json/list/") or
-        std.mem.eql(u8, url, "/json") or std.mem.eql(u8, url, "/json/"))
-    {
-        try self.send(empty_json_list_response);
-        self.shutdown();
-        return .close;
+    if (std.mem.eql(u8, route, "/json/list") or std.mem.eql(u8, route, "/json")) {
+        return self.sendAndClose(self.options.http_responses.list);
     }
 
-    if (std.mem.eql(u8, url, "/json/protocol") or std.mem.eql(u8, url, "/json/protocol/")) {
-        try self.send(protocol_response);
-        self.shutdown();
-        return .close;
+    if (std.mem.eql(u8, route, "/json/new")) {
+        if (query.len > 0) {
+            log.warn(.not_implemented, "json new navigation", .{ .url = query });
+        }
+        return self.sendAndClose(self.options.http_responses.new);
+    }
+
+    if (std.mem.eql(u8, route, "/json/activate") or std.mem.startsWith(u8, route, "/json/activate/")) {
+        return self.sendAndClose(target_activated_response);
+    }
+
+    if (std.mem.eql(u8, route, "/json/close") or std.mem.startsWith(u8, route, "/json/close/")) {
+        log.warn(.not_implemented, "json close target", .{});
+        return self.sendAndClose(target_closing_response);
+    }
+
+    if (std.mem.eql(u8, route, "/json/protocol")) {
+        return self.sendAndClose(protocol_response);
     }
 
     return error.NotFound;
+}
+
+// Every HTTP response carries Connection: Close and we really do close:
+// chromedp requests /json/version and then upgrades on a different
+// connection, and with a single connection allowed the upgrade would
+// otherwise wait for the first one to time out.
+fn sendAndClose(self: *Handshake, response: []const u8) !Result {
+    try self.send(response);
+    self.shutdown();
+    return .close;
 }
 
 // TODO: Temporary solution that provides the bare minimum for Selenium to
@@ -342,15 +374,9 @@ fn sendWebDriver(self: *Handshake, comptime status: []const u8, value: anytype) 
     try std.json.Stringify.value(.{ .value = value }, .{}, &aw.writer);
     const body = aw.written();
 
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 " ++ status ++ "\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        "{s}", .{ body.len, body });
+    const response = try buildResponse(allocator, status, "application/json; charset=UTF-8", "{s}", .{body});
     defer allocator.free(response);
-    try self.send(response);
-    self.shutdown();
-    return .close;
+    return self.sendAndClose(response);
 }
 
 fn upgrade(self: *Handshake, request: []u8) !void {
@@ -480,11 +506,7 @@ fn sendMetrics(self: *Handshake) !void {
     lp.metrics.write(&aw.writer);
     const body = aw.written();
 
-    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\r\n" ++
-        "{s}", .{ body.len, body });
+    const response = try buildResponse(allocator, "200 OK", "text/plain; version=0.0.4; charset=utf-8", "{s}", .{body});
     defer allocator.free(response);
     try self.send(response);
 }
@@ -533,19 +555,23 @@ fn shutdown(self: *Handshake) void {
     sys_net.shutdown(self.socket, .recv) catch {};
 }
 
-const empty_json_list_response =
-    "HTTP/1.1 200 OK\r\n" ++
-    "Content-Length: 2\r\n" ++
+const response_head_format =
+    "HTTP/1.1 {s}\r\n" ++
+    "Content-Length: {d}\r\n" ++
     "Connection: Close\r\n" ++
-    "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-    "[]";
+    "Content-Type: {s}\r\n\r\n";
+
+pub fn buildResponse(allocator: Allocator, comptime status: []const u8, comptime content_type: []const u8, comptime body_format: []const u8, args: anytype) ![]const u8 {
+    const body_len = std.fmt.count(body_format, args);
+    return std.fmt.allocPrint(allocator, response_head_format ++ body_format, .{ status, body_len, content_type } ++ args);
+}
+
+fn staticResponse(comptime content_type: []const u8, comptime body: []const u8) []const u8 {
+    return std.fmt.comptimePrint(response_head_format, .{ "200 OK", body.len, content_type ++ "; charset=UTF-8" }) ++ body;
+}
+
+const target_activated_response = staticResponse("text/plain", "Target activated");
+const target_closing_response = staticResponse("text/plain", "Target is closing");
 
 const protocol_json = @embedFile("../data/protocol.json");
-
-const protocol_response = std.fmt.comptimePrint(
-    "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n",
-    .{protocol_json.len},
-) ++ protocol_json;
+const protocol_response = staticResponse("application/json", protocol_json);

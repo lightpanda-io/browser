@@ -170,11 +170,40 @@ fn createTarget(cmd: *CDP.Command) !void {
         }
     }
 
+    const frame = try setupTarget(cmd, bc);
+    const target_id = &bc.target_id.?;
+
+    if (cmd.cdp.target_auto_attach) {
+        try doAttachtoTarget(cmd, target_id);
+    }
+
+    if (!std.mem.eql(u8, "about:blank", params.url)) {
+        const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
+        try frame.navigate(
+            encoded_url,
+            .{ .reason = .address_bar, .kind = .{ .push = null } },
+        );
+    }
+
+    try cmd.sendResult(.{
+        .targetId = target_id,
+    }, .{});
+}
+
+// Attaching is required even though flat-protocol clients never use the
+// session id: page events are only emitted to an attached session.
+pub fn createImplicitTarget(cmd: *CDP.Command) !void {
+    const bc = try cmd.createBrowserContext();
+    _ = try setupTarget(cmd, bc);
+    try doAttachtoTarget(cmd, &bc.target_id.?);
+}
+
+fn setupTarget(cmd: *CDP.Command, bc: *CDP.BrowserContext) !*lp.Frame {
     // if target_id is null, we should never have a blank frame
-    lp.assert(!bc.session.hasPage(), "CDP.target.createTarget not null page", .{});
+    lp.assert(!bc.session.hasPage(), "CDP.target.setupTarget not null page", .{});
 
     // if target_id is null, we should never have a session_id
-    lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
+    lp.assert(bc.session_id == null, "CDP.target.setupTarget not null session_id", .{});
 
     const page = try bc.session.createPage();
     const frame = page.frame().?;
@@ -216,22 +245,7 @@ fn createTarget(cmd: *CDP.Command) !void {
         },
     }, .{});
 
-    // attach to the target only if auto attach is set.
-    if (cmd.cdp.target_auto_attach) {
-        try doAttachtoTarget(cmd, target_id);
-    }
-
-    if (!std.mem.eql(u8, "about:blank", params.url)) {
-        const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
-        try frame.navigate(
-            encoded_url,
-            .{ .reason = .address_bar, .kind = .{ .push = null } },
-        );
-    }
-
-    try cmd.sendResult(.{
-        .targetId = target_id,
-    }, .{});
+    return frame;
 }
 
 fn attachToTarget(cmd: *CDP.Command) !void {
@@ -992,4 +1006,31 @@ test "cdp.target: setAutoAttach false sends detachedFromTarget" {
     try ctx.expectSentEvent("Target.detachedFromTarget", .{ .sessionId = session_id }, .{});
     try testing.expectEqual(null, bc.session_id);
     try ctx.expectSentResult(null, .{ .id = 12 });
+}
+
+test "cdp.target: sessionless page command creates an implicit target" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    // only handlers that need a context create one
+    try ctx.processMessage(.{ .id = 1, .method = "Target.getTargets" });
+    try ctx.expectSentResult(.{ .targetInfos = [_]TargetInfo{} }, .{ .id = 1 });
+    try ctx.processMessage(.{ .id = 3, .method = "Page.enable" });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    // teardown succeeds as a no-op rather than spawning a page
+    try ctx.processMessage(.{ .id = 4, .method = "Network.disable" });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "Runtime.disable" });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try ctx.processMessage(.{ .id = 6, .method = "Page.close" });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try testing.expectEqual(null, ctx.cdp().browser_context);
+
+    try ctx.processMessage(.{ .id = 2, .method = "Page.setLifecycleEventsEnabled", .params = .{ .enabled = true } });
+    const bc = ctx.cdp().browser_context.?;
+    try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+    try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+    try ctx.expectSentResult(null, .{ .id = 2 });
 }

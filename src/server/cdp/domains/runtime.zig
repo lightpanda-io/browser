@@ -56,30 +56,33 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
         // Bookkeeping that can neither observe nor change the page's global.
-        .releaseObjectGroup, .discardConsoleEntries, .getHeapUsage, .getIsolateId, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => return sendInspector(cmd),
+        .releaseObjectGroup, .discardConsoleEntries, .setCustomObjectFormatterEnabled, .setMaxCallStackSizeToCapture => {
+            const bc = try cmd.teardownBrowserContext() orelse return;
+            return sendInspector(cmd, bc);
+        },
+        // These have no honest answer without a live isolate.
+        .getHeapUsage, .getIsolateId => return sendInspector(cmd, try cmd.requireBrowserContext()),
         else => {
-            const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+            const bc = try cmd.requireBrowserContext();
             bc.main_world_touched = true;
-            return sendInspector(cmd);
+            return sendInspector(cmd, bc);
         },
     }
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.runtimeEnable();
-    return sendInspector(cmd);
+    return sendInspector(cmd, bc);
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.runtimeDisable();
-    return sendInspector(cmd);
+    return sendInspector(cmd, bc);
 }
 
-fn sendInspector(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-
+fn sendInspector(cmd: *CDP.Command, bc: *CDP.BrowserContext) void {
     // the result to return is handled directly by the inspector.
     bc.callInspector(cmd.input.json);
 }

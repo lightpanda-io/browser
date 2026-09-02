@@ -114,7 +114,7 @@ fn commandSessionId(cmd: *CDP.Command, bc: *CDP.BrowserContext) ![]const u8 {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.fetchDisableForSession(try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }
@@ -126,7 +126,7 @@ fn enable(cmd: *CDP.Command) !void {
             return cmd.sendError(-32602, "Can't specify empty patterns with handleAuth set", .{});
         }
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.fetchEnable(params.patterns, params.handleAuthRequests, try commandSessionId(cmd, bc));
     return cmd.sendResult(null, .{});
 }

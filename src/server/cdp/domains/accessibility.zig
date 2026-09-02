@@ -57,7 +57,7 @@ fn getFullAXTree(cmd: *CDP.Command) !void {
         frameId: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const session = bc.session;
 
     const frame = blk: {

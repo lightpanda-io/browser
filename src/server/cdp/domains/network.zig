@@ -118,7 +118,7 @@ fn enable(cmd: *CDP.Command) !void {
         maxPostDataSize: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     var limits: BufferLimits = .{};
     if (params.maxTotalBufferSize) |max| {
@@ -136,7 +136,7 @@ fn enable(cmd: *CDP.Command) !void {
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.networkDisable();
     return cmd.sendResult(null, .{});
 }
@@ -146,7 +146,7 @@ fn setCacheDisabled(cmd: *CDP.Command) !void {
         cacheDisabled: bool,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const client = &bc.cdp.browser.http_client;
     if (!bc.cdp.disable_set_cache_disabled) {
         client.disableCache(params.cacheDisabled);
@@ -159,7 +159,7 @@ fn setBlockedURLs(cmd: *CDP.Command) !void {
         urlPatterns: []const HttpClient.BlockPattern,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.cdp.browser.http_client.setBlockedUrlPatterns(params.urlPatterns);
     return cmd.sendResult(null, .{});
 }
@@ -169,7 +169,7 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         headers: std.json.ArrayHashMap([]const u8),
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     // Copy the headers onto the browser context arena
     const arena = bc.arena;
@@ -240,7 +240,7 @@ fn deleteCookies(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "partition key", .{ .src = "deleteCookies" });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const cookies = &bc.session.cookie_jar.cookies;
 
     var index = cookies.items.len;
@@ -264,14 +264,14 @@ fn clearBrowserCache(cmd: *CDP.Command) !void {
     // CDP clients (chrome-remote-interface, chromedp, custom websocket clients)
     // include an empty `"params":{}` object on every command for ergonomics.
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const network = bc.cdp.browser.http_client.network;
     try network.cache.clear();
     return cmd.sendResult(null, .{});
 }
 
 fn canClearBrowserCache(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const network = bc.cdp.browser.http_client.network;
     return cmd.sendResult(.{ .result = network.cache.active() != null }, .{});
 }
@@ -281,7 +281,7 @@ fn clearBrowserCookies(cmd: *CDP.Command) !void {
     // CDP clients (chrome-remote-interface, chromedp, custom websocket clients)
     // include an empty `"params":{}` object on every command for ergonomics.
     // Chrome accepts that and clears the jar; reject only on truly malformed JSON.
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     bc.session.cookie_jar.clearRetainingCapacity();
     return cmd.sendResult(null, .{});
 }
@@ -291,7 +291,7 @@ fn setCookie(cmd: *CDP.Command) !void {
         CdpStorage.CdpCookie,
     )) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try CdpStorage.setCdpCookie(&bc.session.cookie_jar, params);
 
     try cmd.sendResult(.{ .success = true }, .{});
@@ -302,7 +302,7 @@ fn setCookies(cmd: *CDP.Command) !void {
         cookies: []const CdpStorage.CdpCookie,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     for (params.cookies) |param| {
         try CdpStorage.setCdpCookie(&bc.session.cookie_jar, param);
     }
@@ -314,8 +314,8 @@ const GetCookiesParam = struct {
     urls: ?[]const [:0]const u8 = null,
 };
 fn getCookies(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
+    const bc = try cmd.requireBrowserContext();
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
     const frame_url = if (bc.mainFrame()) |frame| frame.url else null;
@@ -337,7 +337,7 @@ fn getAllCookies(cmd: *CDP.Command) !void {
     // Mirrors Chrome's Network.getAllCookies and Storage.getCookies (without
     // the latter's browserContextId filter, since Network commands are scoped
     // to the current browser context already).
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     var jar = &bc.session.cookie_jar;
     jar.removeExpired(null);
     const writer = CdpStorage.CookieWriter{ .cookies = jar.cookies.items };

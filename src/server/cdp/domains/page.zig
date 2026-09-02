@@ -107,7 +107,7 @@ fn setLifecycleEventsEnabled(cmd: *CDP.Command) !void {
         enabled: bool,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     if (params.enabled == false) {
         bc.lifecycleEventsDisable();
@@ -152,7 +152,7 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         runImmediately: bool = false,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     if (params.runImmediately) {
         log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
@@ -179,7 +179,7 @@ fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         identifier: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     const target_id = std.fmt.parseInt(u32, params.identifier, 10) catch
         return cmd.sendResult(null, .{});
@@ -194,7 +194,7 @@ fn removeScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 }
 
 fn close(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.teardownBrowserContext() orelse return;
 
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
@@ -244,7 +244,7 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
         // When grantUniveralAccess == false and the client attempts to resolve
         // or otherwise access a DOM or other JS Object from another context that should fail.
     }
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
 
@@ -288,7 +288,7 @@ fn navigate(cmd: *CDP.Command) !void {
         // referrerPolicy: ?[]const u8 = null, // TODO: enum
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     // didn't create?
     // const target_id = bc.target_id orelse return error.TargetIdNotLoaded;
@@ -335,7 +335,7 @@ fn doReload(cmd: *CDP.Command) !void {
         scriptToEvaluateOnLoad: ?[]const u8 = null,
     });
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
 
     if (bc.session_id == null) {
         return error.SessionIdNotLoaded;
@@ -378,7 +378,7 @@ const NavigationEntry = struct {
 };
 
 fn getNavigationHistory(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     if (bc.session_id == null) {
         return error.SessionIdNotLoaded;
     }
@@ -412,7 +412,7 @@ fn navigateToHistoryEntry(cmd: *CDP.Command) !void {
         entryId: i64,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     if (bc.session_id == null) {
         return error.SessionIdNotLoaded;
     }
@@ -996,7 +996,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "Page.captureScreenshot params", .{ .quality = params.quality });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const viewport = cmd.cdp.browser.getViewport();
 
@@ -1037,7 +1037,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "Page.printToPDF params", .{ .displayHeaderFooter = true });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const paper_w = if (params.landscape) params.paperHeight else params.paperWidth;
@@ -1587,12 +1587,6 @@ test "cdp.frame: getLayoutMetrics" {
 test "cdp.frame: reload" {
     var ctx = try testing.context();
     defer ctx.deinit();
-
-    {
-        // reload without browser context — should error
-        try ctx.processMessage(.{ .id = 30, .method = "Page.reload" });
-        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 30 });
-    }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
 
@@ -2156,16 +2150,6 @@ test "cdp.frame: addScriptToEvaluateOnNewDocument" {
 test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
     var ctx = try testing.context();
     defer ctx.deinit();
-
-    {
-        // No browser context — should error.
-        try ctx.processMessage(.{ .id = 10, .method = "Page.getNavigationHistory" });
-        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
-    }
-    {
-        try ctx.processMessage(.{ .id = 11, .method = "Page.navigateToHistoryEntry", .params = .{ .entryId = 0 } });
-        try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 11 });
-    }
 
     var bc = try ctx.loadBrowserContext(.{ .id = "BID-B2", .url = "cdp/dom1.html", .target_id = "TID-B2-0000000".* });
 

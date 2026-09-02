@@ -92,7 +92,7 @@ fn getDocument(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
     }
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try bc.node_registry.register(frame.window._document.asNode());
@@ -156,7 +156,7 @@ fn performSearch(cmd: *CDP.Command) !void {
         includeUserAgentShadowDOM: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
     const root = frame.window._document.asNode();
 
@@ -187,7 +187,7 @@ fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMN
 // We should dispatch a node only if it has never been sent.
 fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
     const arena = cmd.arena;
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
 
     var parents: std.ArrayList(*NodeRegistry.Node) = .empty;
@@ -571,7 +571,7 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         frameId: []const u8,
     })) orelse return error.InvalidParams;
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     const frame_id = try id.parseFrameId(params.frameId);
 
     const frame = bc.session.findFrameByFrameId(frame_id) orelse {
@@ -715,12 +715,14 @@ test "cdp.dom: getSearchResults unknown search id" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
     try ctx.processMessage(.{
         .id = 8,
         .method = "DOM.getSearchResults",
         .params = .{ .searchId = "Nope", .fromIndex = 0, .toIndex = 10 },
     });
-    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 8 });
+    try ctx.expectSentError(-31998, "SearchResultNotFound", .{ .id = 8 });
 }
 
 test "cdp.dom: search flow" {

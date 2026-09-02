@@ -38,13 +38,13 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn enable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.requireBrowserContext();
     try bc.consoleEnable();
     return cmd.sendResult(null, .{});
 }
 
 fn disable(cmd: *CDP.Command) !void {
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const bc = try cmd.teardownBrowserContext() orelse return;
     bc.consoleDisable();
     return cmd.sendResult(null, .{});
 }

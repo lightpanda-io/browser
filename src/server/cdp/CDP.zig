@@ -1307,6 +1307,27 @@ pub const Command = struct {
         return self.browser_context.?;
     }
 
+    // Flat-protocol clients skip the Target handshake and expect the /json
+    // target to exist. A session id without a context is the browser
+    // session, which must not get a page implicitly. Not for handlers that
+    // resolve ids minted by an earlier command: a fresh context can never
+    // satisfy those.
+    pub fn requireBrowserContext(self: *Command) !*BrowserContext {
+        if (self.browser_context) |bc| return bc;
+        if (self.input.session_id != null) return error.BrowserContextNotLoaded;
+        try @import("domains/target.zig").createImplicitTarget(self);
+        return self.browser_context.?;
+    }
+
+    // Teardown (X.disable, Page.close): with no context there is nothing to
+    // act on — sends the ok result and returns null.
+    pub fn teardownBrowserContext(self: *Command) !?*BrowserContext {
+        return self.browser_context orelse {
+            try self.sendResult(null, .{});
+            return null;
+        };
+    }
+
     const SendResultOpts = struct {
         include_session_id: bool = true,
     };
