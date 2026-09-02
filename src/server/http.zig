@@ -442,6 +442,8 @@ const method_not_allowed_response = errorResponse(405, "Method not allowed");
 
 const service_unavailable_response = errorResponse(503, "Too many connections");
 
+const internal_error_response = errorResponse(500, "Internal server error");
+
 const empty_json_list_response = staticResponse(.{ .status = "200 OK", .body = "[]", .content_type = "application/json; charset=UTF-8" });
 
 // WebDriver's discovery endpoint; `ready` is whether a new session can be
@@ -540,9 +542,9 @@ fn writeError(conn: *Connection, err: anyerror) void {
         error.ConnectionClosed, error.ConnectionResetByPeer, error.BrokenPipe => return,
         error.InvalidHeader, error.InvalidHTTPMethod, error.BodyNotSupported => invalid_request_response,
         error.RequestTooLarge => request_too_large_response,
-        else => {
+        else => blk: {
             log.warn(.serve, "serve error", .{ .err = err });
-            return;
+            break :blk internal_error_response;
         },
     };
     recordResponse(response);

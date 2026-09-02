@@ -39,9 +39,9 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // inbox's own.
 const Link = @This();
 
-// A send that has flipped to blocking (below) waits at most this long for the
-// peer to take more bytes.
-const SEND_TIMEOUT_S = 5;
+// A send that hits WouldBlock waits at most this long for the peer to take
+// more bytes.
+const SEND_TIMEOUT_MS = 5_000;
 
 // The loop reads as fast as it can. The worker _can_ be slow to process its
 // inbox (e.g. stuck in a syncRequest). Still, we want _some_ limit on how much
@@ -52,10 +52,10 @@ const INBOX_BACKLOG_MESSAGES = 32;
 inbox: *Inbox,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
-socket_flags: usize,
 protocol: Driver.Protocol,
 reader: WS.Reader,
 send_arena: ArenaAllocator,
+send_timeout_ms: i32,
 max_inbox_backlog: usize,
 
 pub fn init(
@@ -65,14 +65,11 @@ pub fn init(
     protocol: Driver.Protocol,
     inbox: *Inbox,
 ) !void {
-    const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
     if (lp.IS_TEST == false) {
+        const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
         lp.assert(socket_flags & nonblocking == nonblocking, "Link.init blocking", .{});
     }
-
-    const timeout = std.mem.toBytes(posix.timeval{ .sec = SEND_TIMEOUT_S, .usec = 0 });
-    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
 
     const config = app.config;
     const allocator = app.allocator;
@@ -82,9 +79,9 @@ pub fn init(
         .socket = socket,
         .protocol = protocol,
         .arena_pool = &app.arena_pool,
-        .socket_flags = socket_flags,
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
+        .send_timeout_ms = SEND_TIMEOUT_MS,
         .max_inbox_backlog = @as(usize, config.cdpMaxMessageSize()) * INBOX_BACKLOG_MESSAGES,
     };
 }
@@ -96,35 +93,31 @@ pub fn deinit(self: *Link) void {
 
 pub fn send(self: *Link, data: []const u8) !void {
     var pos: usize = 0;
-    var changed_to_blocking: bool = false;
+    const socket = self.socket;
     defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
 
-    defer if (changed_to_blocking) {
-        _ = sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
-            log.err(.app, "ws restore nonblocking", .{ .err = err });
-        };
-    };
-
-    LOOP: while (pos < data.len) {
-        const written = sys_net.write(self.socket, data[pos..]) catch |err| switch (err) {
+    while (pos < data.len) {
+        const written = sys_net.write(socket, data[pos..]) catch |err| switch (err) {
+            // The socket is nonblocking so loop reads never stall. Writes are
+            // simpler if they can wait: no per-connection pending-write queue
+            // with its own allocations. Waiting is done with poll rather than
+            // by flipping the fd to blocking: O_NONBLOCK lives on the open
+            // file description, so a flip would reach the loop's reads too.
+            // Should virtually never happen.
             error.WouldBlock => {
-                // The socket is nonblocking so loop reads never stall. Writes
-                // are simpler if we can block: no per-connection pending-write
-                // queue with its own allocations. On WouldBlock we flip the
-                // socket to blocking for this write and flip it back after.
-                // Should virtually never happen.
-                if (changed_to_blocking) {
-                    // We already flipped, so this is SO_SNDTIMEO firing: the
-                    // peer has stopped draining entirely. Treat it as gone
-                    // rather than parking the worker on it.
+                // The socket is nonblocking so that the main read loop doesn't
+                // block. But we don't want to make writes truly async, because
+                // then we'd need to allocate the message and hook that back into
+                // the main thread, so...we'll just pull until the we can write
+                // or we hit our send timeout
+                var fds = [_]posix.pollfd{.{ .fd = socket, .events = posix.POLL.OUT, .revents = 0 }};
+                if ((try posix.poll(&fds, self.send_timeout_ms)) == 0) {
                     return error.Timeout;
                 }
-                changed_to_blocking = true;
-                _ = try sys_net.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
-                continue :LOOP;
+                continue;
             },
             // a signal landed mid-write; nothing was written
-            error.Interrupted => continue :LOOP,
+            error.Interrupted => continue,
             else => return err,
         };
 
@@ -325,20 +318,19 @@ test "link: send gives up when the peer stops reading" {
     try link.init(testing.test_app, pair[1], .cdp, &inbox);
     defer link.deinit();
 
-    // shorten the blocking window so the test doesn't sit out the real one
-    const timeout = std.mem.toBytes(posix.timeval{ .sec = 0, .usec = 50_000 });
-    try posix.setsockopt(pair[1], posix.SOL.SOCKET, posix.SO.SNDTIMEO, &timeout);
+    // shorten the wait so the test doesn't sit out the real one
+    link.send_timeout_ms = 50;
 
     const payload = try testing.allocator.alloc(u8, 1024 * 1024);
     defer testing.allocator.free(payload);
     @memset(payload, 'a');
 
-    // Nobody drains pair[0]. send() flips to blocking to finish the write;
-    // unbounded, that parks the worker forever and, because shutdown only
-    // half-closes the read side, hangs the whole process on SIGINT.
+    // Nobody drains pair[0]. send() waits for writability to finish the
+    // write; unbounded, that parks the worker forever and, because shutdown
+    // only half-closes the read side, hangs the whole process on SIGINT.
     try testing.expectError(error.Timeout, link.send(payload));
 
-    // and the socket has to be non-blocking again for the run loop's reads
+    // and the run loop's reads share the fd: it must still be non-blocking
     try testing.expectEqual(flags | nonblocking, try sys_net.fcntl(pair[1], posix.F.GETFL, 0));
 }
 
