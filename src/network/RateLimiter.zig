@@ -321,6 +321,7 @@ fn sweep(self: *RateLimiter, now: u64) void {
 
 const testing = @import("../testing.zig");
 test "RateLimiter: reserve" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -339,6 +340,7 @@ test "RateLimiter: reserve" {
 }
 
 test "RateLimiter: burst" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 3, .adaptive);
     defer rl.deinit();
 
@@ -371,6 +373,7 @@ test "RateLimiter: burst" {
 }
 
 test "RateLimiter: pressure ramp" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -395,6 +398,7 @@ test "RateLimiter: pressure ramp" {
 }
 
 test "RateLimiter: pressure cooldown" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -426,6 +430,7 @@ test "RateLimiter: pressure cooldown" {
 }
 
 test "RateLimiter: pressure cap" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -446,6 +451,7 @@ test "RateLimiter: pressure cap" {
 }
 
 test "RateLimiter: observe overload" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -468,6 +474,7 @@ test "RateLimiter: observe overload" {
 }
 
 test "RateLimiter: observe failures" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -484,6 +491,7 @@ test "RateLimiter: observe failures" {
 }
 
 test "RateLimiter: observe unknown host" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -499,6 +507,7 @@ test "RateLimiter: observe unknown host" {
 }
 
 test "RateLimiter: observe fixed mode" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .fixed);
     defer rl.deinit();
 
@@ -510,6 +519,7 @@ test "RateLimiter: observe fixed mode" {
 }
 
 test "RateLimiter: loopback is exempt" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
 
@@ -528,6 +538,7 @@ test "RateLimiter: loopback is exempt" {
 }
 
 test "RateLimiter: fixed mode" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .fixed);
     defer rl.deinit();
 
@@ -548,6 +559,7 @@ test "RateLimiter: fixed mode" {
 }
 
 test "RateLimiter: sweep" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
     rl.sweep_at = 4;
@@ -577,6 +589,7 @@ test "RateLimiter: sweep" {
 }
 
 test "RateLimiter: sweep keeps pressured hosts" {
+    testing.silenceLog(&.{.rate_limit});
     var rl = RateLimiter.init(testing.allocator, 100, 1, .adaptive);
     defer rl.deinit();
     rl.sweep_at = 2;
