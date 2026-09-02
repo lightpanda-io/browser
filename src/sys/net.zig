@@ -1,7 +1,7 @@
 // Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
-// Pierre Tachoire <pierre@lightpanda.io>
+// Pierres Tachoire <pierre@lightpanda.io>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as
@@ -180,28 +180,6 @@ pub fn getsockname(sock: socket_t, addr: *posix.sockaddr, len: *posix.socklen_t)
     }
 }
 
-/// pipe2 semantics; flags applied via fcntl since macOS has no pipe2.
-pub fn pipe2(flags: struct { NONBLOCK: bool = false, CLOEXEC: bool = false }) ![2]posix.fd_t {
-    var fds: [2]posix.fd_t = undefined;
-    const rc = c.pipe(&fds);
-    if (rc != 0) {
-        return errnoError(c.errno(rc));
-    }
-    errdefer for (fds) |fd| {
-        _ = c.close(fd);
-    };
-    for (fds) |fd| {
-        if (flags.NONBLOCK) {
-            const fl = try fcntl(fd, posix.F.GETFL, 0);
-            _ = try fcntl(fd, posix.F.SETFL, fl | @as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
-        }
-        if (flags.CLOEXEC) {
-            _ = try fcntl(fd, posix.F.SETFD, posix.FD_CLOEXEC);
-        }
-    }
-    return fds;
-}
-
 pub fn connect(addr: *const IpAddress) !socket_t {
     const sock = try socket(family(addr), posix.SOCK.STREAM, posix.IPPROTO.TCP);
     errdefer _ = c.close(sock);
@@ -240,6 +218,98 @@ pub fn fcntl(fd: posix.fd_t, cmd: i32, arg: usize) !usize {
         return errnoError(c.errno(rc));
     }
     return @intCast(rc);
+}
+
+pub fn close(fd: posix.fd_t) void {
+    switch (c.errno(c.close(fd))) {
+        .BADF => unreachable, // Always a race condition.
+        .INTR => {}, // This is still a success. See https://github.com/ziglang/zig/issues/2425
+        else => {},
+    }
+}
+
+pub fn epoll_create1(flags: u32) !i32 {
+    const rc = c.epoll_create1(flags);
+    return switch (c.errno(rc)) {
+        .SUCCESS => return @intCast(rc),
+        .INVAL => unreachable,
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NOMEM => error.SystemResources,
+        else => error.Unexpected,
+    };
+}
+
+pub fn eventfd(initval: u32, flags: u32) !i32 {
+    const rc = c.eventfd(initval, flags);
+    return switch (c.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .INVAL => unreachable, // invalid parameters
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NODEV => error.SystemResources,
+        .NOMEM => error.SystemResources,
+        else => error.Unexpected,
+    };
+}
+
+pub fn epoll_ctl(epfd: i32, op: u32, fd: i32, event: ?*c.epoll_event) !void {
+    const rc = c.epoll_ctl(epfd, op, fd, event);
+    return switch (c.errno(rc)) {
+        .SUCCESS => {},
+        .BADF => unreachable, // always a race condition if this happens
+        .EXIST => error.FileDescriptorAlreadyPresentInSet,
+        .INVAL => unreachable,
+        .LOOP => error.OperationCausesCircularLoop,
+        .NOENT => error.FileDescriptorNotRegistered,
+        .NOMEM => error.SystemResources,
+        .NOSPC => error.UserResourceLimitReached,
+        .PERM => error.FileDescriptorIncompatibleWithEpoll,
+        else => error.Unexpected,
+    };
+}
+
+pub fn epoll_wait(epfd: i32, events: []c.epoll_event, timeout: i32) usize {
+    while (true) {
+        // TODO get rid of the @intCast
+        const rc = c.epoll_wait(epfd, events.ptr, @intCast(events.len), timeout);
+        switch (posix.errno(rc)) {
+            .SUCCESS => return @intCast(rc),
+            .INTR => continue,
+            .BADF => unreachable,
+            .FAULT => unreachable,
+            .INVAL => unreachable,
+            else => unreachable,
+        }
+    }
+}
+
+pub fn kqueue() !i32 {
+    const rc = c.kqueue();
+    return switch (c.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        else => error.Unexpected,
+    };
+}
+
+pub fn kevent(kq: i32, changes: []const c.Kevent, events: []c.Kevent, timeout: ?*const c.timespec) !usize {
+    while (true) {
+        const rc = c.kevent(kq, changes.ptr, @intCast(changes.len), events.ptr, @intCast(events.len), timeout);
+        switch (c.errno(rc)) {
+            .SUCCESS => return @intCast(rc),
+            .INTR => continue,
+            .BADF => unreachable, // always a race condition if this happens
+            .FAULT => unreachable,
+            .INVAL => unreachable,
+            .ACCES => return error.AccessDenied,
+            .NOENT => return error.EventNotFound,
+            .NOMEM => return error.SystemResources,
+            .SRCH => return error.ProcessNotFound,
+            else => return error.Unexpected,
+        }
+    }
 }
 
 fn errnoError(e: posix.E) anyerror {

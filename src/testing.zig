@@ -524,7 +524,7 @@ var test_ws_server_thread: ?std.Thread = null;
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
-var test_config: Config = undefined;
+pub var test_config: Config = undefined;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;

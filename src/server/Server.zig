@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025 Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -25,840 +25,1096 @@ const Config = @import("../Config.zig");
 const sys_net = @import("../sys/net.zig");
 
 const CDP = @import("cdp/CDP.zig");
-const http = @import("../network/http.zig");
-
 const BiDi = @import("bidi/BiDi.zig");
-const Handshake = @import("Handshake.zig");
+
+const WS = @import("WS.zig");
+const http = @import("http.zig");
 const Driver = @import("Driver.zig");
 
 const log = lp.log;
 const posix = std.posix;
+const Connection = http.Connection;
 const Allocator = std.mem.Allocator;
 const DoublyLinkedList = std.DoublyLinkedList;
 
+// Which protocol-specific routes we serve
+const Protocols = struct {
+    cdp: bool = false,
+    webdriver: bool = false,
+};
+
 const Server = @This();
 
-// Read side of a client (CDP / BiDi) WebSocket, registered with the
-// server's run loop so bytes are read off the socket there and dispatched
-// into the protocol layer via direct method calls on `driver`. The loop
-// never sends on the socket — the worker is the sole writer. After
-// registerLink returns, the worker must not call posix.read on this socket
-// directly. unregisterLink is synchronous: it blocks until the loop
-// confirms the link has been dropped from its poll set and won't touch it
-// again.
-pub const Link = struct {
-    driver: Driver,
-    state: State,
-    socket: posix.socket_t,
-    // The worker's HttpClient.Handles (by value — it's one pointer wide).
-    // The loop calls handles.wakeup() to unblock the worker from
-    // curl_multi_poll whenever it pushes to the worker's inbox.
-    handles: http.Handles,
-    node: DoublyLinkedList.Node = .{},
+// fds the process needs beyond client connections and the HTTP client's
+const FD_HEADROOM = 128;
 
-    pub const State = enum {
-        live,
-        // Worker called unregisterLink; the loop will drop the link on
-        // its next iteration and signal link_removed.
-        unregistering,
-        // The loop has dropped the link from its poll set. The worker
-        // can safely free anything the link's callbacks closed over.
-        removed,
+// How much one readable websocket may pull in per loop iteration; sized so a
+// large driver message (Playwright sends ~400KB) takes a couple of turns
+// rather than dozens, without starving the other connections.
+const WS_READ_BUDGET = 256 * 1024;
+
+// A websocket connection, this loop's side of Link.zig (the worker's side)
+const WebSocket = struct {
+    socket: posix.socket_t,
+    address: sys_net.IpAddress,
+    // threads `websockets` while live, the pool's free list otherwise
+    node: DoublyLinkedList.Node,
+    protocol: Driver.Protocol,
+    // null until the worker attaches
+    driver: ?Driver = null,
+    // whether or not socket is in the poll set. Makes sure we don't double-remove
+    monitored: bool = false,
+
+    const Pool = struct {
+        slab: []WebSocket,
+        free: DoublyLinkedList,
+        live: usize, // acquired and not yet released
+
+        fn init(allocator: Allocator, capacity: usize) !Pool {
+            const slab = try allocator.alloc(WebSocket, capacity);
+            var free: DoublyLinkedList = .{};
+            for (slab) |*ws| {
+                ws.node = .{};
+                free.append(&ws.node);
+            }
+            return .{ .slab = slab, .free = free, .live = 0 };
+        }
+
+        fn deinit(self: *Pool, allocator: Allocator) void {
+            allocator.free(self.slab);
+        }
+
+        fn acquire(self: *Pool) !*WebSocket {
+            const node = self.free.popFirst() orelse return error.NoWebSocketSlot;
+            self.live += 1;
+            return @fieldParentPtr("node", node);
+        }
+
+        pub fn isFull(self: *const Pool) bool {
+            return self.live == self.slab.len;
+        }
+
+        fn release(self: *Pool, ws: *WebSocket) void {
+            self.live -= 1;
+            ws.node = .{};
+            self.free.append(&ws.node);
+        }
     };
 };
 
-// Number of fixed pollfds entries (wakeup pipe + listener).
-const PSEUDO_POLLFDS = 2;
+// Worker -> loop request, see worker_queue.
+const WorkerRequest = struct {
+    ws: *WebSocket,
+    op: union(enum) {
+        attach: Driver,
+        release: *std.Io.Event,
+    },
+};
 
 app: *App,
-max_connections: usize,
-protocols: Handshake.Protocols,
-bidi_session_url: []const u8,
-json_version_response: []const u8,
-
-driver_mutex: std.Io.Mutex = .init,
-drivers: std.ArrayList(Driver) = .empty,
-
-// list of sockets that haven't yet (and might never) be updated to a driver
-// (needed for a clean shutdown).
-handshakes: std.ArrayList(posix.socket_t) = .empty,
-
-// Number of active conns, used to enforce the cdp-max-connections limit.
-active_conns: std.atomic.Value(u32) = .init(0),
-// Number of existing threads, used to deinit correctly.
-// It can be higher than active_conns b/c we free conn slots early.
-active_threads: std.atomic.Value(u32) = .init(0),
-
-cdp_pool: std.heap.MemoryPool(CDP),
-
+io_engine: IOEngine,
 listener: posix.socket_t,
 
-// pollfds layout:
-//   [0]                                  wakeup pipe
-//   [1]                                  listener
-//   [PSEUDO_POLLFDS .. + max_connections] link sockets
-pollfds: []posix.pollfd,
+listener_paused: bool,
 
-// Wakeup pipe: other threads write to [1], the run loop polls [0]
-wakeup_pipe: [2]posix.fd_t,
+// # of client connections we can have alive. Not --cdp-max-connections which
+// limits drivers (which cost a lot of memory). We need a higher limit to support
+// keepalive and hits to /json/version,  /metrics, etc.
+max_connections: usize,
 
-shutting_down: std.atomic.Value(bool) = .init(false),
+// the protocols (cdp/bidi) we support
+protocols: Protocols,
 
-// Registered client read endpoints. Producer-side (the worker doing
-// register/unregister) and consumer-side (the run loop) are serialized
-// by link_mutex. link_removed signals when a link transitions to
-// .removed so unregisterLink can return.
-links: DoublyLinkedList = .{},
-link_mutex: std.Io.Mutex = .init,
-link_removed: std.Io.Condition = .init,
-// Per-iteration snapshot of Links whose sockets are in pollfds. Sized at
-// max_connections at init time so we never allocate inside run().
-// Parallel to pollfds[PSEUDO_POLLFDS..][0..poll_count]. Persists across
-// iterations; only rebuilt when `links_dirty` is set.
-poll_snapshot: []?*Link,
-poll_count: usize = 0,
+// Live connections still in the HTTP phase, ordered by deadline
+http_connections: DoublyLinkedList,
+http_connection_pool: Connection.Pool,
 
-// Set whenever the links list changes (register / unregister / natural
-// drop). preparePollFds rebuilds the snapshot only when this is true;
-// idle iterations skip the rebuild. run() ticks hundreds of times per
-// second, and the link set is stable between connection lifecycle
-// events, so the steady-state cost of the poll prep is one mutex
-// acquire + one bool read.
-links_dirty: bool = false,
+// Websocket connections, attached or not
+websockets: DoublyLinkedList,
+websocket_pool: WebSocket.Pool,
+
+// Worker communicates with the main loop through this queue, protected by the
+// mutex.
+worker_mutex: std.Io.Mutex,
+worker_queue: std.ArrayList(WorkerRequest),
+// the queue is a double-buffer so that we don't have to hold worker_mutex while
+// draining it, just need to swap the two.
+worker_drain: std.ArrayList(WorkerRequest),
+
+// A shutdown has been signaled AND the loop has started to process it
+shutdown_begun: bool,
+
+// Will block on this until all workers are shutdown
+workers: lp.WaitGroup,
+
+// Dynamic responses (/metrics, ...) are built here. If they can't be written
+// immediately, it will be copied to the Connection's pending
+scratch: std.Io.Writer.Allocating,
+
+json_version_response: []const u8,
+// ws://host:port/session/ — what POST /session advertises, the id goes on the end
+bidi_session_url: []const u8,
 
 pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
+    const config = app.config;
     const allocator = app.allocator;
-    const self = try allocator.create(Server);
-    errdefer allocator.destroy(self);
 
-    const pipe = try sys_net.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
-    errdefer for (pipe) |fd| {
-        _ = std.c.close(fd);
+    const io_engine = try IOEngine.init();
+    errdefer io_engine.deinit();
+
+    var scratch = try std.Io.Writer.Allocating.initCapacity(allocator, 8192);
+    errdefer scratch.deinit();
+
+    var json_version_response: []const u8 = "";
+    var bidi_session_url: []const u8 = "";
+
+    const max_connections = fdBudget(config);
+
+    const listener = blk: {
+        const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+        const l = try sys_net.socket(sys_net.family(&address), flags, posix.IPPROTO.TCP);
+        errdefer sys_net.close(l);
+
+        try posix.setsockopt(l, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+        if (@hasDecl(posix.TCP, "NODELAY")) {
+            try posix.setsockopt(l, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+        }
+
+        const sa = sys_net.sockaddrFromAddress(&address);
+        try sys_net.bind(l, sa.ptr(), sa.len);
+        {
+            // look this up incase --port 0 was used
+            var bound: posix.sockaddr.storage = undefined;
+            var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+            try sys_net.getsockname(l, @ptrCast(&bound), &bound_len);
+            const bound_address = sys_net.addressFromSockaddr(@ptrCast(&bound));
+
+            json_version_response = try http.buildJSONVersionResponse(app, bound_address.getPort());
+            errdefer allocator.free(json_version_response);
+
+            bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ config.advertiseHost(), bound_address.getPort() });
+            errdefer allocator.free(bidi_session_url);
+
+            try sys_net.listen(l, config.maxPendingConnections());
+            log.note(.note, "server running", .{
+                .address = bound_address,
+                .max_connections = max_connections,
+                .max_browser_connections = config.maxConnections(),
+            });
+        }
+
+        break :blk l;
     };
+    errdefer sys_net.close(listener);
 
-    const max_connections = app.config.maxConnections();
-    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + max_connections);
-    errdefer allocator.free(pollfds);
-    @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-    pollfds[0] = .{ .fd = pipe[0], .events = posix.POLL.IN, .revents = 0 };
+    var http_connection_pool = try Connection.Pool.init(app);
+    errdefer http_connection_pool.deinit();
 
-    const poll_snapshot = try allocator.alloc(?*Link, max_connections);
-    errdefer allocator.free(poll_snapshot);
-    @memset(poll_snapshot, null);
-
-    // Bind first so /json/version can advertise the OS-assigned port (--port 0).
-    var bound_address = address;
-    const listener = try bindListener(app.config, &bound_address);
-    errdefer _ = std.c.close(listener);
-    pollfds[1] = .{ .fd = listener, .events = posix.POLL.IN, .revents = 0 };
-    log.note(.note, "server running", .{ .address = bound_address });
-
-    const port = bound_address.getPort();
-    const json_version_response = try buildJSONVersionResponse(app, port);
-    errdefer allocator.free(json_version_response);
-
-    const bidi_session_url = try std.fmt.allocPrint(allocator, "ws://{s}:{d}/session/", .{ app.config.advertiseHost(), port });
-    errdefer allocator.free(bidi_session_url);
-
-    var protocols: Handshake.Protocols = .{};
-    for (app.config.protocols()) |p| switch (p) {
+    var protocols: Protocols = .{};
+    for (config.protocols()) |p| switch (p) {
         .cdp => protocols.cdp = true,
         .webdriver => protocols.webdriver = true,
     };
 
+    const request_capacity = 2 * config.maxConnections();
+    var worker_queue: std.ArrayList(WorkerRequest) = try .initCapacity(allocator, request_capacity);
+    errdefer worker_queue.deinit(allocator);
+
+    var worker_drain: std.ArrayList(WorkerRequest) = try .initCapacity(allocator, request_capacity);
+    errdefer worker_drain.deinit(allocator);
+
+    var websocket_pool = try WebSocket.Pool.init(allocator, config.maxConnections());
+    errdefer websocket_pool.deinit(allocator);
+
+    const self = try allocator.create(Server);
+    errdefer allocator.destroy(self);
+
     self.* = .{
         .app = app,
-        .cdp_pool = .empty,
+        .io_engine = io_engine,
+        .listener = listener,
+        .listener_paused = false,
+        .scratch = scratch,
+        .protocols = protocols,
+        .http_connections = .{},
+        .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
         .bidi_session_url = bidi_session_url,
         .max_connections = max_connections,
-        .listener = listener,
-        .pollfds = pollfds,
-        .wakeup_pipe = pipe,
-        .poll_snapshot = poll_snapshot,
-        .protocols = protocols,
+        .websockets = .{},
+        .websocket_pool = websocket_pool,
+        .worker_mutex = .init,
+        .worker_queue = worker_queue,
+        .worker_drain = worker_drain,
+        .shutdown_begun = false,
+        .workers = .{},
     };
     return self;
 }
 
-fn bindListener(config: *const Config, address: *sys_net.IpAddress) !posix.socket_t {
-    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
-    const listener = try sys_net.socket(sys_net.family(address), flags, posix.IPPROTO.TCP);
-    errdefer _ = std.c.close(listener);
-
-    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    if (@hasDecl(posix.TCP, "NODELAY")) {
-        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-    }
-
-    const sa = sys_net.sockaddrFromAddress(address);
-    try sys_net.bind(listener, sa.ptr(), sa.len);
-    try sys_net.listen(listener, config.maxPendingConnections());
-
-    // When the caller requests port 0, the OS assigns an ephemeral port; read
-    // the actual bound address back so callers (e.g. logging) see the real port.
-    var bound: posix.sockaddr.storage = undefined;
-    var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    try sys_net.getsockname(listener, @ptrCast(&bound), &bound_len);
-    address.* = sys_net.addressFromSockaddr(@ptrCast(&bound));
-
-    return listener;
-}
-
-// Stop accepting, make run() return, and terminate every live worker.
-// Idempotent: the signal handler calls it, and so does deinit.
-pub fn shutdown(self: *Server) void {
-    self.shutting_down.store(true, .release);
-    self.wakeup();
-
-    self.driver_mutex.lockUncancelable(lp.io);
-    defer self.driver_mutex.unlock(lp.io);
-
-    for (self.drivers.items) |*driver| {
-        driver.shutdown();
-    }
-    for (self.handshakes.items) |socket| {
-        sys_net.shutdown(socket, .recv) catch {};
-    }
-}
-
 pub fn deinit(self: *Server) void {
-    self.shutdown();
+    const allocator = self.app.allocator;
 
-    while (self.active_threads.load(.monotonic) > 0) {
-        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+    self.workers.wait();
+    lp.assert(self.websockets.first == null, "Server.deinit websockets", .{});
+    while (self.http_connections.first) |node| {
+        http.disconnect(self, @fieldParentPtr("node", node));
     }
 
-    const allocator = self.app.allocator;
-    self.drivers.deinit(allocator);
-    self.handshakes.deinit(allocator);
-    self.cdp_pool.deinit(allocator);
+    self.scratch.deinit();
+    self.websocket_pool.deinit(allocator);
+    self.worker_queue.deinit(allocator);
+    self.worker_drain.deinit(allocator);
+    self.http_connection_pool.deinit();
     allocator.free(self.json_version_response);
     allocator.free(self.bidi_session_url);
-    allocator.free(self.pollfds);
-    allocator.free(self.poll_snapshot);
-    for (self.wakeup_pipe) |fd| {
-        _ = std.c.close(fd);
-    }
-    if (self.listener >= 0) {
-        // run() never ran (or never returned through its exit path).
-        _ = std.c.close(self.listener);
-    }
+    sys_net.close(self.listener);
+    self.io_engine.deinit();
     allocator.destroy(self);
 }
 
-// Blocks the calling thread servicing the listener and the registered client
-// read sockets until shutdown(). Page fetches run on per-worker HttpClient
-// multis and telemetry on its own thread, so nothing here drives libcurl.
+// Any thread (signal handler, mcp).
+pub fn shutdown(self: *Server) void {
+    self.io_engine.stop();
+}
+
+// blocks the caller
 pub fn run(self: *Server) void {
-    var drain_buf: [64]u8 = undefined;
+    self.io_engine.monitorListener(self.listener) catch |err| {
+        log.fatal(.serve, "io listen", .{ .err = err });
+        return;
+    };
 
-    const wakeup_fd = &self.pollfds[0];
-    const listen_fd = &self.pollfds[1];
+    while (self.runOnce()) {}
+}
 
-    while (true) {
-        self.preparePollFds();
+fn runOnce(self: *Server) bool {
+    const deadline = blk: {
+        // self.http_connections is ordered by deadline
+        const node = self.http_connections.first orelse break :blk null;
+        const conn: *Connection = @fieldParentPtr("node", node);
+        break :blk conn.deadline -| lp.datetime.milliTimestamp(.boot);
+    };
 
-        // wait until we get a client message or a signal on the wakeup pipe
-        _ = posix.poll(self.pollfds, -1) catch |err| {
-            log.err(.app, "poll", .{ .err = err });
-            continue;
-        };
+    var events = self.io_engine.wait(deadline);
+    const now = lp.datetime.milliTimestamp(.boot);
 
-        // check wakeup pipe
-        if (wakeup_fd.revents != 0) {
-            wakeup_fd.revents = 0;
-            while (true)
-                _ = posix.read(self.wakeup_pipe[0], &drain_buf) catch break;
+    var pending_accept = false;
+    var pending_signal = false;
+    var pending_shutdown = false;
+    while (events.next()) |event| {
+        switch (event) {
+            .accept => pending_accept = true,
+            .read_write => |rw| switch (rw.target) {
+                .http => |conn| http.processEvent(self, conn, rw, now),
+                .ws => |ws| self.processWebSocketEvent(ws, rw),
+            },
+            .signal => pending_signal = true,
+            .shutdown => pending_shutdown = true,
         }
+    }
 
-        // accept new connections
-        if (listen_fd.revents != 0) {
-            listen_fd.revents = 0;
-            self.acceptConnections();
-        }
+    // signal first: a worker that released frees a slot the accept can use.
+    if (pending_signal) {
+        self.drainWorkerQueue();
+    }
+    if (pending_accept) {
+        self.accept(now) catch |err| log.err(.serve, "accept", .{ .err = err });
+    }
+    // shutdown last: it's terminal, and draining the queue first keeps it from
+    // walking a websocket whose worker has already gone.
+    if (pending_shutdown) {
+        self.beginShutdown();
+    }
 
-        self.processLinks();
-
-        if (self.shutting_down.load(.acquire)) {
-            // Drain any live links so their workers can exit (issue #2510),
-            // then stop. Existing connections are torn down by shutdown();
-            // there is nothing else to flush here.
-            self.shutdownLinks();
+    // evict http connections that have passed their deadline
+    while (self.http_connections.first) |node| {
+        const conn: *Connection = @fieldParentPtr("node", node);
+        if (conn.deadline > now) {
+            // self.http_connections is ordered by deadline, so as soon as we find one
+            // that hasn't reach its deadline, none of the ones after can.
             break;
         }
+        lp.metrics.serve_http_evictions.incr();
+        http.disconnect(self, conn);
     }
 
-    if (self.listener >= 0) {
-        sys_net.shutdown(self.listener, .both) catch |err| blk: {
-            if (err == error.SocketNotConnected and builtin.os.tag != .linux) {
-                // This error is normal/expected on BSD/MacOS. We probably
-                // shouldn't bother calling shutdown at all, but I guess this
-                // is safer.
-                break :blk;
-            }
-            log.warn(.app, "listener shutdown", .{ .err = err });
-        };
-        _ = std.c.close(self.listener);
-        self.listener = -1;
+    if (self.shutdown_begun and self.websocket_pool.live == 0) {
+        return false;
     }
+    return true;
 }
 
-fn wakeup(self: *Server) void {
-    _ = sys_net.write(self.wakeup_pipe[1], &.{1}) catch {};
-}
-
-fn acceptConnections(self: *Server) void {
-    if (self.shutting_down.load(.acquire)) {
-        return;
-    }
-    if (self.listener < 0) {
-        return;
+fn accept(self: *Server, now: u64) !void {
+    if (self.liveConnections() >= self.max_connections) {
+        return self.saturated();
     }
 
     while (true) {
-        const socket = sys_net.accept(self.listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
+        var address: posix.sockaddr.storage = undefined;
+        var address_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+        const socket = sys_net.accept(self.listener, @ptrCast(&address), &address_len, posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
                 error.WouldBlock => break,
-                error.SocketNotListening => {
-                    self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
-                    _ = std.c.close(self.listener);
-                    self.listener = -1;
-                    return;
-                },
                 error.ConnectionAborted => {
-                    log.warn(.app, "accept connection aborted", .{});
+                    log.warn(.serve, "accept connection aborted", .{});
                     continue;
                 },
+                error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded => {
+                    log.warn(.serve, "accept fd limit", .{ .err = err });
+                    return self.saturated();
+                },
                 else => {
-                    log.err(.app, "accept error", .{ .err = err });
+                    log.err(.serve, "accept error", .{ .err = err });
                     continue;
                 },
             }
         };
+        errdefer sys_net.close(socket);
+        configureSocket(socket);
 
-        configureSocket(socket) catch {
-            _ = std.c.close(socket);
-            continue;
-        };
+        const peer = sys_net.addressFromSockaddr(@ptrCast(&address));
+        if (comptime lp.IS_DEBUG) {
+            log.debug(.serve, "client connected", .{ .address = peer });
+        }
 
-        self.spawnWorker(socket) catch |err| {
-            log.err(.app, "CDP spawn", .{ .err = err });
-            _ = std.c.close(socket);
-        };
+        const conn = try self.http_connection_pool.acquire();
+        errdefer self.http_connection_pool.release(conn);
+        conn.socket = socket;
+        conn.address = peer;
+
+        try self.io_engine.monitorHTTP(conn);
+        conn.deadline = now + http.IDLE_TIMEOUT_MS;
+        self.http_connections.append(&conn.node);
+
+        if (self.liveConnections() == self.max_connections) {
+            return;
+        }
     }
 }
 
-// Hand a client WebSocket's read side over to the run loop. The caller owns
-// the link and must keep it alive until unregisterLink is called. The
-// caller must not read from the socket.
-pub fn registerLink(self: *Server, link: *Link) void {
-    self.link_mutex.lockUncancelable(lp.io);
-    self.links.append(&link.node);
-    self.links_dirty = true;
-    self.link_mutex.unlock(lp.io);
-    self.wakeup();
-}
-
-// Synchronous teardown. Blocks the caller until the run loop has dropped
-// the link from its poll set and won't invoke any of the link's
-// callbacks. Safe to call after the loop has already dropped the link
-// unsolicited (state == .removed) — returns immediately in that case.
-pub fn unregisterLink(self: *Server, link: *Link) void {
-    self.link_mutex.lockUncancelable(lp.io);
-    defer self.link_mutex.unlock(lp.io);
-    if (link.state == .live) {
-        link.state = .unregistering;
-        self.links_dirty = true;
-        self.wakeup();
-    }
-
-    while (link.state != .removed) {
-        // condition variable, waiting for a signal
-        self.link_removed.waitUncancelable(lp.io, &self.link_mutex);
-    }
-}
-
-const DropLinkOpts = struct {
-    // on_disconnect is fired iff `notify` is true. false when the worker already
-    // knows the link is dead.
-    notify: bool,
-
-    // Set when we know the peer is dead. Can help unblock a blocked worker's send()
-    shutdown_socket: bool = false,
-};
-
-// Drop a link from the poll set. Caller must hold link_mutex.
-fn dropLink(self: *Server, link: *Link, err: ?anyerror, opts: DropLinkOpts) void {
-    self.links.remove(&link.node);
-    link.state = .removed;
-    self.links_dirty = true;
-
-    if (opts.shutdown_socket) {
-        sys_net.shutdown(link.socket, .both) catch {};
-    }
-
-    if (opts.notify) {
-        // notify=true means the worker hasn't been told yet — push the
-        // disconnect into the inbox and break it out of curl_multi_poll.
-        // notify=false paths have already woken the worker (close frame
-        // case) or are about to be unblocked via link_removed.broadcast
-        // (unregister case); no extra wakeup needed.
-        link.driver.onLinkDisconnect(err);
-        link.handles.wakeup() catch |e| {
-            log.warn(.app, "client link wakeup", .{ .err = e });
-        };
-    }
-}
-
-// Build the link portion of pollfds and snapshot the matching *Link
-// pointers so we can correlate revents after poll() returns. Called
-// before poll, under link_mutex.
-fn preparePollFds(self: *Server) void {
-    self.link_mutex.lockUncancelable(lp.io);
-    defer self.link_mutex.unlock(lp.io);
-
-    // Idle fast-path: link set unchanged since last rebuild, so the
-    // snapshot + pollfds entries from the previous iteration are still
-    // correct. Kernel will overwrite `revents` in the next poll() call.
-    if (!self.links_dirty) {
-        return;
-    }
-    self.links_dirty = false;
-
-    const link_pollfds = self.pollfds[PSEUDO_POLLFDS..];
-    @memset(link_pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
-
-    var i: usize = 0;
-    var it = self.links.first;
-    while (it) |node| : (it = node.next) {
-        lp.assert(i < self.poll_snapshot.len, "poll snapshot overflow", .{ .i = i, .len = self.poll_snapshot.len });
-        const link: *Link = @fieldParentPtr("node", node);
-        if (link.state != .live) {
-            // Will be handled in processLinks; don't poll its fd.
-            continue;
-        }
-
-        link_pollfds[i] = .{
-            .fd = link.socket,
-            .events = posix.POLL.IN,
-            .revents = 0,
-        };
-        self.poll_snapshot[i] = link;
-        i += 1;
-    }
-    self.poll_count = i;
-}
-
-// Per-iteration link handling: process pending unregistrations, then
-// process revents on each polled link. Called after poll().
-fn processLinks(self: *Server) void {
-    var any_removed = false;
-
-    self.link_mutex.lockUncancelable(lp.io);
-    defer self.link_mutex.unlock(lp.io);
-
-    // First pass: pending unregister requests.
-    var it = self.links.first;
-    while (it) |node| {
-        const next = node.next;
-        const link: *Link = @fieldParentPtr("node", node);
-        if (link.state == .unregistering) {
-            self.dropLink(link, null, .{ .notify = false });
-            any_removed = true;
-        }
-        it = next;
-    }
-
-    // Second pass: revents on the snapshot. Skip links the first pass
-    // (or a prior natural drop) has already removed.
-    const link_pollfds = self.pollfds[PSEUDO_POLLFDS..];
-    for (self.poll_snapshot[0..self.poll_count], 0..) |link_opt, i| {
-        const link = link_opt orelse continue;
-        if (link.state != .live) {
-            continue;
-        }
-        const pfd = link_pollfds[i];
-        if (pfd.revents == 0) {
-            continue;
-        }
-
-        const fatal_events: i16 = comptime @intCast(posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL);
-        if (pfd.revents & fatal_events != 0) {
-            self.dropLink(link, null, .{ .notify = true, .shutdown_socket = true });
-            any_removed = true;
-            continue;
-        }
-
-        if (pfd.revents & posix.POLL.IN == 0) {
-            continue;
-        }
-
-        var buf: [16 * 1024]u8 = undefined;
-        const n = posix.read(link.socket, &buf) catch |err| switch (err) {
-            error.WouldBlock => continue,
-            else => {
-                log.warn(.app, "client read", .{ .err = err });
-                self.dropLink(link, err, .{ .notify = true, .shutdown_socket = true });
-                any_removed = true;
-                continue;
-            },
-        };
-
-        if (n == 0) {
-            // peer EOF
-            self.dropLink(link, null, .{ .notify = true, .shutdown_socket = true });
-            any_removed = true;
-            continue;
-        }
-
-        const keep = link.driver.onData(buf[0..n]) catch |err| {
-            // Fatal frame/feed error. Whatever messages on_bytes
-            // managed to push are still in the inbox; the failing
-            // frame was NOT pushed, and the worker has no way to
-            // know it should exit. Drop with notify=true so
-            // on_disconnect surfaces a .disconnect into the inbox.
-            // dropLink wakes the worker.
-            log.info(.app, "client onData", .{ .err = err });
-            self.dropLink(link, err, .{ .notify = true });
-            any_removed = true;
-            continue;
-        };
-
-        // on_bytes succeeded — wake the worker so it observes anything
-        // new in the inbox (data / ping / close).
-        link.handles.wakeup() catch |err| {
-            log.warn(.app, "client link wakeup", .{ .err = err });
-        };
-
-        if (!keep) {
-            // Close frame: the handler already pushed .close. Worker's
-            // drainInbox will call on_disconnect itself after replying,
-            // so we drop without re-notifying.
-            self.dropLink(link, null, .{ .notify = false });
-            any_removed = true;
-        }
-    }
-
-    if (any_removed) {
-        self.link_removed.broadcast(lp.io);
-    }
-}
-
-// On shutdown, force-disconnect every still-live link. Each link's
-// worker thread blocks in curl_multi_poll and is woken ONLY by this
-// thread via dropLink -> handles.wakeup(). If the run loop exits with
-// links still live, those workers never wake and deinit() spins on
-// active_threads forever (issue #2510). Mirrors the peer-EOF path in
-// processLinks: dropLink(notify=true) pushes a .disconnect into the
-// worker's inbox and wakes it, so cdp.tick() returns false and the
-// worker exits.
-fn shutdownLinks(self: *Server) void {
-    self.link_mutex.lockUncancelable(lp.io);
-    defer self.link_mutex.unlock(lp.io);
-
-    var it = self.links.first;
-    while (it) |node| {
-        it = node.next;
-        const link: *Link = @fieldParentPtr("node", node);
-        if (link.state == .live) {
-            self.dropLink(link, null, .{ .notify = true });
-        }
-    }
-
-    self.link_removed.broadcast(lp.io);
-}
-
-// Liveness is enforced at the TCP layer via keepalive probes sent by the
-// kernel. This is transparent to CDP clients — unlike a WebSocket ping, which
-// go-rod panics on and chromedp logs as "malformed". Tunables in Config.zig.
-fn configureSocket(socket: posix.socket_t) !void {
-    posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
-        log.warn(.app, "SO_KEEPALIVE", .{ .err = err });
-        return err;
-    };
+// A peer that goes away without a FIN (a killed VM, a NAT timeout) leaves an
+// upgraded connection holding a worker, a browser and a --cdp-max-connections
+// slot; nothing above the socket notices. Keepalive is what ends it, and
+// Driver.tick's wait cadence is built on that. Best effort: a socket we can't
+// configure is still a usable socket.
+fn configureSocket(socket: posix.socket_t) void {
+    setSocketOption(socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, @as(c_int, 1), "SO_KEEPALIVE");
 
     const idle_opt = switch (builtin.os.tag) {
         .macos, .ios => posix.TCP.KEEPALIVE,
         else => posix.TCP.KEEPIDLE,
     };
-    posix.setsockopt(socket, posix.IPPROTO.TCP, idle_opt, &std.mem.toBytes(Config.CDP_KEEPALIVE_IDLE_S)) catch |err| {
-        log.warn(.app, "TCP_KEEPIDLE", .{ .err = err });
-        return err;
-    };
-    posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, &std.mem.toBytes(Config.CDP_KEEPALIVE_INTVL_S)) catch |err| {
-        log.warn(.app, "TCP_KEEPINTVL", .{ .err = err });
-        return err;
-    };
-    posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, &std.mem.toBytes(Config.CDP_KEEPALIVE_CNT)) catch |err| {
-        log.warn(.app, "TCP_KEEPCNT", .{ .err = err });
-        return err;
-    };
+    setSocketOption(socket, posix.IPPROTO.TCP, idle_opt, Config.CDP_KEEPALIVE_IDLE_S, "TCP_KEEPIDLE");
+    setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPINTVL, Config.CDP_KEEPALIVE_INTVL_S, "TCP_KEEPINTVL");
+    setSocketOption(socket, posix.IPPROTO.TCP, posix.TCP.KEEPCNT, Config.CDP_KEEPALIVE_CNT, "TCP_KEEPCNT");
 
-    if (builtin.os.tag == .linux) {
-        posix.setsockopt(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, &std.mem.toBytes(Config.CDP_TCP_USER_TIMEOUT_MS)) catch |err| {
-            log.warn(.app, "TCP_USER_TIMEOUT", .{ .err = err });
-            return err;
-        };
+    if (comptime builtin.os.tag == .linux) {
+        setSocketOption(socket, posix.IPPROTO.TCP, std.os.linux.TCP.USER_TIMEOUT, Config.CDP_TCP_USER_TIMEOUT_MS, "TCP_USER_TIMEOUT");
     }
 }
 
-fn spawnWorker(self: *Server, socket: posix.socket_t) !void {
-    if (self.shutting_down.load(.acquire)) {
-        return error.ShuttingDown;
+fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anytype, comptime name: []const u8) void {
+    posix.setsockopt(socket, level, option, &std.mem.toBytes(value)) catch |err| {
+        log.warn(.serve, "setsockopt", .{ .err = err, .option = name });
+    };
+}
+
+fn liveConnections(self: *const Server) usize {
+    return self.http_connection_pool.live + self.websocket_pool.live;
+}
+
+// We want to accept a connection, but have reached the connection limit. See
+// If there is any we can disconnect.
+fn saturated(self: *Server) !void {
+    lp.metrics.serve_connection_limit.incr();
+    var node = self.http_connections.first;
+    while (node) |n| : (node = n.next) {
+        const conn: *Connection = @fieldParentPtr("node", n);
+        if (conn.isIdle()) {
+            // we found an idle connection, bye.
+            http.disconnect(self, conn);
+            return;
+        }
     }
 
-    // Atomically increment active_conns only if below max_connections.
-    // Uses CAS loop to avoid race between checking the limit and incrementing.
-    //
-    // cmpxchgWeak may fail for two reasons:
-    // 1. Another thread changed the value (increment or decrement)
-    // 2. Spurious failure on some architectures (e.g. ARM)
-    //
-    // We use Weak instead of Strong because we need a retry loop anyway:
-    // if CAS fails because a conn slot was freed (counter decreased), we should
-    // retry rather than return an error - there may now be room for a new connection.
-    //
-    // On failure, cmpxchgWeak returns the actual value, which we reuse to avoid
-    // an extra load on the next iteration.
-    var current = self.active_conns.load(.monotonic);
-    while (current < self.max_connections) {
-        current = self.active_conns.cmpxchgWeak(current, current + 1, .monotonic, .monotonic) orelse break;
-    } else {
-        lp.metrics.serve_connection_limit.incr();
-        return error.MaxConnectionsReached;
+    // there isn't an available slot, we need to pause the listener (so that
+    // new connections sit in the OS backlog)
+    if (self.listener_paused) {
+        // ...we already did that
+        return;
     }
-    errdefer _ = self.active_conns.fetchSub(1, .monotonic);
+    try self.io_engine.pauseListener(self.listener);
+    self.listener_paused = true;
+}
 
-    _ = self.active_threads.fetchAdd(1, .monotonic);
-    errdefer _ = self.active_threads.fetchSub(1, .monotonic);
+fn processWebSocketEvent(self: *Server, ws: *WebSocket, rw: IOEvent.ReadWrite) void {
+    if (ws.monitored == false) {
+        // only attachWorker puts a websocket in the poll set, and only once
+        // the driver is set; an unmonitored slot has no business here.
+        return;
+    }
 
-    const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, socket });
+    const driver = ws.driver orelse {
+        // the socket is only monitered after an attach, which sets the driver
+        lp.assert(false, "Server.processWebSocketEvent driver", .{});
+        unreachable;
+    };
+
+    if (rw.readable) {
+        const keep = driver.onReadable(WS_READ_BUDGET) catch |err| switch (err) {
+            error.Closed => return self.dropWebSocket(ws, null, true), // peer EOF
+            // read error or fatal framing error: the worker doesn't know, so notify
+            else => return self.dropWebSocket(ws, err, true),
+        };
+        if (keep == false) {
+            // Close frame consumed: the framer already pushed .close, the
+            // worker will reply and disconnect itself.
+            return self.dropWebSocket(ws, null, false);
+        }
+    } else if (rw.hangup) {
+        return self.dropWebSocket(ws, null, true);
+    }
+}
+
+pub fn slotFreed(self: *Server) void {
+    if (self.listener_paused and !self.shutdown_begun) {
+        // the listener was paused (since we had no free slots)
+        // unpause it (we now have a free slot).
+        self.io_engine.monitorListener(self.listener) catch |err| {
+            // the next recycle retries
+            log.err(.serve, "resume listener", .{ .err = err });
+            return;
+        };
+        self.listener_paused = false;
+    }
+}
+
+// The 101 has been written: take the fd off the http Connection (the http
+// side recycles it) into a websocket slot/
+pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Protocol, session_id: ?[36]u8) void {
+    // it'll get added back once the Worker is started and able to process messages
+    self.io_engine.remove(conn.socket);
+    self.http_connections.remove(&conn.node);
+
+    const ws = self.websocket_pool.acquire() catch |err| {
+        if (comptime lp.IS_DEBUG) {
+            // should not be reachable. In the HTTP upgrade processing, we
+            // checked isFull()
+            unreachable;
+        }
+
+        // but, let's be safe..
+        log.err(.serve, "websocket slot", .{ .err = err });
+        sys_net.close(conn.socket);
+        return;
+    };
+
+    ws.* = .{
+        .node = .{},
+        .socket = conn.socket,
+        .address = conn.address,
+        .protocol = protocol,
+    };
+    self.websockets.append(&ws.node);
+
+    lp.metrics.serve_connections.incr(protocol);
+    lp.metrics.serve_active_connections.incr(protocol);
+
+    self.workers.start();
+    const thread = std.Thread.spawn(.{}, Worker.start, .{ self, ws, session_id }) catch |err| {
+        // cleanup what we just did prior to spawning.
+        log.err(.serve, "worker spawn", .{ .err = err });
+        self.workers.finish();
+        sys_net.close(ws.socket);
+        self.releaseWebSocket(ws);
+        return;
+    };
     thread.detach();
 }
 
-fn handleConnection(self: *Server, socket: posix.socket_t) void {
-    var active_conns_early_release = false;
-    defer {
-        if (!active_conns_early_release) {
-            _ = self.active_conns.fetchSub(1, .monotonic);
+fn drainWorkerQueue(self: *Server) void {
+    self.worker_mutex.lockUncancelable(lp.io);
+    std.mem.swap(std.ArrayList(WorkerRequest), &self.worker_queue, &self.worker_drain);
+    self.worker_mutex.unlock(lp.io);
+
+    for (self.worker_drain.items) |request| {
+        switch (request.op) {
+            .attach => |driver| self.attachWorker(request.ws, driver),
+            .release => |notify| self.releaseWorker(request.ws, notify),
         }
     }
-    defer _ = self.active_threads.fetchSub(1, .monotonic);
-    defer _ = std.c.close(socket);
+    self.worker_drain.clearRetainingCapacity();
+}
 
-    const route = self.handshake(socket) orelse return;
-    switch (route) {
-        .cdp => self.serveCDP(socket, &active_conns_early_release),
-        .bidi => |session_id| self.serveBiDi(socket, session_id, &active_conns_early_release),
+// The Worker is spawned, the Driver is setup. It has signaled us that it's
+// ready to receive messages and given us the driver to associate to the
+// connection.
+fn attachWorker(self: *Server, ws: *WebSocket, driver: Driver) void {
+    if (comptime lp.IS_DEBUG) {
+        // a worker attaches exactly once
+        lp.assert(ws.driver == null, "Server.attachWorker attached", .{});
+    }
+    ws.driver = driver;
+    if (self.shutdown_begun) {
+        driver.shutdown();
+    }
+    self.io_engine.monitorWebSocket(ws) catch |err| {
+        log.err(.serve, "ws monitor", .{ .err = err });
+        // never monitored, so this only tells the worker
+        return self.dropWebSocket(ws, err, true);
+    };
+    ws.monitored = true;
+}
+
+fn releaseWorker(self: *Server, ws: *WebSocket, notify: *std.Io.Event) void {
+    if (ws.monitored) {
+        ws.monitored = false;
+        self.io_engine.remove(ws.socket);
+    }
+    self.releaseWebSocket(ws);
+    // The worker is free to deinit its driver and close the fd from here.
+    notify.set(lp.io);
+}
+
+// Frees the slot once the loop is done with the fd. The fd itself is closed
+// by whoever owns the end of its life: the worker after its driver's deinit,
+// or upgradeConnection when there never was a worker.
+fn releaseWebSocket(self: *Server, ws: *WebSocket) void {
+    self.websockets.remove(&ws.node);
+    lp.metrics.serve_active_connections.decr(ws.protocol);
+    self.websocket_pool.release(ws);
+    self.slotFreed();
+}
+
+// unlike close above, this stops the polling on the socket and, optionally,
+// informs the Worker that it should shut down. Ultimately, when it does shutdown
+// releaseWebSocket above will be called.
+fn dropWebSocket(self: *Server, ws: *WebSocket, err: ?anyerror, notify: bool) void {
+    if (ws.monitored) {
+        // only turned on in attachWorker, so it'll never be turned on again
+        ws.monitored = false;
+        self.io_engine.remove(ws.socket);
+    }
+
+    if (notify) {
+        // Some closes the drivers knows about, some it doesn't. But the driver
+        // is always the final authority on cleanup, so we always inform it of
+        // the close.
+        if (ws.driver) |driver| {
+            driver.onLinkDisconnect(err);
+        }
     }
 }
 
-fn handshake(self: *Server, socket: posix.socket_t) ?Handshake.Route {
-    {
-        self.driver_mutex.lockUncancelable(lp.io);
-        defer self.driver_mutex.unlock(lp.io);
-        self.handshakes.append(self.app.allocator, socket) catch return null;
+fn beginShutdown(self: *Server) void {
+    if (self.shutdown_begun) {
+        return;
     }
-    defer {
-        self.driver_mutex.lockUncancelable(lp.io);
-        defer self.driver_mutex.unlock(lp.io);
-        for (self.handshakes.items, 0..) |s, i| {
-            if (s == socket) {
-                _ = self.handshakes.swapRemove(i);
-                break;
+    self.shutdown_begun = true;
+
+    if (!self.listener_paused) {
+        self.io_engine.pauseListener(self.listener) catch {};
+        self.listener_paused = true;
+    }
+    while (self.http_connections.first) |node| {
+        http.disconnect(self, @fieldParentPtr("node", node));
+    }
+
+    var node = self.websockets.first;
+    while (node) |n| : (node = n.next) {
+        const ws: *WebSocket = @fieldParentPtr("node", n);
+        // not attached yet: attachWorker terminates it on arrival
+        if (ws.driver) |driver| {
+            driver.shutdown();
+        }
+    }
+}
+
+fn fdBudget(config: *const Config) usize {
+    const reserve: usize = @as(usize, config.httpMaxConcurrent()) + config.wsMaxConcurrent() + FD_HEADROOM;
+    const soft: u64 = blk: {
+        const limit = posix.getrlimit(.NOFILE) catch |err| {
+            log.warn(.serve, "getrlimit", .{ .err = err });
+            break :blk 1024;
+        };
+        break :blk limit.cur;
+    };
+    // put some limit incase of a unlimited or very large rlimit
+    const ceiling = (64 * 1024 * 1024) / @max(@as(u64, config.cdpMaxHTTPMessageSize()), 1);
+    const budget = @min(soft, ceiling) -| reserve;
+    return @intCast(@max(budget, 8));
+}
+
+fn signal(self: *Server) void {
+    self.io_engine.signal();
+}
+
+// Stateless, but helps to group things that run on the Worker thread
+const Worker = struct {
+    fn start(server: *Server, ws: *WebSocket, session_id: ?[36]u8) void {
+        defer server.workers.finish();
+        Worker._start(server, ws, session_id) catch |err| {
+            log.err(.serve, "worker init", .{ .err = err });
+            Worker.releaseConnection(server, ws);
+        };
+    }
+
+    fn _start(server: *Server, ws: *WebSocket, session_id: ?[36]u8) !void {
+        const allocator = server.app.allocator;
+        // The socket outlives the slot: the driver's deinit below still
+        // writes to it (inspector detach notifications), so it closes last,
+        // after the loop has released us. `ws` itself must not be touched
+        // after releaseConnection returns.
+        const socket = ws.socket;
+        defer sys_net.close(socket);
+        switch (ws.protocol) {
+            .cdp => {
+                const cdp = try allocator.create(CDP);
+                defer allocator.destroy(cdp);
+                try cdp.init(server.app, ws.socket);
+                defer cdp.deinit();
+                Worker.run(server, ws, .init(.{ .cdp = cdp }));
+            },
+            .bidi => {
+                const bidi = try allocator.create(BiDi);
+                defer allocator.destroy(bidi);
+                try bidi.init(server.app, ws.socket, session_id);
+                defer bidi.deinit();
+                Worker.run(server, ws, .init(.{ .bidi = bidi }));
+            },
+        }
+    }
+
+    fn run(server: *Server, ws: *WebSocket, driver: Driver) void {
+        // Gates HttpClient's block in curl_multi_poll: false (tests, before
+        // the attach) means "nobody will wake us, don't sleep on it". From
+        // here the loop is about to feed our inbox and wake us, so the
+        // worker parks in poll instead of spinning through tick().
+        driver.browser.http_client.driver_link_active = true;
+        Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .attach = driver } });
+        driver.run();
+        // The loop is done with us once releaseConnection returns; the
+        // driver's deinit may still tick the client, without a producer.
+        defer driver.browser.http_client.driver_link_active = false;
+        // Release first: until the loop has let go of this websocket it can
+        // still drop the link, and onLinkDisconnect requests a terminate. Doing
+        // it the other way round left that request landing after the cancel,
+        // so the teardown below ran with a pending terminate -- which is the
+        // one thing the cancel is here to prevent (cdp.deinit() and
+        // bidi.deinit() in our caller need V8 in a usable state).
+        Worker.releaseConnection(server, ws);
+        driver.browser.env.cancelTerminate();
+    }
+
+    // Worker -> loop: synchronous release. Blocks until the loop has dropped the
+    // fd and won't call feed() again, so the caller can safely deinit the driver
+    // (which frees the reader).
+    fn releaseConnection(server: *Server, ws: *WebSocket) void {
+        var notify: std.Io.Event = .unset;
+        Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .release = &notify } });
+        notify.waitUncancelable(lp.io);
+    }
+
+    fn notifyLoopOfChange(server: *Server, request: WorkerRequest) void {
+        server.worker_mutex.lockUncancelable(lp.io);
+        server.worker_queue.appendAssumeCapacity(request);
+        server.worker_mutex.unlock(lp.io);
+        server.io_engine.signal();
+    }
+};
+
+const IOEngine = switch (builtin.os.tag) {
+    .linux => EPoll,
+    .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
+    else => unreachable,
+};
+
+// Abstraction over an EPoll or KQueue event
+pub const IOEvent = union(enum) {
+    accept: void,
+    signal: void,
+    shutdown: void,
+    read_write: ReadWrite,
+
+    pub const ReadWrite = struct {
+        target: union(enum) {
+            ws: *WebSocket,
+            http: *Connection,
+        },
+        hangup: bool,
+        readable: bool,
+        writable: bool,
+    };
+};
+
+const EPoll = struct {
+    fd: posix.socket_t,
+    close_fd: posix.socket_t, // to signal shutdown
+    signal_fd: posix.socket_t, // to signal external
+    event_list: [128]EpollEvent,
+
+    const linux = std.os.linux;
+    const EpollEvent = linux.epoll_event;
+
+    fn init() !EPoll {
+        const fd = try sys_net.epoll_create1(0);
+        errdefer sys_net.close(fd);
+
+        const close_fd = try sys_net.eventfd(0, std.os.linux.EFD.CLOEXEC | std.os.linux.EFD.NONBLOCK);
+        errdefer sys_net.close(close_fd);
+
+        const signal_fd = try sys_net.eventfd(0, std.os.linux.EFD.CLOEXEC | std.os.linux.EFD.NONBLOCK);
+        errdefer sys_net.close(signal_fd);
+
+        // Both eventfds are edge-triggered and never read: every write is its
+        // own edge, and one delivery services everything that arrived.
+        {
+            var event = linux.epoll_event{
+                .data = .{ .ptr = 1 },
+                .events = linux.EPOLL.IN | linux.EPOLL.ET,
+            };
+            try sys_net.epoll_ctl(fd, linux.EPOLL.CTL_ADD, close_fd, &event);
+        }
+
+        {
+            var event = linux.epoll_event{
+                .data = .{ .ptr = 2 },
+                .events = linux.EPOLL.IN | linux.EPOLL.ET,
+            };
+            try sys_net.epoll_ctl(fd, linux.EPOLL.CTL_ADD, signal_fd, &event);
+        }
+
+        return .{
+            .fd = fd,
+            .close_fd = close_fd,
+            .signal_fd = signal_fd,
+            .event_list = undefined,
+        };
+    }
+
+    fn deinit(self: *const EPoll) void {
+        sys_net.close(self.close_fd);
+        sys_net.close(self.signal_fd);
+        sys_net.close(self.fd);
+    }
+
+    fn stop(self: *const EPoll) void {
+        const increment: u64 = 1;
+        _ = sys_net.write(self.close_fd, std.mem.asBytes(&increment)) catch |err| {
+            log.fatal(.serve, "network close", .{ .err = err, .type = "epoll" });
+        };
+    }
+
+    fn signal(self: *const EPoll) void {
+        const increment: u64 = 1;
+        _ = sys_net.write(self.signal_fd, std.mem.asBytes(&increment)) catch |err| {
+            log.err(.serve, "network signal", .{ .err = err, .type = "epoll" });
+        };
+    }
+
+    fn monitorListener(self: *const EPoll, fd: posix.fd_t) !void {
+        var event = linux.epoll_event{ .events = linux.EPOLL.IN | linux.EPOLL.EXCLUSIVE, .data = .{ .ptr = 0 } };
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, fd, &event);
+    }
+
+    fn pauseListener(self: *const EPoll, fd: posix.fd_t) !void {
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_DEL, fd, null);
+    }
+
+    const READ_EVENTS = linux.EPOLL.IN | linux.EPOLL.RDHUP;
+
+    // No RDHUP while writing: it's level-triggered, so a half-closed peer
+    // would wake us continuously while the send buffer is full. A gone peer
+    // surfaces as a write error instead.
+    const WRITE_EVENTS = linux.EPOLL.OUT;
+
+    // Poll data carries the owner: an http Connection as-is, an WebSocket with
+    // the low bit set (both are word-aligned, so the bit is free).
+    const WS_TAG: usize = 1;
+
+    fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
+        var event = linux.epoll_event{
+            .data = .{ .ptr = @intFromPtr(conn) },
+            .events = READ_EVENTS,
+        };
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, conn.socket, &event);
+    }
+
+    fn monitorWebSocket(self: *const EPoll, ws: *WebSocket) !void {
+        var event = linux.epoll_event{
+            .data = .{ .ptr = @intFromPtr(ws) | WS_TAG },
+            .events = READ_EVENTS,
+        };
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, ws.socket, &event);
+    }
+
+    pub fn waitWritable(self: *const EPoll, conn: *Connection) !void {
+        return self.modify(conn, WRITE_EVENTS);
+    }
+
+    pub fn waitReadable(self: *const EPoll, conn: *Connection) !void {
+        return self.modify(conn, READ_EVENTS);
+    }
+
+    fn modify(self: *const EPoll, conn: *Connection, events: u32) !void {
+        var event = linux.epoll_event{
+            .data = .{ .ptr = @intFromPtr(conn) },
+            .events = events,
+        };
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_MOD, conn.socket, &event);
+    }
+
+    pub fn remove(self: *const EPoll, socket: posix.socket_t) void {
+        sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_DEL, socket, null) catch {};
+    }
+
+    // null blocks until an event arrives
+    fn wait(self: *EPoll, timeout_ms: ?u64) Iterator {
+        const event_list = &self.event_list;
+        const timeout: i32 = if (timeout_ms) |ms| @intCast(@min(ms, std.math.maxInt(i32))) else -1;
+
+        const event_count = sys_net.epoll_wait(self.fd, event_list, timeout);
+        return .{
+            .index = 0,
+            .events = event_list[0..event_count],
+        };
+    }
+
+    const Iterator = struct {
+        index: usize,
+        events: []EpollEvent,
+
+        fn next(self: *Iterator) ?IOEvent {
+            const index = self.index;
+            const events = self.events;
+            if (index == events.len) {
+                return null;
+            }
+            self.index = index + 1;
+
+            const event = &events[index];
+            switch (event.data.ptr) {
+                0 => return .{ .accept = {} },
+                1 => return .{ .shutdown = {} },
+                2 => return .{ .signal = {} },
+                else => |nptr| {
+                    const flags = event.events;
+                    return .{ .read_write = .{
+                        .target = if (nptr & WS_TAG == 0)
+                            .{ .http = @ptrFromInt(nptr) }
+                        else
+                            .{ .ws = @ptrFromInt(nptr & ~WS_TAG) },
+                        .readable = flags & linux.EPOLL.IN != 0,
+                        .writable = flags & linux.EPOLL.OUT != 0,
+                        .hangup = flags & (linux.EPOLL.RDHUP | linux.EPOLL.HUP | linux.EPOLL.ERR) != 0,
+                    } };
+                },
             }
         }
-    }
-    return Handshake.run(self.app, socket, &.{
-        .protocols = self.protocols,
-        .json_version_response = self.json_version_response,
-        .bidi_session_url = self.bidi_session_url,
-    });
-}
-
-// The socket is an upgraded websocket speaking CDP.
-fn serveCDP(self: *Server, socket: posix.socket_t, active_conns_early_release: *bool) void {
-    const cdp = blk: {
-        const allocator = self.app.allocator;
-        self.driver_mutex.lockUncancelable(lp.io);
-        defer self.driver_mutex.unlock(lp.io);
-        break :blk self.cdp_pool.create(allocator) catch @panic("OOM");
     };
-    defer {
-        self.driver_mutex.lockUncancelable(lp.io);
-        defer self.driver_mutex.unlock(lp.io);
-        self.cdp_pool.destroy(cdp);
+};
+
+const KQueue = struct {
+    fd: i32,
+    event_list: [128]Kevent,
+
+    const EV = std.c.EV;
+    const NOTE = std.c.NOTE;
+    const EVFILT = std.c.EVFILT;
+    const Kevent = std.c.Kevent;
+
+    // Poll data carries the owner: an http Connection as-is, an WebSocket with
+    // the low bit set (both are word-aligned, so the bit is free).
+    const WS_TAG: usize = 1;
+
+    // The listener carries 0. The two wake channels are EVFILT_USER events,
+    // whose ident only has to be unique amongst user events, so it doubles as
+    // the udata sentinel.
+    const LISTENER: usize = 0;
+    const SHUTDOWN: usize = 1;
+    const SIGNAL: usize = 2;
+
+    fn init() !KQueue {
+        const fd = try sys_net.kqueue();
+        errdefer sys_net.close(fd);
+
+        var self = KQueue{ .fd = fd, .event_list = undefined };
+
+        // Both wake channels are edge-triggered and never drained: every
+        // NOTE_TRIGGER is its own edge, EV_CLEAR resets the event as it is
+        // delivered, and one delivery services everything that arrived.
+        try self.change(&.{
+            userEvent(SHUTDOWN, EV.ADD | EV.CLEAR, 0),
+            userEvent(SIGNAL, EV.ADD | EV.CLEAR, 0),
+        });
+
+        return self;
     }
 
-    cdp.init(self.app, socket) catch |err| {
-        log.err(.app, "CDP init", .{ .err = err });
-        return;
-    };
-    defer cdp.deinit();
-
-    lp.metrics.serve_connections.incr(.cdp);
-    lp.metrics.serve_active_connections.incr(.cdp);
-    defer lp.metrics.serve_active_connections.decr(.cdp);
-
-    self.serve(.init(.{ .cdp = cdp }), active_conns_early_release);
-}
-
-// The socket is an upgraded websocket speaking WebDriver BiDi. session_id is
-// set when the client came through a classic POST /session, which already
-// created the session it's about to use.
-fn serveBiDi(self: *Server, socket: posix.socket_t, session_id: ?[36]u8, active_conns_early_release: *bool) void {
-    const allocator = self.app.allocator;
-
-    // heap-allocated: BiDi embeds a Browser
-    const bidi = allocator.create(BiDi) catch @panic("OOM");
-    defer allocator.destroy(bidi);
-
-    bidi.init(self.app, socket, session_id) catch |err| {
-        log.err(.app, "BiDi init", .{ .err = err });
-        return;
-    };
-    defer bidi.deinit();
-
-    lp.metrics.serve_connections.incr(.bidi);
-    lp.metrics.serve_active_connections.incr(.bidi);
-    defer lp.metrics.serve_active_connections.decr(.bidi);
-
-    self.serve(.init(.{ .bidi = bidi }), active_conns_early_release);
-}
-
-// Everything a live connection needs regardless of which protocol it
-// speaks: tracking (so shutdown can reach it), handing the read side to
-// the run loop, and running the worker loop.
-fn serve(self: *Server, driver: Driver, active_conns_early_release: *bool) void {
-    const conn = driver.conn;
-
-    if (log.enabled(.app, .info)) {
-        const client_address = getClientAddress(conn.socket) catch null;
-        log.info(.app, "client connected", .{ .ip = client_address });
+    fn deinit(self: *const KQueue) void {
+        sys_net.close(self.fd);
     }
 
-    self.track(driver);
-    defer self.untrack(driver);
-
-    {
-        // Transition from .starting state to .live
-        // Lock needed even though the main thread hasn't seen this yet because
-        // shutdown could access this from the sighandler thread.
-        self.driver_mutex.lockUncancelable(lp.io);
-        defer self.driver_mutex.unlock(lp.io);
-        conn.state = .live;
+    fn stop(self: *const KQueue) void {
+        self.change(&.{userEvent(SHUTDOWN, 0, NOTE.TRIGGER)}) catch |err| {
+            log.fatal(.serve, "network close", .{ .err = err, .type = "kqueue" });
+        };
     }
 
-    // Hand the read side of the socket over to the run loop.
-    // From here until the matching unregisterLink, the worker must NOT
-    // read from the socket directly — bytes arrive via the inbox.
-    // unregisterLink is synchronous, so by the time it returns the loop
-    // is guaranteed to be done with this link.
-    //
-    // driver_link_active gates HttpClient.perform's block in
-    // curl_multi_poll: with it false (tests, pre-handshake), perform
-    // skips the poll when there's no in-flight curl work — sleeping
-    // would just eat the timeout waiting for a wakeup that won't
-    // come. We set it true *after* registerLink so the loop is already
-    // accepting wakeups by the time the worker might poll, and clear
-    // it *after* unregisterLink returns (the loop is guaranteed done
-    // with us by then).
-    self.registerLink(driver.link);
-    driver.browser.http_client.driver_link_active = true;
-    defer {
-        self.unregisterLink(driver.link);
-        driver.browser.http_client.driver_link_active = false;
+    fn signal(self: *const KQueue) void {
+        self.change(&.{userEvent(SIGNAL, 0, NOTE.TRIGGER)}) catch |err| {
+            log.err(.serve, "network signal", .{ .err = err, .type = "kqueue" });
+        };
     }
 
-    // Check shutdown after markLive so that a concurrent shutdown either
-    // sees us as .live and terminates us, or we observe the stop signal
-    // here. Otherwise we could miss it and block deinit() indefinitely.
-    if (self.shutting_down.load(.acquire)) {
-        return;
+    fn monitorListener(self: *const KQueue, fd: posix.fd_t) !void {
+        return self.monitor(fd, EVFILT.READ, LISTENER);
     }
 
-    driver.run();
-
-    // Try to release the connection as soon as possible: the browser/V8
-    // teardown in our callers' defers can take milliseconds, and a client
-    // that disconnects and immediately reconnects shouldn't be rejected
-    // for a slot we're merely unwinding.
-    active_conns_early_release.* = true;
-    _ = self.active_conns.fetchSub(1, .monotonic);
-}
-
-fn track(self: *Server, driver: Driver) void {
-    self.driver_mutex.lockUncancelable(lp.io);
-    defer self.driver_mutex.unlock(lp.io);
-    self.drivers.append(self.app.allocator, driver) catch {};
-}
-
-fn untrack(self: *Server, driver: Driver) void {
-    self.driver_mutex.lockUncancelable(lp.io);
-    defer self.driver_mutex.unlock(lp.io);
-
-    for (self.drivers.items, 0..) |*d, i| {
-        if (d.conn == driver.conn) {
-            _ = self.drivers.swapRemove(i);
-            break;
-        }
+    fn pauseListener(self: *const KQueue, fd: posix.fd_t) !void {
+        return self.change(&.{socketEvent(fd, EVFILT.READ, EV.DELETE, 0)});
     }
-}
 
-fn getClientAddress(socket: posix.socket_t) !sys_net.IpAddress {
-    var storage: posix.sockaddr.storage = undefined;
-    var socklen: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    try posix.getpeername(socket, @ptrCast(&storage), &socklen);
-    return sys_net.addressFromSockaddr(@ptrCast(&storage));
-}
+    fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
+        return self.monitor(conn.socket, EVFILT.READ, @intFromPtr(conn));
+    }
 
-// The pointed-to driver is owned by its worker thread
-fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
-    const host = app.config.advertiseHost();
-    if (app.config.bindIsWildcard()) {
-        // Serve is bound to INADDR_ANY but no --advertise-host was given;
-        // advertiseHost() falls back to 127.0.0.1 so clients can still
-        // connect locally. Surface the trade-off so users running
-        // outside the same host know they have to opt in.
-        log.note(.cdp, "advertising loopback for wildcard bind", .{
-            .message = "--host is a wildcard (0.0.0.0 / ::) without --advertise-host; clients on other hosts will need --advertise-host to reach the CDP endpoint",
+    fn monitorWebSocket(self: *const KQueue, ws: *WebSocket) !void {
+        return self.monitor(ws.socket, EVFILT.READ, @intFromPtr(ws) | WS_TAG);
+    }
+
+    // A socket only ever has one of the two filters registered, so flipping is
+    // a delete plus an add. The callers only ever flip a connection that is
+    // registered for the filter being dropped, so the delete can't fail and
+    // abort the rest of the list.
+    pub fn waitWritable(self: *const KQueue, conn: *Connection) !void {
+        return self.flip(conn, EVFILT.READ, EVFILT.WRITE);
+    }
+
+    pub fn waitReadable(self: *const KQueue, conn: *Connection) !void {
+        return self.flip(conn, EVFILT.WRITE, EVFILT.READ);
+    }
+
+    fn flip(self: *const KQueue, conn: *Connection, from: i16, to: i16) !void {
+        return self.change(&.{
+            socketEvent(conn.socket, from, EV.DELETE, 0),
+            socketEvent(conn.socket, to, EV.ADD | EV.ENABLE, @intFromPtr(conn)),
         });
     }
-    const body_format =
-        "{{" ++
-        "\"Browser\": \"Lightpanda/1.0\", " ++
-        "\"Protocol-Version\": \"1.3\", " ++
-        "\"User-Agent\": \"Lightpanda/1.0\", " ++
-        "\"Lightpanda-Version\": \"" ++ lp.build_config.version ++ "\", " ++
-        "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
-        "}}";
-    const body_len = std.fmt.count(body_format, .{ host, port });
 
-    // We send a Connection: Close (and actually close the connection)
-    // because chromedp (Go driver) sends a request to /json/version and then
-    // does an upgrade request, on a different connection. Since we only allow
-    // 1 connection at a time, the upgrade connection doesn't proceed until we
-    // timeout the /json/version. So, instead of waiting for that, we just
-    // always close HTTP requests.
-    const response_format =
-        "HTTP/1.1 200 OK\r\n" ++
-        "Content-Length: {d}\r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
-}
+    pub fn remove(self: *const KQueue, socket: posix.socket_t) void {
+        // We don't track which of the two a socket is registered for, and it
+        // might not be registered at all.
+        self.unmonitor(socket, EVFILT.READ);
+        self.unmonitor(socket, EVFILT.WRITE);
+    }
+
+    // No EV_CLEAR, no EV_DISPATCH: socket filters stay level-triggered, the
+    // loop relies on an unread remainder waking us again.
+    fn monitor(self: *const KQueue, socket: posix.socket_t, filter: i16, udata: usize) !void {
+        return self.change(&.{socketEvent(socket, filter, EV.ADD | EV.ENABLE, udata)});
+    }
+
+    fn unmonitor(self: *const KQueue, socket: posix.socket_t, filter: i16) void {
+        self.change(&.{socketEvent(socket, filter, EV.DELETE, 0)}) catch {};
+    }
+
+    // Registrations go through their own kevent call rather than riding along
+    // with the next wait: an empty event list makes kqueue report a bad change
+    // through errno, so the callers above can keep an honest error union.
+    fn change(self: *const KQueue, changes: []const Kevent) !void {
+        var none: [0]Kevent = .{};
+        _ = try sys_net.kevent(self.fd, changes, &none, null);
+    }
+
+    fn userEvent(ident: usize, flags: u16, fflags: u32) Kevent {
+        return .{
+            .ident = ident,
+            .filter = EVFILT.USER,
+            .flags = flags,
+            .fflags = fflags,
+            .data = 0,
+            .udata = ident,
+        };
+    }
+
+    fn socketEvent(socket: posix.socket_t, filter: i16, flags: u16, udata: usize) Kevent {
+        return .{
+            .ident = @intCast(socket),
+            .filter = filter,
+            .flags = flags,
+            .fflags = 0,
+            .data = 0,
+            .udata = udata,
+        };
+    }
+
+    // null blocks until an event arrives
+    fn wait(self: *KQueue, timeout_ms: ?u64) Iterator {
+        const event_list = &self.event_list;
+
+        var ts: std.c.timespec = undefined;
+        const timeout: ?*const std.c.timespec = if (timeout_ms) |ms| blk: {
+            ts = .{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
+            break :blk &ts;
+        } else null;
+
+        // With no changes to apply, only programmer errors are possible.
+        const event_count = sys_net.kevent(self.fd, &.{}, event_list, timeout) catch unreachable;
+        return .{
+            .index = 0,
+            .events = event_list[0..event_count],
+        };
+    }
+
+    const Iterator = struct {
+        index: usize,
+        events: []Kevent,
+
+        fn next(self: *Iterator) ?IOEvent {
+            const index = self.index;
+            const events = self.events;
+            if (index == events.len) {
+                return null;
+            }
+            self.index = index + 1;
+
+            const event = &events[index];
+            switch (event.udata) {
+                LISTENER => return .{ .accept = {} },
+                SHUTDOWN => return .{ .shutdown = {} },
+                SIGNAL => return .{ .signal = {} },
+                else => |nptr| {
+                    return .{
+                        .read_write = .{
+                            .target = if (nptr & WS_TAG == 0)
+                                .{ .http = @ptrFromInt(nptr) }
+                            else
+                                .{ .ws = @ptrFromInt(nptr & ~WS_TAG) },
+                            .readable = event.filter == EVFILT.READ,
+                            .writable = event.filter == EVFILT.WRITE,
+                            // EV_EOF on a read filter can still come with buffered
+                            // bytes; readers deal with the two together.
+                            .hangup = event.flags & (EV.EOF | EV.ERROR) != 0,
+                        },
+                    };
+                },
+            }
+        }
+    };
+};
 
 const testing = @import("../testing.zig");
 test "server: buildJSONVersionResponse" {
-    const res = try buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
+    const res = try http.buildJSONVersionResponse(testing.test_app, testing.test_app.config.port());
     defer testing.test_app.allocator.free(res);
 
     // The response includes the build version, so check structure rather than exact bytes.
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") != null);
+    // HTTP connections are kept alive now
+    try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") == null);
 
     // Verify all required JSON fields are present in the body
     try testing.expect(std.mem.indexOf(u8, res, "\"Browser\": \"Lightpanda/") != null);
@@ -894,9 +1150,10 @@ test "Client: http invalid handshake" {
         "GET /over/9000 HTTP/1.1\r\n\r\n",
     );
 
+    // A known path with the wrong method is a 405 now (it used to 404).
     try assertHTTPError(
-        404,
-        "Not found",
+        405,
+        "Method not allowed",
         "POST / HTTP/1.1\r\n\r\n",
     );
 
@@ -932,7 +1189,7 @@ test "Client: http invalid handshake" {
 }
 
 test "Client: http handshake origin" {
-    testing.silenceLog(&.{.cdp});
+    testing.expectLog(&.{ .serve, .serve, .serve, .serve, .serve });
 
     const with_origin =
         "GET / HTTP/1.1\r\n" ++
@@ -976,7 +1233,7 @@ test "Client: http handshake origin" {
 }
 
 test "Client: http handshake host" {
-    testing.silenceLog(&.{.cdp});
+    testing.expectLog(&.{ .serve, .serve, .serve, .serve });
 
     // Any name in Host means something resolved to us that shouldn't
     // have (rebinding); only an IP literal gets through.
@@ -1014,146 +1271,29 @@ test "Client: http handshake host" {
     }
 }
 
-test "Client: http valid handshake" {
-    var c = try createTestClient();
-    defer c.deinit();
+// --cdp-max-connections caps websockets only. Drivers (chromedp, for one) hit
+// /json/version on a keepalive connection and then upgrade on a fresh one;
+// with a single shared pool, X drivers needed 2X slots and the Xth upgrade
+// was refused.
+test "Client: idle http connections don't consume websocket slots" {
+    const cap: usize = testing.test_app.config.maxConnections();
+    const idle = try testing.allocator.alloc(TestClient, cap + 4);
+    defer testing.allocator.free(idle);
 
-    // No Origin (i.e. not a browser) and a Host we're reachable at: what
-    // every CDP driver sends.
-    const request =
-        "GET /   HTTP/1.1\r\n" ++
-        "Host: 127.0.0.1:9583\r\n" ++
-        "Connection: upgrade\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "sec-websocket-version:13\r\n" ++
-        "sec-websocket-key: this is my key\r\n" ++
-        "Custom:  Header-Value\r\n\r\n";
-
-    const res = try c.httpRequest(request);
-    try testing.expectEqual("HTTP/1.1 101 Switching Protocols\r\n" ++
-        "Upgrade: websocket\r\n" ++
-        "Connection: upgrade\r\n" ++
-        "Sec-Websocket-Accept: flzHu2DevQ2dSCSVqKSii5e9C2o=\r\n\r\n", res);
-}
-
-test "Client: read invalid websocket message" {
-    // 131 = 128 (fin) | 3  where 3 isn't a valid type
-    try assertWebSocketError(
-        1002,
-        &.{ 131, 128, 'm', 'a', 's', 'k' },
-    );
-
-    for ([_]u8{ 16, 32, 64 }) |rsv| {
-        // none of the reserve flags should be set
-        try assertWebSocketError(
-            1002,
-            &.{ rsv, 128, 'm', 'a', 's', 'k' },
-        );
-
-        // as a bitmask
-        try assertWebSocketError(
-            1002,
-            &.{ rsv + 4, 128, 'm', 'a', 's', 'k' },
-        );
+    var opened: usize = 0;
+    defer for (idle[0..opened]) |*c| c.deinit();
+    for (idle) |*c| {
+        c.* = try createTestClient();
+        opened += 1;
+        const res = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     }
 
-    // client->server messages must be masked
-    try assertWebSocketError(
-        1002,
-        &.{ 129, 1, 'a' },
-    );
-
-    // control types (ping/ping/close) can't be > 125 bytes
-    for ([_]u8{ 136, 137, 138 }) |op| {
-        try assertWebSocketError(
-            1002,
-            &.{ op, 254, 1, 1 },
-        );
-    }
-
-    {
-        testing.expectLog(&.{.cdp});
-        // length of message is 0, 0, 0, 0, 0, 16, 0, 1 i.e: 1024 * 1024 + 1
-        try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 16, 0, 1, 'm', 'a', 's', 'k' });
-    }
-
-    // continuation type message must come after a normal message
-    // even when not a fin frame
-    try assertWebSocketError(
-        1002,
-        &.{ 0, 129, 'm', 'a', 's', 'k', 'd' },
-    );
-
-    // continuation type message must come after a normal message
-    // even as a fin frame
-    try assertWebSocketError(
-        1002,
-        &.{ 128, 129, 'm', 'a', 's', 'k', 'd' },
-    );
-
-    // text (non-fin) - text (non-fin)
-    try assertWebSocketError(
-        1002,
-        &.{ 1, 129, 'm', 'a', 's', 'k', 'd', 1, 128, 'k', 's', 'a', 'm' },
-    );
-
-    // text (non-fin) - text (fin) should always been continuation after non-fin
-    try assertWebSocketError(
-        1002,
-        &.{ 1, 129, 'm', 'a', 's', 'k', 'd', 129, 128, 'k', 's', 'a', 'm' },
-    );
-
-    // close must be fin
-    try assertWebSocketError(
-        1002,
-        &.{
-            8, 129, 'm', 'a', 's', 'k', 'd',
-        },
-    );
-
-    // ping must be fin
-    try assertWebSocketError(
-        1002,
-        &.{
-            9, 129, 'm', 'a', 's', 'k', 'd',
-        },
-    );
-
-    // pong must be fin
-    try assertWebSocketError(
-        1002,
-        &.{
-            10, 129, 'm', 'a', 's', 'k', 'd',
-        },
-    );
-}
-
-test "Client: ping reply" {
-    try assertWebSocketMessage(
-        // fin | pong, len
-        &.{ 138, 0 },
-
-        // fin | ping, masked | len, 4-byte mask
-        &.{ 137, 128, 0, 0, 0, 0 },
-    );
-
-    try assertWebSocketMessage(
-        // fin | pong, len, payload
-        &.{ 138, 5, 100, 96, 97, 109, 104 },
-
-        // fin | ping, masked | len, 4-byte mask, 5 byte payload
-        &.{ 137, 133, 0, 5, 7, 10, 100, 101, 102, 103, 104 },
-    );
-}
-
-test "Client: close message" {
-    try assertWebSocketMessage(
-        // fin | close, len, close code (normal)
-        &.{ 136, 2, 3, 232 },
-
-        // fin | close, masked | len, 4-byte mask
-        &.{ 136, 128, 0, 0, 0, 0 },
-    );
+    // more idle http connections than the websocket cap, and the upgrade
+    // still goes through
+    var ws = try createTestClient();
+    defer ws.deinit();
+    try ws.handshake("/");
 }
 
 test "server: bidi session lifecycle" {
@@ -1333,52 +1473,6 @@ test "server: bidi browsingContext" {
     try assertBidiMessage(&c, .{ .type = "success", .id = 9, .result = .{ .contexts = .{} } });
 }
 
-fn discardBidiMessage(c: *TestClient) !void {
-    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
-    if (msg.cleanup_fragment) {
-        c.reader.cleanup();
-    }
-}
-
-fn assertBidiEvent(c: *TestClient, method: []const u8, context: []const u8, url: []const u8) !void {
-    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
-    defer if (msg.cleanup_fragment) {
-        c.reader.cleanup();
-    };
-
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, msg.data, .{});
-    defer parsed.deinit();
-    const obj = parsed.value.object;
-    try testing.expectEqual("event", obj.get("type").?.string);
-    try testing.expectEqual(method, obj.get("method").?.string);
-
-    const p = obj.get("params").?.object;
-    try testing.expectEqual(context, p.get("context").?.string);
-    try testing.expectEqual(url, p.get("url").?.string);
-    try testing.expectEqual(36, p.get("navigation").?.string.len);
-}
-
-fn assertBidiMessage(c: *TestClient, expected: anytype) !void {
-    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
-    defer if (msg.cleanup_fragment) {
-        c.reader.cleanup();
-    };
-
-    try testing.expectEqual(.text, msg.type);
-    try testing.expectJson(expected, msg.data);
-}
-
-test "server: 404" {
-    var c = try createTestClient();
-    defer c.deinit();
-
-    const res = try c.httpRequest("GET /unknown HTTP/1.1\r\n\r\n");
-    try testing.expectEqual("HTTP/1.1 404 \r\n" ++
-        "Connection: Close\r\n" ++
-        "Content-Length: 9\r\n\r\n" ++
-        "Not found", res);
-}
-
 test "server: classic session bootstrap" {
     // What Selenium does before it speaks BiDi: a classic POST /session
     // that hands back the websocket URL, then a DELETE on quit.
@@ -1392,7 +1486,6 @@ test "server: classic session bootstrap" {
             "Content-Length: {d}\r\n\r\n" ++
             "{s}", .{ body.len, body }));
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res, "\r\nConnection: Close\r\n") != null);
 
         const json = res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
         const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
@@ -1437,7 +1530,6 @@ test "server: classic session bootstrap" {
         const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{&session_id}));
         try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
             "Content-Length: 14\r\n" ++
-            "Connection: Close\r\n" ++
             "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
             "{\"value\":null}", res);
     }
@@ -1465,7 +1557,8 @@ test "server: classic session bootstrap errors" {
     }
 
     try assertHTTPError(404, "Not found", "POST /session/abc HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
-    try assertHTTPError(404, "Not found", "DELETE /session HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
+    // the path exists (POST), the method doesn't
+    try assertHTTPError(405, "Method not allowed", "DELETE /session HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
     // a websocket upgrade on /session/<id> needs a real session id
     try assertHTTPError(404, "Not found", "GET /session/abc HTTP/1.1\r\n\r\n");
 }
@@ -1499,7 +1592,6 @@ test "server: protocol gate" {
         const res = try c.httpRequest("GET /status HTTP/1.1\r\n\r\n");
         try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
             "Content-Length: 37\r\n" ++
-            "Connection: Close\r\n" ++
             "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
             "{\"value\":{\"ready\":true,\"message\":\"\"}}", res);
     }
@@ -1508,8 +1600,179 @@ test "server: protocol gate" {
         var c = try createTestClient();
         defer c.deinit();
         const res = try c.httpRequestAlloc("GET /metrics HTTP/1.1\r\n\r\n");
+        defer testing.allocator.free(res);
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     }
+}
+
+test "Client: http valid handshake" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // No Origin (i.e. not a browser) and a Host we're reachable at: what
+    // every CDP driver sends.
+    const request =
+        "GET /   HTTP/1.1\r\n" ++
+        "Host: 127.0.0.1:9583\r\n" ++
+        "Connection: upgrade\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "sec-websocket-version:13\r\n" ++
+        "sec-websocket-key: this is my key\r\n" ++
+        "Custom:  Header-Value\r\n\r\n";
+
+    const res = try c.httpRequest(request);
+    try testing.expectEqual("HTTP/1.1 101 Switching Protocols\r\n" ++
+        "Upgrade: websocket\r\n" ++
+        "Connection: upgrade\r\n" ++
+        "Sec-Websocket-Accept: flzHu2DevQ2dSCSVqKSii5e9C2o=\r\n\r\n", res);
+}
+
+// A frame larger than WS_READ_BUDGET takes the loop more than one turn to
+// assemble; the body isn't JSON, so the worker answers with a protocol error
+// once it has the whole thing.
+test "Client: websocket message larger than the read budget" {
+    const payload_len = WS_READ_BUDGET + WS_READ_BUDGET / 2;
+    const frame = try testing.allocator.alloc(u8, 14 + payload_len);
+    defer testing.allocator.free(frame);
+
+    frame[0] = 129; // fin | text
+    frame[1] = 255; // masked | 127: 8-byte length follows
+    std.mem.writeInt(u64, frame[2..10], payload_len, .big);
+    @memset(frame[10..14], 0); // mask
+    @memset(frame[14..], 'x');
+
+    try assertWebSocketError(1002, frame);
+}
+
+test "Client: read invalid websocket message" {
+    // 131 = 128 (fin) | 3  where 3 isn't a valid type
+    try assertWebSocketError(
+        1002,
+        &.{ 131, 128, 'm', 'a', 's', 'k' },
+    );
+
+    for ([_]u8{ 16, 32, 64 }) |rsv| {
+        // none of the reserve flags should be set
+        try assertWebSocketError(
+            1002,
+            &.{ rsv, 128, 'm', 'a', 's', 'k' },
+        );
+
+        // as a bitmask
+        try assertWebSocketError(
+            1002,
+            &.{ rsv + 4, 128, 'm', 'a', 's', 'k' },
+        );
+    }
+
+    // client->server messages must be masked
+    try assertWebSocketError(
+        1002,
+        &.{ 129, 1, 'a' },
+    );
+
+    // control types (ping/ping/close) can't be > 125 bytes
+    for ([_]u8{ 136, 137, 138 }) |op| {
+        try assertWebSocketError(
+            1002,
+            &.{ op, 254, 1, 1 },
+        );
+    }
+
+    {
+        testing.expectLog(&.{.cdp});
+        // length of message is 0, 0, 0, 0, 0, 16, 0, 1 i.e: 1024 * 1024 + 1
+        try assertWebSocketError(1009, &.{ 129, 255, 0, 0, 0, 0, 0, 16, 0, 1, 'm', 'a', 's', 'k' });
+    }
+
+    // continuation type message must come after a normal message
+    // even when not a fin frame
+    try assertWebSocketError(
+        1002,
+        &.{ 0, 129, 'm', 'a', 's', 'k', 'd' },
+    );
+
+    // continuation type message must come after a normal message
+    // even as a fin frame
+    try assertWebSocketError(
+        1002,
+        &.{ 128, 129, 'm', 'a', 's', 'k', 'd' },
+    );
+
+    // text (non-fin) - text (non-fin)
+    try assertWebSocketError(
+        1002,
+        &.{ 1, 129, 'm', 'a', 's', 'k', 'd', 1, 128, 'k', 's', 'a', 'm' },
+    );
+
+    // text (non-fin) - text (fin) should always been continuation after non-fin
+    try assertWebSocketError(
+        1002,
+        &.{ 1, 129, 'm', 'a', 's', 'k', 'd', 129, 128, 'k', 's', 'a', 'm' },
+    );
+
+    // close must be fin
+    try assertWebSocketError(
+        1002,
+        &.{
+            8, 129, 'm', 'a', 's', 'k', 'd',
+        },
+    );
+
+    // ping must be fin
+    try assertWebSocketError(
+        1002,
+        &.{
+            9, 129, 'm', 'a', 's', 'k', 'd',
+        },
+    );
+
+    // pong must be fin
+    try assertWebSocketError(
+        1002,
+        &.{
+            10, 129, 'm', 'a', 's', 'k', 'd',
+        },
+    );
+}
+
+test "Client: ping reply" {
+    try assertWebSocketMessage(
+        // fin | pong, len
+        &.{ 138, 0 },
+
+        // fin | ping, masked | len, 4-byte mask
+        &.{ 137, 128, 0, 0, 0, 0 },
+    );
+
+    try assertWebSocketMessage(
+        // fin | pong, len, payload
+        &.{ 138, 5, 100, 96, 97, 109, 104 },
+
+        // fin | ping, masked | len, 4-byte mask, 5 byte payload
+        &.{ 137, 133, 0, 5, 7, 10, 100, 101, 102, 103, 104 },
+    );
+}
+
+test "Client: close message" {
+    try assertWebSocketMessage(
+        // fin | close, len, close code (normal)
+        &.{ 136, 2, 3, 232 },
+
+        // fin | close, masked | len, 4-byte mask
+        &.{ 136, 128, 0, 0, 0, 0 },
+    );
+}
+
+test "server: 404" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const res = try c.httpRequest("GET /unknown HTTP/1.1\r\n\r\n");
+    try testing.expectEqual("HTTP/1.1 404 \r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Length: 9\r\n\r\n" ++
+        "Not found", res);
 }
 
 test "server: get /json/version" {
@@ -1541,6 +1804,7 @@ test "server: get /json/protocol" {
     defer c.deinit();
 
     const res = try c.httpRequestAlloc("GET /json/protocol HTTP/1.1\r\n\r\n");
+    defer testing.allocator.free(res);
 
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
@@ -1571,7 +1835,43 @@ test "server: get /metrics" {
     try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: text/plain; version=0.0.4") != null);
     try testing.expect(std.mem.indexOf(u8, res, "build_info{version=") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "# TYPE serve_http_requests_total counter") != null);
     try testing.expect(std.mem.indexOf(u8, res, "# TYPE serve_connections_total counter") != null);
+}
+
+fn discardBidiMessage(c: *TestClient) !void {
+    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+    if (msg.cleanup_fragment) {
+        c.reader.cleanup();
+    }
+}
+
+fn assertBidiEvent(c: *TestClient, method: []const u8, context: []const u8, url: []const u8) !void {
+    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) {
+        c.reader.cleanup();
+    };
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, msg.data, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+    try testing.expectEqual("event", obj.get("type").?.string);
+    try testing.expectEqual(method, obj.get("method").?.string);
+
+    const p = obj.get("params").?.object;
+    try testing.expectEqual(context, p.get("context").?.string);
+    try testing.expectEqual(url, p.get("url").?.string);
+    try testing.expectEqual(36, p.get("navigation").?.string.len);
+}
+
+fn assertBidiMessage(c: *TestClient, expected: anytype) !void {
+    const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) {
+        c.reader.cleanup();
+    };
+
+    try testing.expectEqual(.text, msg.type);
+    try testing.expectJson(expected, msg.data);
 }
 
 fn assertHTTPError(
@@ -1605,7 +1905,8 @@ fn assertWebSocketError(close_code: u16, input: []const u8) !void {
 
     try testing.expectEqual(.close, msg.type);
     try testing.expectEqual(2, msg.data.len);
-    try testing.expectEqual(close_code, std.mem.readInt(u16, msg.data[0..2], .big));
+    const code = std.mem.readInt(u16, msg.data[0..2], .big);
+    try testing.expectEqual(close_code, code);
 }
 
 fn assertWebSocketMessage(expected: []const u8, input: []const u8) !void {
@@ -1672,12 +1973,10 @@ fn createTestClient() !TestClient {
 const TestClient = struct {
     socket: posix.socket_t,
     buf: [8192]u8 = undefined,
-    reader: WS.Reader(false),
-
-    const WS = @import("../network/WS.zig");
+    reader: WS.ReaderNoMask,
 
     fn deinit(self: *TestClient) void {
-        _ = std.c.close(self.socket);
+        sys_net.close(self.socket);
         self.reader.deinit();
     }
 
@@ -1694,25 +1993,7 @@ const TestClient = struct {
             pos += n;
             const response = self.buf[0..pos];
             if (total_length == null) {
-                const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse continue;
-                const header = response[0 .. header_end + 4];
-
-                const cl = blk: {
-                    const cl_header = "Content-Length: ";
-                    const start = (std.mem.indexOf(u8, header, cl_header) orelse {
-                        break :blk 0;
-                    }) + cl_header.len;
-
-                    const end = std.mem.indexOfScalarPos(u8, header, start, '\r') orelse {
-                        return error.InvalidContentLength;
-                    };
-
-                    break :blk std.fmt.parseInt(usize, header[start..end], 10) catch {
-                        return error.InvalidContentLength;
-                    };
-                };
-
-                total_length = cl + header.len;
+                total_length = try responseLength(response) orelse continue;
             }
 
             if (total_length) |tl| {
@@ -1732,13 +2013,39 @@ const TestClient = struct {
         try sys_net.writeAll(self.socket, req);
 
         var response: std.ArrayList(u8) = .empty;
+        defer response.deinit(testing.allocator);
+        var total_length: ?usize = null;
         while (true) {
             const n = try posix.read(self.socket, &self.buf);
             if (n == 0) {
-                return response.items;
+                return error.NoMoreData;
             }
-            try response.appendSlice(testing.arena_allocator, self.buf[0..n]);
+            try response.appendSlice(testing.allocator, self.buf[0..n]);
+            if (total_length == null) {
+                total_length = try responseLength(response.items) orelse continue;
+            }
+            if (response.items.len >= total_length.?) {
+                return response.toOwnedSlice(testing.allocator);
+            }
         }
+    }
+
+    // Header + Content-Length once the header block is complete, else null.
+    // The server keeps HTTP/1.1 connections open, so EOF never marks the end
+    // of a response.
+    fn responseLength(response: []const u8) !?usize {
+        const header_end = std.mem.indexOf(u8, response, "\r\n\r\n") orelse return null;
+        const header = response[0 .. header_end + 4];
+
+        const cl_header = "Content-Length: ";
+        const start = (std.mem.indexOf(u8, header, cl_header) orelse return header.len) + cl_header.len;
+        const end = std.mem.indexOfScalarPos(u8, header, start, '\r') orelse {
+            return error.InvalidContentLength;
+        };
+        const cl = std.fmt.parseInt(usize, header[start..end], 10) catch {
+            return error.InvalidContentLength;
+        };
+        return cl + header.len;
     }
 
     fn handshake(self: *TestClient, path: []const u8) !void {
@@ -1789,3 +2096,220 @@ const TestClient = struct {
         }
     }
 };
+
+// A server of our own, bound to an ephemeral port and never run(): these
+// tests drive its handlers by hand to reproduce what one event batch does.
+// The real test server (port 9583) is shared and can't be torn down.
+const LoopTest = struct {
+    server: *Server,
+    address: sys_net.IpAddress,
+
+    fn init() !LoopTest {
+        const server = try Server.init(testing.test_app, .{ .ip4 = .loopback(0) });
+        errdefer server.deinit();
+        server.protocols = .{ .cdp = true, .webdriver = true };
+        // run() does this; runOnce() on its own would never see an accept
+        try server.io_engine.monitorListener(server.listener);
+
+        var bound: posix.sockaddr.storage = undefined;
+        var bound_len: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
+        try sys_net.getsockname(server.listener, @ptrCast(&bound), &bound_len);
+
+        return .{ .server = server, .address = sys_net.addressFromSockaddr(@ptrCast(&bound)) };
+    }
+
+    fn deinit(self: *LoopTest) void {
+        self.server.deinit();
+    }
+
+    fn expectResponse(self: *const LoopTest, client: posix.socket_t, prefix: []const u8) !void {
+        _ = self;
+        var buf: [512]u8 = undefined;
+        const n = try posix.read(client, &buf);
+        try testing.expect(std.mem.startsWith(u8, buf[0..n], prefix));
+    }
+
+    // Connects a client and runs the accept the loop would have run,
+    // returning the client's end and the Connection the loop now owns.
+    fn accept(self: *LoopTest) !struct { posix.socket_t, *Connection } {
+        const client = try sys_net.connect(&self.address);
+        errdefer sys_net.close(client);
+        // never block the suite on a response that isn't coming
+        const timeout = std.mem.toBytes(posix.timeval{ .sec = 5, .usec = 0 });
+        try posix.setsockopt(client, posix.SOL.SOCKET, posix.SO.RCVTIMEO, &timeout);
+
+        const before = self.server.http_connections.last;
+        try self.server.accept(lp.datetime.milliTimestamp(.boot));
+
+        const node = self.server.http_connections.last orelse return error.NotAccepted;
+        if (node == before) {
+            return error.NotAccepted;
+        }
+        return .{ client, @fieldParentPtr("node", node) };
+    }
+};
+
+// epoll and kqueue both report in the order things became ready, so making the
+// deferred event ready first and the socket readable second puts the batch in
+// the order that used to be fatal: the recycle before the event that names it.
+test "server: a shutdown in the same batch as a readable connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, _ = try lt.accept();
+    defer sys_net.close(client);
+
+    // shutdown first...
+    lt.server.shutdown();
+    // ...then the request, so it lands behind it in the batch
+    try sys_net.writeAll(client, "GET /json/version HTTP/1.1\r\n\r\n");
+
+    // beginShutdown drops every http connection, so running it where it
+    // arrived left the rest of the batch pointing at a recycled (or freed)
+    // Connection. The request has to be answered first.
+    try testing.expectEqual(false, lt.server.runOnce());
+    try lt.expectResponse(client, "HTTP/1.1 200 OK\r\n");
+    try testing.expect(lt.server.shutdown_begun);
+}
+
+test "server: an accept at the connection limit in the same batch as a readable connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, _ = try lt.accept();
+    defer sys_net.close(client);
+
+    // one connection, and no room for another: the next accept has to make
+    // room by disconnecting an idle connection
+    lt.server.max_connections = 1;
+    try testing.expectEqual(1, lt.server.liveConnections());
+
+    // the accept first...
+    const second = try sys_net.connect(&lt.address);
+    defer sys_net.close(second);
+    // ...then the request, so it lands behind it in the batch
+    try sys_net.writeAll(client, "GET /json/version HTTP/1.1\r\n\r\n");
+
+    // saturated() picks the idle connection to drop, which is the one the
+    // batch is still holding a pointer to. Its request comes first.
+    _ = lt.server.runOnce();
+    try lt.expectResponse(client, "HTTP/1.1 200 OK\r\n");
+}
+
+// Why the ordering matters rather than a flag on the connection: past the
+// pool's retain count a release doesn't recycle, it destroys, so a stale
+// pointer isn't merely pointing at the wrong client -- it's dangling.
+test "server: releasing past the pool's retain destroys the connection" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const pool = &lt.server.http_connection_pool;
+    const retain = pool.retain;
+
+    const clients = try testing.allocator.alloc(posix.socket_t, retain + 1);
+    defer testing.allocator.free(clients);
+    var doomed: *Connection = undefined;
+    for (clients, 0..) |*client, i| {
+        client.*, const conn = try lt.accept();
+        if (i == clients.len - 1) {
+            doomed = conn;
+        }
+    }
+    defer for (clients) |client| sys_net.close(client);
+    try testing.expectEqual(retain + 1, pool.live);
+    try testing.expectEqual(0, pool.free_count);
+
+    while (lt.server.http_connections.first) |node| {
+        http.disconnect(lt.server, @fieldParentPtr("node", node));
+    }
+
+    // retain + 1 released but only retain came back, and `doomed` is not among
+    // them: it was destroyed, not pooled.
+    try testing.expectEqual(0, pool.live);
+    try testing.expectEqual(retain, pool.free_count);
+    var node = pool.free.first;
+    while (node) |n| : (node = n.next) {
+        try testing.expect(@as(*Connection, @fieldParentPtr("node", n)) != doomed);
+    }
+}
+
+test "server: the connection budget is bounded by buffer memory" {
+    const opts = &testing.test_config.mode.serve;
+    const original = opts.cdp_max_http_message_size;
+    defer opts.cdp_max_http_message_size = original;
+
+    // whatever NOFILE happens to be, we never sign up for more read buffers
+    // than fdBudget's ceiling pays for (kept in step with it by hand)
+    const ceiling = 64 * 1024 * 1024;
+    for ([_]u14{ 1024, 4096, 16383 }) |size| {
+        opts.cdp_max_http_message_size = size;
+        const budget = fdBudget(testing.test_app.config);
+        try testing.expect(budget * size <= ceiling);
+        try testing.expect(budget >= 8);
+    }
+}
+
+test "server: accepted sockets get TCP keepalive" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, const conn = try lt.accept();
+    defer sys_net.close(client);
+
+    // Driver.tick leans on this for liveness: without it a peer that goes
+    // away without a FIN holds a worker and a connection slot forever.
+    var value: c_int = 0;
+    var len: posix.socklen_t = @sizeOf(c_int);
+    try testing.expectEqual(0, std.c.getsockopt(conn.socket, posix.SOL.SOCKET, posix.SO.KEEPALIVE, &value, &len));
+    try testing.expectEqual(1, value);
+
+    http.disconnect(lt.server, conn);
+}
+
+test "server: the http read buffer is sized by --cdp-max-http-message-size" {
+    // the pool is built in Server.init, so this has to move first
+    const opts = &testing.test_config.mode.serve;
+    const original = opts.cdp_max_http_message_size;
+    defer opts.cdp_max_http_message_size = original;
+    opts.cdp_max_http_message_size = 8192;
+
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    const client, const conn = try lt.accept();
+    defer sys_net.close(client);
+
+    try testing.expectEqual(8192, conn.buffer.buf.len);
+
+    http.disconnect(lt.server, conn);
+}
+
+test "server: http connections stay ordered by deadline" {
+    var lt = try LoopTest.init();
+    defer lt.deinit();
+
+    // A connects and completes a request, so it gets the served deadline...
+    const client_a, const conn_a = try lt.accept();
+    defer sys_net.close(client_a);
+    try sys_net.writeAll(client_a, "GET /json/version HTTP/1.1\r\n\r\n");
+    const readable: IOEvent.ReadWrite = .{ .target = .{ .http = conn_a }, .readable = true, .writable = false, .hangup = false };
+    http.processEvent(lt.server, conn_a, readable, lp.datetime.milliTimestamp(.boot));
+
+    // ...and B connects after it, so it sits behind A in the list.
+    const client_b, const conn_b = try lt.accept();
+    defer sys_net.close(client_b);
+
+    // run() reads the wait timeout off the head and the eviction sweep stops
+    // at the first unexpired entry, so a later node may never hold an earlier
+    // deadline.
+    var node = lt.server.http_connections.first;
+    var previous: u64 = 0;
+    while (node) |n| : (node = n.next) {
+        const conn: *Connection = @fieldParentPtr("node", n);
+        try testing.expect(conn.deadline >= previous);
+        previous = conn.deadline;
+    }
+
+    http.disconnect(lt.server, conn_a);
+    http.disconnect(lt.server, conn_b);
+}

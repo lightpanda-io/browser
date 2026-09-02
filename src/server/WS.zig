@@ -108,12 +108,17 @@ pub fn fillHeader(buf: std.ArrayList(u8)) []const u8 {
 const RECLAIM_TO = 256 * 1024;
 const RECLAIM_AFTER = 8;
 
-// WebSocket message reader. Given websocket message, acts as an iterator that
-// can return zero or more Messages. When next returns null, any incomplete
-// message will remain in reader.data
-pub fn Reader(comptime EXPECT_MASK: bool) type {
+pub const Reader = ReaderM(true);
+pub const ReaderNoMask = ReaderM(false);
+
+// WebSocket and HTTP aware reader. EXPECT_MASK is always true, (since this is
+// only used to read server mesages) except for testing, where we setup test
+// clients.
+fn ReaderM(comptime EXPECT_MASK: bool) type {
     return struct {
         allocator: Allocator,
+
+        buf: []u8,
 
         // position in buf of the start of the next message
         pos: usize = 0,
@@ -123,8 +128,6 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
         len: usize = 0,
 
         max_message_size: usize,
-
-        buf: []u8,
 
         fragments: ?Fragments = null,
 
@@ -220,7 +223,9 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                     buf = self.buf[0..len];
                     // we need more data
                     return null;
-                } else if (buf.len < message_len) {
+                }
+
+                if (buf.len < message_len) {
                     // we need more data
                     return null;
                 }
@@ -393,7 +398,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
 // don't need to narrow it first; unrecognized errors return null.
 pub fn errorReply(err: anyerror) ?[]const u8 {
     return switch (err) {
-        error.TooLarge => &CLOSE_TOO_BIG,
+        error.TooLarge, error.InboxBacklog => &CLOSE_TOO_BIG,
         error.Masked,
         error.NotMasked,
         error.ReservedFlags,
@@ -537,7 +542,7 @@ fn feedAndDrain(reader: anytype, frame: []const u8) !void {
 
 test "reader: reclaims buffer after a run of small messages" {
     const allocator = testing.allocator;
-    var reader = try Reader(false).init(allocator, 4 * 1024 * 1024);
+    var reader = try ReaderNoMask.init(allocator, 4 * 1024 * 1024);
     defer reader.deinit();
 
     // A large message forces the buffer to grow well past RECLAIM_TO.
@@ -576,4 +581,32 @@ test "reader: reclaims buffer after a run of small messages" {
     try feedAndDrain(&reader, big.items);
     try testing.expect(reader.buf.len > RECLAIM_TO);
     try testing.expectEqual(@as(usize, 0), reader.small_message_streak);
+}
+
+test "reader: control frame arriving in pieces" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    // A ping with a 114 byte payload; only the header and 50 bytes of it
+    // have arrived. The control branch skips the "is the whole frame here"
+    // check that the data branches do, so next() used to slice past len.
+    var frame: [2 + 114]u8 = undefined;
+    frame[0] = 128 | 9; // FIN + ping
+    frame[1] = 114;
+    @memset(frame[2..], 'a');
+
+    const partial = frame[0 .. 2 + 50];
+    @memcpy(reader.readBuf()[0..partial.len], partial);
+    reader.len += partial.len;
+    try testing.expectEqual(@as(?Message, null), try reader.next());
+
+    // the rest arrives
+    const rest = frame[2 + 50 ..];
+    @memcpy(reader.readBuf()[0..rest.len], rest);
+    reader.len += rest.len;
+
+    const msg = (try reader.next()) orelse return error.NoMessage;
+    try testing.expectEqual(.ping, msg.type);
+    try testing.expectEqual(114, msg.data.len);
 }

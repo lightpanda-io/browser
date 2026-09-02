@@ -25,11 +25,10 @@ const Server = @import("../Server.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
-
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
+const Link = @import("../Link.zig");
 const Driver = @import("../Driver.zig");
-const Connection = @import("../Connection.zig");
 
 const script = @import("script.zig");
 const remote_value = @import("remote_value.zig");
@@ -40,11 +39,7 @@ const Allocator = std.mem.Allocator;
 const BiDi = @This();
 
 app: *App,
-conn: Connection,
-
-// Server run-loop read-side handle for the socket. Server registers it
-// after the handshake and unregisters before teardown; see CDP.zig.
-link: Server.Link,
+conn: Link,
 
 // Re-used arena for processing a message. Works because we strictly process
 // one message at a time.
@@ -93,7 +88,6 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, session_id: ?[36]u8)
     const allocator = app.allocator;
     self.* = .{
         .app = app,
-        .link = undefined,
         .conn = undefined,
         .browser = undefined,
         .user_context = undefined,
@@ -105,21 +99,14 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, session_id: ?[36]u8)
         .session_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
-    const driver: Driver = .init(.{ .bidi = self });
+    const driver = Driver.init(.{ .bidi = self });
 
     try self.browser.init(app, .{}, driver);
     errdefer self.browser.deinit();
 
-    const http_client = &self.browser.http_client;
-    try self.conn.init(app, socket, .bidi, &http_client.inbox);
+    try self.conn.init(app, socket, .bidi, &self.browser.http_client.inbox);
     errdefer self.conn.deinit();
 
-    self.link = .{
-        .driver = driver,
-        .state = .live,
-        .socket = socket,
-        .handles = http_client.handles,
-    };
     self.notification = try Notification.init(allocator);
     errdefer self.notification.deinit();
 
