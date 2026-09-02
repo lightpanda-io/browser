@@ -52,6 +52,13 @@ pub const Method = enum(u8) {
     OPTIONS = 5,
     PATCH = 6,
     PROPFIND = 7,
+
+    pub fn isSafe(self: Method) bool {
+        return switch (self) {
+            .GET, .HEAD, .OPTIONS => true,
+            .PUT, .POST, .DELETE, .PATCH, .PROPFIND => false,
+        };
+    }
 };
 
 pub const Header = struct {

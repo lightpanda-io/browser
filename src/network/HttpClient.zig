@@ -2555,7 +2555,7 @@ pub const Transfer = struct {
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.cookie_origin,
-            .is_navigation = req.resource_type == .document,
+            .is_navigation = req.resource_type == .document and req.method.isSafe(),
         });
         if (aw.written().len == 0) {
             return null;
