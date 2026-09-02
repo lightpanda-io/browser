@@ -416,7 +416,8 @@ fn parseOptions(
                 self.domains = try domain.parse(arena, v);
             },
             .important => {
-                if (negated) return error.InvalidOption;
+                // Importance is a property of blocks; uBO rejects `@@…$important`.
+                if (negated or self.exception) return error.InvalidOption;
                 self.important = true;
             },
             .badfilter => {
@@ -588,12 +589,14 @@ fn parsePattern(
         pattern = pattern[0 .. pattern.len - 1];
     }
 
-    // Trim pointless wildcards touching the (now removed) ends.
-    while (std.mem.startsWith(u8, pattern, "*")) {
-        pattern = pattern[1..];
+    // Trim pointless wildcards touching the (now removed) ends. A wildcard bordering
+    // a short word stays; which is what keeps the word a substring rather than a hostname.
+    const stars = std.mem.indexOfNone(u8, pattern, "*") orelse pattern.len;
+    if (stars > 0 and (stars == pattern.len or !isPatternWordChar(pattern[stars]))) {
+        pattern = pattern[stars..];
         self.left_anchor = false;
     }
-    while (std.mem.endsWith(u8, pattern, "*")) {
+    while (pointlessTrailingWildcard(pattern)) {
         pattern = pattern[0 .. pattern.len - 1];
         self.right_anchor = false;
     }
@@ -623,6 +626,10 @@ fn parsePattern(
         const remainder = pattern[host_end..];
         if (remainder.len == 0) {
             self.kind = .hostname;
+            if (isHostnameShaped(self.hostname)) {
+                self.require_separator = true;
+                self.right_anchor = false;
+            }
         } else if (std.mem.eql(u8, remainder, "^")) {
             self.kind = .hostname;
             self.require_separator = true;
@@ -633,14 +640,14 @@ fn parsePattern(
         return;
     }
 
-    // A pattern that reads as a bare hostname is a hostname filter
-    // (`ads.example.com` == `||ads.example.com^`)
-    if (!self.left_anchor and !self.right_anchor and isHostnameShaped(pattern)) {
+    if (isHostnameShaped(pattern)) {
         if (isRedirectHostName(pattern)) return error.Ignored;
         self.kind = .hostname;
         self.hostname = pattern;
         self.hostname_anchor = true;
         self.require_separator = true;
+        self.left_anchor = false;
+        self.right_anchor = false;
         return;
     }
 
@@ -650,6 +657,19 @@ fn parsePattern(
 
     self.kind = if (std.mem.indexOfAny(u8, pattern, "*^") != null) .wildcard else .plain;
     self.pattern = pattern;
+}
+
+/// Ditto uBO's `rePointlessTrailingWildcards`.
+fn pointlessTrailingWildcard(pattern: []const u8) bool {
+    if (pattern.len == 0 or pattern[pattern.len - 1] != '*') return false;
+    const before = std.mem.trimEnd(u8, pattern, "*");
+    var run: usize = 0;
+    while (run < before.len and isPatternWordChar(before[before.len - 1 - run])) run += 1;
+    return run == 0 or run >= 7;
+}
+
+inline fn isPatternWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '%';
 }
 
 /// Matches uBO's hostname flavor: dot-separated labels of [a-z0-9_-], each
@@ -705,18 +725,35 @@ test "adblock.NetworkFilter: pure hostname forms" {
     // Implicit "strict" blocking: documents included.
     try testing.expectEqual(ResourceTypes.all.bits(), f.types.bits());
 
-    // Without '^' there is no separator requirement and no implicit
-    // document blocking.
+    // `||host` and `||host|` are, in uBO, the same filter as `||host^`:
+    // the request hostname is `host` or a subdomain of it.
     f = try testParse(arena, "||ads.example.com");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expect(!f.require_separator);
-    try testing.expectEqual(ResourceTypes.all_network.bits(), f.types.bits());
+    try testing.expect(f.require_separator);
+    try testing.expectEqual(ResourceTypes.all.bits(), f.types.bits());
+
+    f = try testParse(arena, "||ads.example.com|");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expect(f.require_separator);
+    try testing.expect(!f.right_anchor);
 
     // Bare hostname line == ||host^ (uBO divergence from ABP).
     f = try testParse(arena, "tracker.example.net");
     try testing.expectEqual(.hostname, f.kind);
     try testing.expectString("tracker.example.net", f.hostname);
     try testing.expect(f.require_separator);
+
+    // An anchor on a bare hostname is part of the same reading.
+    f = try testParse(arena, "tracker.example.net|");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expectString("tracker.example.net", f.hostname);
+    try testing.expect(f.require_separator);
+    try testing.expect(!f.right_anchor);
+
+    f = try testParse(arena, "|tracker.example.net");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expectString("tracker.example.net", f.hostname);
+    try testing.expect(!f.left_anchor);
 
     // Raw IPv4 lines (URLhaus style).
     f = try testParse(arena, "101.126.11.168");
@@ -778,11 +815,23 @@ test "adblock.NetworkFilter: anchors and pattern kinds" {
     try testing.expectEqual(.plain, f.kind);
     try testing.expect(!f.right_anchor);
 
-    // A pattern that trims down to a bare hostname shape gets promoted
-    // (uBO flavor rules), even a single label.
+    // A '*' bordering a short alphanumeric run is meaningful (uBO's
+    // pointless-wildcard rules), so no trimming and no hostname promotion.
     f = try testParse(arena, "*ads*|");
+    try testing.expectEqual(.wildcard, f.kind);
+    try testing.expectString("*ads*", f.pattern);
+
+    // A trailing '*' after 7+ chars drops, and a pattern that trims down
+    // to a bare hostname shape gets promoted (uBO flavor rules)...
+    f = try testParse(arena, "ads.example*");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectString("ads", f.hostname);
+    try testing.expectString("ads.example", f.hostname);
+
+    // ...but a leading '*' before a word survives, and keeps the pattern a
+    // substring match rather than a hostname.
+    f = try testParse(arena, "*ads.example*");
+    try testing.expectEqual(.wildcard, f.kind);
+    try testing.expectString("*ads.example", f.pattern);
 
     // '||' hostname region containing '*' stays a generic pattern.
     f = try testParse(arena, "||example.*/ads");
@@ -963,6 +1012,9 @@ test "adblock.NetworkFilter: important, badfilter, noop" {
 
     var f = try testParse(arena, "||ads.com^$important");
     try testing.expect(f.important);
+
+    // Importance is a property of blocks; uBO rejects it on an exception.
+    try testing.expectError(error.InvalidOption, testParse(arena, "@@||ads.com^$important"));
 
     f = try testParse(arena, "||ads.com^$badfilter");
     try testing.expect(f.badfilter);
