@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -36,12 +36,18 @@ pub fn getHighWaterMark(self: *const ByteLengthQueuingStrategy) f64 {
     return self._high_water_mark;
 }
 
-pub fn size(_: *const ByteLengthQueuingStrategy, chunk: js.Value) !f64 {
-    if (!chunk.isObject()) {
-        return error.TypeError;
-    }
-    const sized = try chunk.toObject().toZig(struct { byteLength: f64 });
-    return sized.byteLength;
+// GetV(chunk, "byteLength"): objects report their byteLength (or undefined
+// without one), other primitives have no such property, null/undefined throw.
+const Chunk = union(enum) {
+    sized: struct { byteLength: ?f64 },
+    other: js.Value,
+};
+
+pub fn size(_: *const ByteLengthQueuingStrategy, chunk: Chunk) !?f64 {
+    return switch (chunk) {
+        .sized => |sized| sized.byteLength,
+        .other => |value| if (value.isNullOrUndefined()) error.TypeError else null,
+    };
 }
 
 pub const JsApi = struct {
@@ -55,5 +61,5 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ByteLengthQueuingStrategy.init, .{});
     pub const highWaterMark = bridge.accessor(ByteLengthQueuingStrategy.getHighWaterMark, null, .{});
-    pub const size = bridge.function(ByteLengthQueuingStrategy.size, .{});
+    pub const size = bridge.function(ByteLengthQueuingStrategy.size, .{ .null_as_undefined = true });
 };
