@@ -121,6 +121,8 @@ const Host = struct {
 };
 
 pub fn init(allocator: Allocator, interval_ms: u64, burst: u32, mode: Mode) RateLimiter {
+    lp.assert(interval_ms > 0, "RateLimiter.init", .{ .interval_ms = interval_ms, .mode = mode });
+
     const b: u64 = @max(burst, 1);
     const ramp_step = b * RAMP_BURSTS;
     return .{
