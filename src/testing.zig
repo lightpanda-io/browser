@@ -532,12 +532,15 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
-    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .insecure_disable_tls_host_verification = true,
-        .user_agent_suffix = "internal-tester",
-        .ws_max_concurrent = 50,
-        .load_resources = .{ .worker = true, .iframe = true },
-    } });
+    test_config = try Config.init(test_allocator, "test", .{
+        .serve = .{
+            .insecure_disable_tls_host_verification = true,
+            .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
+            .load_resources = .{ .worker = true, .iframe = true },
+            .watchdog_ms = 0,
+        },
+    });
 
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
