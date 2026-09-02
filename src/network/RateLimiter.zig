@@ -114,6 +114,10 @@ const Host = struct {
     // to `pressure`. Advanced by whole `cooldown_ms` steps so no idle time is
     // lost to rounding.
     clock: u64,
+
+    // log_msg indicates is a rate limited host has already been notified to
+    // the user via a log message.
+    log_msg: bool = false,
 };
 
 pub fn init(allocator: Allocator, interval_ms: u64, burst: u32, mode: Mode) RateLimiter {
@@ -163,19 +167,21 @@ pub fn reserve(self: *RateLimiter, host: []const u8, now: u64) !u64 {
         h.pressure = @min(h.pressure + 1, self.pressure_max);
 
         const wait = start - now;
+
         // log.debug(.rate_limit, "navigation reserved", .{
         //     .host = host,
         //     .pressure = h.pressure,
         //     .interval_ms = interval,
         //     .wait_ms = wait,
         // });
-        if (wait > 0) {
-            const level: lp.log.Level = if (self.mode == .adaptive) .warn else .debug;
-            lp.log.log(.rate_limit, level, "navigation delayed", .{
+
+        if (h.log_msg == false and wait > 0) {
+            const level: log.Level = if (self.mode == .adaptive) .warn else .debug;
+            log.log(.rate_limit, level, "navigation delayed", .{
                 .host = host,
-                .wait_ms = wait,
                 .tips = "use `--http-nav-delay 0` to disable the rate limiter",
             });
+            h.log_msg = true;
         }
         return start;
     }
