@@ -38,12 +38,15 @@ const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationActivation = @import("NavigationActivation.zig");
 const NavigationTransition = @import("root.zig").NavigationTransition;
 const NavigationState = @import("root.zig").NavigationState;
+const NavigationDestination = @import("NavigationDestination.zig");
 
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
+const NavigateEvent = @import("../event/NavigateEvent.zig");
 
 _proto: *EventTarget,
 _on_currententrychange: ?js.Function.Global = null,
+_on_navigate: ?js.Function.Global = null,
 
 _current_navigation_kind: ?NavigationKind = null,
 
@@ -60,6 +63,9 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 pub fn onRemoveFrame(self: *Navigation) void {
     if (self._on_currententrychange) |cb| cb.release();
     self._on_currententrychange = null;
+
+    if (self._on_navigate) |cb| cb.release();
+    self._on_navigate = null;
 
     for (self._entries.items) |entry| {
         if (entry._on_dispose) |cb| cb.release();
@@ -295,6 +301,37 @@ pub fn replaceEntry(
     return entry;
 }
 
+fn fireNavigateEvent(
+    self: *Navigation,
+    destination: *NavigationDestination,
+    kind: NavigationKind,
+    user_initiated: bool,
+    hash_change: bool,
+    can_intercept: bool,
+    info: ?js.Value,
+    frame: *Frame,
+) !*NavigateEvent {
+    const event = try NavigateEvent.initTrusted(
+        .wrap("navigate"),
+        .{
+            .cancelable = true,
+            .navigationType = @tagName(kind),
+            .canIntercept = can_intercept,
+            .userInitiated = user_initiated,
+            .hashChange = hash_change,
+            .destination = destination,
+            .downloadRequest = null,
+            .info = info,
+            .hasUAVisualTransition = false,
+        },
+        frame,
+    );
+
+    try frame._event_manager.dispatch(self.asEventTarget(), event.asEvent());
+
+    return event;
+}
+
 const NavigateOptions = struct {
     history: ?[]const u8 = null,
     info: ?js.Value = null,
@@ -331,8 +368,46 @@ pub fn navigateInner(
     // Captured before the switch overwrites frame.url in the same_document
     // branches; used to queue the hashchange once below.
     const old_url = frame.url;
-
     const previous = self.getCurrentEntry();
+
+    const destination = switch (kind) {
+        // On traverse, it is a real entry that exists.
+        .traverse => |index| blk: {
+            const entry = self._entries.items[index];
+            break :blk try NavigationDestination.init(.{
+                .id = entry._id,
+                .key = entry._key,
+                .index = @intCast(index),
+                .same_document = is_same_document,
+                .url = url,
+            }, frame);
+        },
+        else => try NavigationDestination.init(.{
+            .same_document = is_same_document,
+            .url = url,
+        }, frame),
+    };
+
+    const navigate_event = try self.fireNavigateEvent(
+        destination,
+        kind,
+        false,
+        false,
+        is_same_document,
+        null,
+        frame,
+    );
+
+    // Script cancelled the navigation.
+    if (navigate_event.asEvent().getDefaultPrevented()) {
+        _ = try committed.persist();
+        _ = try finished.persist();
+
+        return .{
+            .committed = try committed.promise().persist(),
+            .finished = try finished.promise().persist(),
+        };
+    }
 
     switch (kind) {
         .push => |state| {
@@ -502,6 +577,19 @@ pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void 
     }
 }
 
+fn getOnNavigate(self: *Navigation) ?js.Function.Global {
+    return self._on_navigate;
+}
+
+fn setOnNavigate(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_navigate) |old| old.release();
+    if (listener) |listen| {
+        self._on_navigate = try listen.persistWithThis(self);
+    } else {
+        self._on_navigate = null;
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Navigation);
 
@@ -528,6 +616,7 @@ pub const JsApi = struct {
         Navigation.setOnCurrentEntryChange,
         .{},
     );
+    pub const onnavigate = bridge.accessor(Navigation.getOnNavigate, Navigation.setOnNavigate, .{});
 };
 
 const testing = @import("../../../testing.zig");

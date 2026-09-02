@@ -30,6 +30,7 @@ _index: i32,
 _key: []const u8,
 _same_document: bool,
 _url: []const u8,
+_state: ?js.Value.Global,
 
 pub const InitOpts = struct {
     id: []const u8 = "",
@@ -41,9 +42,7 @@ pub const InitOpts = struct {
 };
 
 pub fn init(opts: InitOpts, frame: *Frame) !*NavigationDestination {
-    const arena = try frame.getArena(.tiny, "NavigationDestination");
-    errdefer arena.release();
-
+    const arena = frame._session.arena;
     const state: ?js.Value.Global = if (opts.state) |s| try s.persist() else null;
 
     const self = try arena.create(NavigationDestination);
@@ -55,7 +54,6 @@ pub fn init(opts: InitOpts, frame: *Frame) !*NavigationDestination {
         ._url = try arena.allocator().dupeZ(u8, opts.url),
         ._state = state,
     };
-    arena.report();
     return self;
 }
 
@@ -79,11 +77,12 @@ pub fn getSameDocument(self: *const NavigationDestination) bool {
     return self._same_document;
 }
 
-pub fn getState(self: *const NavigationDestination, exec: *const js.Execution) js.Value {
+pub fn getState(self: *const NavigationDestination, exec: *const js.Execution) ?js.Value {
     if (self._state) |state| {
         return exec.js.local.?.toLocal(state);
     }
-    return exec.js.local.?.undefined_();
+
+    return null;
 }
 
 pub const JsApi = struct {
