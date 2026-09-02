@@ -191,9 +191,16 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     }
 
     const origin = req.origin orelse "null";
-    try transfer.setHeader(ORIGIN, origin, .{});
 
     transfer._cors_cross_origin = true;
+
+    // https://fetch.spec.whatwg.org/#append-a-request-origin-header
+    //
+    // If the request is no cors, we only add the origin if it is not HEAD or GET.
+    // TODO: Should use referrer policy.
+    if (req.request_mode != .no_cors or (req.method != .HEAD and req.method != .GET)) {
+        try transfer.setHeader("Origin", origin, .{});
+    }
 
     if (req.request_mode == .no_cors) {
         log.debug(.cors, "cross origin", .{
