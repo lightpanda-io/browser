@@ -144,6 +144,9 @@ worker_drain: std.ArrayList(WorkerRequest),
 // A shutdown has been signaled AND the loop has started to process it
 shutdown_begun: bool,
 
+// Will block on this until all workers are shutdown
+workers: lp.WaitGroup,
+
 // Dynamic responses (/metrics, ...) are built here. If they can't be written
 // immediately, it will be copied to the Connection's pending
 scratch: std.Io.Writer.Allocating,
@@ -244,6 +247,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .worker_queue = worker_queue,
         .worker_drain = worker_drain,
         .shutdown_begun = false,
+        .workers = .{},
     };
     return self;
 }
@@ -251,6 +255,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
 pub fn deinit(self: *Server) void {
     const allocator = self.app.allocator;
 
+    self.workers.wait();
     lp.assert(self.websockets.first == null, "Server.deinit websockets", .{});
     while (self.http_connections.first) |node| {
         http.disconnect(self, @fieldParentPtr("node", node));
@@ -516,9 +521,11 @@ pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Prot
     lp.metrics.serve_connections.incr(protocol);
     lp.metrics.serve_active_connections.incr(protocol);
 
+    self.workers.start();
     const thread = std.Thread.spawn(.{}, Worker.start, .{ self, ws, session_id }) catch |err| {
         // cleanup what we just did prior to spawning.
         log.err(.serve, "worker spawn", .{ .err = err });
+        self.workers.finish();
         sys_net.close(ws.socket);
         self.releaseWebSocket(ws);
         return;
@@ -646,6 +653,7 @@ fn signal(self: *Server) void {
 // Stateless, but helps to group things that run on the Worker thread
 const Worker = struct {
     fn start(server: *Server, ws: *WebSocket, session_id: ?[36]u8) void {
+        defer server.workers.finish();
         Worker._start(server, ws, session_id) catch |err| {
             log.err(.serve, "worker init", .{ .err = err });
             Worker.releaseConnection(server, ws);
