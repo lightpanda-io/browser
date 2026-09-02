@@ -670,7 +670,8 @@ pub const Handles = struct {
         try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
         // Default is 4x the attached easy handles, i.e. ~0 between page loads,
         // so keepalive connections were evicted on every cross-site navigation.
-        try libcurl.curl_multi_setopt(multi, .max_connects, 128);
+          try libcurl.curl_multi_setopt(multi, .max_connects, 4 * @as(u32, config.httpMaxConcurrent()));
+
 
         return .{ .multi = multi };
     }
