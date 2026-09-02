@@ -1315,4 +1315,55 @@
     });
 }
 </script>
+
+<!-- nextunique/prevunique visit one record per distinct index key — the one
+     with the lowest primary key, in both directions — and advance() counts
+     keys, not records. continue(undefined) is continue(). -->
+<script id="index_cursor_unique_directions" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("unique-cursor-db", 1);
+    open.onupgradeneeded = (e) => {
+        const store = e.target.result.createObjectStore("s", { keyPath: "id" });
+        store.createIndex("by_v", "v");
+        for (const [id, v] of [[1, "a"], [2, "a"], [3, "b"], [4, "b"], [5, "c"], [6, "c"]]) {
+            store.put({ id, v });
+        }
+    };
+    const walk = (index, direction, step) => new Promise((resolve) => {
+        const seen = [];
+        const req = index.openCursor(null, direction);
+        req.onsuccess = () => {
+            const cursor = req.result;
+            if (!cursor) return resolve(seen);
+            seen.push(cursor.key + cursor.primaryKey);
+            step(cursor);
+        };
+    });
+    open.onsuccess = async () => {
+        const index = open.result.transaction("s").objectStore("s").index("by_v");
+        state.resolve({
+            next: await walk(index, "nextunique", (c) => c.continue()),
+            prev: await walk(index, "prevunique", (c) => c.continue(undefined)),
+            advance: await walk(index, "nextunique", (c) => c.advance(2)),
+            keyCursor: await new Promise((resolve) => {
+                const seen = [];
+                const req = index.openKeyCursor(null, "prevunique");
+                req.onsuccess = () => {
+                    const cursor = req.result;
+                    if (!cursor) return resolve(seen);
+                    seen.push(cursor.primaryKey);
+                    cursor.continue();
+                };
+            }),
+        });
+    };
+    await state.done((got) => {
+        testing.expectEqual(["a1", "b3", "c5"], got.next);
+        testing.expectEqual(["c5", "b3", "a1"], got.prev);
+        testing.expectEqual(["a1", "c5"], got.advance);
+        testing.expectEqual([5, 3, 1], got.keyCursor);
+    });
+}
+</script>
 </body>

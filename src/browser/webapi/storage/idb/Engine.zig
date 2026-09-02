@@ -570,6 +570,7 @@ pub fn indexCursorSeek(
     index_id: i64,
     b: Bounds,
     reverse: bool,
+    unique: bool,
     from_key: []const u8,
     from_pk: []const u8,
     pk_inclusive: bool,
@@ -583,19 +584,26 @@ pub fn indexCursorSeek(
     const key_op = if (reverse) "< " else "> ";
     const pk_op = if (reverse) (if (pk_inclusive) "<= " else "< ") else (if (pk_inclusive) ">= " else "> ");
 
-    var buf: [640]u8 = undefined;
-    const select = if (with_value)
-        "select ir.key, ir.primary_key, r.value from idb_index_records ir join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key"
-    else
-        "select ir.key, ir.primary_key from idb_index_records ir";
-
+    var buf: [768]u8 = undefined;
     const sql = try std.fmt.bufPrint(
         &buf,
-        \\ {s} where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
-        \\ order by ir.key {s}, ir.primary_key {s}
+        \\ select ir.key, {s}{s} from idb_index_records ir {s}
+        \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
+        \\ {s} order by ir.key {s}, ir.primary_key {s}
         \\ limit 1 offset ?7
     ,
-        .{ select, ops.lo, ops.hi, key_op, pk_op, order, order },
+        .{
+            if (unique) "min(ir.primary_key)" else "ir.primary_key",
+            if (with_value) ", r.value" else "",
+            if (with_value) "join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key" else "",
+            ops.lo,
+            ops.hi,
+            key_op,
+            pk_op,
+            if (unique) "group by ir.key" else "",
+            order,
+            if (unique) "asc" else order,
+        },
     );
 
     var row = (try self.conn.row(sql, .{ object_store_id, index_id, b.lower, b.upper, from_key, from_pk, @as(i64, offset) })) orelse return null;
