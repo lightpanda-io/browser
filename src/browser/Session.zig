@@ -243,6 +243,12 @@ pub fn processDestroyQueues(self: *Session) void {
     {
         const queue = self._page_destruction_queue.items;
         if (queue.len > 0) {
+            // Context disposal GC must not arm a new termination.
+            const env = &self.browser.env;
+            const was_tearing_down = env.tearing_down;
+            env.tearing_down = true;
+            defer env.tearing_down = was_tearing_down;
+
             for (queue) |page| {
                 page.deinit();
                 self.browser.page_pool.destroy(page);

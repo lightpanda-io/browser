@@ -571,3 +571,44 @@ test "WebApi: MutationObserver requested termination unwinds delivery" {
     env.runMicrotasks();
     try testing.expectEqual(2, try (try local.exec("window.__delivered", null)).toI32());
 }
+
+test "WebApi: MutationObserver terminated page tears down" {
+    testing.expectLog(&.{ .frame, .frame });
+
+    const frame = try testing.createFrame();
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
+
+        const State = struct {
+            env: *js.Env,
+
+            fn kill(self: *@This()) void {
+                self.env.requestTerminate();
+            }
+        };
+        var state = State{ .env = env };
+        const kill_cb = local.newCallback(State.kill, &state);
+        const setup = try local.exec(
+            \\(function(kill) {
+            \\  const target = document.createElement('div');
+            \\  new MutationObserver(() => { kill(); for(;;){} })
+            \\      .observe(target, { attributes: true });
+            \\  target.setAttribute('x', '1');
+            \\})
+        , null);
+        const setup_fn = js.Function{ .local = local, .handle = @ptrCast(setup.handle) };
+        try setup_fn.call(void, .{kill_cb});
+    }
+
+    env.runMicrotasks();
+    try testing.expectEqual(true, env.terminatePending());
+    try testing.expectEqual(false, js.v8.v8__Isolate__IsExecutionTerminating(env.isolate.handle));
+
+    testing.test_session.closeAllPages();
+    try testing.expectEqual(@as(usize, 0), env.contexts.items.len);
+}
