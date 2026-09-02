@@ -234,6 +234,30 @@ jobs:
           wait $VALIDATOR_PID
           exec 3>&-
 
+      # The signature covers @authority, so every redirect hop has to be
+      # re-signed: a redirect from one validator onto another (different
+      # port, different authority) fails unless the second hop carries a
+      # signature made for it.
+      - name: run wba redirect test
+        shell: bash
+        run: |
+          node webbotauth/validator.js &
+          FIRST_PID=$!
+          PORT=8990 node webbotauth/validator.js &
+          SECOND_PID=$!
+          sleep 5
+
+          exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
+
+          ./lightpanda fetch --dump "http://127.0.0.1:8989/redirect?to=http://127.0.0.1:8990/" \
+            --web-bot-auth-key-file /proc/self/fd/3 \
+            --web-bot-auth-keyid ${{ vars.WBA_KEY_ID }} \
+            --web-bot-auth-domain ${{ vars.WBA_DOMAIN }}
+
+          wait $FIRST_PID
+          wait $SECOND_PID
+          exec 3>&-
+
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release
