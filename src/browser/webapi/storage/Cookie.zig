@@ -451,8 +451,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
     return true;
 }
 
-// Kept distinct from a plain URL so "the initiator has no site for cookies"
-// (.none) can't be confused with "there is no initiating document".
+// RFC 6265bis "site for cookies" of a request's initiator.
 pub const SiteForCookies = union(enum) {
     // Matches no site, used for a frame whose ancestor chain contains a cross-site document.
     none,
@@ -584,7 +583,7 @@ pub const Jar = struct {
         request_time: ?u64 = null,
         is_navigation: bool = true,
         prefix: ?[]const u8 = null,
-        origin_url: ?SiteForCookies = null,
+        origin_url: SiteForCookies,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
         const target = PreparedUri.init(target_url);
@@ -650,12 +649,11 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
     return true;
 }
 
-pub fn areSameSite(maybe_origin_url: ?SiteForCookies, target_host: []const u8) bool {
-    const origin_url = switch (maybe_origin_url orelse return true) {
-        .none => return false,
-        .url => |url| url,
+pub fn areSameSite(origin_url: SiteForCookies, target_host: []const u8) bool {
+    return switch (origin_url) {
+        .none => false,
+        .url => |url| areHostsSameSite(URL.getHostname(url), target_host),
     };
-    return areHostsSameSite(URL.getHostname(origin_url), target_host);
 }
 
 pub fn areHostsSameSite(target_host: []const u8, origin_host: []const u8) bool {
@@ -867,7 +865,7 @@ test "Jar: forRequest" {
 
     {
         // test with no cookies
-        try expectCookies("", &jar, test_url, .{ .is_http = true });
+        try expectCookies("", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true });
     }
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "global1=1"), now, true);
@@ -881,7 +879,7 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, url2, "domain1=9;domain=test.lightpanda.io"), now, true);
 
     // nothing fancy here
-    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true });
     try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_navigation = false, .is_http = true });
 
     // We have a cookie where Domain=lightpanda.io
@@ -1024,13 +1022,14 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
         .is_http = true,
     });
 
-    // Browser-initiated navigation (origin_url=null) is treated as same-site.
+    // Browser-initiated navigation: the initiator is the destination itself.
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
+        .origin_url = .{ .url = "http://victim.example/transfer" },
         .is_http = true,
     });
 }
 
-test "Jar: forRequest with a null site-for-cookies" {
+test "Jar: forRequest with .none site-for-cookies" {
     const expectCookies = struct {
         fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
             var aw: std.Io.Writer.Allocating = .init(testing.allocator);

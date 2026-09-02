@@ -613,15 +613,15 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
             if (owned.notification == null) owned.notification = o.notification;
-            if (owned.cookie_origin == null) owned.cookie_origin = o.siteForCookies();
             if (req.cookies) cookie_jar = o.cookie_jar;
         }
-        if (owned.cookie_origin) |cookie_origin| {
-            owned.cookie_origin = switch (cookie_origin) {
-                .none => .none,
-                .url => |url| .{ .url = try arena.dupeZ(u8, url) },
-            };
-        }
+        // Resolved onto the transfer; the request's copy is left null so
+        // nothing reads the caller's (possibly short-lived) url through it.
+        const cookie_origin: Cookie.SiteForCookies = switch (req.cookie_origin orelse if (owner) |o| o.siteForCookies() else .none) {
+            .none => .none,
+            .url => |url| .{ .url = try arena.dupeZ(u8, url) },
+        };
+        owned.cookie_origin = null;
         if (req.credentials) |c| {
             owned.credentials = try arena.dupeZ(u8, c);
         }
@@ -639,6 +639,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
         t.* = .{
             .req = owned,
             .cookie_jar = cookie_jar,
+            .cookie_origin = cookie_origin,
             .client = self,
             .arena = arena,
             .id = self.incrReqId(),
@@ -2096,6 +2097,8 @@ pub const Transfer = struct {
 
     // The owner's jar, unless the request opted out of cookies.
     cookie_jar: ?*CookieJar = null,
+    // The site for SameSite checks: Request.cookie_origin, else the owner's.
+    cookie_origin: Cookie.SiteForCookies = .none,
 
     req_headers: std.ArrayList(RequestHeader) = .empty,
 
@@ -2490,7 +2493,7 @@ pub const Transfer = struct {
         var aw: std.Io.Writer.Allocating = .init(arena);
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
-            .origin_url = req.cookie_origin,
+            .origin_url = self.cookie_origin,
             .is_navigation = req.resource_type == .document,
         });
         if (aw.written().len == 0) {

@@ -1296,8 +1296,6 @@ const EchoDriver = struct {
             .method = .POST,
             .url = "http://127.0.0.1:9582/echo_body",
             .body = body,
-            .cookie_jar = null,
-            .cookie_origin = .{ .url = "http://127.0.0.1:9582/" },
             .resource_type = .fetch,
             .notification = bc.session.notification,
             .ctx = &driver,
