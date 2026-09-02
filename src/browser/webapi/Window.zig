@@ -813,6 +813,10 @@ pub fn close(self: *Window) void {
 pub fn focus(_: *Window) void {}
 pub fn blur(_: *Window) void {}
 
+pub fn stop(self: *Window) void {
+    self._frame.stopLoading();
+}
+
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
@@ -1260,6 +1264,7 @@ pub const JsApi = struct {
     pub const close = bridge.function(Window.close, .{});
     pub const focus = bridge.function(Window.focus, .{});
     pub const blur = bridge.function(Window.blur, .{});
+    pub const stop = bridge.function(Window.stop, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
@@ -1377,6 +1382,7 @@ const CrossOriginWindow = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
+    testing.expectLog(&.{.http}); // stop aborts
     try testing.htmlRunner("window", .{});
 }
 

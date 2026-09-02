@@ -138,7 +138,7 @@ fn clearResponse(self: *XMLHttpRequest, page: *Page) void {
 
 pub fn deinit(self: *XMLHttpRequest, page: *Page) void {
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
 
@@ -219,7 +219,7 @@ pub fn setTimeout(self: *XMLHttpRequest, value: u32, exec: *const Execution) !vo
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async_: ?bool) !void {
     // Abort any in-progress request
     if (self._http_transfer) |transfer| {
-        transfer.abort(error.Abort);
+        transfer.cancel();
         self._http_transfer = null;
     }
     self._send_flag = false;
@@ -711,10 +711,10 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
-    self.handleError(error.Abort);
+    self.handleError(error.TransferCanceled);
     if (self._http_transfer) |resp| {
         self._http_transfer = null;
-        resp.abort(error.Abort);
+        resp.cancel();
     }
     self.releaseSelfRef();
 }
@@ -728,7 +728,7 @@ fn handleError(self: *XMLHttpRequest, err: anyerror) void {
     };
 }
 fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
-    const is_abort = err == error.Abort;
+    const is_abort = err == error.TransferCanceled;
     const is_timeout = err == error.OperationTimedout;
 
     const new_state: ReadyState = if (is_abort) .unsent else .done;
@@ -747,7 +747,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = if (err == error.Abort) .debug else .err;
+    const level: log.Level = if (err == error.TransferCanceled) .debug else .err;
     log.log(.http, level, "error", .{
         .url = self._url,
         .err = err,

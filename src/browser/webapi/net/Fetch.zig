@@ -138,7 +138,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return .abort;
+            return error.TransferCanceled;
         }
     }
 
@@ -206,7 +206,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     // Check if aborted
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return error.Abort;
+            return error.TransferCanceled;
         }
     }
 

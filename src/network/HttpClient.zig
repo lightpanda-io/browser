@@ -525,6 +525,25 @@ pub fn abortRequests(_: *Client, owner: *Owner) void {
     // the owner itself is freed, no orphan transfer points at it.
 }
 
+// Unlike abortOwner, the owner intends to stay alive (e.g. window.stop()). Our
+// shutdown has to be a little nicer, i.e. firing error callbacks.
+pub fn cancelRequests(self: *Client, owner: *Owner) void {
+    const last_id = self.next_request_id;
+    while (true) {
+        // Don't walk the linked list "normally", instead keep poping the head...
+        // cancel() can run JS which can mutate / invalidate nodes
+        var n = owner.transfers.first;
+
+        const target = while (n) |node| : (n = node.next) {
+            const t: *Transfer = @fieldParentPtr("owner_node", node);
+            if (t.id <= last_id and !t._outcome_delivered and !t.isCompleteAwaitingDispatch()) {
+                break t;
+            }
+        } else return;
+        target.cancel();
+    }
+}
+
 // Point-in-time snapshot of the client's outstanding work
 pub const Activity = struct {
     // in-flight + buffered-awaiting-dispatch + parked-for-CDP-interception
@@ -2450,13 +2469,24 @@ pub const Transfer = struct {
         self.client.graveyard.append(&self._node);
     }
 
-    // Cancel this transfer with `err`. Fires error_callback once (latched
+    // The consumer doesn't want this transfer. Reserved for things like
+    // xhr.abort(), an AbortController, a worker.terminate(), i.e. mostly JS
+    // driven (though, potentially indirectly).
+    // HeaderResult.abort on the other hand is more internal, e.g. ScriptManager
+    // getting a non-2xx response code.
+    // cancel results in a `error.TransferCanceled` and abort results in an
+    // error.Abort. Various places need to make the distinction between the two.
+    pub fn cancel(self: *Transfer) void {
+        self.abort(error.TransferCanceled);
+    }
+
+    // Fail this transfer with `err`. Fires error_callback once (latched
     // via _notified_fail), then either deinits synchronously or, if
     // deliver() is running our callbacks, detaches and lets deliver()
     // deinit when its loop exits.
     //
-    // This is the ONE entry point external callers should use to cancel
-    // a transfer. Don't reach for kill() or requestFailed() directly —
+    // abort() or cancel() are the only entry points external callers should use
+    // to end a transfer. Don't reach for kill() or requestFailed() directly —
     // they're internal helpers.
     pub fn abort(self: *Transfer, err: anyerror) void {
         // error_callback can run JS that tears this transfer down again
@@ -2468,6 +2498,37 @@ pub const Transfer = struct {
         self.requestFailed(err);
         self.state = state;
         self.detachOrDeinit();
+    }
+
+    // take whatever we have, and deliver it.
+    pub fn finishEarly(self: *Transfer) bool {
+        if (self.state != .inflight or self.req.streaming or self._cache_intent == .revalidate) {
+            return false;
+        }
+        const conn = self._conn orelse return false;
+        const status = conn.getResponseCode() catch 0;
+        if (status == 0 or (status >= 300 and status < 400)) {
+            // we don't have a status code yet, or it's a 3xx. Nothing to deliver.
+            return false;
+        }
+
+        self.materializeResponse(conn, .{}) catch return false;
+        self.client.removeConn(conn);
+        self._conn = null;
+        self._content_length = self.res.buffer.items.len;
+        self.bufferEvents(self.res.buffer.items) catch |err| {
+            self.failAsync(err);
+        };
+        return true;
+    }
+
+    // We have our events, and the last event is .done
+    fn isCompleteAwaitingDispatch(self: *const Transfer) bool {
+        if (self.state != .buffered) {
+            return false;
+        }
+        const events = self._events.items;
+        return events.len > 0 and events[events.len - 1] == .done;
     }
 
     // A pipeline entry point failed. The pipeline still owns the transfer in
@@ -2614,7 +2675,9 @@ pub const Transfer = struct {
     // A consumer callback failed mid-delivery: latch the failure, notify,
     // free. Only called from deliver().
     fn failDelivery(self: *Transfer, err: anyerror) void {
-        log.err(.http, "delivery callback", .{ .err = err, .req = self });
+        if (err != error.TransferCanceled) {
+            log.err(.http, "delivery callback", .{ .err = err, .req = self });
+        }
         self.requestFailed(err);
         self.finishDelivery();
     }

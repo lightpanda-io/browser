@@ -865,6 +865,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/stop_loading/streaming.html")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        });
+        try res.writer.writeAll("<html><body><p id=first>first</p>");
+        try res.writer.flush();
+        try res.flush();
+        lp.io.sleep(.fromMilliseconds(1500), .awake) catch {};
+        try res.writer.writeAll("<p id=second>second</p></body></html>");
+        try res.writer.flush();
+        return res.end();
+    }
+
     if (std.mem.eql(u8, path, "/sse/streaming")) {
         sse_flag.store(false, .release);
         var send_buffer: [1024]u8 = undefined;

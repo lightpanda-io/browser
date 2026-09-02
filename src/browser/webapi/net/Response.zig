@@ -228,7 +228,7 @@ pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Re
 
 pub fn deinit(self: *Response, _: *Page) void {
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
     self._arena.release();
