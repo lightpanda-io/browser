@@ -1032,15 +1032,15 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 return transfer.failAsync(error.UrlBlocked);
             }
 
-            if (self.obey_cors and !isCrossOriginModeAllowed(transfer) and !transfer.req.internal) {
-                log.warn(.http, "blocked by mode", .{
-                    .url = transfer.req.url,
-                    .mode = @tagName(transfer.req.request_mode),
-                });
-                return transfer.failAsync(error.ModeBlocked);
-            }
-
             if (self.obey_cors and !transfer.req.internal) {
+                if (!isCrossOriginModeAllowed(transfer)) {
+                    log.warn(.http, "blocked by mode", .{
+                        .url = transfer.req.url,
+                        .mode = @tagName(transfer.req.request_mode),
+                    });
+                    return transfer.failAsync(error.ModeBlocked);
+                }
+
                 switch (try self.cors.check(transfer)) {
                     .allowed => {},
                     .pending => return,
