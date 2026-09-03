@@ -45,7 +45,7 @@ pub fn open(_: *IDBFactory, name: []const u8, version: ?u64, exec: *Execution) !
         if (v == 0) return error.TypeError;
     }
 
-    const request = try IDBRequest.init(exec);
+    const request = try IDBRequest.initOpen(exec);
 
     const ctx = try exec._factory.create(OpenContext{
         .request = request,
@@ -177,7 +177,7 @@ const OpenContext = struct {
         txn._db._txn = null;
         txn.releaseRef(exec.page);
 
-        if (aborted) {
+        if (aborted or txn._db._closed) {
             self.request._result = .{ .none = js.Undefined{} };
             self.request.setError(error.AbortError);
             return self.request.deliver(exec);
@@ -295,7 +295,7 @@ pub fn deleteDatabase(_: *IDBFactory, name: []const u8, exec: *Execution) !*IDBR
         return error.SecurityError;
     }
 
-    const request = try IDBRequest.init(exec);
+    const request = try IDBRequest.initOpen(exec);
 
     const ctx = try exec._factory.create(DeleteContext{
         .request = request,
@@ -386,6 +386,14 @@ const DeleteContext = struct {
     }
 };
 
+pub fn databases(_: *IDBFactory, exec: *Execution) !js.Promise {
+    const local = exec.js.local.?;
+    // unavailable for opaque origins, e.g. about:blank
+    const origin = exec.origin() orelse return local.rejectPromise(.{ .dom_exception = .{ .err = error.SecurityError } });
+    const engine = try exec.session.idb.engineForOrigin(origin);
+    return local.resolvePromise(try engine.databases(exec.call_arena));
+}
+
 pub fn cmp(_: *IDBFactory, first: js.Value, second: js.Value, exec: *Execution) !i32 {
     const a = try Key.encodeValue(exec.call_arena, first);
     const b = try Key.encodeValue(exec.call_arena, second);
@@ -408,5 +416,6 @@ pub const JsApi = struct {
 
     pub const open = bridge.function(IDBFactory.open, .{});
     pub const deleteDatabase = bridge.function(IDBFactory.deleteDatabase, .{});
+    pub const databases = bridge.function(IDBFactory.databases, .{});
     pub const cmp = bridge.function(IDBFactory.cmp, .{});
 };

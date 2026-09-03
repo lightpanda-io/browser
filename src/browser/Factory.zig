@@ -33,6 +33,7 @@ const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const AbortSignal = @import("webapi/AbortSignal.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
+const IDBRequest = @import("webapi/storage/idb/IDBRequest.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMRect = @import("webapi/DOMRect.zig");
@@ -503,6 +504,12 @@ pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !
     return try AutoPrototypeChain(
         &.{ EventTarget, XMLHttpRequestEventTarget, @TypeOf(child) },
     ).create(allocator, child);
+}
+
+pub fn idbOpenRequest(self: *Factory, child: anytype) !*@TypeOf(child) {
+    return try AutoPrototypeChain(
+        &.{ EventTarget, IDBRequest, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
 }
 
 pub fn taskSignal(self: *Factory, child: anytype) !*@TypeOf(child) {

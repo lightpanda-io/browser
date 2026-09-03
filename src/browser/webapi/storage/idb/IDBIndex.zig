@@ -123,11 +123,11 @@ pub fn runGetKey(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, e
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, b));
 }
 
-pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .key, exec);
 }
 
@@ -138,7 +138,7 @@ pub fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*ID
     return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = .record } }, exec);
 }
 
-fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
+fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
     const args = try IDBKeyRange.resolveGetAll(t._arena.allocator(), query_or_options, count_, exec);
     const request = try t.newRequest();
@@ -199,14 +199,14 @@ pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, ex
 }
 
 pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
+    const t = try self.txn();
+    const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
+    const t = try self.txn();
+    const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, true, exec);
 }
 
