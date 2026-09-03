@@ -37,7 +37,7 @@ Mirror the patterns in neighboring files. In particular:
 [GitNexus](https://github.com/abhigyanpatwari/GitNexus) builds a call/import graph of the Zig sources and serves it to agents over MCP (`impact`, `trace`, `detect_changes`). Requires GitNexus >= 1.6.11.
 
 ```bash
-npx gitnexus analyze --index-only    # writes only .gitnexus/ (gitignored)
+npx gitnexus@latest analyze --index-only    # writes only .gitnexus/ (gitignored)
 ```
 
 Always pass `--index-only`: without it the tool injects its own section into `AGENTS.md`/`CLAUDE.md` and installs skill files, none of which belong in a PR. The Zig grammar is an npm `optionalDependency`; if its native build fails on your platform, `.zig` files are silently skipped.
