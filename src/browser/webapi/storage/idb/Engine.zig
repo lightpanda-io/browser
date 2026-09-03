@@ -200,6 +200,31 @@ pub fn databaseVersion(self: *const Engine, name: []const u8) !?i64 {
     return self.conn.scalar(i64, "select version from idb_databases where name = ?1", .{name});
 }
 
+pub const DatabaseInfo = struct {
+    name: []const u8,
+    version: i64,
+};
+
+// Every database of the origin, by name (IDBFactory.databases).
+pub fn databases(self: *const Engine, arena: Allocator) ![]const DatabaseInfo {
+    var rows = try self.conn.rows("select name, version from idb_databases order by name", .{});
+    defer rows.deinit();
+
+    var list: std.ArrayList(DatabaseInfo) = .empty;
+    while (try rows.next()) |row| {
+        try list.append(arena, .{
+            .name = try arena.dupe(u8, row.get([]const u8, 0)),
+            .version = row.get(i64, 1),
+        });
+    }
+    return list.items;
+}
+
+pub fn indexExists(self: *const Engine, object_store_id: i64, name: []const u8) !bool {
+    const id = try self.conn.scalar(i64, "select id from idb_indexes where object_store_id = ?1 and name = ?2", .{ object_store_id, name });
+    return id != null;
+}
+
 pub fn upsertDatabase(self: *Engine, name: []const u8, version: i64) !i64 {
     try self.conn.exec(
         \\ insert into idb_databases (name, version) values (?1, ?2)

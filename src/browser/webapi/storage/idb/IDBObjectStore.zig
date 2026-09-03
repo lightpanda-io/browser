@@ -112,10 +112,10 @@ pub fn runGet(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bounds
 pub fn delete(self: *IDBObjectStore, query: js.Value, exec: *Execution) !*IDBRequest {
     try self.assertLive();
     const txn = self._txn;
+    try txn.assertActive();
     if (txn._mode == .readonly) {
         return error.ReadOnlyError;
     }
-    try txn.assertActive();
     const bounds = try IDBKeyRange.resolveKey(txn._arena.allocator(), query, exec);
     const request = try txn.newRequest();
     return request.submit(.{ .store_delete = .{ .store = self, .bounds = bounds } }, exec);
@@ -177,11 +177,11 @@ pub fn runCount(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Boun
 // What a getAll/getAllKeys/getAllRecords produces
 pub const GetAllMode = enum { value, key, record };
 
-pub fn getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .key, exec);
 }
 
@@ -194,7 +194,7 @@ pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution
     return request.submit(.{ .store_get_all = .{ .store = self, .args = args, .mode = .record } }, exec);
 }
 
-fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?u32, mode: GetAllMode, exec: *Execution) !*IDBRequest {
+fn _getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, mode: GetAllMode, exec: *Execution) !*IDBRequest {
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
@@ -259,12 +259,14 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
 
 pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
+    try self._txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
+    try self._txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, true, exec);
 }
@@ -509,8 +511,10 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
-    // Spec order: the transaction-state check precedes the index-name check.
     try txn.assertActive();
+    if (try self._engine.indexExists(self._store_id, name)) {
+        return error.ConstraintError;
+    }
     if (Key.isValidKeyPathSpec(key_path) == false) {
         return error.SyntaxError;
     }
@@ -580,7 +584,6 @@ pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void
     if (txn._mode != .versionchange) {
         return error.InvalidStateError;
     }
-    // Spec order: the transaction-state check precedes the index-name check.
     try txn.assertActive();
     self._engine.deleteIndexRow(self._store_id, name) catch |err| switch (err) {
         error.NotFound => return error.NotFoundError,
@@ -598,6 +601,9 @@ pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void
 
 pub fn index(self: *IDBObjectStore, name: []const u8, _: *Execution) !*IDBIndex {
     try self.assertLive();
+    if (self._txn._settled) {
+        return error.InvalidStateError;
+    }
     for (self._indexes.items) |idx| {
         if (std.mem.eql(u8, idx._name, name)) {
             return idx;

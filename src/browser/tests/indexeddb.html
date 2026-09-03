@@ -329,9 +329,9 @@
         db.deleteObjectStore("temp");
     };
     open.onsuccess = (e) => {
-        const tx = e.target.result.transaction("temp", "readonly");
+        // The deleted store is not in the database: transaction() itself throws.
         let threw = null;
-        try { tx.objectStore("temp"); } catch (err) { threw = err; }
+        try { e.target.result.transaction("temp", "readonly"); } catch (err) { threw = err; }
         state.resolve(threw && threw.name);
     };
     await state.done((name) => {
@@ -1189,6 +1189,7 @@
     });
 }
 </script>
+<<<<<<< HEAD
 
 <!-- put()/add() structured-clone the value at call time: the record is the
      clone as of the call (later mutation of the argument is not stored), a
@@ -1224,6 +1225,42 @@
         testing.expectEqual([{ data: "before", id: 1 }, { data: "after", id: 2 }], got.all);
         testing.expectEqual({ data: "after" }, got.record);
         testing.expectEqual("DataCloneError", got.threw);
+    });
+}
+</script>
+
+<!-- Open requests are IDBOpenDBRequests; result/error throw while pending and
+     error is null (not undefined) after success; databases() lists the
+     origin's databases. -->
+<script id="request_conformance" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("conformance-db", 2);
+    testing.expectEqual("IDBOpenDBRequest", Object.getPrototypeOf(open).constructor.name);
+    testing.expectEqual(true, open instanceof IDBRequest);
+    testing.expectEqual(true, "onblocked" in open);
+    testing.expectError("InvalidStateError", () => open.result);
+    testing.expectError("InvalidStateError", () => open.error);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = async () => {
+        const db = open.result;
+        const req = db.transaction("s").objectStore("s").get(1);
+        testing.expectError("InvalidStateError", () => req.result);
+        req.onsuccess = async () => {
+            const all = await indexedDB.databases();
+            state.resolve({
+                openError: open.error,
+                openTransaction: open.transaction,
+                reqError: req.error,
+                listed: all.filter((d) => d.name === "conformance-db"),
+            });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(null, got.openError);
+        testing.expectEqual(null, got.openTransaction);
+        testing.expectEqual(null, got.reqError);
+        testing.expectEqual([{ name: "conformance-db", version: 2 }], got.listed);
     });
 }
 </script>
@@ -1364,6 +1401,42 @@
         testing.expectEqual(["a1", "c5"], got.advance);
         testing.expectEqual([5, 3, 1], got.keyCursor);
     });
+}
+</script>
+</body>
+
+<!-- transaction() validates up front: closed connection, empty scope, unknown
+     store; a DOMStringList scope (db.objectStoreNames) is accepted; getAll's
+     count is [EnforceRange]; objectStore()/index() throw once the
+     transaction finished. -->
+<script id="transaction_argument_checks" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("txn-args-db", 1);
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        db.createObjectStore("a").createIndex("by_x", "x");
+        db.createObjectStore("b");
+    };
+    open.onsuccess = () => {
+        const db = open.result;
+        testing.expectError("InvalidAccessError", () => db.transaction([]));
+        testing.expectError("NotFoundError", () => db.transaction("nope"));
+        testing.expectError("NotFoundError", () => db.transaction(["a", "nope"]));
+        const tx = db.transaction(db.objectStoreNames, "readonly");
+        testing.expectEqual(["a", "b"], [...tx.objectStoreNames]);
+        const store = tx.objectStore("a");
+        testing.expectError("TypeError", () => store.getAll(null, -1));
+        testing.expectError("TypeError", () => store.getAll(null, NaN));
+        testing.expectError("TypeError", () => store.index("by_x").getAllKeys({ count: Infinity }));
+        tx.abort();
+        testing.expectError("InvalidStateError", () => tx.objectStore("a"));
+        testing.expectError("InvalidStateError", () => store.index("by_x"));
+        db.close();
+        testing.expectError("InvalidStateError", () => db.transaction("a"));
+        state.resolve(true);
+    };
+    await state.done((got) => testing.expectEqual(true, got));
 }
 </script>
 </body>

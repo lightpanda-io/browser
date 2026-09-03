@@ -507,6 +507,9 @@ pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
 }
 
 pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
+    if (self._settled) {
+        return error.InvalidStateError;
+    }
     for (self._stores.items) |store| {
         if (std.mem.eql(u8, store._name, name)) {
             return store;

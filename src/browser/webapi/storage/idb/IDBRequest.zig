@@ -29,6 +29,7 @@ const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
+const IDBOpenDBRequest = @import("IDBOpenDBRequest.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
@@ -44,6 +45,7 @@ const IDBRequest = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
+_type: Type = .generic,
 _op: Operation = .none,
 _error: ?anyerror = null,
 _txn: Txn = .none,
@@ -101,8 +103,15 @@ const Txn = union(enum) {
     borrowed: *IDBTransaction,
 };
 
-pub fn init(exec: *Execution) !*IDBRequest {
-    return exec._factory.eventTarget(IDBRequest{ ._proto = undefined });
+pub const Type = union(enum) {
+    generic,
+    open: *IDBOpenDBRequest,
+};
+
+// An open/deleteDatabase request: page-scoped, exposed as IDBOpenDBRequest.
+pub fn initOpen(exec: *Execution) !*IDBRequest {
+    const open = try exec._factory.idbOpenRequest(IDBOpenDBRequest{ ._proto = undefined });
+    return open._proto;
 }
 
 pub fn asEventTarget(self: *IDBRequest) *EventTarget {
@@ -321,7 +330,10 @@ const JsResult = union(enum) {
     database: *IDBDatabase,
 };
 
-pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
+pub fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     return switch (self._result) {
         .none => |n| .{ .none = n },
         .value => |global| .{ .value = global.local(exec.js.local.?) },
@@ -344,7 +356,10 @@ pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
 
 // Return this as a DOMException directly. If we return an error, the bridge
 // *will* convert it to a DOMException, but it'll throw it, not return it.
-pub fn getError(self: *const IDBRequest) ?DOMException {
+pub fn getError(self: *const IDBRequest) !?DOMException {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     const err = self._error orelse return null;
     const mapped: anyerror = switch (err) {
         // sqlite's generic constraint failure is IDB's ConstraintError.
@@ -493,9 +508,8 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(IDBRequest.getReadyState, null, .{});
     pub const result = bridge.accessor(IDBRequest.getResult, null, .{});
     pub const source = bridge.accessor(IDBRequest.getSource, null, .{});
-    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{ .null_as_undefined = true });
-    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{ .null_as_undefined = true });
+    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{});
+    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{});
     pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
     pub const onerror = bridge.accessor(IDBRequest.getOnError, IDBRequest.setOnError, .{});
-    pub const onupgradeneeded = bridge.accessor(IDBRequest.getOnUpgradeNeeded, IDBRequest.setOnUpgradeNeeded, .{});
 };
