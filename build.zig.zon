@@ -28,8 +28,8 @@
         },
         // .@"boringssl-zig" = .{ .path = "../boringssl-zig" },
         .curl = .{
-            .url = "https://github.com/curl/curl/releases/download/curl-8_20_0/curl-8.20.0.tar.gz",
-            .hash = "N-V-__8AAHM9RQHjzJo8Wn4dbGPqNOC21zZJJA9PcCj7FPF5",
+            .url = "https://github.com/curl/curl/releases/download/curl-8_22_0/curl-8.22.0.tar.gz",
+            .hash = "N-V-__8AALJXUwHr71AwttzhEqqYTvFb_jz0EQ5Ou3OWpHBM",
         },
         .sqlite3 = .{
             .url = "https://github.com/allyourcodebase/sqlite3/archive/7a615f5af79009cd733e3480658586d9b0d28b35.tar.gz",
