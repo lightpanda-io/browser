@@ -182,16 +182,17 @@ const Result = enum { allowed, pending };
 pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
     const req = &transfer.req;
 
-    if (req.origin) |origin| {
-        if (URL.isSameOrigin(req.url, origin)) {
-            log.debug(.cors, "same origin", .{ .url = req.url, .origin = origin });
-            lp.metrics.cors_check.incr(.same_origin);
-            return .allowed;
+    if (!transfer._cors_origin_tainted) {
+        if (req.origin) |origin| {
+            if (URL.isSameOrigin(req.url, origin)) {
+                log.debug(.cors, "same origin", .{ .url = req.url, .origin = origin });
+                lp.metrics.cors_check.incr(.same_origin);
+                return .allowed;
+            }
         }
     }
 
-    const origin = req.origin orelse "null";
-
+    const origin = transfer.effectiveOrigin();
     transfer._cors_cross_origin = true;
 
     // https://fetch.spec.whatwg.org/#append-a-request-origin-header
@@ -579,11 +580,7 @@ pub fn validateResponse(transfer: *Transfer) !void {
     }
 
     if (!is_wildcard_origin) {
-        const origin = req.origin orelse {
-            log.warn(.cors, "blocked", .{ .url = req.url, .reason = "opaque origin" });
-            return error.CorsBlocked;
-        };
-
+        const origin = transfer.effectiveOrigin();
         if (!std.mem.eql(u8, allow_origin, origin)) {
             log.warn(.cors, "blocked", .{
                 .url = req.url,

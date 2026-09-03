@@ -2247,6 +2247,9 @@ pub const Transfer = struct {
     _retired: bool = false,
 
     _cors_cross_origin: bool = false,
+    // Set once a redirect target origin differs from origin of the URL
+    // that redirected to it.
+    _cors_origin_tainted: bool = false,
 
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
@@ -2595,6 +2598,11 @@ pub const Transfer = struct {
     pub fn abortParked(self: *Transfer, err: anyerror) void {
         self.unpark();
         self.failAsync(err);
+    }
+
+    pub fn effectiveOrigin(transfer: *const Transfer) []const u8 {
+        if (transfer._cors_origin_tainted) return "null";
+        return transfer.req.origin orelse "null";
     }
 
     pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
@@ -3291,6 +3299,14 @@ pub const Transfer = struct {
         }
 
         transfer.redirectTaint(url);
+
+        if (transfer.req.request_mode == .cors and !transfer._cors_origin_tainted) {
+            const already_cross_origin = if (req.origin) |o| !URL.isSameOrigin(base, o) else true;
+            if (already_cross_origin and !URL.isSameOrigin(url, base)) {
+                transfer._cors_origin_tainted = true;
+            }
+        }
+
         try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
