@@ -81,7 +81,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         .method = .GET,
         .origin = frame.origin,
         .request_mode = .no_cors,
-        .credentials_mode = .same_origin,
+        .credentials_mode = .include,
         .resource_type = .image,
         .headers_only = true,
         .header_callback = ImageLoad.headerCallback,

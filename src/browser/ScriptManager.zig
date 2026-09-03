@@ -123,7 +123,7 @@ fn corsSettings(element: ?*Element, is_module: bool) CorsSettings {
     };
 
     return switch (mode) {
-        .no_cors => .{ .request_mode = .no_cors, .credentials_mode = .same_origin },
+        .no_cors => .{ .request_mode = .no_cors, .credentials_mode = .include },
         .anonymous => .{ .request_mode = .cors, .credentials_mode = .same_origin },
         .use_credentials => .{ .request_mode = .cors, .credentials_mode = .include },
     };
