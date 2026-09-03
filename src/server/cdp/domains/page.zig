@@ -246,22 +246,40 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
+    const frame_id = try id.parseFrameId(params.frameId);
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    };
+
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
 
-    // An existing world already has a live, inspector-registered context for
-    // the current document: return its id without re-registering.
-    if (world.context) |js_context| {
-        var ls: js.Local.Scope = undefined;
-        js_context.localScope(&ls);
-        defer ls.deinit();
-        const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
-        return cmd.sendResult(.{ .executionContextId = context_id }, .{});
-    }
+    // use the existing world context for a frame if we have it, else create one
+    const js_context = world.contextFor(frame) orelse try createIsolatedWorldContext(cmd.arena, bc, world, frame, null);
 
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
+    return cmd.sendResult(.{ .executionContextId = context_id }, .{});
+}
 
+// Creates `world`'s context for `frame` and registers it with the inspector
+fn createIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: *CDP.IsolatedWorld, frame: *Frame, loader_id: ?[]const u8) !*js.Context {
     const js_context = try world.createContext(frame);
-    const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
+    errdefer world.removeContext(frame);
+    try registerIsolatedWorldContext(arena, bc, world, js_context, frame, loader_id);
+    return js_context;
+}
+
+// Registers a world context with the inspector, which assigns the id clients
+// use and sends Runtime.executionContextCreated. Registering a context again
+// assigns it a new id, so this only happens when the previous id is gone.
+fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: *CDP.IsolatedWorld, js_context: *js.Context, frame: *const Frame, loader_id: ?[]const u8) !void {
+    const frame_id = &id.toFrameId(frame._frame_id);
+    const aux_data = if (loader_id) |lid|
+        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, lid })
+    else
+        try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{frame_id});
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -269,14 +287,11 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
 
     bc.inspector_session.inspector.contextCreated(
         &ls.local,
-        params.worldName,
+        world.name,
         frame.origin orelse "",
         aux_data,
         false,
     );
-
-    const context_id = bc.inspector_session.inspector.getContextId(&ls.local);
-    return cmd.sendResult(.{ .executionContextId = context_id }, .{});
 }
 
 fn navigate(cmd: *CDP.Command) !void {
@@ -517,7 +532,7 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
 
     // The main frame is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
-        isolated_world.removeContext();
+        isolated_world.removeAllContexts();
     }
 
     // node_registry / node_search_list reference Nodes from the page being
@@ -546,10 +561,6 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
     if (!in_commit) {
         _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
         bc.main_world_touched = false;
-    }
-
-    for (bc.isolated_worlds.items) |isolated_world| {
-        _ = try isolated_world.createContext(frame);
     }
 
     if (in_commit == false) {
@@ -583,6 +594,13 @@ pub fn frameNavigateFailed(bc: *CDP.BrowserContext, event: *const Notification.F
         },
         .sessionId = session_id,
     });
+}
+
+// Fired from Frame.deinit while the frame's JS is still alive.
+pub fn frameDestroyed(bc: *CDP.BrowserContext, frame: *const Frame) void {
+    for (bc.isolated_worlds.items) |isolated_world| {
+        isolated_world.removeContext(frame);
+    }
 }
 
 pub fn frameChildFrameCreated(bc: *CDP.BrowserContext, event: *const Notification.FrameChildFrameCreated) !void {
@@ -703,29 +721,25 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             is_root_frame,
         );
     }
-    // Isolated worlds are session-wide (single V8 context shared across
-    // navigations). Only re-register them for main frame navigations;
-    // re-registering during child frame (iframe) navigations would
-    // re-register the same V8 context under a new inspector id, silently
-    // invalidating the id the main frame is using.
-    if (is_root_frame) {
-        for (bc.isolated_worlds.items) |isolated_world| {
-            const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
-
-            // Calling contextCreated will assign a new Id to the context and send the contextCreated event
-
-            var ls: js.Local.Scope = undefined;
-            (isolated_world.context orelse continue).localScope(&ls);
-            defer ls.deinit();
-
-            bc.inspector_session.inspector.contextCreated(
-                &ls.local,
-                isolated_world.name,
-                "://",
-                aux_json,
-                false,
-            );
+    // Each known world must get a context per frame
+    for (bc.isolated_worlds.items) |isolated_world| {
+        if (isolated_world.contextFor(frame)) |js_context| {
+            // The context was already created ahead of time (createIsolatedWorld).
+            // A child keeps the id the client was given. The root's id was just
+            // invalidated by executionContextsCleared: the first navigation of a
+            // pristine about:blank keeps the Frame and its contexts.
+            if (!is_root_frame) {
+                continue;
+            }
+            registerIsolatedWorldContext(arena, bc, isolated_world, js_context, frame, loader_id) catch |err| {
+                log.warn(.cdp, "isolated world context", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
+            };
+            continue;
         }
+
+        _ = createIsolatedWorldContext(arena, bc, isolated_world, frame, loader_id) catch |err| {
+            log.warn(.cdp, "isolated world context", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
+        };
     }
 
     // Evaluate scripts registered via Page.addScriptToEvaluateOnNewDocument.
@@ -1231,29 +1245,212 @@ test "cdp.frame: createIsolatedWorld is idempotent per name" {
     defer ctx.deinit();
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
 
     try ctx.processMessage(.{ .id = 20, .method = "Page.createIsolatedWorld", .params = .{
-        .frameId = "FID-000000000X",
+        .frameId = &root_id,
         .worldName = "utility",
         .grantUniveralAccess = true,
     } });
     try testing.expectEqual(1, bc.isolated_worlds.items.len);
-    const world_context = bc.isolated_worlds.items[0].context.?;
+    const world_context = bc.isolated_worlds.items[0].contextFor(root).?;
 
     try ctx.processMessage(.{ .id = 21, .method = "Page.createIsolatedWorld", .params = .{
-        .frameId = "FID-000000000X",
+        .frameId = &root_id,
         .worldName = "utility",
         .grantUniveralAccess = true,
     } });
     try testing.expectEqual(1, bc.isolated_worlds.items.len);
-    try testing.expectEqual(world_context, bc.isolated_worlds.items[0].context.?);
+    try testing.expectEqual(world_context, bc.isolated_worlds.items[0].contextFor(root).?);
 
     try ctx.processMessage(.{ .id = 22, .method = "Page.createIsolatedWorld", .params = .{
-        .frameId = "FID-000000000X",
+        .frameId = &root_id,
         .worldName = "other",
         .grantUniveralAccess = true,
     } });
     try testing.expectEqual(2, bc.isolated_worlds.items.len);
+
+    try ctx.processMessage(.{ .id = 23, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = "FID-4000000000",
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try ctx.expectSentError(-32000, "Frame with the given id does not belong to the target.", .{ .id = 23 });
+}
+
+// #3347: a world requested for a child frame must evaluate against that
+// frame's document, survive the root world, and follow the child across its
+// re-navigation.
+test "cdp.frame: createIsolatedWorld targets the requested frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expectEqual(1, root.child_frames.items.len);
+    const child = root.child_frames.items[0];
+    const root_id = id.toFrameId(root._frame_id);
+    const child_id = id.toFrameId(child._frame_id);
+
+    try ctx.processMessage(.{ .id = 30, .method = "Runtime.enable", .sessionId = "SID-X" });
+
+    try ctx.processMessage(.{ .id = 31, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const root_ctx = try isolatedWorldContextId(bc, root);
+    try ctx.expectSentResult(.{ .executionContextId = root_ctx }, .{ .id = 31 });
+
+    try ctx.processMessage(.{ .id = 32, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &child_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const child_ctx = try isolatedWorldContextId(bc, child);
+    try testing.expect(child_ctx != root_ctx);
+    try ctx.expectSentResult(.{ .executionContextId = child_ctx }, .{ .id = 32 });
+    try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{
+        .id = child_ctx,
+        .name = "utility",
+        .auxData = .{ .isDefault = false, .type = "isolated", .frameId = &child_id },
+    } }, .{ .session_id = "SID-X" });
+
+    try ctx.processMessage(.{ .id = 33, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = child_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 33 });
+
+    // Navigate only the child. Its Frame is re-initialized in place: same
+    // frame id, new document, and a new world context announced for it.
+    try ctx.processMessage(.{ .id = 34, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.querySelector('iframe').src = 'isolated_world_two.html'",
+    } });
+    try testing.waitForPage(bc);
+    try testing.expectEqual(child, root.child_frames.items[0]);
+    try testing.expect(std.mem.endsWith(u8, child.url, "/cdp/isolated_world_two.html"));
+
+    try ctx.expectSentEvent("Runtime.executionContextDestroyed", .{ .executionContextId = child_ctx }, .{ .session_id = "SID-X" });
+    const child_ctx2 = try isolatedWorldContextId(bc, child);
+    try testing.expect(child_ctx2 != child_ctx);
+    try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{
+        .id = child_ctx2,
+        .name = "utility",
+        .auxData = .{ .isDefault = false, .type = "isolated", .frameId = &child_id },
+    } }, .{ .session_id = "SID-X" });
+
+    // A driver that re-requests the world gets the announced context.
+    try ctx.processMessage(.{ .id = 35, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &child_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try ctx.expectSentResult(.{ .executionContextId = child_ctx2 }, .{ .id = 35 });
+
+    try ctx.processMessage(.{ .id = 36, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = child_ctx2,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page two" } }, .{ .id = 36 });
+
+    // The root world was untouched by the child navigation.
+    try ctx.processMessage(.{ .id = 37, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = root_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Parent jobs" } }, .{ .id = 37 });
+}
+
+// puppeteer: the utility world is created on the bootstrap about:blank and
+// must be announced again for the first document, which navigates the
+// pristine Frame in place (no teardown, no frame_destroyed).
+test "cdp.frame: isolated world survives the in-place first navigation" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 42, .method = "Runtime.enable", .sessionId = session_id });
+    try ctx.processMessage(.{ .id = 43, .method = "Page.createIsolatedWorld", .sessionId = session_id, .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const blank_ctx = try isolatedWorldContextId(bc, root);
+
+    try ctx.processMessage(.{ .id = 44, .method = "Page.navigate", .sessionId = session_id, .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_one.html",
+    } });
+    try testing.waitForPage(bc);
+    try testing.expectEqual(root, bc.mainFrame().?);
+
+    const page_ctx = try isolatedWorldContextId(bc, root);
+    try testing.expect(page_ctx != blank_ctx);
+    try ctx.expectSentEvent("Runtime.executionContextCreated", .{ .context = .{
+        .id = page_ctx,
+        .name = "utility",
+        .auxData = .{ .isDefault = false, .type = "isolated", .frameId = &root_id },
+    } }, .{ .session_id = session_id });
+
+    try ctx.processMessage(.{ .id = 45, .method = "Runtime.evaluate", .sessionId = session_id, .params = .{
+        .expression = "document.title",
+        .contextId = page_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 45 });
+}
+
+// A committed root navigation tears the old Page down later, with the same
+// frame id as the live page. That teardown must not take the live page's
+// world context with it.
+test "cdp.frame: isolated world survives the old page's deferred teardown" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW2", .url = "cdp/isolated_world_one.html", .target_id = "FID-000000000X".* });
+    const old_root = bc.mainFrame() orelse unreachable;
+    const old_frame_id = old_root._frame_id;
+    const root_id = id.toFrameId(old_frame_id);
+
+    try ctx.processMessage(.{ .id = 50, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try testing.expect(bc.isolated_worlds.items[0].contextFor(old_root) != null);
+
+    try ctx.processMessage(.{ .id = 51, .method = "Page.navigate", .sessionId = "SID-X", .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_two.html",
+    } });
+    try testing.waitForPage(bc);
+    bc.session.processDestroyQueues();
+
+    // old_root is freed now; only its address is compared.
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expect(root != old_root);
+    try testing.expectEqual(old_frame_id, root._frame_id);
+    try testing.expectEqual(1, bc.isolated_worlds.items[0].contexts.items.len);
+
+    const page_ctx = try isolatedWorldContextId(bc, root);
+    try ctx.processMessage(.{ .id = 52, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = page_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page two" } }, .{ .id = 52 });
+}
+
+fn isolatedWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
+    const js_context = bc.isolated_worlds.items[0].contextFor(frame) orelse return error.ContextNotFound;
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+    return bc.inspector_session.inspector.getContextId(&ls.local);
 }
 
 test "cdp.frame: child frame metadata" {

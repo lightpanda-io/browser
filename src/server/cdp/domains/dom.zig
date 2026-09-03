@@ -359,14 +359,15 @@ fn resolveNode(cmd: *CDP.Command) !void {
         }
         // not the default scope, check the other ones
         for (bc.isolated_worlds.items) |isolated_world| {
-            ls.deinit();
-            ls_open = false;
+            for (isolated_world.contexts.items) |fc| {
+                ls.deinit();
+                ls_open = false;
 
-            const ctx = (isolated_world.context orelse return error.ContextNotFound);
-            ctx.localScope(&ls);
-            ls_open = true;
-            if (ls.local.debugContextId() == context_id) {
-                break :blk;
+                fc.context.localScope(&ls);
+                ls_open = true;
+                if (ls.local.debugContextId() == context_id) {
+                    break :blk;
+                }
             }
         } else return error.ContextNotFound;
     } else {
