@@ -30,6 +30,7 @@ const BiDi = @import("bidi/BiDi.zig");
 const WS = @import("WS.zig");
 const http = @import("http.zig");
 const Driver = @import("Driver.zig");
+const Inbox = @import("../Inbox.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -60,6 +61,8 @@ const WebSocket = struct {
     // threads `websockets` while live, the pool's free list otherwise
     node: DoublyLinkedList.Node,
     protocol: Driver.Protocol,
+    // The worker's mailbox, which is how the main loop communicates with the worker.
+    inbox: Inbox = .{},
     // null until the worker attaches
     driver: ?Driver = null,
     // whether or not socket is in the poll set. Makes sure we don't double-remove
@@ -582,6 +585,8 @@ fn releaseWorker(self: *Server, ws: *WebSocket, notify: *std.Io.Event) void {
 // or upgradeConnection when there never was a worker.
 fn releaseWebSocket(self: *Server, ws: *WebSocket) void {
     self.websockets.remove(&ws.node);
+    ws.driver = null;
+    ws.inbox.deinit();
     lp.metrics.serve_active_connections.decr(ws.protocol);
     self.websocket_pool.release(ws);
     self.slotFreed();
@@ -672,31 +677,23 @@ const Worker = struct {
             .cdp => {
                 const cdp = try allocator.create(CDP);
                 defer allocator.destroy(cdp);
-                try cdp.init(server.app, ws.socket);
+                try cdp.init(server.app, ws.socket, &ws.inbox);
                 defer cdp.deinit();
-                Worker.run(server, ws, .init(.{ .cdp = cdp }));
+                Worker.run(server, ws, .init(.{ .cdp = cdp }, &ws.inbox));
             },
             .bidi => {
                 const bidi = try allocator.create(BiDi);
                 defer allocator.destroy(bidi);
-                try bidi.init(server.app, ws.socket, session_id);
+                try bidi.init(server.app, ws.socket, &ws.inbox, session_id);
                 defer bidi.deinit();
-                Worker.run(server, ws, .init(.{ .bidi = bidi }));
+                Worker.run(server, ws, .init(.{ .bidi = bidi }, &ws.inbox));
             },
         }
     }
 
     fn run(server: *Server, ws: *WebSocket, driver: Driver) void {
-        // Gates HttpClient's block in curl_multi_poll: false (tests, before
-        // the attach) means "nobody will wake us, don't sleep on it". From
-        // here the loop is about to feed our inbox and wake us, so the
-        // worker parks in poll instead of spinning through tick().
-        driver.browser.http_client.driver_link_active = true;
         Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .attach = driver } });
         driver.run();
-        // The loop is done with us once releaseConnection returns; the
-        // driver's deinit may still tick the client, without a producer.
-        defer driver.browser.http_client.driver_link_active = false;
         // Release first: until the loop has let go of this websocket it can
         // still drop the link, and onLinkDisconnect requests a terminate. Doing
         // it the other way round left that request landing after the cancel,

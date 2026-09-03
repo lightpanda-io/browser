@@ -28,7 +28,7 @@ const Notification = @import("../../Notification.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const Link = @import("../Link.zig");
-const Driver = @import("../Driver.zig");
+const Inbox = @import("../../Inbox.zig");
 
 const script = @import("script.zig");
 const remote_value = @import("remote_value.zig");
@@ -84,7 +84,7 @@ const InputMessage = struct {
     method: ?[]const u8 = null,
 };
 
-pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, session_id: ?[36]u8) !void {
+pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, inbox: *Inbox, session_id: ?[36]u8) !void {
     const allocator = app.allocator;
     self.* = .{
         .app = app,
@@ -99,12 +99,10 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, session_id: ?[36]u8)
         .session_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
-    const driver = Driver.init(.{ .bidi = self });
-
-    try self.browser.init(app, .{}, driver);
+    try self.browser.init(app, .{});
     errdefer self.browser.deinit();
 
-    try self.conn.init(app, socket, .bidi, &self.browser.http_client.inbox);
+    try self.conn.init(app, socket, .bidi, inbox);
     errdefer self.conn.deinit();
 
     self.notification = try Notification.init(allocator);

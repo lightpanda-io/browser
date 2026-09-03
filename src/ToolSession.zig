@@ -43,7 +43,7 @@ pub fn init(self: *ToolSession, app: *App) !void {
     self.registry = .init(app.allocator);
     errdefer self.registry.deinit();
 
-    try self.browser.init(app, .{}, null);
+    try self.browser.init(app, .{});
     errdefer self.browser.deinit();
 
     try self.restartSession();

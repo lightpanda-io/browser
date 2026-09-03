@@ -1061,6 +1061,7 @@ pub const ImportedModule = struct {
 };
 
 const testing = @import("../testing.zig");
+const Inbox = @import("../Inbox.zig");
 
 test "ScriptManagerBase: shutdownCallback fails a .loading module" {
     const page = try testing.pageTest("mcp_nav.html", .{});
@@ -1172,12 +1173,16 @@ test "ScriptManagerBase: waitForImport stops when teardown is pending" {
     try sm.imported_modules.put(sm.allocator, url, .{ .state = .{ .loading = script } });
     sm.async_scripts.append(&script.node);
 
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+    client.test_inbox = &inbox;
+    defer client.test_inbox = null;
+
     const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
-    client.inbox.push(message_arena, .{ .cdp = .{
+    inbox.push(message_arena, .{ .cdp = .{
         .raw = try message_arena.dupe(u8, "{}"),
         .input = .{ .method = "Target.disposeBrowserContext" },
     } });
-    defer client.inbox.pop().?.deinit();
 
     try testing.expectError(error.SyncWaitInterrupted, sm.waitForImport(url));
 }

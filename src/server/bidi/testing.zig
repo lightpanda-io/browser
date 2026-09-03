@@ -22,6 +22,8 @@ const base = @import("../../testing.zig");
 const Frame = @import("../../browser/Frame.zig");
 
 const BiDi = @import("BiDi.zig");
+const Inbox = @import("../../Inbox.zig");
+const Driver = @import("../Driver.zig");
 
 const json = std.json;
 const posix = std.posix;
@@ -44,6 +46,8 @@ pub const TestContext = struct {
     read_buf: [1024 * 32]u8 = undefined,
     bidi_: BiDi = undefined,
     bidi_initialized: bool = false,
+    inbox: Inbox = .{},
+    driver: Driver = undefined,
     bidi_socket: posix.socket_t,
     socket: posix.socket_t,
     received: std.ArrayList(json.Value) = .empty,
@@ -51,8 +55,10 @@ pub const TestContext = struct {
 
     pub fn deinit(self: *TestContext) void {
         if (self.bidi_initialized) {
+            self.driver.detach();
             self.bidi_.deinit();
         }
+        self.inbox.deinit();
         _ = std.c.close(self.socket);
         _ = std.c.close(self.bidi_socket);
         base.reset();
@@ -60,8 +66,10 @@ pub const TestContext = struct {
 
     pub fn bidi(self: *TestContext) *BiDi {
         if (!self.bidi_initialized) {
-            self.bidi_.init(base.test_app, self.bidi_socket, null) catch |err| @panic(@errorName(err));
+            self.bidi_.init(base.test_app, self.bidi_socket, &self.inbox, null) catch |err| @panic(@errorName(err));
             self.bidi_initialized = true;
+            self.driver = .init(.{ .bidi = &self.bidi_ }, &self.inbox);
+            self.driver.attach();
         }
         return &self.bidi_;
     }

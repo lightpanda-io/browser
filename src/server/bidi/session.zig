@@ -106,9 +106,9 @@ pub const Capabilities = struct {
 fn end(cmd: *const BiDi.Command) !void {
     try cmd.sendResult(struct {}{});
 
-    const browser = &cmd.bidi.browser;
-    const arena = try browser.arena_pool.acquire(.tiny, "bidi session end");
-    browser.http_client.inbox.push(arena, .close);
+    const bidi = cmd.bidi;
+    const arena = try bidi.browser.arena_pool.acquire(.tiny, "bidi session end");
+    bidi.conn.inbox.push(arena, .close);
 }
 
 // Subscriptions are global (per-context filtering is not supported yet).
