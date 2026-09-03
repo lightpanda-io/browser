@@ -379,6 +379,7 @@ pub fn navigateInner(
     // branches; used to queue the hashchange once below.
     const old_url = frame.url;
     const previous = self.getCurrentEntry();
+    const hash_change = is_same_document and !std.mem.eql(u8, old_url, new_url);
 
     const destination = switch (kind) {
         // On traverse, it is a real entry that exists.
@@ -402,11 +403,12 @@ pub fn navigateInner(
         destination,
         kind,
         false,
-        false,
+        hash_change,
         is_same_document,
         null,
         frame,
     );
+    defer navigate_event._destination._arena.release();
 
     // Script cancelled the navigation.
     if (navigate_event.asEvent().getDefaultPrevented()) {
@@ -464,7 +466,7 @@ pub fn navigateInner(
         },
     }
 
-    if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
+    if (hash_change) {
         try frame.queueHashChange(old_url, new_url);
     }
 
