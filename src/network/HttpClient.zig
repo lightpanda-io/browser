@@ -1565,6 +1565,19 @@ fn processMessages(self: *Client) !bool {
     return processed;
 }
 
+fn enforceCorsResponse(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) bool {
+    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
+        return false;
+    }
+    CorsGate.validateResponse(transfer) catch |err| {
+        self.removeConn(msg.conn);
+        transfer._conn = null;
+        transfer.failAsync(err);
+        return true;
+    };
+    return false;
+}
+
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
     // Workaround for libcurl Brotli trailing-byte rejection.
     //
@@ -1660,6 +1673,8 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     // requestWillBeSent event has been serialized. Will be
                     // reset() in makeRequest.
                     try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+                    if (self.enforceCorsResponse(msg, transfer)) return true;
+
                     try transfer.handleRedirect(location.value);
 
                     if (!transfer.req.internal) {
@@ -1704,16 +1719,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
-
-    // Validate the headers for the response with CORS.
-    if (transfer._cors_cross_origin and transfer.req.request_mode == .cors) {
-        CorsGate.validateResponse(transfer) catch |err| {
-            self.removeConn(msg.conn);
-            transfer._conn = null;
-            transfer.failAsync(err);
-            return true;
-        };
-    }
+    if (self.enforceCorsResponse(msg, transfer)) return true;
 
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
