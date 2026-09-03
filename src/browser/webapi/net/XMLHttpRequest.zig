@@ -303,9 +303,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
 
-    // Only add cookies for same-origin or when withCredentials is true
-    const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
-
     self.acquireRef();
     self._active_requests += 1;
     self._send_flag = true;
@@ -315,7 +312,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .url = self._url,
         .method = self._method,
         .body = self._request_body,
-        .cookies = cookie_support,
         .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .request_mode = .cors,
         .origin = exec.origin(),
@@ -340,7 +336,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             self._send_flag = false;
         }
         try self._request_headers.populateRequestHeaders(transfer);
-        if (cookie_support) {
+
+        if (transfer.req.credentialsAllowed()) {
             try exec.headersForRequest(transfer);
         }
     }

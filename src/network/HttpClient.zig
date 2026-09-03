@@ -633,7 +633,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
             if (owned.notification == null) owned.notification = o.notification;
-            if (req.cookies) cookie_jar = o.cookie_jar;
+            cookie_jar = o.cookie_jar;
         }
         // Resolved onto the transfer; the request's copy is left null so
         // nothing reads the caller's (possibly short-lived) url through it.
@@ -1872,10 +1872,6 @@ pub const Request = struct {
     document_frame_id: ?u32 = null,
     notification: ?*Notification = null,
 
-    // Send the owner's cookies and honour Set-Cookie. Off for a credential-less
-    // fetch / XHR / EventSource. Meaningless without an owner: there is no jar.
-    cookies: bool = true,
-
     // The site for SameSite checks. null = the owner's (Owner.siteForCookies).
     // Frame.navigate is the one caller with a reason to override it: the
     // initiator of a top-level navigation isn't the frame being navigated.
@@ -1919,6 +1915,17 @@ pub const Request = struct {
     // every caller decides — pass `HttpClient.noopShutdown` to opt out,
     // knowingly.
     shutdown_callback: ShutdownCallback,
+
+    pub fn credentialsAllowed(req: *const Request) bool {
+        return switch (req.credentials_mode) {
+            .omit => false,
+            .include => true,
+            .same_origin => blk: {
+                const origin = req.origin orelse break :blk false;
+                break :blk URL.isSameOrigin(req.url, origin);
+            },
+        };
+    }
 };
 
 pub const SyncResponse = struct {
@@ -2012,10 +2019,12 @@ fn fulfillRedirect(
     errdefer |err| transfer.abortPipelineError(err);
 
     // retrieve cookies from the fulfilled response's headers.
-    if (transfer.cookie_jar) |jar| {
-        for (headers) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                try jar.populateFromResponse(transfer.req.url, hdr.value);
+    if (transfer.req.credentialsAllowed()) {
+        if (transfer.cookie_jar) |jar| {
+            for (headers) |hdr| {
+                if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                    try jar.populateFromResponse(transfer.req.url, hdr.value);
+                }
             }
         }
     }
@@ -2583,8 +2592,10 @@ pub const Transfer = struct {
     }
 
     pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
-        const jar = self.cookie_jar orelse return null;
         const req = &self.req;
+        if (!req.credentialsAllowed()) return null;
+
+        const jar = self.cookie_jar orelse return null;
         var aw: std.Io.Writer.Allocating = .init(arena);
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
@@ -3055,13 +3066,15 @@ pub const Transfer = struct {
         const headers = try it.collect(arena.allocator());
         self.res.headers = headers.items;
 
-        if (self.cookie_jar) |jar| {
-            for (self.res.headers) |hdr| {
-                if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                    jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
-                        log.err(.http, "set cookie", .{ .err = err, .req = self });
-                        return err;
-                    };
+        if (self.req.credentialsAllowed()) {
+            if (self.cookie_jar) |jar| {
+                for (self.res.headers) |hdr| {
+                    if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                        jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
+                            log.err(.http, "set cookie", .{ .err = err, .req = self });
+                            return err;
+                        };
+                    }
                 }
             }
         }

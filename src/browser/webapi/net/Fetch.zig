@@ -101,11 +101,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .method = request._method,
         .body = request._body,
         .resource_type = .fetch,
-        .cookies = switch (request._credentials) {
-            .omit => false,
-            .include => true,
-            .@"same-origin" => exec.isSameOrigin(request._url),
-        },
         .credentials_mode = switch (request._credentials) {
             .omit => .omit,
             .@"same-origin" => .same_origin,
