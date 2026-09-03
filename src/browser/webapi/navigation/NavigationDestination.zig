@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 
@@ -25,6 +26,7 @@ const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationDestination
 const NavigationDestination = @This();
 
+_arena: *lp.Arena,
 _id: []const u8,
 _index: i32,
 _key: []const u8,
@@ -42,11 +44,14 @@ pub const InitOpts = struct {
 };
 
 pub fn init(opts: InitOpts, frame: *Frame) !*NavigationDestination {
-    const arena = frame._session.arena;
+    const arena = try frame.getArena(.tiny, "NavigationDestination");
+    errdefer arena.release();
+
     const state: ?js.Value.Global = if (opts.state) |s| try s.persist() else null;
 
     const self = try arena.create(NavigationDestination);
     self.* = .{
+        ._arena = arena,
         ._id = try arena.allocator().dupe(u8, opts.id),
         ._index = opts.index,
         ._key = try arena.allocator().dupe(u8, opts.key),
@@ -54,6 +59,8 @@ pub fn init(opts: InitOpts, frame: *Frame) !*NavigationDestination {
         ._url = try arena.allocator().dupeZ(u8, opts.url),
         ._state = state,
     };
+
+    arena.report();
     return self;
 }
 
