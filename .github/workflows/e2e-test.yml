@@ -283,7 +283,7 @@ jobs:
           fi
 
           mkdir -p $CG_ROOT/$CG
-          cgexec -g memory:$CG ./lightpanda serve --protocol cdp --insecure-disable-tls-host-verification & echo $! > LPD.pid
+          cgexec -g memory:$CG ./lightpanda serve --http-nav-delay 0 --protocol cdp --insecure-disable-tls-host-verification & echo $! > LPD.pid
 
           sleep 2
 

@@ -123,7 +123,11 @@ pub fn init(app: *App) !Network {
         .cache = cache,
         .robot_store = RobotStore.init(allocator),
         .web_bot_auth = web_bot_auth,
-        .rate_limiter = if (config.httpNavDelay()) |ms| RateLimiter.init(allocator, ms, config.httpNavBurst()) else null,
+        .rate_limiter = switch (config.httpNavDelay()) {
+            .off => null,
+            .adaptive => RateLimiter.init(allocator, RateLimiter.ADAPTIVE_INTERVAL_MS, config.httpNavBurst(), .adaptive),
+            .fixed => |ms| RateLimiter.init(allocator, ms, config.httpNavBurst(), .fixed),
+        },
         .adblocker = adblocker,
 
         .ws_pool = .empty,
