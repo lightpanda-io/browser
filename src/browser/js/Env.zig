@@ -104,6 +104,11 @@ terminate_mutex: std.Io.Mutex = .init,
 // thread making sure terminate hasn't been canceled.
 terminate_requested: std.atomic.Value(bool) = .init(false),
 
+// Set while a V8 context (or the isolate) is being disposed.
+tearing_down: bool = false,
+
+heap_limit_protected: bool = false,
+
 pub const InitOpts = struct {
     with_inspector: bool = false,
 };
@@ -209,6 +214,10 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 }
 
 pub fn deinit(self: *Env) void {
+    // Prevent callbacks during isolate disposal.
+    self.tearing_down = true;
+    self.releaseHeapLimit();
+
     if (comptime lp.IS_DEBUG) {
         std.debug.assert(self.contexts.items.len == 0);
     }
@@ -576,6 +585,7 @@ pub fn terminate(self: *Env) void {
 
 // We need a stable pointer for *Env, so can't be setup in init.
 pub fn protectHeapLimit(self: *Env) void {
+    self.heap_limit_protected = true;
     v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
     // TODO: uncomment this when https://github.com/lightpanda-io/zig-v8-fork/pull/187 lands
     // if our nearHeapLimit extends the memory, we want to  restore the original
@@ -599,12 +609,29 @@ pub fn protectHeapLimit(self: *Env) void {
 // V8 expects.
 fn nearHeapLimit(data: ?*anyopaque, current_limit: usize, initial_limit: usize) callconv(.c) usize {
     const self: *Env = @ptrCast(@alignCast(data.?));
+    return self.onNearHeapLimit(current_limit, initial_limit);
+}
+
+fn releaseHeapLimit(self: *Env) void {
+    if (self.heap_limit_protected == false) {
+        return;
+    }
+    self.heap_limit_protected = false;
+    v8.v8__Isolate__RemoveNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, 0);
+}
+
+fn onNearHeapLimit(self: *Env, current_limit: usize, initial_limit: usize) usize {
     lp.metrics.js_heap_limits.incr();
     log.err(.app, "JS heap limit reached", .{
         .initial_limit = initial_limit,
         .current_limit = current_limit,
+        .tearing_down = self.tearing_down,
     });
-    self.requestTerminate();
+
+    // Context disposal can trigger this after execution has ended.
+    if (self.tearing_down == false) {
+        self.requestTerminate();
+    }
 
     const cap = initial_limit + 256 * 1024 * 1024;
     if (current_limit >= cap) {
@@ -718,6 +745,24 @@ const PrivateSymbols = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+test "Env: a heap limit reached during teardown does not arm a termination" {
+    testing.expectLog(&.{.app});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const env = frame.js.env;
+    const limit: usize = 64 * 1024 * 1024;
+
+    env.tearing_down = true;
+    defer env.tearing_down = false;
+
+    const granted = env.onNearHeapLimit(limit, limit);
+    try testing.expectEqual(false, env.terminatePending());
+    try testing.expect(granted > limit);
+}
+
 test "Env: Worker context " {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

@@ -180,7 +180,14 @@ pub fn deinit(self: *Session) void {
 
     self.cookie_jar.deinit();
 
-    self.browser.env.memoryPressureNotification(.critical);
+    {
+        // Every context is disposed; this GC must not arm a termination.
+        const env = &self.browser.env;
+        const was_tearing_down = env.tearing_down;
+        env.tearing_down = true;
+        defer env.tearing_down = was_tearing_down;
+        env.memoryPressureNotification(.critical);
+    }
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.idb.deinit();
