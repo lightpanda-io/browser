@@ -927,7 +927,8 @@ fn startDelayed(self: *Client) !void {
         self.delayed_queue.remove(node);
 
         transfer.state = .created;
-        self.pipeline(transfer, .start) catch |err| {
+        // The throttle is the last step before the network, resume there.
+        self.pipeline(transfer, .network) catch |err| {
             // Same as startPending: this can run from a tick(.sync_wait), and
             // error_callback JS must not fire on a blocking request's stack.
             if (transfer.state == .created) {
@@ -961,14 +962,20 @@ fn delay(self: *Client, transfer: *Transfer, run_at: u64) void {
     }
 }
 
-const SubmitFrom = enum { start, after_intercept, network };
+const SubmitFrom = enum {
+    start, // Transfer.submit — a brand new request.
+    redirect, // Followed 3xx. Same as .start, but a distinct name (e.g. for CDP)
+    after_intercept, // Released by CDP
+    throttle, // the robots gate allowed the request.
+    network, // released by throttle
+};
 
 // Process a transfer, passing it through our pipeline. A transfer an move off
 // the pipeline(e.g. while parked waiting for a robots.txt check) and then
 // pushed back onto it, which is what `from` helps us achieve.
 fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
     sw: switch (from) {
-        .start => {
+        .start, .redirect => {
             if (comptime lp.IS_TEST) {
                 if (self.test_fail_submit) |err| {
                     return err;
@@ -982,7 +989,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
 
             if (self.serve_mode) {
                 transfer._notify_cdp = true;
-                transfer.notify(.http_request_start, &.{ .transfer = transfer });
+                transfer.notify(.http_request_start, &.{
+                    .transfer = transfer,
+                    .redirect_response = from == .redirect,
+                });
 
                 var wait_for_interception = false;
                 transfer.notify(.http_request_intercept, &.{
@@ -1024,16 +1034,33 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                     .pending => return,
                 }
             }
+            continue :sw SubmitFrom.throttle;
+        },
+        .throttle => {
+            // Last because we only want to reserve a slot for a request we
+            // intend to actually send out (e.g. not cached, not blocked by
+            // robots, not answered by request intercetion)
+            if (transfer.req.throttle) {
+                if (self.network.rate_limiter) |*rl| {
+                    const now = lp.datetime.milliTimestamp(.boot);
+                    const run_at = try rl.reserve(URL.getHostname(transfer.req.url), now);
+                    if (run_at > now) {
+                        const d = run_at - now;
+                        lp.metrics.http_navigation_delay_ms.observe(@intCast(d));
+                        log.debug(.http, "navigation delayed", .{ .url = transfer.req.url, .ms = d });
+                        return self.delay(transfer, run_at);
+                    }
+                }
+            }
             continue :sw SubmitFrom.network;
         },
         .network => try self.processTransfer(transfer),
     }
 }
 
-// RobotsGate resumption. The robots gate is the last step before the
-// network, so an allowed transfer goes straight there.
+// RobotsGate resumption.
 pub fn resumeAfterRobots(self: *Client, transfer: *Transfer) !void {
-    return self.pipeline(transfer, .network);
+    return self.pipeline(transfer, .throttle);
 }
 
 fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
@@ -1466,18 +1493,6 @@ fn processMessages(self: *Client) !bool {
                 // Only the throw path cleans up here.
                 const done = self.processOneMessage(msg, transfer) catch |err| blk: {
                     log.err(.http, "process_messages", .{ .err = err, .req = transfer });
-                    if (transfer._detached_conn) |c| {
-                        // Conn was removed from handles during redirect reconfiguration
-                        // but not re-added. Release it directly to avoid double-remove.
-                        // _conn still aliases it during that window.
-                        self.in_use.remove(&c.node);
-                        self.http_active -= 1;
-                        self.releaseConn(c);
-                        if (transfer._conn == c) {
-                            transfer._conn = null;
-                        }
-                        transfer._detached_conn = null;
-                    }
                     if (transfer._conn) |c| {
                         self.removeConn(c);
                         transfer._conn = null;
@@ -1603,70 +1618,26 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                 .follow => {
                     transfer.restoreInterceptHeaders();
                     // Preserve the completed 3xx response until the redirected
-                    // requestWillBeSent event has been serialized. reset() below
-                    // clears it before the next network attempt.
+                    // requestWillBeSent event has been serialized. Will be
+                    // reset() in makeRequest.
                     try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
                     try transfer.handleRedirect(location.value);
 
-                    if (!transfer.req.internal) lp.metrics.http_redirects.incr();
-
-                    if (self.serve_mode) { // e.g. cdp
-                        // Chromium announces each redirect hop before pausing it
-                        // for Fetch interception. Playwright uses redirectResponse
-                        // to pair the new pause with a new Request.
-                        transfer.notify(.http_request_start, &.{
-                            .transfer = transfer,
-                            .redirect_response = true,
-                        });
+                    if (!transfer.req.internal) {
+                        lp.metrics.http_redirects.incr();
                     }
 
-                    if (self.isUrlBlocked(transfer.req.url, transfer.req.internal)) {
-                        log.info(.http, "blocked url", .{ .url = transfer.req.url });
-                        self.removeConn(msg.conn);
-                        transfer._conn = null;
-                        transfer.failAsync(error.UrlBlocked);
-                        return true;
-                    }
+                    // The multi should keep this alive. Releasing it now makes
+                    // it so we can re-enter the pipeline and keeps the code
+                    // streamlined.
+                    self.removeConn(msg.conn);
+                    transfer._conn = null;
+                    transfer.state = .created;
 
-                    if (self.serve_mode) { // e.g. cdp
-                        var wait_for_interception = false;
-                        transfer.notify(.http_request_intercept, &.{
-                            .transfer = transfer,
-                            .wait_for_interception = &wait_for_interception,
-                        });
-
-                        if (wait_for_interception) {
-                            // Same shape as the auth-interception park above:
-                            // give up the connection, wait for the CDP client.
-                            self.removeConn(msg.conn);
-                            transfer._conn = null;
-                            transfer.reset();
-                            transfer.state = .created;
-                            self.intercepted += 1;
-                            transfer.park(.intercept_request);
-                            return false;
-                        }
-                    }
-
-                    const conn = transfer._conn.?;
-
-                    try self.handles.remove(conn);
-                    // Conn temporarily out of multi during reconfigure.
-                    // _detached_conn lets processMessages release it if any of
-                    // the steps below throw. State stays .inflight; _conn stays set
-                    transfer._detached_conn = conn;
-
-                    transfer.reset();
-                    try transfer.configureConn(conn);
-                    try self.handles.add(conn);
-                    transfer._detached_conn = null;
-
-                    // Get the redirect on the wire now. Any completion messages
-                    // this produces are picked up by the processMessages loop
-                    // we were called from — no recursion into the pump.
-                    _ = try self.handles.perform();
-
-                    return false;
+                    // We have to restart (.redirect == .start) the whole
+                    // pipeline, rechecking the cache/robot/ratelimit/...
+                    try self.pipeline(transfer, .redirect);
+                    return true;
                 },
                 // error_callback surfaces this as a TypeError.
                 .@"error" => {
@@ -2131,11 +2102,6 @@ pub const Transfer = struct {
     // guard to ensure only one of done/error/shutdown is ever called
     _outcome_delivered: bool = false,
 
-    // Set when conn is temporarily detached from transfer during redirect
-    // reconfiguration. Used by processMessages to release the orphaned conn
-    // if reconfiguration fails. Transient inside the redirect path only.
-    _detached_conn: ?*http.Connection = null,
-
     _auth_challenge: ?http.AuthChallenge = null,
 
     // number of times the transfer has been tried.
@@ -2304,23 +2270,6 @@ pub const Transfer = struct {
                 self.failAsync(err);
             };
             return;
-        }
-
-        if (self.req.throttle) {
-            if (self.client.network.rate_limiter) |*rl| {
-                const now = lp.datetime.milliTimestamp(.boot);
-                const run_at = rl.reserve(URL.getHostname(self.req.url), now) catch |err| {
-                    self.abortPipelineError(err);
-                    return err;
-                };
-                if (run_at > now) {
-                    const d = run_at - now;
-                    lp.metrics.http_navigation_delay_ms.observe(@intCast(d));
-                    log.debug(.http, "navigation delayed", .{ .url = self.req.url, .ms = d });
-                    self.client.delay(self, run_at);
-                    return;
-                }
-            }
         }
 
         self.client.pipeline(self, .start) catch |err| {
@@ -3004,7 +2953,7 @@ pub const Transfer = struct {
     }
 
     // Called above (in handleRedirect) and by a CDP fulfill request which redirects
-    pub fn applyRedirectTarget(transfer: *Transfer, base: [:0]const u8, location: []const u8, status: u16) !void {
+    fn applyRedirectTarget(transfer: *Transfer, base: [:0]const u8, location: []const u8, status: u16) !void {
         const req = &transfer.req;
         const arena = transfer.arena;
 
@@ -3012,6 +2961,13 @@ pub const Transfer = struct {
         if (transfer._redirect_count > transfer.client.network.config.httpMaxRedirects()) {
             return error.TooManyRedirects;
         }
+
+        if (transfer._cache_intent == .revalidate) {
+            transfer._cache_intent.revalidate.data.deinit();
+            transfer.removeHeader("If-None-Match");
+            transfer.removeHeader("If-Modified-Since");
+        }
+        transfer._cache_intent = .none;
 
         // resolve the redirect target.
         const url: [:0]const u8 = blk: {
