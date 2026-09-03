@@ -357,7 +357,7 @@ const FetchTerminator = struct {
 
 fn fetchThread(app: *App, ft: *FetchTerminator, urls: []const [:0]const u8, fetch_opts: lp.FetchOpts, err_out: *?anyerror) void {
     var browser: lp.Browser = undefined;
-    browser.init(app, .{}, null) catch |err| {
+    browser.init(app, .{}) catch |err| {
         err_out.* = err;
         log.fatal(.app, "browser init error", .{ .err = err });
         return;

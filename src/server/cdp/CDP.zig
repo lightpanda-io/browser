@@ -37,7 +37,6 @@ const Label = @import("../../browser/webapi/element/html/Label.zig");
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
 const Server = @import("../Server.zig");
-const Driver = @import("../Driver.zig");
 const Incrementing = @import("id.zig").Incrementing;
 
 const fetch = @import("domains/fetch.zig");
@@ -98,7 +97,7 @@ browser_context_arena: std.heap.ArenaAllocator,
 // Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
 streams: @import("domains/io.zig").Streams,
 
-pub fn init(self: *CDP, app: *App, socket: posix.socket_t) !void {
+pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void {
     const allocator = app.allocator;
 
     self.* = .{
@@ -114,12 +113,10 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t) !void {
         .streams = .{ .allocator = allocator },
     };
 
-    const driver = Driver.init(.{ .cdp = self });
-
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, driver);
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
     errdefer self.browser.deinit();
 
-    try self.conn.init(app, socket, .cdp, &self.browser.http_client.inbox);
+    try self.conn.init(app, socket, .cdp, inbox);
 }
 
 pub fn deinit(self: *CDP) void {
@@ -1463,7 +1460,7 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     // since #2510, on shutdown via shutdownLinks.
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
-        client.inbox.push(arena, .{ .disconnect = null });
+        ctx.inbox.push(arena, .{ .disconnect = null });
     }
 
     // First tick drains the .disconnect and tears the link down.
@@ -1489,8 +1486,7 @@ test "cdp: run sends a close frame on pending terminate" {
     defer cdp.browser.env.cancelTerminate();
 
     // The pending terminate makes the first tick the last one, so run returns.
-    const driver: Driver = .init(.{ .cdp = cdp });
-    driver.run();
+    ctx.driver.run();
 
     // The client should receive a close frame (code 1001, going away), not
     // just an abrupt socket close.
@@ -1505,10 +1501,10 @@ test "cdp: syncRequest short-circuits after disconnect" {
 
     const client = &ctx.cdp().browser.http_client;
 
-    // Latch terminated via a drained disconnect (as above).
+    // Latch disconnected via a drained disconnect (as above).
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
-        client.inbox.push(arena, .{ .disconnect = null });
+        ctx.inbox.push(arena, .{ .disconnect = null });
     }
     try testing.expectError(error.ClientDisconnected, client.tick(0));
 

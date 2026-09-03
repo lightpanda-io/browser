@@ -151,30 +151,17 @@ test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null els
 // Allocated from self.allocator when set, null otherwise.
 user_agent_override: ?[:0]const u8 = null,
 
-// The protocol layer we dispatch inbox messages to. Set in CDP.init /
-// BiDi.init for `serve` mode; null in all other modes. Since this is set
-// early, BEFORE the socket is registered with the network thread, we also
-// have the `driver_link_active` boolean.
+// The driver (CDP / BiDi) attached to us. If there's a driver, then there's
+// an inbox for us to process (and there's someone to wake us up from a poll)
 driver: ?Driver = null,
 
-// True iff a producer (Server.handleConnection, after the worker
-// handshake completes) has registered the client socket with the Network
-// thread and Network will fire curl_multi_wakeup on our multi handle
-// when it pushes to the inbox. perform uses this — NOT `driver != null`
-// — to decide whether to block in poll without any in-flight curl
-// work. driver is set in the driver's init, well before the link is
-// wired; tests and the pre-handshake window have a driver but no
-// producer, so polling
-// there would just eat the timeout waiting for a wakeup that's never
-// coming.
-driver_link_active: bool = false,
+// If there's a driver, it can tell us to disconnect and that has to stick
+// until _tick is called and picks it up.
+disconnected: bool = false,
 
-// Client messages read off the WS socket by the Network thread land
-// here. perform drains the inbox at each safe point and dispatches
-// via driver.onMessage / onPing / onClose / onDisconnect. Always present
-// even in non-serve mode — the empty-queue drain is one mutex lock plus
-// a linked-list head check, cheaper than nullability everywhere.
-inbox: Inbox,
+// Test-only: an inbox for a client with no driver (the shared test browser),
+// so the pending-teardown checks can be exercised without a CDP connection.
+test_inbox: if (lp.IS_TEST) ?*Inbox else void = if (lp.IS_TEST) null else {},
 
 max_response_size: usize,
 
@@ -201,7 +188,7 @@ http_version: lp.Config.HttpVersion,
 robots: RobotsGate,
 url_blocklist: ?UrlBlocklist,
 
-pub fn init(self: *Client, app: *lp.App, driver: ?Driver) !void {
+pub fn init(self: *Client, app: *lp.App) !void {
     const config = app.config;
     const allocator = app.allocator;
 
@@ -231,8 +218,6 @@ pub fn init(self: *Client, app: *lp.App, driver: ?Driver) !void {
         .handles = handles,
         .network = network,
         .allocator = app.allocator,
-        .driver = driver,
-        .inbox = .{},
         .cache = &network.cache,
 
         .use_proxy = http_proxy != null,
@@ -280,7 +265,6 @@ pub fn deinit(self: *Client) void {
     self.robots.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
-    self.inbox.deinit();
     self.cache.maintenance(lp.datetime.timestamp(.real));
 }
 
@@ -701,14 +685,21 @@ pub fn tickSync(self: *Client, timeout_ms: u32) !void {
 }
 
 fn hasPendingTeardown(self: *Client) bool {
-    return self.inbox.contains(isSyncWaitInterrupt);
+    const inbox = blk: {
+        if (comptime lp.IS_TEST) {
+            if (self.test_inbox) |test_inbox| break :blk test_inbox;
+        }
+        const driver = &(self.driver orelse return false);
+        break :blk driver.inbox;
+    };
+    return inbox.contains(isSyncWaitInterrupt);
 }
 
 // Returns false iff the tick was a no-op. When false is returned, immediately
 // calling this again will almost [instantly] return false again, potentially
 // causing a spin.
 pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
-    if (self.inbox.terminated) {
+    if (self.disconnected) {
         return error.ClientDisconnected;
     }
 
@@ -723,7 +714,7 @@ pub fn _tick(self: *Client, timeout_ms: u32, mode: DrainMode) !bool {
     if (dispatched == false and processed == false and self.dispatch_queue.first == null and self.ws_dispatch_queue.first == null) {
         // Nothing was dispatched, no messages were processed and nothing is
         // waiting for dispatch. We need to wait for I/O.
-        if (running > 0 or self.driver_link_active or self.delayed_queue.first != null) {
+        if (running > 0 or self.driver != null or self.delayed_queue.first != null) {
             {
                 self.heartbeat.enterWait();
                 defer self.heartbeat.exitWait();
@@ -1362,11 +1353,12 @@ pub fn drainTerminal(self: *Client) !void {
 // processOneMessage's redirect path.
 fn drainInbox(self: *Client, mode: DrainMode) !void {
     const driver = &(self.driver orelse return);
+    const inbox = driver.inbox;
     while (true) {
         const msg = switch (mode) {
-            .all => self.inbox.pop(),
-            .sync_wait => self.inbox.popIf(allowDuringSyncWait),
-            .terminal => self.inbox.popIf(isTerminal),
+            .all => inbox.pop(),
+            .sync_wait => inbox.popIf(allowDuringSyncWait),
+            .terminal => inbox.popIf(isTerminal),
         } orelse return;
 
         defer msg.deinit();
@@ -1380,12 +1372,12 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
             .ping => |body| driver.onPing(body),
             .close => {
                 driver.onClose();
-                self.inbox.terminated = true;
+                self.disconnected = true;
                 return error.ClientDisconnected;
             },
             .disconnect => |err| {
                 driver.onDisconnect(err);
-                self.inbox.terminated = true;
+                self.disconnected = true;
                 return error.ClientDisconnected;
             },
         }
@@ -2332,7 +2324,7 @@ pub const Transfer = struct {
     pub fn submitSync(self: *Transfer) !SyncResponse {
         const client = self.client;
 
-        if (client.inbox.terminated) {
+        if (client.disconnected) {
             self.deinit();
             return error.ClientDisconnected;
         }

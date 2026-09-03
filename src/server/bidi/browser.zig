@@ -45,9 +45,9 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
 fn close(cmd: *const BiDi.Command) !void {
     try cmd.sendResult(struct {}{});
 
-    const browser = &cmd.bidi.browser;
-    const arena = try browser.arena_pool.acquire(.tiny, "bidi browser close");
-    browser.http_client.inbox.push(arena, .close);
+    const bidi = cmd.bidi;
+    const arena = try bidi.browser.arena_pool.acquire(.tiny, "bidi browser close");
+    bidi.conn.inbox.push(arena, .close);
 }
 
 const UserContextInfo = struct { userContext: []const u8 };

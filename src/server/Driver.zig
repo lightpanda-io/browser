@@ -50,18 +50,20 @@ impl: Impl,
 conn: *Link,
 browser: *Browser,
 
+// The worker's mailbox, owned by the loop's connection slot (it outlives
+// the link). The loop pushes, the worker's HttpClient drains through us.
+inbox: *Inbox,
+
 // The protocol's log scope, so shared code still logs as .cdp / .bidi.
 scope: log.Scope,
 
-// Called from CDP.init / BiDi.init, where conn and browser are both still
-// undefined: we only take their addresses, which the impl's own allocation
-// already fixed.
-pub fn init(impl: Impl) Driver {
+pub fn init(impl: Impl, inbox: *Inbox) Driver {
     return switch (impl) {
         inline else => |d, tag| .{
             .impl = impl,
             .conn = &d.conn,
             .browser = &d.browser,
+            .inbox = inbox,
             .scope = @field(log.Scope, @tagName(tag)), // The tag names line up with the log scopes of the same name.
         },
     };
@@ -83,7 +85,7 @@ pub fn onLinkDisconnect(self: *const Driver, err: ?anyerror) void {
     };
     // order matters, this ensures that the disconnect message is in the inbox
     // when tick() discovers the terminatePending flag is set.
-    self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
+    self.inbox.push(arena, .{ .disconnect = err });
     self.browser.env.requestTerminate();
     self.wakeup();
 }
@@ -137,9 +139,10 @@ pub fn onDisconnect(self: *const Driver, err: ?anyerror) void {
     log.info(self.scope, "disconnect", .{ .err = err });
 }
 
-// Worker thread. Once the websocket connection is established, the server
-// calls this (from the worker thread) and it becomes the driving loop.
+// Worker thread.
 pub fn run(self: *const Driver) void {
+    self.attach(); // make HttpClient aware of our inbox
+    defer self.detach(); // make HttpClient forget our inbox
     while (true) {
         const alive = self.tick() catch |err| {
             log.err(self.scope, "tick", .{ .err = err });
@@ -149,6 +152,16 @@ pub fn run(self: *const Driver) void {
             return;
         }
     }
+}
+
+// Worker thread. Tell the http_client about us (so it can monitor our inbox)
+pub fn attach(self: *const Driver) void {
+    self.browser.http_client.driver = self.*;
+}
+
+// Worker thread.
+pub fn detach(self: *const Driver) void {
+    self.browser.http_client.driver = null;
 }
 
 // One iteration of the worker loop. Returns false to disconnect.

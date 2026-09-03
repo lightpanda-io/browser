@@ -560,6 +560,7 @@ const PreloadedScript = struct {
 };
 
 const testing = @import("../testing.zig");
+const Inbox = @import("../Inbox.zig");
 
 test "ScriptManager: PreloadedScript.shutdownCallback drops a .loading preload" {
     const page = try testing.pageTest("mcp_nav.html", .{});
@@ -616,12 +617,16 @@ test "ScriptManager: waitForPreload stops when teardown is pending" {
     try sm.preloaded_scripts.put(sm.base.allocator, url, .{ .state = .{ .loading = script } });
     defer sm.takePreload(url).?.deinit();
 
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+    client.test_inbox = &inbox;
+    defer client.test_inbox = null;
+
     const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
-    client.inbox.push(message_arena, .{ .cdp = .{
+    inbox.push(message_arena, .{ .cdp = .{
         .raw = try message_arena.dupe(u8, "{}"),
         .input = .{ .method = "Target.closeTarget" },
     } });
-    defer client.inbox.pop().?.deinit();
 
     try testing.expect(sm.waitForPreload(url) == null);
 }

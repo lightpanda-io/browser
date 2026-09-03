@@ -545,7 +545,7 @@ test "tests:beforeAll" {
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    try test_browser.init(test_app, .{}, null);
+    try test_browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
     // Create notification for testing
