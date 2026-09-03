@@ -31,3 +31,13 @@ Mirror the patterns in neighboring files. In particular:
 
 - `@import` alias case follows the imported file's basename (`const Frame = @import("Frame.zig")`, `const ast = @import("ast.zig")`).
 - Prefer struct-init type inference (`.{ ... }`) where the expected type is known from the function signature or variable annotation.
+
+## Code navigation (optional)
+
+[GitNexus](https://github.com/abhigyanpatwari/GitNexus) builds a call/import graph of the Zig sources and serves it to agents over MCP (`impact`, `trace`, `detect_changes`). Requires GitNexus >= 1.6.11.
+
+```bash
+npx gitnexus analyze --index-only    # writes only .gitnexus/ (gitignored)
+```
+
+Always pass `--index-only`: without it the tool injects its own section into `AGENTS.md`/`CLAUDE.md` and installs skill files, none of which belong in a PR. The Zig grammar is an npm `optionalDependency`; if its native build fails on your platform, `.zig` files are silently skipped.
