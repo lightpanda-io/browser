@@ -585,6 +585,7 @@ fn releaseWorker(self: *Server, ws: *WebSocket, notify: *std.Io.Event) void {
 // or upgradeConnection when there never was a worker.
 fn releaseWebSocket(self: *Server, ws: *WebSocket) void {
     self.websockets.remove(&ws.node);
+    ws.driver = null;
     ws.inbox.deinit();
     lp.metrics.serve_active_connections.decr(ws.protocol);
     self.websocket_pool.release(ws);
