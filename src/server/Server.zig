@@ -1969,7 +1969,7 @@ fn createTestClient() !TestClient {
 
 const TestClient = struct {
     socket: posix.socket_t,
-    buf: [8192]u8 = undefined,
+    buf: [8192 * 2]u8 = undefined,
     reader: WS.ReaderNoMask,
 
     fn deinit(self: *TestClient) void {
