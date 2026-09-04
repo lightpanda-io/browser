@@ -91,6 +91,8 @@ http_navigation_delay_ms: Histogram(&.{
 }) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
+adblock_verdicts: CounterEnum("verdict", @import("network/adblock/AdBlocker.zig").Verdict) = .{},
+adblock_rules: GaugeEnum("state", enum { loaded, skipped, cosmetic }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
@@ -123,6 +125,8 @@ const help = .{
     .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
+    .adblock_verdicts = "Adblocker decisions for evaluated requests, by verdict (none = not blocked, allowed = an exception overrode a block)",
+    .adblock_rules = "Filter-list rules by fate: loaded into the matcher, skipped as unsupported, or cosmetic (domain-scoped element hiding, outside the network realm)",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {
@@ -210,6 +214,10 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
 
         pub fn decr(self: *Self, tag: T) void {
             self.values.getPtr(tag).decr();
+        }
+
+        pub fn add(self: *Self, tag: T, n: i64) void {
+            self.values.getPtr(tag).add(n);
         }
 
         fn write(self: *const Self, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
