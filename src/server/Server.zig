@@ -1843,15 +1843,16 @@ test "server: HTTP session idle timeout" {
 test "server: HTTP session ended before its worker attached" {
     // The mailbox is alive from spawn: a DELETE that lands while the worker
     // is still starting up is a plain push, drained on its first tick.
-    const server = testing.test_cdp_server.?;
-    const live = server.worker_pool.live;
+    // worker_pool.live is the loop's; the gauge is the cross-thread view of it
+    const gauge = &lp.metrics.serve_active_connections;
+    const live = gauge.get(.bidi);
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
     try deleteHTTPSession(&session_id, true);
 
     // the worker exited and gave its slot back
     var attempts: usize = 0;
-    while (server.worker_pool.live != live) : (attempts += 1) {
+    while (gauge.get(.bidi) != live) : (attempts += 1) {
         try testing.expect(attempts < 200);
         lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
     }

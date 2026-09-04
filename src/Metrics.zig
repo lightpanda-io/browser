@@ -193,7 +193,11 @@ const Gauge = struct {
 
     fn write(self: *const Gauge, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
         try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
-        try writer.print(name ++ " {d}\n", .{@atomicLoad(isize, &self.value, .monotonic)});
+        try writer.print(name ++ " {d}\n", .{self.get()});
+    }
+
+    fn get(self: *const Gauge) isize {
+        return @atomicLoad(isize, &self.value, .monotonic);
     }
 };
 
@@ -214,11 +218,14 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
             self.values.getPtr(tag).decr();
         }
 
+        pub fn get(self: *const Self, tag: T) isize {
+            return self.values.getPtrConst(tag).get();
+        }
+
         fn write(self: *const Self, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
             try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
             inline for (comptime std.enums.values(Tag)) |tag| {
-                const value = @atomicLoad(isize, &self.values.getPtrConst(tag).value, .monotonic);
-                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{value});
+                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{self.get(tag)});
             }
         }
     };
