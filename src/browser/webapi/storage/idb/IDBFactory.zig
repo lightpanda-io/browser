@@ -172,12 +172,15 @@ const OpenContext = struct {
     // open request's outcome.
     fn finishUpgrade(self: *OpenContext, txn: *IDBTransaction) !void {
         const exec = self.exec;
-        const aborted = txn.aborted();
+        const db = txn._db;
+        // Our pin is often the last one, so releasing it frees `txn` (its
+        // arena goes back to the pool). Read everything we need first.
+        const failed = txn.aborted() or db._closed;
         self.request._txn = .none;
-        txn._db._txn = null;
+        db._txn = null;
         txn.releaseRef(exec.page);
 
-        if (aborted or txn._db._closed) {
+        if (failed) {
             self.request._result = .{ .none = js.Undefined{} };
             self.request.setError(error.AbortError);
             return self.request.deliver(exec);
