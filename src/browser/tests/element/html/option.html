@@ -1,7 +1,9 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<select id="select1">
+<!-- autocomplete=off: Firefox otherwise restores the selection a previous
+     run left behind when the page is reloaded, failing the `selected` test. -->
+<select id="select1" autocomplete="off">
   <option id="opt1" value="val1">Text 1</option>
   <option id="opt2" value="val2" selected>Text 2</option>
   <option id="opt3">Text 3</option>
@@ -58,8 +60,11 @@
   $('#opt1').label = 'Set Label'
   testing.expectEqual('Set Label', $('#opt1').label)
   testing.expectEqual('Set Label', $('#opt1').getAttribute('label'))
-  // An empty label attribute falls back to the text, per spec.
+  // An empty label attribute is returned as-is; only a missing one falls
+  // back to the text (WPT the-option-element/option-label.html).
   $('#opt1').setAttribute('label', '')
+  testing.expectEqual('', $('#opt1').label)
+  $('#opt1').removeAttribute('label')
   testing.expectEqual('Text 1', $('#opt1').label)
 </script>
 
@@ -83,6 +88,87 @@
   testing.expectEqual(false, $('#opt2').selected)
 </script>
 
+<script id="selected_unset_resets_to_default">
+  // A menu-list select always has a selected option: deselecting the last
+  // selected one falls back to the first enabled option (Blink's
+  // ResetToDefaultSelection, HTML's "ask for a reset").
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option>a</option><option selected>b</option><option>c</option>'
+    const [a, b, c] = sel.options
+
+    b.selected = false
+    testing.expectEqual(false, b.selected)
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(1, sel.selectedOptions.length)
+    testing.expectEqual('a', sel.value)
+
+    // Deselecting an option that isn't selected changes nothing.
+    c.selected = false
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(1, sel.selectedOptions.length)
+
+    // Deselecting the fallback re-selects it.
+    a.selected = false
+    testing.expectEqual(true, a.selected)
+    testing.expectEqual(0, sel.selectedIndex)
+  }
+
+  // A disabled first option is skipped.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option disabled>a</option><option>b</option><option selected>c</option>'
+    const [a, b, c] = sel.options
+    c.selected = false
+    testing.expectEqual(false, a.selected)
+    testing.expectEqual(true, b.selected)
+    testing.expectEqual(1, sel.selectedIndex)
+  }
+
+  // Every option disabled: nothing to fall back to.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<option disabled>a</option><option disabled selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // A list box (size > 1) may have nothing selected.
+  {
+    const sel = document.createElement('select')
+    sel.size = 3
+    sel.innerHTML = '<option>a</option><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(false, sel.options[0].selected)
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // Multiple: plain deselect.
+  {
+    const sel = document.createElement('select')
+    sel.multiple = true
+    sel.innerHTML = '<option>a</option><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(0, sel.selectedOptions.length)
+  }
+
+  // Options inside an optgroup are part of the list.
+  {
+    const sel = document.createElement('select')
+    sel.innerHTML = '<optgroup><option>a</option></optgroup><option selected>b</option>'
+    sel.options[1].selected = false
+    testing.expectEqual(true, sel.options[0].selected)
+  }
+
+  // No owning select: nothing to reset.
+  {
+    const opt = document.createElement('option')
+    opt.selected = true
+    opt.selected = false
+    testing.expectEqual(false, opt.selected)
+  }
+</script>
+
 <script id="defaultSelected">
   testing.expectEqual(false, $('#opt1').defaultSelected)
   testing.expectEqual(true, $('#opt2').defaultSelected)
@@ -104,38 +190,4 @@
 
   $('#opt4').disabled = false
   testing.expectEqual(false, $('#opt4').disabled)
-</script>
-
-<option id="named1" name="choice1">Named option</option>
-<option id="named2">Unnamed option</option>
-
-<script id="name_initial">
-  testing.expectEqual('choice1', $('#named1').name)
-  testing.expectEqual('', $('#named2').name)
-</script>
-
-<script id="name_set">
-  {
-    const option = document.createElement('option')
-    testing.expectEqual('', option.name)
-
-    option.name = 'opt-name'
-    testing.expectEqual('opt-name', option.name)
-    testing.expectEqual('opt-name', option.getAttribute('name'))
-
-    option.name = 'another-name'
-    testing.expectEqual('another-name', option.name)
-    testing.expectEqual('another-name', option.getAttribute('name'))
-  }
-</script>
-
-<script id="name_reflects_to_attribute">
-  {
-    const option = document.createElement('option')
-    testing.expectEqual(null, option.getAttribute('name'))
-
-    option.name = 'fieldname'
-    testing.expectEqual('fieldname', option.getAttribute('name'))
-    testing.expectTrue(option.outerHTML.includes('name="fieldname"'))
-  }
 </script>

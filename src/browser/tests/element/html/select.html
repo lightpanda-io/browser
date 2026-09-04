@@ -1,18 +1,18 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<select id="select1">
+<select id="select1" autocomplete="off">
   <option value="val1">Option 1</option>
   <option value="val2" selected>Option 2</option>
   <option value="val3">Option 3</option>
 </select>
 
-<select id="select2">
+<select id="select2" autocomplete="off">
   <option value="a">A</option>
   <option value="b">B</option>
 </select>
 
-<select id="select3" disabled>
+<select id="select3" disabled autocomplete="off">
   <option value="x">X</option>
 </select>
 
@@ -127,7 +127,7 @@
   }
 </script>
 
-<select id="select_multi" multiple>
+<select id="select_multi" multiple autocomplete="off">
   <option value="opt1">Option 1</option>
   <option value="opt2" selected>Option 2</option>
   <option value="opt3">Option 3</option>

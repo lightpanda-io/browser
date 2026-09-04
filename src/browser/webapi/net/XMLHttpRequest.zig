@@ -597,12 +597,6 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
     }
 }
 
-fn httpHeaderCallback(transfer: *Transfer, header: http.Header) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
-    const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
-    try self._response_headers.append(self._arena, joined);
-}
-
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.req.ctx));
 
