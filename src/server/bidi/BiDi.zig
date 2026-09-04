@@ -39,7 +39,16 @@ const Allocator = std.mem.Allocator;
 const BiDi = @This();
 
 app: *App,
-conn: Link,
+
+// The websocket, when a client is connected. Null for an HTTP WebDriver
+// session (until it optionally connects via WebSocket)
+link: ?*Link,
+
+// The worker's mailbox, owned by the Worker and thus outliving the link.
+inbox: *Inbox,
+
+// WebDriver can be BiDi only, or HTTP WebDriver + BiDi or HTTP WebDriver only.
+mode: Mode,
 
 // Re-used arena for processing a message. Works because we strictly process
 // one message at a time.
@@ -79,20 +88,46 @@ const Subscription = struct {
     event: []const u8,
 };
 
+pub const Mode = union(enum) {
+    // Directly created via websocket upgrade, tied to the websocket's lifetime
+    bidi_only: void,
+
+    // created via HTTP, a websocket may or may not web associated with it (it
+    // can come and go), but the lifetime is explicit: either removed via HTTP
+    // (DELETE /session/:id) or by the HTTP reaper
+    http: *Server.Worker,
+};
+
+// What a worker is born from: a websocket upgrade (the session comes later
+// via session.new) or an HTTP session (a websocket may come later via
+// GET /session/{id}); never both.
+pub const Origin = union(enum) {
+    socket: posix.socket_t,
+    session: struct { id: [36]u8, worker: *Server.Worker },
+};
+
 const InputMessage = struct {
     id: ?u64 = null,
     method: ?[]const u8 = null,
 };
 
-pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, inbox: *Inbox, session_id: ?[36]u8) !void {
+pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
     const allocator = app.allocator;
     self.* = .{
         .app = app,
-        .conn = undefined,
+        .link = null,
+        .inbox = inbox,
+        .mode = switch (origin) {
+            .socket => .bidi_only,
+            .session => |session| .{ .http = session.worker },
+        },
         .browser = undefined,
         .user_context = undefined,
         .notification = undefined,
-        .session_id = session_id,
+        .session_id = switch (origin) {
+            .socket => null,
+            .session => |session| session.id,
+        },
         .node_registry = .init(allocator),
         .handles = .{ .allocator = allocator },
         .message_arena = std.heap.ArenaAllocator.init(allocator),
@@ -102,8 +137,11 @@ pub fn init(self: *BiDi, app: *App, socket: posix.socket_t, inbox: *Inbox, sessi
     try self.browser.init(app, .{});
     errdefer self.browser.deinit();
 
-    try self.conn.init(app, socket, .bidi, inbox);
-    errdefer self.conn.deinit();
+    switch (origin) {
+        .socket => |socket| self.link = try Link.create(app, socket, .bidi, inbox),
+        .session => {},
+    }
+    errdefer if (self.link) |l| l.destroy();
 
     self.notification = try Notification.init(allocator);
     errdefer self.notification.deinit();
@@ -129,9 +167,45 @@ pub fn deinit(self: *BiDi) void {
     self.node_registry.deinit();
     self.notification.deinit();
     self.browser.deinit();
-    self.conn.deinit();
+    // The loop let go of the link before we got here (Server.Worker.run)
+    if (self.link) |l| {
+        l.destroy();
+    }
     self.message_arena.deinit();
     self.session_arena.deinit();
+}
+
+// Worker thread, from the inbox: the loop is already reading from it.
+pub fn adoptLink(self: *BiDi, l: *Link) void {
+    if (self.link != null) {
+        // the loop only hands one over once it has seen the previous one
+        // released (Server.Worker.link is null)
+        lp.assert(false, "BiDi.adoptLink held", .{});
+        l.destroy();
+        return;
+    }
+    self.link = l;
+}
+
+// Worker thread. The link is gone (peer closed, or the loop dropped it).
+// Returns true when the worker is done with it: a bidi-only session dies
+// with its connection, an HTTP session just drops the link and waits
+// for the next one, or for DELETE / the idle reaper.
+pub fn onLinkGone(self: *BiDi) bool {
+    const worker = switch (self.mode) {
+        .bidi_only => return true,
+        .http => |worker| worker,
+    };
+    self.releaseLink(worker);
+    return false;
+}
+
+fn releaseLink(self: *BiDi, worker: *Server.Worker) void {
+    const l = self.link orelse return;
+    self.link = null;
+    // blocks until the loop has stopped reading from it
+    worker.releaseLink();
+    l.destroy();
 }
 
 pub fn replaceSession(self: *BiDi, id: []const u8) !void {
@@ -317,6 +391,10 @@ pub fn sendError(self: *BiDi, id: ?u64, code: []const u8, message: []const u8) !
     return self.sendJSON(.{ .type = "error", .id = id, .@"error" = code, .message = message });
 }
 
+// Without a link there's nobody to tell: an HTTP session between
+// connections drops events and late results (a navigate that completes
+// after the client went away).
 fn sendJSON(self: *BiDi, message: anytype) !void {
-    return self.conn.sendJSON(message, .{});
+    const l = self.link orelse return;
+    return l.sendJSON(message, .{});
 }

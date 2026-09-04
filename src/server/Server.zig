@@ -29,6 +29,7 @@ const BiDi = @import("bidi/BiDi.zig");
 
 const WS = @import("WS.zig");
 const http = @import("http.zig");
+const Link = @import("Link.zig");
 const Driver = @import("Driver.zig");
 const Inbox = @import("../Inbox.zig");
 
@@ -54,66 +55,6 @@ const FD_HEADROOM = 128;
 // rather than dozens, without starving the other connections.
 const WS_READ_BUDGET = 256 * 1024;
 
-// A websocket connection, this loop's side of Link.zig (the worker's side)
-const WebSocket = struct {
-    socket: posix.socket_t,
-    address: sys_net.IpAddress,
-    // threads `websockets` while live, the pool's free list otherwise
-    node: DoublyLinkedList.Node,
-    protocol: Driver.Protocol,
-    // The worker's mailbox, which is how the main loop communicates with the worker.
-    inbox: Inbox = .{},
-    // null until the worker attaches
-    driver: ?Driver = null,
-    // whether or not socket is in the poll set. Makes sure we don't double-remove
-    monitored: bool = false,
-
-    const Pool = struct {
-        slab: []WebSocket,
-        free: DoublyLinkedList,
-        live: usize, // acquired and not yet released
-
-        fn init(allocator: Allocator, capacity: usize) !Pool {
-            const slab = try allocator.alloc(WebSocket, capacity);
-            var free: DoublyLinkedList = .{};
-            for (slab) |*ws| {
-                ws.node = .{};
-                free.append(&ws.node);
-            }
-            return .{ .slab = slab, .free = free, .live = 0 };
-        }
-
-        fn deinit(self: *Pool, allocator: Allocator) void {
-            allocator.free(self.slab);
-        }
-
-        fn acquire(self: *Pool) !*WebSocket {
-            const node = self.free.popFirst() orelse return error.NoWebSocketSlot;
-            self.live += 1;
-            return @fieldParentPtr("node", node);
-        }
-
-        pub fn isFull(self: *const Pool) bool {
-            return self.live == self.slab.len;
-        }
-
-        fn release(self: *Pool, ws: *WebSocket) void {
-            self.live -= 1;
-            ws.node = .{};
-            self.free.append(&ws.node);
-        }
-    };
-};
-
-// Worker -> loop request, see worker_queue.
-const WorkerRequest = struct {
-    ws: *WebSocket,
-    op: union(enum) {
-        attach: Driver,
-        release: *std.Io.Event,
-    },
-};
-
 app: *App,
 io_engine: IOEngine,
 listener: posix.socket_t,
@@ -132,9 +73,22 @@ protocols: Protocols,
 http_connections: DoublyLinkedList,
 http_connection_pool: Connection.Pool,
 
-// Websocket connections, attached or not
-websockets: DoublyLinkedList,
-websocket_pool: WebSocket.Pool,
+// Live workers, attached or not
+workers: DoublyLinkedList,
+worker_pool: Worker.Pool,
+
+// HTTP sessions by id, what /session/{id} resolves. Sized to the pool at
+// init, so no allocation per request.
+sessions: std.AutoHashMapUnmanaged([36]u8, *Worker),
+
+// HTTP sessions with no link, ordered by deadline: every deadline is
+// now + session_timeout_ms, so appending keeps the order (the same trick
+// as http_connections), reaping pops the head and the wait timeout is a
+// head read.
+idle_sessions: DoublyLinkedList,
+
+// --session-timeout, see Worker.deadline
+session_timeout_ms: u64,
 
 // Worker communicates with the main loop through this queue, protected by the
 // mutex.
@@ -148,15 +102,20 @@ worker_drain: std.ArrayList(WorkerRequest),
 shutdown_begun: bool,
 
 // Will block on this until all workers are shutdown
-workers: lp.WaitGroup,
+worker_wg: lp.WaitGroup,
 
 // Dynamic responses (/metrics, ...) are built here. If they can't be written
 // immediately, it will be copied to the Connection's pending
 scratch: std.Io.Writer.Allocating,
 
-json_version_response: []const u8,
+// Request-scoped allocations (parsed bodies, ...), handed to handlers as
+// Request.arena and reset once the request is answered.
+request_arena: std.heap.ArenaAllocator,
+
 // ws://host:port/session/ — what POST /session advertises, the id goes on the end
 bidi_session_url: []const u8,
+
+json_version_response: []const u8,
 
 pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     const config = app.config;
@@ -226,8 +185,15 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
     var worker_drain: std.ArrayList(WorkerRequest) = try .initCapacity(allocator, request_capacity);
     errdefer worker_drain.deinit(allocator);
 
-    var websocket_pool = try WebSocket.Pool.init(allocator, config.maxConnections());
-    errdefer websocket_pool.deinit(allocator);
+    var worker_pool = try Worker.Pool.init(allocator, config.maxConnections());
+    errdefer worker_pool.deinit(allocator);
+
+    var sessions: std.AutoHashMapUnmanaged([36]u8, *Worker) = .empty;
+    if ((comptime lp.IS_TEST) or protocols.webdriver) {
+        // only used for http sessions
+        try sessions.ensureTotalCapacity(allocator, config.maxConnections());
+    }
+    errdefer sessions.deinit(allocator);
 
     const self = try allocator.create(Server);
     errdefer allocator.destroy(self);
@@ -238,19 +204,23 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .listener = listener,
         .listener_paused = false,
         .scratch = scratch,
+        .request_arena = std.heap.ArenaAllocator.init(allocator),
         .protocols = protocols,
         .http_connections = .{},
         .http_connection_pool = http_connection_pool,
         .json_version_response = json_version_response,
         .bidi_session_url = bidi_session_url,
         .max_connections = max_connections,
-        .websockets = .{},
-        .websocket_pool = websocket_pool,
+        .workers = .{},
+        .worker_pool = worker_pool,
+        .sessions = sessions,
+        .idle_sessions = .{},
+        .session_timeout_ms = config.httpSessionTimeout(),
         .worker_mutex = .init,
         .worker_queue = worker_queue,
         .worker_drain = worker_drain,
         .shutdown_begun = false,
-        .workers = .{},
+        .worker_wg = .{},
     };
     return self;
 }
@@ -258,14 +228,16 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
 pub fn deinit(self: *Server) void {
     const allocator = self.app.allocator;
 
-    self.workers.wait();
-    lp.assert(self.websockets.first == null, "Server.deinit websockets", .{});
+    self.worker_wg.wait();
+    lp.assert(self.workers.first == null, "Server.deinit workers", .{});
     while (self.http_connections.first) |node| {
         http.disconnect(self, @fieldParentPtr("node", node));
     }
 
     self.scratch.deinit();
-    self.websocket_pool.deinit(allocator);
+    self.request_arena.deinit();
+    self.worker_pool.deinit(allocator);
+    self.sessions.deinit(allocator);
     self.worker_queue.deinit(allocator);
     self.worker_drain.deinit(allocator);
     self.http_connection_pool.deinit();
@@ -292,14 +264,9 @@ pub fn run(self: *Server) void {
 }
 
 fn runOnce(self: *Server) bool {
-    const deadline = blk: {
-        // self.http_connections is ordered by deadline
-        const node = self.http_connections.first orelse break :blk null;
-        const conn: *Connection = @fieldParentPtr("node", node);
-        break :blk conn.deadline -| lp.datetime.milliTimestamp(.boot);
-    };
+    const timeout: ?u64 = if (self.nextDeadline()) |deadline| deadline -| lp.datetime.milliTimestamp(.boot) else null;
 
-    var events = self.io_engine.wait(deadline);
+    var events = self.io_engine.wait(timeout);
     const now = lp.datetime.milliTimestamp(.boot);
 
     var pending_accept = false;
@@ -310,7 +277,7 @@ fn runOnce(self: *Server) bool {
             .accept => pending_accept = true,
             .read_write => |rw| switch (rw.target) {
                 .http => |conn| http.processEvent(self, conn, rw, now),
-                .ws => |ws| self.processWebSocketEvent(ws, rw),
+                .worker => |worker| self.processWebSocketEvent(worker, rw),
             },
             .signal => pending_signal = true,
             .shutdown => pending_shutdown = true,
@@ -319,7 +286,7 @@ fn runOnce(self: *Server) bool {
 
     // signal first: a worker that released frees a slot the accept can use.
     if (pending_signal) {
-        self.drainWorkerQueue();
+        self.drainWorkerQueue(now);
     }
     if (pending_accept) {
         self.accept(now) catch |err| log.err(.serve, "accept", .{ .err = err });
@@ -341,8 +308,9 @@ fn runOnce(self: *Server) bool {
         lp.metrics.serve_http_evictions.incr();
         http.disconnect(self, conn);
     }
+    self.reapSessions(now);
 
-    if (self.shutdown_begun and self.websocket_pool.live == 0) {
+    if (self.shutdown_begun and self.worker_pool.live == 0) {
         return false;
     }
     return true;
@@ -424,7 +392,7 @@ fn setSocketOption(socket: posix.socket_t, level: i32, option: u32, value: anyty
 }
 
 fn liveConnections(self: *const Server) usize {
-    return self.http_connection_pool.live + self.websocket_pool.live;
+    return self.http_connection_pool.live + self.worker_pool.live;
 }
 
 // We want to accept a connection, but have reached the connection limit. See
@@ -451,32 +419,37 @@ fn saturated(self: *Server) !void {
     self.listener_paused = true;
 }
 
-fn processWebSocketEvent(self: *Server, ws: *WebSocket, rw: IOEvent.ReadWrite) void {
-    if (ws.monitored == false) {
-        // only attachWorker puts a websocket in the poll set, and only once
-        // the driver is set; an unmonitored slot has no business here.
+fn processWebSocketEvent(self: *Server, worker: *Worker, rw: IOEvent.ReadWrite) void {
+    if (worker.monitored == false) {
+        // only monitorLink puts a websocket in the poll set; an unmonitored
+        // slot has no business here.
         return;
     }
 
-    const driver = ws.driver orelse {
-        // the socket is only monitered after an attach, which sets the driver
-        lp.assert(false, "Server.processWebSocketEvent driver", .{});
+    const link = worker.link orelse {
+        lp.assert(false, "Server.processWebSocketEvent link", .{});
         unreachable;
     };
 
     if (rw.readable) {
-        const keep = driver.onReadable(WS_READ_BUDGET) catch |err| switch (err) {
-            error.Closed => return self.dropWebSocket(ws, null, true), // peer EOF
+        const read = link.readAvailable(WS_READ_BUDGET) catch |err| switch (err) {
+            error.Closed => return self.dropWebSocket(worker, null, true), // peer EOF
             // read error or fatal framing error: the worker doesn't know, so notify
-            else => return self.dropWebSocket(ws, err, true),
+            else => return self.dropWebSocket(worker, err, true),
         };
-        if (keep == false) {
+        if (read.pushed) {
+            // before the attach there's nobody to wake; the first tick drains
+            if (worker.driver) |driver| {
+                driver.wakeup();
+            }
+        }
+        if (read.keep == false) {
             // Close frame consumed: the framer already pushed .close, the
-            // worker will reply and disconnect itself.
-            return self.dropWebSocket(ws, null, false);
+            // worker will reply and let go of the link itself.
+            return self.dropWebSocket(worker, null, false);
         }
     } else if (rw.hangup) {
-        return self.dropWebSocket(ws, null, true);
+        return self.dropWebSocket(worker, null, true);
     }
 }
 
@@ -493,58 +466,131 @@ pub fn slotFreed(self: *Server) void {
     }
 }
 
-// The 101 has been written: take the fd off the http Connection (the http
-// side recycles it) into a websocket slot/
-pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Protocol, session_id: ?[36]u8) void {
-    // it'll get added back once the Worker is started and able to process messages
-    self.io_engine.remove(conn.socket);
-    self.http_connections.remove(&conn.node);
+// An HTTP connection is being upgraded to a WebSocket connection for use with
+// a new Worker. CDP goes this route as do some WebDriver libraries.
+pub fn upgradeConnection(self: *Server, conn: *Connection, protocol: Driver.Protocol) void {
+    self.detachConnection(conn); // removes from the loop, will get re-added
+    _ = self.spawnWorker(protocol, .{ .socket = conn.socket }) catch |err| {
+        log.err(.serve, "worker spawn", .{ .err = err });
+        sys_net.close(conn.socket);
+    };
+}
 
-    const ws = self.websocket_pool.acquire() catch |err| {
-        if (comptime lp.IS_DEBUG) {
-            // should not be reachable. In the HTTP upgrade processing, we
-            // checked isFull()
-            unreachable;
-        }
+// An HTTP connection is being upgraded to a WebSocket connection for use with
+// a *EXISTING* Worker. Some WebDrivers (e.g. Selenium) go this route.
+pub fn attachConnection(self: *Server, worker: *Worker, conn: *Connection) void {
+    self.detachConnection(conn); // removes from the loop, will get re-added
 
-        // but, let's be safe..
-        log.err(.serve, "websocket slot", .{ .err = err });
+    lp.assert(worker.link == null, "Server.deliverLink held", .{});
+    const link = Link.create(self.app, conn.socket, worker.protocol, &worker.inbox) catch |err| {
+        log.err(.serve, "link create", .{ .err = err });
         sys_net.close(conn.socket);
         return;
     };
 
-    ws.* = .{
-        .node = .{},
-        .socket = conn.socket,
-        .address = conn.address,
-        .protocol = protocol,
+    // precedes anything read off the socket
+    self.push(worker, .{ .link = link });
+    worker.link = link;
+    self.clearIdle(worker);
+    self.monitorLink(worker);
+}
+
+fn detachConnection(self: *Server, conn: *Connection) void {
+    self.io_engine.remove(conn.socket);
+    self.http_connections.remove(&conn.node);
+}
+
+// Takes a slot and starts the thread.
+pub fn spawnWorker(self: *Server, protocol: Driver.Protocol, origin: Worker.Origin) !*Worker {
+    const worker = self.worker_pool.acquire() catch |err| {
+        if (comptime lp.IS_DEBUG) {
+            // should not be reachable, callers check isFull()
+            unreachable;
+        }
+        // but, let's be safe..
+        return err;
     };
-    self.websockets.append(&ws.node);
+
+    worker.* = .{
+        .node = .{},
+        .server = self,
+        .protocol = protocol,
+        .session_id = switch (origin) {
+            .socket => null,
+            .session => |id| id,
+        },
+    };
+    self.workers.append(&worker.node);
+    if (origin == .session) {
+        lp.assert(self.protocols.webdriver, "spawnWorker session without webdriver", .{});
+        // because we sized self.sessions to config.maxConnections()
+        self.sessions.putAssumeCapacityNoClobber(origin.session, worker);
+    }
 
     lp.metrics.serve_connections.incr(protocol);
     lp.metrics.serve_active_connections.incr(protocol);
 
-    self.workers.start();
-    const thread = std.Thread.spawn(.{}, Worker.start, .{ self, ws, session_id }) catch |err| {
+    self.worker_wg.start();
+    const thread = std.Thread.spawn(.{}, Worker.start, .{ worker, origin }) catch |err| {
         // cleanup what we just did prior to spawning.
-        log.err(.serve, "worker spawn", .{ .err = err });
-        self.workers.finish();
-        sys_net.close(ws.socket);
-        self.releaseWebSocket(ws);
-        return;
+        self.worker_wg.finish();
+        self.releaseWorkerSlot(worker);
+        return err;
     };
     thread.detach();
+    return worker;
 }
 
-fn drainWorkerQueue(self: *Server) void {
+// Find an HTTP session by ID
+pub fn findSession(self: *Server, id: *const [36]u8) ?*Worker {
+    return self.sessions.get(id.*);
+}
+
+// Ends an HTTP session: DELETE /session/{id}, or the idle reaper.
+pub fn quitSession(self: *Server, worker: *Worker) void {
+    self.forgetSession(worker);
+    self.push(worker, .quit);
+    if (worker.driver) |driver| {
+        // the message is in the inbox before the flag is observed
+        driver.browser.env.requestTerminate();
+    } else {
+        // What if there's no driver? It means it's still starting up or that
+        // we haven't processed it's attach message yet. Either way, we've
+        // queued the .quit message. Attach will send a .wakeup() so that it
+        // gets picked up promptly.
+    }
+}
+
+// Into the worker's mailbox.
+fn push(self: *Server, worker: *Worker, payload: Inbox.Message.Payload) void {
+    const arena = self.app.arena_pool.acquire(.tiny, "worker push") catch |err| switch (err) {
+        error.OutOfMemory => @panic("OOM"),
+    };
+    worker.inbox.push(arena, payload);
+    if (worker.driver) |driver| {
+        driver.wakeup();
+    }
+}
+
+fn monitorLink(self: *Server, worker: *Worker) void {
+    self.io_engine.monitorWebSocket(worker) catch |err| {
+        log.err(.serve, "ws monitor", .{ .err = err });
+        // never monitored, so this only tells the worker
+        return self.dropWebSocket(worker, err, true);
+    };
+    worker.monitored = true;
+}
+
+fn drainWorkerQueue(self: *Server, now: u64) void {
     self.worker_mutex.lockUncancelable(lp.io);
     std.mem.swap(std.ArrayList(WorkerRequest), &self.worker_queue, &self.worker_drain);
     self.worker_mutex.unlock(lp.io);
 
     for (self.worker_drain.items) |request| {
         switch (request.op) {
-            .attach => |driver| self.attachWorker(request.ws, driver),
-            .release => |notify| self.releaseWorker(request.ws, notify),
+            .attach => |attach| self.attachWorker(request.worker, attach.driver, attach.link, now),
+            .release_link => |notify| self.releaseLink(request.worker, notify, now),
+            .release => |notify| self.releaseWorker(request.worker, notify),
         }
     }
     self.worker_drain.clearRetainingCapacity();
@@ -553,61 +599,125 @@ fn drainWorkerQueue(self: *Server) void {
 // The Worker is spawned, the Driver is setup. It has signaled us that it's
 // ready to receive messages and given us the driver to associate to the
 // connection.
-fn attachWorker(self: *Server, ws: *WebSocket, driver: Driver) void {
+fn attachWorker(self: *Server, worker: *Worker, driver: Driver, link: ?*Link, now: u64) void {
     if (comptime lp.IS_DEBUG) {
         // a worker attaches exactly once
-        lp.assert(ws.driver == null, "Server.attachWorker attached", .{});
+        lp.assert(worker.driver == null, "Server.attachWorker attached", .{});
     }
-    ws.driver = driver;
+    worker.driver = driver;
+
+    if (worker.inbox.isEmpty() == false) {
+        // we might have pushed message before we had the driver, so we weren't
+        // able to wakeup the worker.
+        driver.wakeup();
+    }
+
+    // The worker's own link (cdp, bidi-only); an HTTP session's may already
+    // be here, delivered while the worker was starting up.
+    if (link) |l| {
+        lp.assert(worker.link == null, "Server.attachWorker link", .{});
+        worker.link = l;
+        self.monitorLink(worker);
+    }
+
     if (self.shutdown_begun) {
         driver.shutdown();
+        if (worker.link) |l| {
+            l.shutdown();
+        }
     }
-    self.io_engine.monitorWebSocket(ws) catch |err| {
-        log.err(.serve, "ws monitor", .{ .err = err });
-        // never monitored, so this only tells the worker
-        return self.dropWebSocket(ws, err, true);
-    };
-    ws.monitored = true;
+
+    if (worker.link == null) {
+        // This is an HTTP session, we need to watch it and reap it if it
+        // stays idle too long.
+        self.markIdle(worker, now);
+    }
 }
 
-fn releaseWorker(self: *Server, ws: *WebSocket, notify: *std.Io.Event) void {
-    if (ws.monitored) {
-        ws.monitored = false;
-        self.io_engine.remove(ws.socket);
+// A HTTP session without a link: the reaper's clock starts.
+fn markIdle(self: *Server, worker: *Worker, now: u64) void {
+    if (worker.session_id == null) {
+        // ending already (or never a HTTP session)
+        return;
     }
-    self.releaseWebSocket(ws);
+    lp.assert(worker.deadline == null, "Server.markIdle idle", .{});
+    worker.deadline = now + self.session_timeout_ms;
+    self.idle_sessions.append(&worker.idle_node);
+}
+
+fn clearIdle(self: *Server, worker: *Worker) void {
+    if (worker.deadline != null) {
+        worker.deadline = null;
+        self.idle_sessions.remove(&worker.idle_node);
+    }
+}
+
+// The session id stops resolving; the worker may still be running.
+fn forgetSession(self: *Server, worker: *Worker) void {
+    self.clearIdle(worker);
+    if (worker.session_id) |id| {
+        worker.session_id = null;
+        _ = self.sessions.remove(id);
+    }
+}
+
+fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
+    self.unmonitorLink(worker);
+    worker.link = null;
+    self.markIdle(worker, now);
+    // The worker is free to destroy the link from here.
+    notify.set(lp.io);
+}
+
+fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event) void {
+    self.unmonitorLink(worker);
+    worker.link = null;
+    self.releaseWorkerSlot(worker);
     // The worker is free to deinit its driver and close the fd from here.
     notify.set(lp.io);
 }
 
+fn unmonitorLink(self: *Server, worker: *Worker) void {
+    if (worker.monitored) {
+        worker.monitored = false;
+        self.io_engine.remove(worker.link.?.socket);
+    }
+}
+
 // Frees the slot once the loop is done with the fd. The fd itself is closed
 // by whoever owns the end of its life: the worker after its driver's deinit,
-// or upgradeConnection when there never was a worker.
-fn releaseWebSocket(self: *Server, ws: *WebSocket) void {
-    self.websockets.remove(&ws.node);
-    ws.driver = null;
-    ws.inbox.deinit();
-    lp.metrics.serve_active_connections.decr(ws.protocol);
-    self.websocket_pool.release(ws);
+// or the inbox's deinit for a link the worker never adopted.
+fn releaseWorkerSlot(self: *Server, worker: *Worker) void {
+    // still registered when the worker ended on its own (session.end, a
+    // failed init)
+    self.forgetSession(worker);
+    self.workers.remove(&worker.node);
+    worker.driver = null;
+    worker.inbox.deinit();
+    lp.metrics.serve_active_connections.decr(worker.protocol);
+    self.worker_pool.release(worker);
     self.slotFreed();
 }
 
 // unlike close above, this stops the polling on the socket and, optionally,
-// informs the Worker that it should shut down. Ultimately, when it does shutdown
-// releaseWebSocket above will be called.
-fn dropWebSocket(self: *Server, ws: *WebSocket, err: ?anyerror, notify: bool) void {
-    if (ws.monitored) {
-        // only turned on in attachWorker, so it'll never be turned on again
-        ws.monitored = false;
-        self.io_engine.remove(ws.socket);
-    }
+// informs the Worker that it should let go of the link. Ultimately, when it
+// does, releaseLink or releaseWorker above will be called.
+fn dropWebSocket(self: *Server, worker: *Worker, err: ?anyerror, notify: bool) void {
+    // only turned on in monitorLink, so it'll never be turned on again
+    // until the worker has released this link
+    self.unmonitorLink(worker);
 
     if (notify) {
         // Some closes the drivers knows about, some it doesn't. But the driver
         // is always the final authority on cleanup, so we always inform it of
         // the close.
-        if (ws.driver) |driver| {
-            driver.onLinkDisconnect(err);
+        self.push(worker, .{ .disconnect = err });
+        if (worker.driver) |driver| {
+            if (driver.connectionScoped()) {
+                // nobody is left to hear the result of whatever is running;
+                // the message is in the inbox before the flag is observed
+                driver.browser.env.requestTerminate();
+            }
         }
     }
 }
@@ -626,14 +736,47 @@ fn beginShutdown(self: *Server) void {
         http.disconnect(self, @fieldParentPtr("node", node));
     }
 
-    var node = self.websockets.first;
+    var node = self.workers.first;
     while (node) |n| : (node = n.next) {
-        const ws: *WebSocket = @fieldParentPtr("node", n);
+        const worker: *Worker = @fieldParentPtr("node", n);
         // not attached yet: attachWorker terminates it on arrival
-        if (ws.driver) |driver| {
-            driver.shutdown();
+        const driver = worker.driver orelse continue;
+        driver.shutdown();
+        if (worker.link) |link| {
+            link.shutdown();
         }
     }
+}
+
+// HTTP sessions nobody has talked to for --session-timeout.
+fn reapSessions(self: *Server, now: u64) void {
+    while (self.idle_sessions.first) |node| {
+        const worker: *Worker = @fieldParentPtr("idle_node", node);
+        if (worker.deadline.? > now) {
+            // ordered by deadline: none after this one is due either
+            return;
+        }
+        log.info(.serve, "session timeout", .{ .id = &worker.session_id.? });
+        lp.metrics.serve_session_timeouts.incr();
+        self.quitSession(worker);
+    }
+}
+
+// The earliest of the http connections' idle deadline and the idle
+// sessions' reap deadline; null when there's nothing to wait for. Both
+// lists are ordered, so this is two head reads.
+fn nextDeadline(self: *const Server) ?u64 {
+    var next: ?u64 = null;
+    if (self.http_connections.first) |node| {
+        const conn: *Connection = @fieldParentPtr("node", node);
+        next = conn.deadline;
+    }
+    if (self.idle_sessions.first) |node| {
+        const worker: *Worker = @fieldParentPtr("idle_node", node);
+        const deadline = worker.deadline.?;
+        next = @min(next orelse deadline, deadline);
+    }
+    return next;
 }
 
 fn fdBudget(config: *const Config) usize {
@@ -651,76 +794,6 @@ fn fdBudget(config: *const Config) usize {
     return @intCast(@max(budget, 8));
 }
 
-fn signal(self: *Server) void {
-    self.io_engine.signal();
-}
-
-// Stateless, but helps to group things that run on the Worker thread
-const Worker = struct {
-    fn start(server: *Server, ws: *WebSocket, session_id: ?[36]u8) void {
-        defer server.workers.finish();
-        Worker._start(server, ws, session_id) catch |err| {
-            log.err(.serve, "worker init", .{ .err = err });
-            Worker.releaseConnection(server, ws);
-        };
-    }
-
-    fn _start(server: *Server, ws: *WebSocket, session_id: ?[36]u8) !void {
-        const allocator = server.app.allocator;
-        // The socket outlives the slot: the driver's deinit below still
-        // writes to it (inspector detach notifications), so it closes last,
-        // after the loop has released us. `ws` itself must not be touched
-        // after releaseConnection returns.
-        const socket = ws.socket;
-        defer sys_net.close(socket);
-        switch (ws.protocol) {
-            .cdp => {
-                const cdp = try allocator.create(CDP);
-                defer allocator.destroy(cdp);
-                try cdp.init(server.app, ws.socket, &ws.inbox);
-                defer cdp.deinit();
-                Worker.run(server, ws, .init(.{ .cdp = cdp }, &ws.inbox));
-            },
-            .bidi => {
-                const bidi = try allocator.create(BiDi);
-                defer allocator.destroy(bidi);
-                try bidi.init(server.app, ws.socket, &ws.inbox, session_id);
-                defer bidi.deinit();
-                Worker.run(server, ws, .init(.{ .bidi = bidi }, &ws.inbox));
-            },
-        }
-    }
-
-    fn run(server: *Server, ws: *WebSocket, driver: Driver) void {
-        Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .attach = driver } });
-        driver.run();
-        // Release first: until the loop has let go of this websocket it can
-        // still drop the link, and onLinkDisconnect requests a terminate. Doing
-        // it the other way round left that request landing after the cancel,
-        // so the teardown below ran with a pending terminate -- which is the
-        // one thing the cancel is here to prevent (cdp.deinit() and
-        // bidi.deinit() in our caller need V8 in a usable state).
-        Worker.releaseConnection(server, ws);
-        driver.browser.env.cancelTerminate();
-    }
-
-    // Worker -> loop: synchronous release. Blocks until the loop has dropped the
-    // fd and won't call feed() again, so the caller can safely deinit the driver
-    // (which frees the reader).
-    fn releaseConnection(server: *Server, ws: *WebSocket) void {
-        var notify: std.Io.Event = .unset;
-        Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .release = &notify } });
-        notify.waitUncancelable(lp.io);
-    }
-
-    fn notifyLoopOfChange(server: *Server, request: WorkerRequest) void {
-        server.worker_mutex.lockUncancelable(lp.io);
-        server.worker_queue.appendAssumeCapacity(request);
-        server.worker_mutex.unlock(lp.io);
-        server.io_engine.signal();
-    }
-};
-
 const IOEngine = switch (builtin.os.tag) {
     .linux => EPoll,
     .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .dragonfly, .openbsd => KQueue,
@@ -736,7 +809,7 @@ pub const IOEvent = union(enum) {
 
     pub const ReadWrite = struct {
         target: union(enum) {
-            ws: *WebSocket,
+            worker: *Worker,
             http: *Connection,
         },
         hangup: bool,
@@ -826,7 +899,7 @@ const EPoll = struct {
     // surfaces as a write error instead.
     const WRITE_EVENTS = linux.EPOLL.OUT;
 
-    // Poll data carries the owner: an http Connection as-is, an WebSocket with
+    // Poll data carries the owner: an http Connection as-is, a Worker with
     // the low bit set (both are word-aligned, so the bit is free).
     const WS_TAG: usize = 1;
 
@@ -838,12 +911,12 @@ const EPoll = struct {
         return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, conn.socket, &event);
     }
 
-    fn monitorWebSocket(self: *const EPoll, ws: *WebSocket) !void {
+    fn monitorWebSocket(self: *const EPoll, worker: *Worker) !void {
         var event = linux.epoll_event{
-            .data = .{ .ptr = @intFromPtr(ws) | WS_TAG },
+            .data = .{ .ptr = @intFromPtr(worker) | WS_TAG },
             .events = READ_EVENTS,
         };
-        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, ws.socket, &event);
+        return sys_net.epoll_ctl(self.fd, linux.EPOLL.CTL_ADD, worker.link.?.socket, &event);
     }
 
     pub fn waitWritable(self: *const EPoll, conn: *Connection) !void {
@@ -901,7 +974,7 @@ const EPoll = struct {
                         .target = if (nptr & WS_TAG == 0)
                             .{ .http = @ptrFromInt(nptr) }
                         else
-                            .{ .ws = @ptrFromInt(nptr & ~WS_TAG) },
+                            .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
                         .readable = flags & linux.EPOLL.IN != 0,
                         .writable = flags & linux.EPOLL.OUT != 0,
                         .hangup = flags & (linux.EPOLL.RDHUP | linux.EPOLL.HUP | linux.EPOLL.ERR) != 0,
@@ -921,7 +994,7 @@ const KQueue = struct {
     const EVFILT = std.c.EVFILT;
     const Kevent = std.c.Kevent;
 
-    // Poll data carries the owner: an http Connection as-is, an WebSocket with
+    // Poll data carries the owner: an http Connection as-is, a Worker with
     // the low bit set (both are word-aligned, so the bit is free).
     const WS_TAG: usize = 1;
 
@@ -977,8 +1050,8 @@ const KQueue = struct {
         return self.monitor(conn.socket, EVFILT.READ, @intFromPtr(conn));
     }
 
-    fn monitorWebSocket(self: *const KQueue, ws: *WebSocket) !void {
-        return self.monitor(ws.socket, EVFILT.READ, @intFromPtr(ws) | WS_TAG);
+    fn monitorWebSocket(self: *const KQueue, worker: *Worker) !void {
+        return self.monitor(worker.link.?.socket, EVFILT.READ, @intFromPtr(worker) | WS_TAG);
     }
 
     // A socket only ever has one of the two filters registered, so flipping is
@@ -1088,7 +1161,7 @@ const KQueue = struct {
                             .target = if (nptr & WS_TAG == 0)
                                 .{ .http = @ptrFromInt(nptr) }
                             else
-                                .{ .ws = @ptrFromInt(nptr & ~WS_TAG) },
+                                .{ .worker = @ptrFromInt(nptr & ~WS_TAG) },
                             .readable = event.filter == EVFILT.READ,
                             .writable = event.filter == EVFILT.WRITE,
                             // EV_EOF on a read filter can still come with buffered
@@ -1099,6 +1172,177 @@ const KQueue = struct {
                 },
             }
         }
+    };
+};
+
+// One thread driving a Browser. Once the thread spawns, this will get
+// associated with a Driver (CDP or WebDriver) and optionally a Link which is
+// the Worker's side of the WebSocket connection. A worker can be Linkless, in
+// the case of an HTTP Session, though that Link could be attached at some point
+// in the future.
+pub const Worker = struct {
+    server: *Server,
+    // threads `workers` while live, the pool's free list otherwise
+    node: DoublyLinkedList.Node,
+    protocol: Driver.Protocol,
+
+    // The worker's mailbox, how the loop talks to it. Alive from spawn, so
+    // the loop can push before the worker has attached (it drains on its
+    // first tick); deinit'd with the slot, after the worker released it.
+    inbox: Inbox = .{},
+
+    // null until the worker thread attaches
+    driver: ?Driver = null,
+
+    // The WebSocket connection, null for HTTP sessions (which can be upgraded
+    // in which case the link is set)
+    link: ?*Link = null,
+
+    // whether link's socket is in the poll set. Makes sure we don't double-remove
+    monitored: bool = false,
+
+    // HTTP WebDriver session id, null for cdp and bidi-only workers.
+    session_id: ?[36]u8 = null,
+
+    // A HTTP session without a link is reaped at this time, and threads
+    // `idle_sessions` until then. Null while a link is attached (TCP
+    // keepalive covers a dead peer then).
+    deadline: ?u64 = null,
+    idle_node: DoublyLinkedList.Node = .{},
+
+    const Pool = struct {
+        slab: []Worker,
+        free: DoublyLinkedList,
+        live: usize, // acquired and not yet released
+
+        fn init(allocator: Allocator, capacity: usize) !Pool {
+            const slab = try allocator.alloc(Worker, capacity);
+            var free: DoublyLinkedList = .{};
+            for (slab) |*worker| {
+                worker.node = .{};
+                free.append(&worker.node);
+            }
+            return .{ .slab = slab, .free = free, .live = 0 };
+        }
+
+        fn deinit(self: *Pool, allocator: Allocator) void {
+            allocator.free(self.slab);
+        }
+
+        fn acquire(self: *Pool) !*Worker {
+            const node = self.free.popFirst() orelse return error.NoWorkerSlot;
+            self.live += 1;
+            return @fieldParentPtr("node", node);
+        }
+
+        pub fn isFull(self: *const Pool) bool {
+            return self.live == self.slab.len;
+        }
+
+        fn release(self: *Pool, worker: *Worker) void {
+            self.live -= 1;
+            worker.node = .{};
+            self.free.append(&worker.node);
+        }
+    };
+
+    // What a worker is born from: the upgraded socket, or an HTTP session
+    // whose websocket, if any, comes later (see attachConnection).
+    pub const Origin = union(enum) {
+        socket: posix.socket_t,
+        session: [36]u8,
+    };
+
+    // -- Worker thread from here down --
+
+    // The origin travels as an argument: the loop owns session_id and may
+    // clear it while the thread starts up.
+    fn start(self: *Worker, origin: Origin) void {
+        defer self.server.worker_wg.finish();
+        self._start(origin) catch |err| {
+            log.err(.serve, "worker init", .{ .err = err });
+            self.releaseConnection();
+        };
+    }
+
+    fn _start(self: *Worker, origin: Origin) !void {
+        const server = self.server;
+        const allocator = server.app.allocator;
+        switch (self.protocol) {
+            .cdp => {
+                // only WebDriver has HTTP sessions
+                const socket = switch (origin) {
+                    .socket => |socket| socket,
+                    .session => return error.NoSocket,
+                };
+                const cdp = try allocator.create(CDP);
+                defer allocator.destroy(cdp);
+                try cdp.init(server.app, socket, &self.inbox);
+                defer cdp.deinit();
+                self.run(.init(.{ .cdp = cdp }, &self.inbox), &cdp.link);
+            },
+            .bidi => {
+                const bidi = try allocator.create(BiDi);
+                defer allocator.destroy(bidi);
+                try bidi.init(server.app, &self.inbox, switch (origin) {
+                    .socket => |socket| .{ .socket = socket },
+                    .session => |id| .{ .session = .{ .id = id, .worker = self } },
+                });
+                defer bidi.deinit();
+                self.run(.init(.{ .bidi = bidi }, &self.inbox), bidi.link);
+            },
+        }
+    }
+
+    fn run(self: *Worker, driver: Driver, link: ?*Link) void {
+        self.notifyLoop(.{ .attach = .{ .driver = driver, .link = link } });
+        driver.run();
+        // Release first: until the loop has let go of this worker it can
+        // still drop the link, and dropWebSocket requests a terminate. Doing
+        // it the other way round left that request landing after the cancel,
+        // so the teardown below ran with a pending terminate -- which is the
+        // one thing the cancel is here to prevent (cdp.deinit() and
+        // bidi.deinit() in our caller need V8 in a usable state).
+        self.releaseConnection();
+        driver.browser.env.cancelTerminate();
+    }
+
+    // Worker -> loop: synchronous release. Blocks until the loop has dropped the
+    // fd and won't read it again, so the caller can safely deinit the driver
+    // (which frees the link).
+    fn releaseConnection(self: *Worker) void {
+        var notify: std.Io.Event = .unset;
+        self.notifyLoop(.{ .release = &notify });
+        notify.waitUncancelable(lp.io);
+    }
+
+    // Worker -> loop: the worker is dropping its link but carrying on
+    // (a HTTP session whose BiDi client went away). Blocks until the
+    // loop has stopped reading from it, so the caller can destroy it.
+    pub fn releaseLink(self: *Worker) void {
+        var notify: std.Io.Event = .unset;
+        self.notifyLoop(.{ .release_link = &notify });
+        notify.waitUncancelable(lp.io);
+    }
+
+    fn notifyLoop(self: *Worker, op: WorkerRequest.Op) void {
+        const server = self.server;
+        server.worker_mutex.lockUncancelable(lp.io);
+        server.worker_queue.appendAssumeCapacity(.{ .worker = self, .op = op });
+        server.worker_mutex.unlock(lp.io);
+        server.io_engine.signal();
+    }
+};
+
+// Worker -> loop request, see worker_queue.
+const WorkerRequest = struct {
+    op: Op,
+    worker: *Worker,
+
+    const Op = union(enum) {
+        release: *std.Io.Event,
+        release_link: *std.Io.Event,
+        attach: struct { driver: Driver, link: ?*Link },
     };
 };
 
@@ -1470,43 +1714,16 @@ test "server: bidi browsingContext" {
     try assertBidiMessage(&c, .{ .type = "success", .id = 9, .result = .{ .contexts = .{} } });
 }
 
-test "server: classic session bootstrap" {
-    // What Selenium does before it speaks BiDi: a classic POST /session
+test "server: HTTP session bootstrap" {
+    // What Selenium does before it speaks BiDi: a POST /session
     // that hands back the websocket URL, then a DELETE on quit.
-    const session_id = blk: {
-        var c = try createTestClient();
-        defer c.deinit();
+    const session_id = try createHTTPSession("{\"capabilities\":{\"firstMatch\":[{}],\"alwaysMatch\":{\"browserName\":\"firefox\",\"webSocketUrl\":true}}}", true);
 
-        const body = "{\"capabilities\":{\"firstMatch\":[{}],\"alwaysMatch\":{\"browserName\":\"firefox\",\"webSocketUrl\":true}}}";
-        const res = try c.httpRequest(std.fmt.comptimePrint("POST /session HTTP/1.1\r\n" ++
-            "Content-Type: application/json;charset=UTF-8\r\n" ++
-            "Content-Length: {d}\r\n\r\n" ++
-            "{s}", .{ body.len, body }));
-        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
-
-        const json = res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
-        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-        defer parsed.deinit();
-
-        const value = parsed.value.object.get("value").?.object;
-        const id = value.get("sessionId").?.string;
-        try testing.expectEqual(36, id.len);
-
-        const capabilities = value.get("capabilities").?.object;
-        try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
-        try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
-        const ws_url = capabilities.get("webSocketUrl").?.string;
-        try testing.expectEqual("ws://127.0.0.1:9583/session/", ws_url[0 .. ws_url.len - 36]);
-        try testing.expectEqual(id, ws_url[ws_url.len - 36 ..]);
-
-        break :blk id[0..36].*;
-    };
-
+    var c = try createTestClient();
+    defer c.deinit();
     {
         // The session already exists on the advertised URL: no session.new
         // needed (or possible), everything else works as usual.
-        var c = try createTestClient();
-        defer c.deinit();
         var path_buf: [64]u8 = undefined;
         try c.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
 
@@ -1520,31 +1737,127 @@ test "server: classic session bootstrap" {
         try assertBidiMessage(&c, .{ .type = "success", .id = 3, .result = .{ .contexts = .{} } });
     }
 
+    // one websocket per session
     {
+        var c2 = try createTestClient();
+        defer c2.deinit();
+        var path_buf: [64]u8 = undefined;
+        const res = try c2.upgradeRequest(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try testing.expectEqual("HTTP/1.1 409 \r\nConnection: Close\r\nContent-Length: 25\r\n\r\nSession already connected", res);
+    }
+
+    try deleteHTTPSession(&session_id, true);
+
+    // ending the session closes the websocket
+    {
+        const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+        defer if (msg.cleanup_fragment) c.reader.cleanup();
+        try testing.expectEqual(.close, msg.type);
+    }
+
+    // and it's gone
+    try deleteHTTPSession(&session_id, false);
+    {
+        var c2 = try createTestClient();
+        defer c2.deinit();
+        var path_buf: [64]u8 = undefined;
+        const res = try c2.upgradeRequest(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try testing.expectEqual("HTTP/1.1 404 \r\nConnection: Close\r\nContent-Length: 9\r\n\r\nNot found", res);
+    }
+}
+
+test "server: HTTP session outlives its websocket" {
+    // Without webSocketUrl the session is driven over HTTP alone; asking for
+    // it later still works, and closing the websocket doesn't end the session.
+    const session_id = try createHTTPSession("{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"chrome\"}}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id});
+
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        try c.handshake(path);
+
+        try c.bidiCommand("{\"id\":1,\"method\":\"browsingContext.create\",\"params\":{\"type\":\"tab\"}}");
+        try discardBidiMessage(&c);
+
+        // a client-initiated close is answered and the session carries on
+        try sys_net.writeAll(c.socket, &[_]u8{ 136, 128, 0, 0, 0, 0 });
+        const msg = try c.readWebsocketMessage() orelse return error.NoMessage;
+        defer if (msg.cleanup_fragment) c.reader.cleanup();
+        try testing.expectEqual(.close, msg.type);
+    }
+
+    // The worker lets go of its link right after replying; the loop learns
+    // of it a moment later, and refuses a new one until then.
+    var c = try createTestClient();
+    defer c.deinit();
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
+        const res = try c.upgradeRequest(path);
+        if (std.mem.startsWith(u8, res, "HTTP/1.1 101 ")) {
+            break;
+        }
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 409 "));
+        try testing.expect(attempts < 100);
+        c.deinit();
+        c = try createTestClient();
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+    }
+
+    // same worker: the context created over the first websocket is there
+    try c.bidiCommand("{\"id\":2,\"method\":\"browsingContext.getTree\"}");
+    const res = try c.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (res.cleanup_fragment) c.reader.cleanup();
+    try testing.expect(std.mem.indexOf(u8, res.data, "\"url\":\"about:blank\"") != null);
+}
+
+test "server: HTTP session idle timeout" {
+    const server = testing.test_cdp_server.?;
+    const original = server.session_timeout_ms;
+    defer server.session_timeout_ms = original;
+    server.session_timeout_ms = 50;
+
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+
+    // reaped: the DELETE has nothing to find
+    var attempts: usize = 0;
+    while (true) : (attempts += 1) {
         var c = try createTestClient();
         defer c.deinit();
         var request_buf: [128]u8 = undefined;
         const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{&session_id}));
-        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
-            "Content-Length: 14\r\n" ++
-            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-            "{\"value\":null}", res);
+        if (std.mem.startsWith(u8, res, "HTTP/1.1 404 ")) {
+            break;
+        }
+        // DELETE on a live session ends it, which is what the reaper was
+        // about to do: only a still-running session can answer 200 here
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 "));
+        try testing.expect(attempts == 0);
+        lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
     }
 }
 
-test "server: classic session bootstrap errors" {
-    {
-        // the body can arrive after the headers
-        var c = try createTestClient();
-        defer c.deinit();
-        const body = "{\"capabilities\":{\"alwaysMatch\":{\"browserName\":\"firefox\"}}}";
-        try sys_net.writeAll(c.socket, std.fmt.comptimePrint("POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body.len}));
-        lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
-        const res = try c.httpRequest(body);
-        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
-        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"session not created\",\"message\":\"only WebDriver BiDi sessions are supported; request the webSocketUrl capability\",\"stacktrace\":\"\"}}"));
-    }
+test "server: HTTP session ended before its worker attached" {
+    // The mailbox is alive from spawn: a DELETE that lands while the worker
+    // is still starting up is a plain push, drained on its first tick.
+    const server = testing.test_cdp_server.?;
+    const live = server.worker_pool.live;
 
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    try deleteHTTPSession(&session_id, true);
+
+    // the worker exited and gave its slot back
+    var attempts: usize = 0;
+    while (server.worker_pool.live != live) : (attempts += 1) {
+        try testing.expect(attempts < 200);
+        lp.io.sleep(.fromMilliseconds(10), .awake) catch {};
+    }
+}
+
+test "server: HTTP session bootstrap errors" {
     {
         var c = try createTestClient();
         defer c.deinit();
@@ -1558,6 +1871,60 @@ test "server: classic session bootstrap errors" {
     try assertHTTPError(405, "Method not allowed", "DELETE /session HTTP/1.1\r\nContent-Length: 0\r\n\r\n");
     // a websocket upgrade on /session/<id> needs a real session id
     try assertHTTPError(404, "Not found", "GET /session/abc HTTP/1.1\r\n\r\n");
+    try assertHTTPError(404, "Not found", "GET /session/00000000-0000-4000-8000-000000000000 HTTP/1.1\r\n" ++
+        "Connection: upgrade\r\nUpgrade: websocket\r\nsec-websocket-version:13\r\nsec-websocket-key: k\r\n\r\n");
+    try deleteHTTPSession("00000000-0000-4000-8000-000000000000", false);
+}
+
+// POST /session; asserts the response and whether it advertised a websocket
+fn createHTTPSession(body: []const u8, expect_ws_url: bool) ![36]u8 {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // the body can arrive after the headers
+    var head_buf: [128]u8 = undefined;
+    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\n" ++
+        "Content-Type: application/json;charset=UTF-8\r\n" ++
+        "Content-Length: {d}\r\n\r\n", .{body.len}));
+    lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
+    const res = try c.httpRequest(body);
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 200 OK\r\n"));
+
+    const json = res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const value = parsed.value.object.get("value").?.object;
+    const id = value.get("sessionId").?.string;
+    try testing.expectEqual(36, id.len);
+
+    const capabilities = value.get("capabilities").?.object;
+    try testing.expectEqual("Lightpanda", capabilities.get("browserName").?.string);
+    try testing.expectEqual(false, capabilities.get("acceptInsecureCerts").?.bool);
+    if (expect_ws_url) {
+        const ws_url = capabilities.get("webSocketUrl").?.string;
+        try testing.expectEqual("ws://127.0.0.1:9583/session/", ws_url[0 .. ws_url.len - 36]);
+        try testing.expectEqual(id, ws_url[ws_url.len - 36 ..]);
+    } else {
+        try testing.expectEqual(null, capabilities.get("webSocketUrl"));
+    }
+    return id[0..36].*;
+}
+
+fn deleteHTTPSession(session_id: *const [36]u8, expect_live: bool) !void {
+    var c = try createTestClient();
+    defer c.deinit();
+    var request_buf: [128]u8 = undefined;
+    const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s} HTTP/1.1\r\nContent-Length: 0\r\n\r\n", .{session_id}));
+    if (expect_live) {
+        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: 14\r\n" ++
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+            "{\"value\":null}", res);
+    } else {
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"no such session\",\"stacktrace\":\"\"}}"));
+    }
 }
 
 test "server: protocol gate" {
@@ -2045,7 +2412,7 @@ const TestClient = struct {
         return cl + header.len;
     }
 
-    fn handshake(self: *TestClient, path: []const u8) !void {
+    fn upgradeRequest(self: *TestClient, path: []const u8) ![]const u8 {
         var request_buf: [256]u8 = undefined;
         const request = try std.fmt.bufPrint(&request_buf, "GET {s}   HTTP/1.1\r\n" ++
             "Connection: upgrade\r\n" ++
@@ -2053,8 +2420,11 @@ const TestClient = struct {
             "sec-websocket-version:13\r\n" ++
             "sec-websocket-key: this is my key\r\n" ++
             "Custom:  Header-Value\r\n\r\n", .{path});
+        return self.httpRequest(request);
+    }
 
-        const res = try self.httpRequest(request);
+    fn handshake(self: *TestClient, path: []const u8) !void {
+        const res = try self.upgradeRequest(path);
         try testing.expectEqual("HTTP/1.1 101 Switching Protocols\r\n" ++
             "Upgrade: websocket\r\n" ++
             "Connection: upgrade\r\n" ++

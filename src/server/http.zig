@@ -104,6 +104,9 @@ pub const Connection = struct {
         // Filled in by the router for /session/{id}[/...] routes; points
         // into the read buffer like path does.
         session_id: ?*const [36]u8 = null,
+
+        // valid for handling a single request up to sending the response
+        arena: Allocator,
     };
 
     pub const Method = enum {
@@ -117,7 +120,7 @@ pub const Connection = struct {
         header: void, // still parsing the header
         request: Request,
 
-        pub fn parseHeader(self: *State, data: []u8) !bool {
+        pub fn parseHeader(self: *State, arena: Allocator, data: []u8) !bool {
             const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
                 return false;
             };
@@ -147,12 +150,13 @@ pub const Connection = struct {
                 .keepalive = keepalive,
                 .body = data[body_start..total],
                 .head = data[0..body_start],
+                .arena = arena,
             } };
 
             return true;
         }
 
-        // The classic WebDriver bootstrap (POST /session) is the only thing
+        // The HTTP WebDriver bootstrap (POST /session) is the only thing
         // that sends a body; everything else is 0.
         fn contentLength(header: []const u8) !usize {
             const key = "\r\ncontent-length:";
@@ -320,6 +324,8 @@ pub const Connection = struct {
 // How long a connection may sit without completing a request before we close it.
 pub const IDLE_TIMEOUT_MS = 10_000;
 
+const REQUEST_ARENA_RETAIN = 8192;
+
 pub fn processEvent(server: *Server, conn: *Connection, rw: Server.IOEvent.ReadWrite, now: u64) void {
     if (conn.pending != null) {
         // registered for OUT only; a hangup shows up as a write error
@@ -377,11 +383,12 @@ fn flush(server: *Server, conn: *Connection, now: u64) void {
 
 fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
     const http = &conn.state;
+    const arena = server.request_arena.allocator();
     while (true) {
         switch (http.*) {
             .header => {
                 const data = try conn.buffer.read(conn.socket);
-                if (try http.parseHeader(data) == false) {
+                if (try http.parseHeader(arena, data) == false) {
                     // don't have a complete header yet
                     return true;
                 }
@@ -392,6 +399,7 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
                 }
             },
             .request => |*req| {
+                defer _ = server.request_arena.reset(.{ .retain_with_limit = REQUEST_ARENA_RETAIN });
                 if (try serveHTTP(server, conn, req) == .upgraded) {
                     // The fd moved to a WebSocket (and out of server.http); all
                     // that's left of this Connection is to recycle it.
@@ -425,33 +433,21 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
 // Error responses use a minimal, uniform shape: no reason phrase, an explicit
 // Connection: Close, and no Content-Type. errorResponse builds it at comptime.
 const invalid_request_response = errorResponse(400, "Invalid request");
-
 const invalid_protocol_response = errorResponse(400, "Invalid HTTP protocol");
-
 const missing_header_response = errorResponse(400, "Missing required header");
-
 const forbidden_origin_response = errorResponse(403, "Origin not allowed");
-
 const forbidden_host_response = errorResponse(403, "Host not allowed");
-
 const request_too_large_response = errorResponse(413, "Request too large");
-
 const not_found_response = errorResponse(404, "Not found");
-
+const session_connected_response = errorResponse(409, "Session already connected");
 const method_not_allowed_response = errorResponse(405, "Method not allowed");
-
 const service_unavailable_response = errorResponse(503, "Too many connections");
-
 const internal_error_response = errorResponse(500, "Internal server error");
-
 const empty_json_list_response = staticResponse(.{ .status = "200 OK", .body = "[]", .content_type = "application/json; charset=UTF-8" });
-
 // WebDriver's discovery endpoint; `ready` is whether a new session can be
 // created, which the bootstrap never refuses.
 const status_response = staticResponse(.{ .status = "200 OK", .body = "{\"value\":{\"ready\":true,\"message\":\"\"}}", .content_type = "application/json; charset=UTF-8" });
-
 const delete_session_response = staticResponse(.{ .status = "200 OK", .body = "{\"value\":null}", .content_type = "application/json; charset=UTF-8" });
-
 const protocol_response = staticResponse(.{ .status = "200 OK", .body = @embedFile("../data/protocol.json"), .content_type = "application/json; charset=UTF-8" });
 
 const Served = enum {
@@ -489,12 +485,12 @@ const routes = [_]Route{
 };
 
 const session_routes = [_]Route{
-    .{ .method = .GET, .path = "", .handler = upgradeBiDi },
+    .{ .method = .GET, .path = "", .handler = upgradeSession },
     .{ .method = .DELETE, .path = "", .handler = deleteSession },
 };
 
 // Routes under /session/{id}; path is what follows the id ("" for the
-// session itself). The classic command surface goes here.
+// session itself). The HTTP command surface goes here.
 const SESSION_PREFIX = "/session/";
 
 const SESSION_ID_LEN = 36;
@@ -635,65 +631,64 @@ fn gateOpen(server: *const Server, gate: Route.Gate) bool {
     };
 }
 
+// GET / (cdp)
 fn upgradeCDP(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    return upgrade(server, conn, req, .cdp, null);
+    return upgradeSpawn(server, conn, req, .cdp);
 }
 
+// GET /json/version (cdp)
 fn serveJSONVersion(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = server.json_version_response });
 }
 
+// GET /json/list or GET /json (cdp)
 fn serveJSONList(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = empty_json_list_response });
 }
 
+// GET /json/protocol (cdp)
 fn serveJSONProtocol(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = protocol_response });
 }
 
+// GET /metrics (internal)
 fn serveMetrics(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     const writer = try beginBody(server);
     lp.metrics.write(writer);
     return serveDynamicHTTPResponse(server, conn, req, "200 OK", "text/plain; version=0.0.4; charset=utf-8");
 }
 
+// GET /status (webdriver)
 fn serveStatus(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     return serveHTTPResponse(server, conn, req, .{ .static = status_response });
 }
 
-// req.session_id is null for GET /session, set for GET /session/{id}
+// GET /session (webdriver (direct bidi))
 fn upgradeBiDi(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    const session_id: ?[36]u8 = if (req.session_id) |s| s.* else null;
-    return upgrade(server, conn, req, .bidi, session_id);
+    return upgradeSpawn(server, conn, req, .bidi);
 }
 
-// What Selenium does before it speaks BiDi: a classic POST /session that
-// hands back the websocket URL of a session that already exists.
+// POST /session (webdriver)
 fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    const allocator = server.app.allocator;
-
     const Capability = struct { webSocketUrl: ?bool = null };
-    const parsed = std.json.parseFromSlice(struct {
+    const parsed = std.json.parseFromSliceLeaky(struct {
         capabilities: ?struct {
             alwaysMatch: ?Capability = null,
             firstMatch: ?[]const Capability = null,
         } = null,
-    }, allocator, req.body, .{ .ignore_unknown_fields = true }) catch {
+    }, req.arena, req.body, .{ .ignore_unknown_fields = true }) catch {
         return serveWebDriver(server, conn, req, "400 Bad Request", .{
             .@"error" = "invalid argument",
             .message = "invalid JSON body",
             .stacktrace = "",
         });
     };
-    defer parsed.deinit();
 
-    // Without the capability the client intends to drive the session over
-    // HTTP, which this server doesn't serve: tell it now rather than 404
-    // its first real command.
-    if (!requestsWebSocketUrl(parsed.value.capabilities)) {
+    if (server.worker_pool.isFull()) {
+        lp.metrics.serve_connection_limit.incr();
         return serveWebDriver(server, conn, req, "500 Internal Server Error", .{
             .@"error" = "session not created",
-            .message = "only WebDriver BiDi sessions are supported; request the webSocketUrl capability",
+            .message = "too many sessions",
             .stacktrace = "",
         });
     }
@@ -701,8 +696,36 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     var session_id: [36]u8 = undefined;
     uuidv4(&session_id);
 
-    const url = try std.fmt.allocPrint(allocator, "{s}{s}", .{ server.bidi_session_url, &session_id });
-    defer allocator.free(url);
+    _ = server.spawnWorker(.bidi, .{ .session = session_id }) catch |err| {
+        log.err(.serve, "worker spawn", .{ .err = err });
+        return serveWebDriver(server, conn, req, "500 Internal Server Error", .{
+            .@"error" = "session not created",
+            .message = "failed to start the session",
+            .stacktrace = "",
+        });
+    };
+
+    const is_requesting_websocket_url = blk: {
+        const caps = parsed.capabilities orelse break :blk false;
+        if (caps.alwaysMatch) |always| {
+            if (always.webSocketUrl == true) {
+                break :blk true;
+            }
+        }
+        for (caps.firstMatch orelse &.{}) |first| {
+            if (first.webSocketUrl == true) {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    const url: ?[]const u8 = blk: {
+        if (is_requesting_websocket_url) {
+            break :blk try std.fmt.allocPrint(req.arena, "{s}{s}", .{ server.bidi_session_url, &session_id });
+        }
+        break :blk null;
+    };
 
     return serveWebDriver(server, conn, req, "200 OK", .{
         .sessionId = &session_id,
@@ -713,30 +736,47 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     });
 }
 
-fn requestsWebSocketUrl(capabilities: anytype) bool {
-    const caps = capabilities orelse return false;
-    if (caps.alwaysMatch) |always| {
-        if (always.webSocketUrl == true) {
-            return true;
-        }
+// GET /session/ID  (webdriver (upgrade to bidi))
+fn upgradeSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    const worker = server.findSession(req.session_id.?) orelse {
+        return serveNotFound(server, conn, req);
+    };
+
+    if (worker.link != null) {
+        // already joined
+        return serveHTTPResponse(server, conn, req, .{ .static = session_connected_response });
     }
-    for (caps.firstMatch orelse &.{}) |first| {
-        if (first.webSocketUrl == true) {
-            return true;
-        }
-    }
-    return false;
+
+    return upgrade(server, conn, req, .{ .attach = worker });
 }
 
-// Answers a classic WebDriver request with {"value": value}.
+// DELETE /session/ID (webdriver)
+fn deleteSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    const worker = server.findSession(req.session_id.?) orelse {
+        return serveWebDriver(server, conn, req, "404 Not Found", .{
+            .@"error" = "invalid session id",
+            .message = "no such session",
+            .stacktrace = "",
+        });
+    };
+    server.quitSession(worker);
+    return serveHTTPResponse(server, conn, req, .{ .static = delete_session_response });
+}
+
+// CDP or Bidi directly creating a Worker from an websocket upgrade
+fn upgradeSpawn(server: *Server, conn: *Connection, req: *Connection.Request, protocol: Driver.Protocol) !Served {
+    if (server.worker_pool.isFull()) {
+        lp.metrics.serve_connection_limit.incr();
+        return serveHTTPResponse(server, conn, req, .{ .static = service_unavailable_response });
+    }
+    return upgrade(server, conn, req, .{ .spawn = protocol });
+}
+
+// Answers a HTTP WebDriver request with {"value": value}.
 fn serveWebDriver(server: *Server, conn: *Connection, req: *const Connection.Request, comptime status: []const u8, value: anytype) !Served {
     const writer = try beginBody(server);
     try std.json.Stringify.value(.{ .value = value }, .{}, writer);
     return serveDynamicHTTPResponse(server, conn, req, status, "application/json; charset=UTF-8");
-}
-
-fn deleteSession(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
-    return serveHTTPResponse(server, conn, req, .{ .static = delete_session_response });
 }
 
 fn serveNotFound(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
@@ -831,14 +871,15 @@ pub fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
     return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
 }
 
-// Shared upgrade path: validate the WebSocket headers, write the 101, park the
-// fd, and spawn the worker that will build the driver and attach it.
-fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, protocol: Driver.Protocol, session_id: ?[36]u8) !Served {
-    if (server.websocket_pool.isFull()) {
-        lp.metrics.serve_connection_limit.incr();
-        return serveHTTPResponse(server, conn, req, .{ .static = service_unavailable_response });
-    }
+// Where the upgraded socket goes: a new worker, or an existing session's.
+const Upgrade = union(enum) {
+    spawn: Driver.Protocol,
+    attach: *Server.Worker,
+};
 
+// Shared upgrade path: validate the WebSocket headers, write the 101, and
+// hand the fd to its worker (spawning one for a new connection).
+fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, target: Upgrade) !Served {
     var accept_buf: [28]u8 = undefined;
     const accept_key = webSocketAccept(req.head, &accept_buf) catch |err| {
         const response: []const u8 = switch (err) {
@@ -863,7 +904,10 @@ fn upgrade(server: *Server, conn: *Connection, req: *Connection.Request, protoco
         return error.ConnectionClosed;
     }
 
-    server.upgradeConnection(conn, protocol, session_id);
+    switch (target) {
+        .spawn => |protocol| server.upgradeConnection(conn, protocol),
+        .attach => |worker| server.attachConnection(worker, conn),
+    }
     return .upgraded;
 }
 

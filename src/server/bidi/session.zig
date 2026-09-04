@@ -81,7 +81,7 @@ pub const Capabilities = struct {
     setWindowRect: bool = false,
     userAgent: []const u8,
     proxy: struct {} = .{},
-    webSocketUrl: ?[]const u8 = null, // only reported for the classic handshake
+    webSocketUrl: ?[]const u8 = null, // only reported for the HTTP handshake
 
     // ugh, are you kidding me? All this so we don't emit the webSocketUrl
     // when it's null.
@@ -108,7 +108,7 @@ fn end(cmd: *const BiDi.Command) !void {
 
     const bidi = cmd.bidi;
     const arena = try bidi.browser.arena_pool.acquire(.tiny, "bidi session end");
-    bidi.conn.inbox.push(arena, .close);
+    bidi.inbox.push(arena, .quit);
 }
 
 // Subscriptions are global (per-context filtering is not supported yet).

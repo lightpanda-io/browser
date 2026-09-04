@@ -61,7 +61,7 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 const CDP = @This();
 
 app: *App,
-conn: Link,
+link: Link,
 browser: Browser,
 allocator: Allocator,
 
@@ -102,7 +102,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
 
     self.* = .{
         .app = app,
-        .conn = undefined,
+        .link = undefined,
         .browser = undefined,
         .allocator = allocator,
         .browser_context = null,
@@ -116,7 +116,7 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
     errdefer self.browser.deinit();
 
-    try self.conn.init(app, socket, .cdp, inbox);
+    try self.link.init(app, socket, .cdp, inbox);
 }
 
 pub fn deinit(self: *CDP) void {
@@ -129,7 +129,7 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
-    self.conn.deinit();
+    self.link.deinit();
 }
 // Called by the Server run loop when readable bytes arrive on the CDP
 // socket. Feeds them through the WS framer and pushes each parsed frame
@@ -164,7 +164,7 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
+    try self.link.sendJSON(message, .{ .emit_null_optional_fields = false });
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -1127,7 +1127,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.conn.send_arena.allocator();
+        const allocator = cdp.link.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -1153,7 +1153,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.conn.sendJSONRaw(buf);
+        try cdp.link.sendJSONRaw(buf);
     }
 };
 

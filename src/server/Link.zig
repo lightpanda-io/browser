@@ -30,9 +30,10 @@ const Driver = @import("Driver.zig");
 
 const log = lp.log;
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-// The worker's end of an upgraded connection (the loop's is Server.WebSocket).
+// The worker's end of an upgraded connection (the loop's is Server.Worker).
 // Reads/framing happen on the server run loop (readAvailable → inbox); the worker
 // thread is the sole writer (send*). The two sides touch disjoint state
 // (reader+inbox vs send_arena+socket write) so no lock is needed beyond the
@@ -50,6 +51,7 @@ const SEND_TIMEOUT_MS = 5_000;
 const INBOX_BACKLOG_MESSAGES = 32;
 
 inbox: *Inbox,
+allocator: Allocator,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
 protocol: Driver.Protocol,
@@ -78,6 +80,7 @@ pub fn init(
         .inbox = inbox,
         .socket = socket,
         .protocol = protocol,
+        .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
@@ -89,6 +92,20 @@ pub fn init(
 pub fn deinit(self: *Link) void {
     self.reader.deinit();
     self.send_arena.deinit();
+    sys_net.close(self.socket);
+}
+
+pub fn create(app: *App, socket: posix.socket_t, protocol: Driver.Protocol, inbox: *Inbox) !*Link {
+    const link = try app.allocator.create(Link);
+    errdefer app.allocator.destroy(link);
+    try link.init(app, socket, protocol, inbox);
+    return link;
+}
+
+pub fn destroy(self: *Link) void {
+    const allocator = self.allocator;
+    self.deinit();
+    allocator.destroy(self);
 }
 
 pub fn send(self: *Link, data: []const u8) !void {
@@ -300,8 +317,8 @@ test "link: send gives up when the peer stops reading" {
     if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
         return error.SocketPairFailed;
     }
+    // pair[1] is the link's, closed by its deinit
     defer sys_net.close(pair[0]);
-    defer sys_net.close(pair[1]);
 
     const small = std.mem.toBytes(@as(c_int, 4096));
     try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVBUF, &small);
@@ -339,8 +356,8 @@ test "link: stops reading once the worker's inbox backs up" {
     if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
         return error.SocketPairFailed;
     }
+    // pair[1] is the link's, closed by its deinit
     defer sys_net.close(pair[0]);
-    defer sys_net.close(pair[1]);
 
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
     const flags = try sys_net.fcntl(pair[1], posix.F.GETFL, 0);

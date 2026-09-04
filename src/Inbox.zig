@@ -29,6 +29,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const CDP = @import("server/cdp/CDP.zig");
+const Link = @import("server/Link.zig");
 
 const DoublyLinkedList = std.DoublyLinkedList;
 
@@ -46,7 +47,7 @@ pub fn deinit(self: *Inbox) void {
     defer self.mutex.unlock(lp.io);
     while (self.queue.popFirst()) |node| {
         const msg: *Message = @fieldParentPtr("node", node);
-        msg.deinit();
+        msg.discard();
     }
     self.queued_bytes = 0;
 }
@@ -55,6 +56,12 @@ pub fn queuedBytes(self: *Inbox) usize {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     return self.queued_bytes;
+}
+
+pub fn isEmpty(self: *Inbox) bool {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+    return self.queue.first == null;
 }
 
 pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
@@ -137,12 +144,19 @@ pub const Message = struct {
         // expected to echo via pong on its thread.
         ping: []u8,
 
-        // A close frame was received from the peer, or the worker decided
-        // to close (BiDi's session.end). Consumer is expected to send the
-        // close frame and tear the connection down. A peer's close body is
-        // dropped — we always send CLOSE_NORMAL (status 1000) regardless of
-        // what the peer sent.
+        // A close frame was received from the peer. Consumer is expected to
+        // send the close frame and tear the connection down. This may or may
+        // not kill the worker (up to the driver, CDP: always yes, WebDriver:
+        // depends)
         close: void,
+
+        // The Session is over. Currently WebDriver only. Always kills the worker.
+        // This is because for WebDriver, the Worker isn't necessarily tied to
+        // a WebSocket connection, so only an explicit DELETE /session/:id (or
+        // the HTTP reaper) can kill it. tl;dr an explicit "close" needed for
+        // WebDriver since the implicit socket-is-gone (aka .close) is ambiguous
+        // for WebDriver.
+        quit: void,
 
         // No allocation; conveys "no more messages will arrive on
         // this inbox" plus an optional reason. The Network thread
@@ -150,11 +164,15 @@ pub const Message = struct {
         // (now) JSON parse failure.
         disconnect: ?anyerror,
 
+        // A websocket for the consumer to adopt (an HTTP WebDriver session
+        // gets its BiDi connection after the fact).
+        link: *Link,
+
         pub fn size(self: Payload) usize {
             return switch (self) {
                 .cdp => |c| c.raw.len,
                 .bidi, .ping => |b| b.len,
-                .close, .disconnect => 0,
+                .close, .disconnect, .link, .quit => 0,
             };
         }
     };
@@ -166,6 +184,15 @@ pub const Message = struct {
 
     pub fn deinit(self: *const Message) void {
         self.arena.release();
+    }
+
+    // For messages that never reached the consumer (Inbox.deinit).
+    fn discard(self: *const Message) void {
+        switch (self.payload) {
+            .link => |link| link.destroy(),
+            else => {},
+        }
+        self.deinit();
     }
 };
 
