@@ -1014,10 +1014,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         break :blk .{ u, false };
     };
 
-    const target = switch (nt) {
-        .form, .anchor => |p| p,
-        .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
+    const target: *Frame, const source_element: ?*Element = switch (nt) {
+        .form => |p| .{ p.frame, p.element },
+        .anchor => |p| .{ p.frame, p.element },
+        .script => |p| .{ p orelse originator, null },
+        .iframe => |iframe| .{ iframe._window.?._frame, null },
     };
 
     const session = target._session;
@@ -1047,7 +1048,12 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             },
             else => opts.kind,
         };
-        _ = try session.navigation.navigateSameDocument(resolved_url, resolved_kind, target);
+        _ = try session.navigation.navigateSameDocument(
+            resolved_url,
+            resolved_kind,
+            source_element,
+            target,
+        );
         arena.release();
         return;
     }
@@ -3449,9 +3455,9 @@ const NavigationType = enum {
 };
 
 const Navigation = union(NavigationType) {
-    form: *Frame,
+    form: struct { frame: *Frame, element: ?*Element = null },
     script: ?*Frame,
-    anchor: *Frame,
+    anchor: struct { frame: *Frame, element: ?*Element = null },
     iframe: *IFrame,
 };
 
@@ -3765,7 +3771,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         .frame => |f| f,
         .blank => try form_element.ownerFrame(self).openBlankTarget(form_element, ""),
     };
-    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
+    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = .{ .frame = target_frame, .element = submitter_ orelse form_element } });
 }
 
 const testing = @import("../testing.zig");
