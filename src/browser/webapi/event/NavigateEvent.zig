@@ -176,7 +176,7 @@ pub fn getHasUAVisualTransition(self: *const NavigateEvent) bool {
 
 const InterceptOptions = struct {
     focusReset: ?[]const u8 = null,
-    handler: ?js.Function = null,
+    handler: ?js.Value = null,
     scroll: ?[]const u8 = null,
 };
 
@@ -195,7 +195,16 @@ pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions) !void {
     self._intercepted = true;
 
     if (opts) |o| {
-        if (o.handler) |handler| self._handler = try handler.persist();
+        if (o.handler) |v| {
+            if (v.isNull()) {
+                return error.TypeError;
+            }
+            if (!v.isFunction()) {
+                return error.TypeError;
+            }
+            const handler_fn = js.Function{ .local = v.local, .handle = @ptrCast(v.handle) };
+            self._handler = try handler_fn.persist();
+        }
         self._focus_reset = o.focusReset;
         self._scroll = o.scroll;
     }
