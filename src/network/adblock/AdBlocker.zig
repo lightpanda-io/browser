@@ -323,7 +323,14 @@ fn addToTrie(self: *AdBlocker, root: u32, hostname: []const u8) !void {
     };
 }
 
-pub const Verdict = enum { none, allowed, blocked };
+pub const Verdict = enum {
+    /// Nothing blocks the request, whether or not an exception names it.
+    none,
+    /// An exception overrode a block.
+    allowed,
+    /// A block no exception overrides, or a `$important` one.
+    blocked,
+};
 
 pub fn isBlocked(self: *const AdBlocker, transfer: *const HttpClient.Transfer) bool {
     var buffers: Request.Buffers = undefined;
@@ -346,13 +353,12 @@ pub fn match(self: *const AdBlocker, request: *const Request) Verdict {
     if (self.trie.matches(self.blocked_important, hostname) != null) return .blocked;
     if (self.blocking_important.match(request) != null) return .blocked;
 
-    if (self.exceptions.match(request) != null) return .allowed;
+    const blocked = self.trie.matches(self.blocked, hostname) != null or
+        self.blocking.match(request) != null;
+    if (!blocked) return .none;
     if (self.trie.matches(self.allowed, hostname) != null) return .allowed;
-
-    if (self.trie.matches(self.blocked, hostname) != null) return .blocked;
-    if (self.blocking.match(request) != null) return .blocked;
-
-    return .none;
+    if (self.exceptions.match(request) != null) return .allowed;
+    return .blocked;
 }
 
 /// Whether we can evaluate this filter at all.
@@ -488,7 +494,9 @@ test "adblock.AdBlocker: the doubleclick rules from EasyList" {
     // Right everything, wrong path.
     try expectVerdict(&blocker, .blocked, "https://g.doubleclick.net/pagead/ads", "bloomberg.com", xhr);
 
-    try expectVerdict(&blocker, .allowed, "https://static.doubleclick.net/instream/ad_status.js", "ignboards.com", script);
+    // An exception with nothing to override decides nothing: `$popup` never
+    // applies to a script, so no block covers this request.
+    try expectVerdict(&blocker, .none, "https://static.doubleclick.net/instream/ad_status.js", "ignboards.com", script);
     // The unconditional exception carves one path out of the block covering
     // the whole subtree, and leaves the rest of it blocked.
     try expectVerdict(&blocker, .allowed, "https://pubads.g.doubleclick.net/ssai/x", "history.com", xhr);
@@ -542,6 +550,7 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     var first: Io.Reader = .fixed(
         \\! Title: First List
         \\||ads.example.com^
+        \\||cdn.example.com^
         \\@@||cdn.example.com^$script
         \\example.com##.ad-banner
     );
@@ -555,20 +564,39 @@ test "adblock.AdBlocker: parse accumulates across lists" {
 
     try expectVerdict(&blocker, .blocked, "https://ads.example.com/x", "news.com", script);
     try expectVerdict(&blocker, .blocked, "https://sub.ads.example.com/x", "news.com", script);
-    // The type-restricted exception now applies to scripts only.
+    // The type-restricted exception carves scripts out of the block.
     try expectVerdict(&blocker, .allowed, "https://cdn.example.com/x.js", "news.com", script);
-    try expectVerdict(&blocker, .none, "https://cdn.example.com/x.png", "news.com", image);
+    try expectVerdict(&blocker, .blocked, "https://cdn.example.com/x.png", "news.com", image);
 
     // The party and $domain= constrained block, from the second list.
     try expectVerdict(&blocker, .blocked, "https://tracker.net/x", "news.com", script);
     try expectVerdict(&blocker, .none, "https://tracker.net/x", "sports.news.com", script);
     try expectVerdict(&blocker, .none, "https://tracker.net/x", "other.com", script);
 
-    // Three rules loaded across the two lists; the cosmetic line is a rule of
+    // Four rules loaded across the two lists; the cosmetic line is a rule of
     // another realm, counted as such rather than as one we failed to apply.
-    try testing.expectEqual(3, blocker.rules_loaded);
+    try testing.expectEqual(4, blocker.rules_loaded);
     try testing.expectEqual(0, blocker.rules_skipped);
     try testing.expectEqual(1, blocker.rules_cosmetic);
+}
+
+test "adblock.AdBlocker: tokens past the request buffer still match" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\&utm_tracker=
+    );
+
+    // 140 tokens of query noise push the filter's token ("utm", its rarest)
+    // past what the request holds; the engine walks the rest of the URL.
+    const noise = "https://example.com/?" ++ "a=1&" ** 70;
+    const overflowing: Request = .init(noise ++ "utm_tracker=1", "a.com", script);
+    try testing.expect(overflowing.tail.len != 0);
+    try testing.expectEqual(.blocked, blocker.match(&overflowing));
+    // A token past the buffer finds its bucket, but the pattern does not fit.
+    try expectVerdict(&blocker, .none, noise ++ "utm_other=1", "a.com", script);
+    try expectVerdict(&blocker, .none, noise ++ "b=2", "a.com", script);
 }
 
 test "adblock.AdBlocker: cosmetic-realm rules are not skipped rules" {

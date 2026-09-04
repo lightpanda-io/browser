@@ -72,10 +72,13 @@ pub const Request = struct {
     /// Exactly one bit set.
     kind: NetworkFilter.ResourceTypes,
     third_party: bool,
-    /// The URL's tokens, hashed once here so no engine retokenizes. A URL
-    /// long enough to overflow loses its last tokens.
+    /// The URL's first tokens, hashed once here so no engine retokenizes.
     tokens_buf: [URL_TOKENS_MAX]u32,
     tokens_len: usize,
+    /// The rest of the URL, past the last token that fit.
+    /// Each engine tokenizes it itself, so no token is ever lost. Token-free for
+    /// all but the longest URLs.
+    tail: []const u8,
 
     const URL_TOKENS_MAX = 128;
 
@@ -108,13 +111,15 @@ pub const Request = struct {
             .third_party = domain.isThirdParty(parsed.hostname(), source),
             .tokens_buf = undefined,
             .tokens_len = 0,
+            .tail = "",
         };
         var it: Tokens = .{ .text = url };
-        while (it.next()) |token| {
-            if (request.tokens_len == request.tokens_buf.len) break;
+        while (request.tokens_len < request.tokens_buf.len) {
+            const token = it.next() orelse break;
             request.tokens_buf[request.tokens_len] = token;
             request.tokens_len += 1;
         }
+        request.tail = url[it.i..];
         return request;
     }
 
@@ -177,13 +182,22 @@ const TOKENS_MAX = 32;
 
 /// The first filter that matches, or null.
 pub fn match(self: *const Engine, request: *const Request) ?*const NetworkFilter {
-    if (self.filters.len != 0) {
+    if (self.buckets.count() != 0) {
         for (request.tokens()) |token| {
-            const bucket = self.buckets.get(token) orelse continue;
-            if (self.matchIn(bucket, request)) |filter| return filter;
+            if (self.matchToken(token, request)) |filter| return filter;
+        }
+        // Whatever the request could not hold is hashed again.
+        var it: Tokens = .{ .text = request.tail };
+        while (it.next()) |token| {
+            if (self.matchToken(token, request)) |filter| return filter;
         }
     }
     return self.matchIn(self.fallback, request);
+}
+
+fn matchToken(self: *const Engine, token: u32, request: *const Request) ?*const NetworkFilter {
+    const bucket = self.buckets.get(token) orelse return null;
+    return self.matchIn(bucket, request);
 }
 
 fn matchIn(self: *const Engine, bucket: []const u32, request: *const Request) ?*const NetworkFilter {
@@ -353,6 +367,30 @@ fn contains(tokens: []const u32, token: []const u8) bool {
         if (t == hash(token)) return true;
     }
     return false;
+}
+
+test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
+    const max = Request.URL_TOKENS_MAX;
+    const kind: NetworkFilter.ResourceTypes = .{ .script = true };
+
+    // Exactly as many tokens as the buffer holds: nothing is left to walk...
+    const full = "x/" ** (max - 1) ++ "x";
+    var request: Request = .init(full, "", kind);
+    try testing.expectEqual(max, request.tokens_len);
+    try testing.expectEqual(0, request.tail.len);
+
+    // ...one more, and only that one is in the tail.
+    request = .init(full ++ "/y", "", kind);
+    try testing.expectEqual(max, request.tokens_len);
+    try testing.expectString("/y", request.tail);
+    var it: Tokens = .{ .text = request.tail };
+    try testing.expectEqual(hash("y"), it.next().?);
+    try testing.expect(it.next() == null);
+
+    // Fewer than the buffer holds: the tail is empty.
+    request = .init("https://example.com/a", "", kind);
+    try testing.expectEqual(4, request.tokens_len);
+    try testing.expectEqual(0, request.tail.len);
 }
 
 test "adblock.Engine: only tokens the URL must reproduce are collected" {
