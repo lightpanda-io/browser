@@ -250,14 +250,7 @@ pub fn pushEntry(
     self._index = index;
 
     if (previous != null and should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous.?, .navigationType = @tagName(.push) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
-        }
+        self.fireCurrentEntryChangeEvent(previous.?, .{ .push = null }, frame);
     }
 
     return entry;
@@ -300,14 +293,7 @@ pub fn replaceEntry(
     };
 
     if (should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous, .navigationType = @tagName(.replace) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
-        }
+        self.fireCurrentEntryChangeEvent(previous, .{ .replace = null }, frame);
     }
 
     return entry;
@@ -351,6 +337,29 @@ fn fireNavigateError(self: *Navigation, reason: js.Value, frame: *Frame) void {
 
         self.dispatch(one, err_event.asEvent(), frame) catch |err| {
             log.warn(.event, "Navigation.fireNavigateError dispatch", .{ .err = err });
+        };
+    }
+}
+
+fn fireCurrentEntryChangeEvent(
+    self: *Navigation,
+    previous: *NavigationHistoryEntry,
+    kind: ?NavigationKind,
+    frame: *Frame,
+) void {
+    if (self._on_currententrychange) |cec| {
+        const event =
+            NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous, .navigationType = if (kind) |k| @tagName(k) else null },
+                frame,
+            ) catch |err| {
+                log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
+                return;
+            };
+
+        self.dispatch(cec, event.asEvent(), frame) catch |err| {
+            log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
         };
     }
 }
@@ -569,8 +578,9 @@ pub fn navigateSameDocument(
         .push => |state| {
             frame.url = new_url;
             try refreshLocation(frame);
-
             committed.resolve("navigation push", {});
+            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
@@ -581,8 +591,9 @@ pub fn navigateSameDocument(
         .replace => |state| {
             frame.url = new_url;
             try refreshLocation(frame);
-
             committed.resolve("navigation replace", {});
+            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
@@ -594,8 +605,9 @@ pub fn navigateSameDocument(
             self._index = index;
             frame.url = new_url;
             try refreshLocation(frame);
-
             committed.resolve("navigation traverse", {});
+            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
@@ -607,15 +619,6 @@ pub fn navigateSameDocument(
 
     if (hash_change) {
         try frame.queueHashChange(old_url, new_url);
-    }
-
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(kind) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
     }
 
     _ = try committed.persist();
@@ -763,14 +766,7 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
         .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
     };
 
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = null },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
+    self.fireCurrentEntryChangeEvent(previous, null, frame);
 }
 
 pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, frame: *Frame) !void {
