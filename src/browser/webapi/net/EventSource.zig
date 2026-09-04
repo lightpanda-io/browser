@@ -172,13 +172,14 @@ fn connect(self: *EventSource) !void {
     try self._id_buf.appendSlice(self._arena.allocator(), self._last_event_id.items);
 
     const same_origin = exec.isSameOrigin(self._url);
-    const cookie_support = self._with_credentials or same_origin;
 
     const transfer = try exec.newRequest(.{
         .ctx = self,
         .url = self._url,
         .method = .GET,
-        .cookies = cookie_support,
+        .origin = exec.origin(),
+        .request_mode = .cors,
+        .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
         .streaming = true,
         .header_callback = httpHeaderDoneCallback,

@@ -359,6 +359,14 @@
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
+    \\  --experimental-features <FEATURE>
+    \\          Enable an experimental, unstable feature. Can be passed multiple times.
+    \\          Behavior may change or be removed without notice.
+    \\          Defaults to none enabled.
+    \\          Allowed values:
+    \\              cors      Obey CORS (cross-origin resource sharing) checks
+    \\                        on fetch/XHR requests instead of allowing them
+    \\                        unconditionally.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to requesting none of them.

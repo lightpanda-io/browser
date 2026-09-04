@@ -244,6 +244,10 @@ pub const LoadResources = packed struct(u4) {
     stylesheet: bool = false,
 };
 
+pub const ExperimentalFeatures = packed struct(u1) {
+    cors: bool = false,
+};
+
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
@@ -280,6 +284,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool, .deprecated = "subframes are now disabled by default, use \"--load-resources iframe\" to enable" },
     .{ .name = "disable_workers", .type = bool, .deprecated = "workers are now disabled by default, use \"--load-resources worker\" to enable" },
     .{ .name = "enable_external_stylesheets", .type = bool, .deprecated = "use \"--load-resources stylesheet\" to enable" },
+    .{ .name = "experimental_features", .type = ExperimentalFeatures, .default = ExperimentalFeatures{} },
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
@@ -551,6 +556,13 @@ pub fn obeyRobots(self: *const Config) bool {
 pub fn httpVersion(self: *const Config) HttpVersion {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_version,
+        else => unreachable,
+    };
+}
+
+pub fn experimentalFeatures(self: *const Config) ExperimentalFeatures {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.experimental_features,
         else => unreachable,
     };
 }

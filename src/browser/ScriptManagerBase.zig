@@ -55,6 +55,12 @@ pub const Owner = union(enum) {
         };
     }
 
+    pub fn origin(self: Owner) ?[]const u8 {
+        return switch (self) {
+            inline else => |g| g.origin,
+        };
+    }
+
     pub fn jsContext(self: Owner) *js.Context {
         return switch (self) {
             inline else => |g| g.js,
@@ -249,6 +255,9 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .ctx = script,
         .url = url,
         .method = .GET,
+        .origin = owner.origin(),
+        .request_mode = .cors,
+        .credentials_mode = .same_origin,
         .resource_type = .script,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -438,6 +447,9 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .url = url,
         .method = .GET,
         .resource_type = .script,
+        .origin = owner.origin(),
+        .request_mode = .cors,
+        .credentials_mode = .same_origin,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,

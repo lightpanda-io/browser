@@ -35,6 +35,7 @@ const http = @import("http.zig");
 const Network = @import("Network.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
+const CorsGate = @import("CorsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
 
 pub const BlockPattern = UrlBlocklist.Pattern;
@@ -181,12 +182,14 @@ cache: *Cache,
 // Cached config decisions, resolved once at init.
 serve_mode: bool,
 obey_robots: bool,
+obey_cors: bool,
 
 // Applied to every transfer at configureConn, so a CDP change takes effect
 // on the next request, not on in-flight ones.
 http_version: lp.Config.HttpVersion,
 
 robots: RobotsGate,
+cors: CorsGate,
 url_blocklist: ?UrlBlocklist,
 
 pub fn init(self: *Client, app: *lp.App) !void {
@@ -229,10 +232,12 @@ pub fn init(self: *Client, app: *lp.App) !void {
         .serve_mode = config.mode == .serve,
         .obey_robots = config.obeyRobots(),
         .http_version = config.httpVersion(),
+        .obey_cors = config.experimentalFeatures().cors,
         .robots = .{
             .network = network,
             .single_flight = .init(allocator),
         },
+        .cors = .{ .single_flight = .init(allocator) },
         .url_blocklist = url_blocklist,
         .arena_pool = &app.arena_pool,
     };
@@ -264,6 +269,7 @@ pub fn deinit(self: *Client) void {
 
     self.clearUrlBlocklist();
     self.robots.deinit();
+    self.cors.deinit();
     self.blocking_requests.deinit(self.allocator);
     self.transfers.deinit(self.allocator);
     self.cache.maintenance(lp.datetime.timestamp(.real));
@@ -411,6 +417,15 @@ fn isHostAdblocked(self: *const Client, url: [:0]const u8) bool {
     return blocker.matchHostname(hostname) == .blocked;
 }
 
+fn isCrossOriginModeAllowed(transfer: *const Transfer) bool {
+    const req = &transfer.req;
+    if (req.request_mode != .same_origin) {
+        return true;
+    }
+    const origin = req.origin orelse return false;
+    return URL.isSameOrigin(req.url, origin);
+}
+
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
@@ -461,6 +476,7 @@ pub fn abort(self: *Client) void {
         // - self.robots.pending : each robots fetch's shutdown_callback
         //   drops its entry; parked waiters unlink in their own deinit.
         std.debug.assert(self.robots.single_flight.count() == 0);
+        std.debug.assert(self.cors.single_flight.count() == 0);
     }
 }
 
@@ -617,7 +633,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
             if (owned.notification == null) owned.notification = o.notification;
-            if (req.cookies) cookie_jar = o.cookie_jar;
+            cookie_jar = o.cookie_jar;
         }
         // Resolved onto the transfer; the request's copy is left null so
         // nothing reads the caller's (possibly short-lived) url through it.
@@ -626,9 +642,13 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             .url => |url| .{ .url = try arena.dupeZ(u8, url) },
         };
         owned.cookie_origin = null;
-        if (req.credentials) |c| {
-            owned.credentials = try arena.dupeZ(u8, c);
+
+        if (req.basic_auth_credentials) |c| {
+            owned.basic_auth_credentials = try arena.dupeZ(u8, c);
         }
+
+        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.origin.* else null;
+        owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
 
         // The body can be larger, so callers can signal, via the
         // `body_outlives_request` flag that they guarantee that the body
@@ -958,6 +978,7 @@ const SubmitFrom = enum {
     start, // Transfer.submit — a brand new request.
     redirect, // Followed 3xx. Same as .start, but a distinct name (e.g. for CDP)
     after_intercept, // Released by CDP
+    after_cors, // cors allowed the request.
     throttle, // the robots gate allowed the request.
     network, // released by throttle
 };
@@ -1010,10 +1031,28 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 log.info(.http, "blocked url", .{ .url = transfer.req.url });
                 return transfer.failAsync(error.UrlBlocked);
             }
+
+            if (self.obey_cors and !transfer.req.internal) {
+                if (!isCrossOriginModeAllowed(transfer)) {
+                    log.warn(.http, "blocked by mode", .{
+                        .url = transfer.req.url,
+                        .mode = @tagName(transfer.req.request_mode),
+                    });
+                    return transfer.failAsync(error.ModeBlocked);
+                }
+
+                switch (try self.cors.check(transfer)) {
+                    .allowed => {},
+                    .pending => return,
+                }
+            }
+            continue :sw SubmitFrom.after_cors;
+        },
+        .after_cors => {
             if (try self.cacheLookup(transfer)) {
-                // response came from the cache, we're done
                 return;
             }
+
             if (self.obey_robots and !transfer.req.internal) {
                 switch (try self.robots.check(transfer)) {
                     .allowed => {
@@ -1055,7 +1094,13 @@ pub fn resumeAfterRobots(self: *Client, transfer: *Transfer) !void {
     return self.pipeline(transfer, .throttle);
 }
 
-fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
+// CorsGate resumption after a preflight resolves as allowed. Re-enters
+// right after the CORS step (not .after_intercept)
+pub fn resumeAfterCors(self: *Client, transfer: *Transfer) !void {
+    return self.pipeline(transfer, .after_cors);
+}
+
+pub fn findHeader(headers: []const http.Header, name: []const u8) ?[]const u8 {
     for (headers) |hdr| {
         if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
             return hdr.value;
@@ -1520,6 +1565,19 @@ fn processMessages(self: *Client) !bool {
     return processed;
 }
 
+fn enforceCorsResponse(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) bool {
+    if (!(transfer._cors_cross_origin and transfer.req.request_mode == .cors)) {
+        return false;
+    }
+    CorsGate.validateResponse(transfer) catch |err| {
+        self.removeConn(msg.conn);
+        transfer._conn = null;
+        transfer.failAsync(err);
+        return true;
+    };
+    return false;
+}
+
 fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *Transfer) !bool {
     // Workaround for libcurl Brotli trailing-byte rejection.
     //
@@ -1615,6 +1673,8 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
                     // requestWillBeSent event has been serialized. Will be
                     // reset() in makeRequest.
                     try transfer.materializeResponse(msg.conn, .{ .check_content_length = false });
+                    if (self.enforceCorsResponse(msg, transfer)) return true;
+
                     try transfer.handleRedirect(location.value);
 
                     if (!transfer.req.internal) {
@@ -1659,6 +1719,7 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     }
 
     try transfer.materializeResponse(msg.conn, .{});
+    if (self.enforceCorsResponse(msg, transfer)) return true;
 
     // Latency is only meaningful for responses that hit the network (cache
     // and synthetic responses never reach processOneMessage).
@@ -1772,13 +1833,31 @@ pub const Request = struct {
     // ten segments, versus a TCP handshake plus a TLS one.
     const HEADERS_ONLY_DRAIN_MAX: usize = 16 * 1024;
 
+    pub const CredentialsMode = enum {
+        // Never send credentials, even same-origin.
+        omit,
+        // Send credentials only for same-origin requests.
+        same_origin,
+        // Always send credentials, including cross-origin.
+        include,
+    };
+
+    pub const RequestMode = enum {
+        cors,
+        no_cors,
+        same_origin,
+        navigate,
+    };
+
     method: Method,
     url: [:0]const u8,
     body: ?[]const u8 = null,
     resource_type: ResourceType,
     redirect: RedirectMode = .follow,
     referrer_policy: ?referrer.Policy = null,
-    credentials: ?[:0]const u8 = null,
+    basic_auth_credentials: ?[:0]const u8 = null,
+    credentials_mode: CredentialsMode,
+    request_mode: RequestMode,
     timeout_ms: u32 = 0,
     skip_cache: bool = false,
 
@@ -1799,14 +1878,13 @@ pub const Request = struct {
     document_frame_id: ?u32 = null,
     notification: ?*Notification = null,
 
-    // Send the owner's cookies and honour Set-Cookie. Off for a credential-less
-    // fetch / XHR / EventSource. Meaningless without an owner: there is no jar.
-    cookies: bool = true,
-
     // The site for SameSite checks. null = the owner's (Owner.siteForCookies).
     // Frame.navigate is the one caller with a reason to override it: the
     // initiator of a top-level navigation isn't the frame being navigated.
     cookie_origin: ?Cookie.SiteForCookies = null,
+
+    // The Origin of the Request.
+    origin: ?[]const u8,
 
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
@@ -1843,6 +1921,17 @@ pub const Request = struct {
     // every caller decides — pass `HttpClient.noopShutdown` to opt out,
     // knowingly.
     shutdown_callback: ShutdownCallback,
+
+    pub fn credentialsAllowed(req: *const Request) bool {
+        return switch (req.credentials_mode) {
+            .omit => false,
+            .include => true,
+            .same_origin => blk: {
+                const origin = req.origin orelse break :blk false;
+                break :blk URL.isSameOrigin(req.url, origin);
+            },
+        };
+    }
 };
 
 pub const SyncResponse = struct {
@@ -1936,10 +2025,12 @@ fn fulfillRedirect(
     errdefer |err| transfer.abortPipelineError(err);
 
     // retrieve cookies from the fulfilled response's headers.
-    if (transfer.cookie_jar) |jar| {
-        for (headers) |hdr| {
-            if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                try jar.populateFromResponse(transfer.req.url, hdr.value);
+    if (transfer.req.credentialsAllowed()) {
+        if (transfer.cookie_jar) |jar| {
+            for (headers) |hdr| {
+                if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                    try jar.populateFromResponse(transfer.req.url, hdr.value);
+                }
             }
         }
     }
@@ -2155,6 +2246,11 @@ pub const Transfer = struct {
     // everything and sits on client.graveyard
     _retired: bool = false,
 
+    _cors_cross_origin: bool = false,
+    // Set once a redirect target origin differs from origin of the URL
+    // that redirected to it.
+    _cors_origin_tainted: bool = false,
+
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
         // or a re-entry like continueTransfer / unpark) before any commit
@@ -2207,6 +2303,9 @@ pub const Transfer = struct {
 
         // RobotsGate holds the transfer pending a robots.txt fetch.
         robots,
+
+        // CorsGate holds the tranfer pending a CORS preflight.
+        cors,
     };
 
     pub const HeaderResult = enum {
@@ -2242,7 +2341,7 @@ pub const Transfer = struct {
             return;
         }
         switch (self.state.parked) {
-            .robots => {},
+            .robots, .cors => {},
             .intercept_request, .intercept_auth => {
                 lp.assert(self.client.intercepted > 0, "Transfer.leaveIntercept", .{ .value = self.client.intercepted });
                 self.client.intercepted -= 1;
@@ -2381,8 +2480,12 @@ pub const Transfer = struct {
 
         // And for the robots gate: RobotsGate.pending holds a raw *Transfer
         // while we're parked.
-        if (self.state == .parked and self.state.parked == .robots) {
-            self.client.robots.remove(self);
+        if (self.state == .parked) {
+            switch (self.state.parked) {
+                .cors => self.client.cors.remove(self),
+                .robots => self.client.robots.remove(self),
+                .intercept_auth, .intercept_request => {},
+            }
         }
 
         // A pending revalidation entry owns cache resources (possibly an
@@ -2497,9 +2600,16 @@ pub const Transfer = struct {
         self.failAsync(err);
     }
 
+    pub fn effectiveOrigin(transfer: *const Transfer) []const u8 {
+        if (transfer._cors_origin_tainted) return "null";
+        return transfer.req.origin orelse "null";
+    }
+
     pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
-        const jar = self.cookie_jar orelse return null;
         const req = &self.req;
+        if (!req.credentialsAllowed()) return null;
+
+        const jar = self.cookie_jar orelse return null;
         var aw: std.Io.Writer.Allocating = .init(arena);
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
@@ -2970,13 +3080,15 @@ pub const Transfer = struct {
         const headers = try it.collect(arena.allocator());
         self.res.headers = headers.items;
 
-        if (self.cookie_jar) |jar| {
-            for (self.res.headers) |hdr| {
-                if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
-                    jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
-                        log.err(.http, "set cookie", .{ .err = err, .req = self });
-                        return err;
-                    };
+        if (self.req.credentialsAllowed()) {
+            if (self.cookie_jar) |jar| {
+                for (self.res.headers) |hdr| {
+                    if (std.ascii.eqlIgnoreCase(hdr.name, "set-cookie")) {
+                        jar.populateFromResponse(self.req.url, hdr.value) catch |err| {
+                            log.err(.http, "set cookie", .{ .err = err, .req = self });
+                            return err;
+                        };
+                    }
                 }
             }
         }
@@ -3049,7 +3161,7 @@ pub const Transfer = struct {
         }
 
         // add credentials
-        if (req.credentials) |creds| {
+        if (req.basic_auth_credentials) |creds| {
             if (self._auth_challenge != null and self._auth_challenge.?.source == .proxy) {
                 try conn.setProxyCredentials(creds);
             } else {
@@ -3187,6 +3299,14 @@ pub const Transfer = struct {
         }
 
         transfer.redirectTaint(url);
+
+        if (transfer.req.request_mode == .cors and !transfer._cors_origin_tainted) {
+            const already_cross_origin = if (req.origin) |o| !URL.isSameOrigin(base, o) else true;
+            if (already_cross_origin and !URL.isSameOrigin(url, base)) {
+                transfer._cors_origin_tainted = true;
+            }
+        }
+
         try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
@@ -3234,7 +3354,7 @@ pub const Transfer = struct {
     }
 
     pub fn updateCredentials(self: *Transfer, userpwd: [:0]const u8) void {
-        self.req.credentials = userpwd;
+        self.req.basic_auth_credentials = userpwd;
     }
 
     pub const RequestHeader = struct {
@@ -4143,6 +4263,9 @@ fn testTransfer(arena: *lp.Arena) Transfer {
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
         },
@@ -4371,6 +4494,9 @@ test "HttpClient: fulfillIntercepted survives a done_callback that tears down th
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4451,6 +4577,9 @@ test "HttpClient: kill during done_callback does not also fire shutdown_callback
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .xhr,
             .shutdown_callback = Ctx.shutdownCallback,
             .ctx = &ctx,
@@ -4532,6 +4661,9 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .xhr,
             .shutdown_callback = Ctx.shutdownCallback,
             .ctx = &ctx,
@@ -4588,6 +4720,9 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
             },
@@ -4650,7 +4785,10 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .req = .{
                 .method = .POST,
                 .url = "http://example.com/start",
+                .origin = null,
                 .body = "payload",
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
@@ -4689,7 +4827,10 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
             .req = .{
                 .method = .POST,
                 .url = "http://example.com/start",
+                .origin = null,
                 .body = "payload",
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
                 .resource_type = .document,
                 .shutdown_callback = noopShutdown,
                 .ctx = undefined,
@@ -4753,6 +4894,9 @@ test "HttpClient: fulfillIntercepted delivers a 3xx without a Location as the re
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4816,6 +4960,9 @@ test "HttpClient: abortParked survives an error_callback that tears down the own
         .req = .{
             .method = .GET,
             .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
             .resource_type = .document,
             .shutdown_callback = noopShutdown,
             .ctx = &ctx,
@@ -4889,6 +5036,9 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
                 .resource_type = .xhr,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,
@@ -4921,6 +5071,9 @@ test "HttpClient: abort survives an error_callback that tears down the owner" {
             .req = .{
                 .method = .GET,
                 .url = "http://example.com/",
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
                 .resource_type = .xhr,
                 .shutdown_callback = noopShutdown,
                 .ctx = &ctx,
@@ -4980,6 +5133,9 @@ test "HttpClient: throttled navigations wait for their per-host slot" {
                 .req = .{
                     .method = .GET,
                     .url = url,
+                    .origin = null,
+                    .credentials_mode = .omit,
+                    .request_mode = .no_cors,
                     .resource_type = .document,
                     .shutdown_callback = noopShutdown,
                     .ctx = undefined,

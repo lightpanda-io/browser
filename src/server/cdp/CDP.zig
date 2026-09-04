@@ -1516,6 +1516,9 @@ test "cdp: syncRequest short-circuits after disconnect" {
     const transfer = try client.newRequest(.{
         .method = .GET,
         .url = "http://127.0.0.1:9582/",
+        .origin = null,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
         .resource_type = .fetch,
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);
