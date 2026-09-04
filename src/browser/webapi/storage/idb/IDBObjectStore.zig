@@ -20,8 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-
 const Page = @import("../../../Page.zig");
+
 const idb = @import("idb.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
@@ -42,6 +42,7 @@ const IDBObjectStore = @This();
 _engine: *Engine,
 _store_id: i64,
 _name: []const u8,
+_original_name: ?[]const u8 = null, // needed for restore incase of abort
 _key_path: ?Key.KeyPath,
 _auto_increment: bool,
 _txn: *IDBTransaction,
@@ -273,6 +274,27 @@ pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCur
 
 pub fn getName(self: *const IDBObjectStore) []const u8 {
     return self._name;
+}
+
+// Only during an upgrade.
+pub fn setName(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
+    try self.assertLive();
+    const txn = self._txn;
+    if (txn._mode != .versionchange) {
+        return error.InvalidStateError;
+    }
+    try txn.assertActive();
+    if (std.mem.eql(u8, name, self._name)) {
+        return;
+    }
+    self._engine.renameObjectStore(self._store_id, name) catch |err| switch (err) {
+        error.Constraint => return error.ConstraintError,
+        else => return err,
+    };
+    if (self._original_name == null) {
+        self._original_name = self._name;
+    }
+    self._name = try txn.dupe(name);
 }
 
 pub fn getKeyPath(self: *IDBObjectStore, exec: *Execution) !js.Value {
@@ -643,7 +665,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(IDBObjectStore.getName, null, .{});
+    pub const name = bridge.accessor(IDBObjectStore.getName, IDBObjectStore.setName, .{});
     pub const keyPath = bridge.accessor(IDBObjectStore.getKeyPath, null, .{});
     pub const autoIncrement = bridge.accessor(IDBObjectStore.getAutoIncrement, null, .{});
     pub const transaction = bridge.accessor(IDBObjectStore.getTransaction, null, .{ .null_as_undefined = true });

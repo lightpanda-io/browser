@@ -16,11 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-
 const Page = @import("../../../Page.zig");
+
 const idb = @import("idb.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
@@ -40,6 +41,7 @@ _store: *IDBObjectStore,
 _engine: *Engine,
 _index_id: i64,
 _name: []const u8,
+_original_name: ?[]const u8 = null, // needed for restore incase of abort
 _key_path: Key.KeyPath,
 _unique: bool,
 _multi_entry: bool,
@@ -214,6 +216,26 @@ pub fn getName(self: *const IDBIndex) []const u8 {
     return self._name;
 }
 
+pub fn setName(self: *IDBIndex, name: []const u8, _: *Execution) !void {
+    try self.assertLive();
+    const t = self._store._txn;
+    if (t._mode != .versionchange) {
+        return error.InvalidStateError;
+    }
+    try t.assertActive();
+    if (std.mem.eql(u8, name, self._name)) {
+        return;
+    }
+    self._engine.renameIndex(self._index_id, name) catch |err| switch (err) {
+        error.Constraint => return error.ConstraintError,
+        else => return err,
+    };
+    if (self._original_name == null) {
+        self._original_name = self._name;
+    }
+    self._name = try t.dupe(name);
+}
+
 pub fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
     return idb.cachedKeyPathJs(&self._key_path_js, self._store._txn, self._key_path, exec);
 }
@@ -239,7 +261,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(IDBIndex.getName, null, .{});
+    pub const name = bridge.accessor(IDBIndex.getName, IDBIndex.setName, .{});
     pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
     pub const unique = bridge.accessor(IDBIndex.getUnique, null, .{});
     pub const multiEntry = bridge.accessor(IDBIndex.getMultiEntry, null, .{});

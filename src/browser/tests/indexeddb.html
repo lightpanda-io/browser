@@ -1189,7 +1189,6 @@
     });
 }
 </script>
-<<<<<<< HEAD
 
 <!-- put()/add() structured-clone the value at call time: the record is the
      clone as of the call (later mutation of the argument is not stored), a
@@ -1437,6 +1436,88 @@
         state.resolve(true);
     };
     await state.done((got) => testing.expectEqual(true, got));
+}
+</script>
+
+<!-- Object store and index renames during an upgrade: names, name lists and
+     data follow; same-name is a no-op; collisions are a ConstraintError;
+     outside an upgrade it's an InvalidStateError. -->
+<script id="rename_store_and_index" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("rename-db", 1);
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const books = db.createObjectStore("books", { keyPath: "isbn" });
+        books.createIndex("by_author", "author");
+        books.put({ isbn: 1, author: "Herbert" });
+        db.createObjectStore("other");
+
+        books.name = "renamed_books";
+        books.name = "renamed_books"; // same name: no-op
+        testing.expectError("ConstraintError", () => books.name = "other");
+        testing.expectEqual("renamed_books", books.name);
+        testing.expectEqual(["other", "renamed_books"], [...db.objectStoreNames]);
+        testing.expectEqual(books, e.target.transaction.objectStore("renamed_books"));
+
+        const index = books.index("by_author");
+        index.name = "by_writer";
+        testing.expectEqual("by_writer", index.name);
+        testing.expectEqual(["by_writer"], [...books.indexNames]);
+        testing.expectEqual(index, books.index("by_writer"));
+    };
+    open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("renamed_books", "readwrite");
+        const store = tx.objectStore("renamed_books");
+        testing.expectError("InvalidStateError", () => store.name = "nope");
+        testing.expectError("InvalidStateError", () => store.index("by_writer").name = "nope");
+        const req = store.index("by_writer").get("Herbert");
+        req.onsuccess = () => state.resolve(req.result);
+    };
+    await state.done((got) => testing.expectEqual({ isbn: 1, author: "Herbert" }, got));
+}
+</script>
+
+<!-- An aborted upgrade reverts renames on the handles the caller still holds. -->
+<script id="rename_reverts_on_abort" type=module>
+{
+    const state = await testing.async();
+    const setup = indexedDB.open("rename-abort-db", 1);
+    setup.onupgradeneeded = (e) => e.target.result.createObjectStore("books").createIndex("by_author", "author");
+    setup.onsuccess = () => {
+        setup.result.close();
+        const open = indexedDB.open("rename-abort-db", 2);
+        let store = null;
+        let index = null;
+        open.onupgradeneeded = (e) => {
+            const tx = e.target.transaction;
+            store = tx.objectStore("books");
+            index = store.index("by_author");
+            store.name = "renamed";
+            index.name = "renamed_index";
+            tx.abort();
+        };
+        open.onerror = (e) => {
+            e.preventDefault();
+            const reopen = indexedDB.open("rename-abort-db", 1);
+            reopen.onsuccess = () => {
+                const db = reopen.result;
+                state.resolve({
+                    store: store.name,
+                    index: index.name,
+                    stores: [...db.objectStoreNames],
+                    indexes: [...db.transaction("books").objectStore("books").indexNames],
+                });
+            };
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual("books", got.store);
+        testing.expectEqual("by_author", got.index);
+        testing.expectEqual(["books"], got.stores);
+        testing.expectEqual(["by_author"], got.indexes);
+    });
 }
 </script>
 </body>

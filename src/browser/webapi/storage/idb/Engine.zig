@@ -315,6 +315,15 @@ pub fn createObjectStore(
     return (try self.objectStoreId(database_id, name)).?;
 }
 
+// A duplicate name surfaces as error.Constraint.
+pub fn renameObjectStore(self: *Engine, object_store_id: i64, name: []const u8) !void {
+    try self.conn.exec("update idb_object_stores set name = ?2 where id = ?1", .{ object_store_id, name });
+}
+
+pub fn renameIndex(self: *Engine, index_id: i64, name: []const u8) !void {
+    try self.conn.exec("update idb_indexes set name = ?2 where id = ?1", .{ index_id, name });
+}
+
 pub fn deleteObjectStore(self: *Engine, database_id: i64, name: []const u8) !void {
     // caller has a transaction open; cascade drops records, indexes and index
     // records.
