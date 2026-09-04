@@ -403,22 +403,10 @@ fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
 fn isAdblocked(self: *const Client, transfer: *const Transfer) bool {
     const blocker = if (self.network.adblocker) |*b| b else return false;
     var buffers: AdBlocker.Request.Buffers = undefined;
-    const target = AdBlocker.Request.fromHttp(
-        &transfer.req,
-        adblockSourceUrl(transfer),
-        &buffers,
-    ) orelse return false;
+    const target = AdBlocker.Request.fromHttp(transfer, &buffers) orelse return false;
     const verdict = blocker.match(target);
     lp.metrics.adblock_verdicts.incr(verdict);
     return verdict == .blocked;
-}
-
-fn adblockSourceUrl(transfer: *const Transfer) ?[]const u8 {
-    var owner: *const Owner = transfer.owner orelse return null;
-    if (transfer.req.resource_type == .document) {
-        owner = owner.parent orelse return null;
-    }
-    return owner.documentUrl();
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
@@ -1822,11 +1810,6 @@ pub const Request = struct {
     // Whether this request should (possibly) be throttled based on the RateLimiter
     throttle: bool = false,
 
-    // Whether a `.document` request is loading a nested frame rather than the
-    // top-level page. The reason why is filter lists separate the two ($document vs
-    // $subdocument), and only ever block the latter.
-    is_subframe: bool = false,
-
     // Set by syncRequest; only used to label the http_requests metric.
     sync: bool = false,
 
@@ -2013,7 +1996,9 @@ pub const Owner = struct {
 
     // The parent frame's Owner; for a worker, its creating frame's. Outlives
     // this Owner: child frames are torn down before their parent, a worker
-    // before its frame.
+    // before its frame. A `.document` request's owner is the frame it
+    // navigates, so a parent here is what makes that load a nested frame's;
+    // the adblocker tells $document from $subdocument by it.
     parent: ?*const Owner,
 
     // Copied onto every request made through this owner, see Request.
@@ -3885,7 +3870,6 @@ const TestRequest = struct {
     /// The page embedding `document`, when the test wants a deeper chain.
     parent_document: [:0]const u8 = "",
     resource_type: Request.ResourceType = .document,
-    is_subframe: bool = false,
     internal: bool = false,
 };
 
@@ -3916,7 +3900,6 @@ fn testIsUrlBlocked(client: *const Client, opts: TestRequest) bool {
             .method = .GET,
             .url = opts.url,
             .resource_type = opts.resource_type,
-            .is_subframe = opts.is_subframe,
             .internal = opts.internal,
             .shutdown_callback = noopShutdown,
         },
@@ -3965,10 +3948,11 @@ test "HttpClient: adblock verdicts apply per request" {
         .resource_type = .xhr,
     }));
 
-    // A `.document` request is $subdocument only inside a nested frame.
+    // A `.document` request is $subdocument only inside a nested frame,
+    // which its owner chain tells: the navigated frame has a parent.
     try testing.expect(testIsUrlBlocked(&client, .{
         .url = "https://framed.example.com/",
-        .is_subframe = true,
+        .document = "https://news.com/",
     }));
     try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://framed.example.com/" }));
 
@@ -3986,16 +3970,13 @@ test "HttpClient: adblock verdicts apply per request" {
     }));
 
     // A top-level navigation is its own context: the page it was clicked on
-    // does not make it third-party...
-    try testing.expect(!testIsUrlBlocked(&client, .{
-        .url = "https://partied.example.com/",
-        .document = "https://news.com/",
-    }));
+    // is not in its owner chain (it only travels as cookie_origin, which the
+    // adblocker never reads), so nothing makes it third-party...
+    try testing.expect(!testIsUrlBlocked(&client, .{ .url = "https://partied.example.com/" }));
     // ...but a subframe loading the same URL keeps its document's context.
     try testing.expect(testIsUrlBlocked(&client, .{
         .url = "https://partied.example.com/",
         .document = "https://news.com/",
-        .is_subframe = true,
     }));
 
     // The context is the issuing frame's document even under a cross-site

@@ -118,29 +118,31 @@ pub const Request = struct {
         return request;
     }
 
-    /// Builds the request `req` is matched as, `source` being the URL (or
-    /// origin serialization) of the document it was issued from. null when
-    /// there is none.
-    pub fn fromHttp(
-        req: *const HttpClient.Request,
-        source_url: ?[]const u8,
-        buffers: *Buffers,
-    ) ?Request {
+    pub fn fromHttp(transfer: *const HttpClient.Transfer, buffers: *Buffers) ?Request {
+        const req = &transfer.req;
         const url = normalizeUrl(req.url, &buffers.url) orelse return null;
 
-        // Matching top-level nav against the page it was clicked on would make
-        // every link third party.
-        const top_level = req.resource_type == .document and !req.is_subframe;
-        const source_host = if (top_level)
-            ""
-        else if (source_url) |u|
-            URL.getOriginHostname(u)
-        else
-            "";
+        var owner: ?*const HttpClient.Owner = transfer.owner;
+        var subframe = false;
+        if (req.resource_type == .document) {
+            owner = if (owner) |o| o.parent else null;
+            subframe = owner != null;
+        }
+        const source_url = if (owner) |o| o.documentUrl() else null;
+        const source_host = if (source_url) |u| URL.getOriginHostname(u) else "";
         if (source_host.len > buffers.source.len) return null;
         const source = std.ascii.lowerString(&buffers.source, source_host);
 
-        return .init(url, source, resourceType(req));
+        const resource_type: NetworkFilter.ResourceTypes = switch (req.resource_type) {
+            .document => if (subframe) .{ .subdocument = true } else .{ .document = true },
+            .script => .{ .script = true },
+            .stylesheet => .{ .stylesheet = true },
+            .xhr, .fetch => .{ .xmlhttprequest = true },
+            .image => .{ .image = true },
+            .eventsource => .{ .other = true },
+        };
+
+        return .init(url, source, resource_type);
     }
 
     inline fn tokens(self: *const Request) []const u32 {
@@ -162,17 +164,6 @@ pub const Request = struct {
         @memcpy(out[0..upper], trimmed[0..upper]);
         _ = std.ascii.lowerString(out[upper..], trimmed[upper..]);
         return out;
-    }
-
-    fn resourceType(req: *const HttpClient.Request) NetworkFilter.ResourceTypes {
-        return switch (req.resource_type) {
-            .document => if (req.is_subframe) .{ .subdocument = true } else .{ .document = true },
-            .script => .{ .script = true },
-            .stylesheet => .{ .stylesheet = true },
-            .xhr, .fetch => .{ .xmlhttprequest = true },
-            .image => .{ .image = true },
-            .eventsource => .{ .other = true },
-        };
     }
 };
 
