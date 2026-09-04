@@ -55,6 +55,7 @@ _on_navigatesuccess: ?js.Function.Global = null,
 _on_navigateerror: ?js.Function.Global = null,
 
 _current_navigation_kind: ?NavigationKind = null,
+_pending_finished: ?js.PromiseResolver.Global = null,
 
 _index: usize = 0,
 // Need to be stable pointers, because Events can reference entries.
@@ -83,6 +84,9 @@ pub fn onRemoveFrame(self: *Navigation) void {
         if (entry._on_dispose) |cb| cb.release();
         entry._on_dispose = null;
     }
+
+    if (self._pending_finished) |p| p.release();
+    self._pending_finished = null;
 }
 
 pub fn getActivation(self: *const Navigation) ?NavigationActivation {
@@ -191,6 +195,41 @@ pub fn commitNavigation(self: *Navigation, frame: *Frame) !void {
         ._entry = self.getCurrentEntry(),
         ._type = kind.toNavigationType(),
     };
+}
+
+fn commitSameDocumentNavigation(
+    self: *Navigation,
+    url: [:0]const u8,
+    new_url: [:0]const u8,
+    kind: NavigationKind,
+    previous: *NavigationHistoryEntry,
+    committed: js.PromiseResolver,
+    finished: js.PromiseResolver,
+    comptime source: []const u8,
+    frame: *Frame,
+) !void {
+    frame.url = new_url;
+    const location = try Location.init(frame.url, frame);
+    location.acquireRef();
+    frame.window._location.releaseRef(frame._page);
+    frame.window._location = location;
+    committed.resolve(source, {});
+
+    switch (kind) {
+        .push => |state| {
+            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, false);
+        },
+        .replace => |state| {
+            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, false);
+        },
+        .traverse => |index| {
+            self._index = index;
+        },
+        .reload => unreachable,
+    }
+
+    self._pending_finished = try finished.persist();
+    self.fireCurrentEntryChangeEvent(previous, kind, frame);
 }
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
@@ -417,11 +456,21 @@ fn fireNavigateEvent(
 }
 
 fn resolveFinished(self: *Navigation, resolver: js.PromiseResolver, comptime source: []const u8, frame: *Frame) void {
+    if (self._pending_finished) |p| {
+        p.release();
+        self._pending_finished = null;
+    }
+
     resolver.resolve(source, {});
     self.fireNavigateSuccess(frame);
 }
 
 fn rejectFinished(self: *Navigation, resolver: js.PromiseResolver, reason: js.Value, frame: *Frame) void {
+    if (self._pending_finished) |p| {
+        p.release();
+        self._pending_finished = null;
+    }
+
     resolver.rejectValue(reason) catch |err| {
         log.warn(.event, "Navigation.intercept reject", .{ .err = err });
     };
@@ -509,11 +558,16 @@ const NavigateOptions = struct {
     state: ?js.Value = null,
 };
 
-fn refreshLocation(frame: *Frame) !void {
-    const location = try Location.init(frame.url, frame);
-    location.acquireRef();
-    frame.window._location.releaseRef(frame._page);
-    frame.window._location = location;
+fn abortPendingNavigation(self: *Navigation, frame: *Frame) void {
+    const pending = self._pending_finished orelse return;
+    self._pending_finished = null;
+
+    const local = frame.js.local.?;
+    const resolver = pending.local(local);
+
+    resolver.rejectError("Navigation was aborted", .{ .dom_exception = .{ .err = error.AbortError } });
+    // self.fireNavigateError(reason, frame);
+    pending.release();
 }
 
 pub fn navigateSameDocument(
@@ -523,6 +577,8 @@ pub fn navigateSameDocument(
     source_element: ?*Element,
     frame: *Frame,
 ) !NavigationReturn {
+    self.abortPendingNavigation(frame);
+
     const arena = frame._session.arena;
     const local = frame.js.local.?;
     const committed = local.createPromiseResolver();
@@ -575,38 +631,54 @@ pub fn navigateSameDocument(
     }
 
     switch (kind) {
-        .push => |state| {
-            frame.url = new_url;
-            try refreshLocation(frame);
-            committed.resolve("navigation push", {});
-            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+        .push => {
+            try self.commitSameDocumentNavigation(
+                url,
+                new_url,
+                kind,
+                previous,
+                committed,
+                finished,
+                "navigation push",
+                frame,
+            );
 
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
                 self.resolveFinished(finished, "navigation push", frame);
             }
-            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
         },
-        .replace => |state| {
-            frame.url = new_url;
-            try refreshLocation(frame);
-            committed.resolve("navigation replace", {});
-            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+        .replace => {
+            try self.commitSameDocumentNavigation(
+                url,
+                new_url,
+                kind,
+                previous,
+                committed,
+                finished,
+                "navigation replace",
+                frame,
+            );
+            self._pending_finished = try finished.persist();
 
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
                 self.resolveFinished(finished, "navigation replace", frame);
             }
-            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
         },
-        .traverse => |index| {
-            self._index = index;
-            frame.url = new_url;
-            try refreshLocation(frame);
-            committed.resolve("navigation traverse", {});
-            self.fireCurrentEntryChangeEvent(previous, kind, frame);
+        .traverse => {
+            try self.commitSameDocumentNavigation(
+                url,
+                new_url,
+                kind,
+                previous,
+                committed,
+                finished,
+                "navigation traverse",
+                frame,
+            );
 
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
@@ -635,6 +707,8 @@ pub fn navigateInner(
     kind: NavigationKind,
     frame: *Frame,
 ) !NavigationReturn {
+    self.abortPendingNavigation(frame);
+
     const arena = frame._session.arena;
     const url = _url orelse return error.MissingURL;
 
