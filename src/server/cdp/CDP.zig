@@ -640,17 +640,26 @@ pub const BrowserContext = struct {
         self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
-    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-        // The name is the world's identity (matching Chrome). Clients re-issue
-        // this call after every navigation; appending a duplicate each time
-        // would grow the per-page context count without bound.
+    pub const GetOrPutIsolatedWorld = struct {
+        world: *IsolatedWorld,
+        found_existing: bool,
+    };
+
+    pub fn findIsolatedWorld(self: *const BrowserContext, world_name: []const u8) ?*IsolatedWorld {
         for (self.isolated_worlds.items) |world| {
             if (std.mem.eql(u8, world.name, world_name)) {
-                if (world.grant_universal_access != grant_universal_access) {
-                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
-                }
                 return world;
             }
+        }
+        return null;
+    }
+
+    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !GetOrPutIsolatedWorld {
+        if (self.findIsolatedWorld(world_name)) |world| {
+            if (world.grant_universal_access != grant_universal_access) {
+                log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+            }
+            return .{ .world = world, .found_existing = true };
         }
 
         const browser = &self.cdp.browser;
@@ -667,7 +676,19 @@ pub const BrowserContext = struct {
 
         try self.isolated_worlds.append(self.arena, world);
 
-        return world;
+        return .{ .world = world, .found_existing = false };
+    }
+
+    // only called when we fail to fully create a world (e.g. errdefer in
+    // Page.createIsolatedWorld).
+    pub fn removeIsolatedWorld(self: *BrowserContext, world: *IsolatedWorld) void {
+        for (self.isolated_worlds.items, 0..) |w, i| {
+            if (w == world) {
+                _ = self.isolated_worlds.swapRemove(i);
+                world.deinit();
+                return;
+            }
+        }
     }
 
     pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
@@ -1165,12 +1186,16 @@ pub const BrowserContext = struct {
 const ScriptOnNewDocument = struct {
     identifier: u32,
     source: []const u8,
+    // Page.addScriptToEvaluateOnNewDocument's worldName. null means the main
+    // world. A named world is seeded into every frame (see IsolatedWorld).
+    world_name: ?[]const u8,
 };
 
 /// An isolated world is identified by its name and has one V8::Context per
-// it was requested it. Generally the client needs to resolve a node into the
-// isolated world to be able to work with it.
-///
+/// frame it has been seeded into. A world enters a frame on an explicit
+/// trigger: Page.createIsolatedWorld or, or a preload script which is seeded
+/// into every frame. Once seeded, the frame's context is rebuilt on every
+/// navigation with no further client involvement.
 /// Frame ids are stable across a child frame's re-navigation (the Frame is
 /// torn down and re-initialized in place), so a per-frame context is removed
 /// on frame_destroyed and created again on the frame's next frame_navigated.
@@ -1180,6 +1205,9 @@ pub const IsolatedWorld = struct {
     name: []const u8,
     grant_universal_access: bool,
     contexts: std.ArrayList(FrameContext) = .empty,
+
+    // Frames this world has been seeded into, by frame id.
+    seeded_frames: std.ArrayList(u32) = .empty,
 
     // Identity tracking for this isolated world (separate from main world).
     // Shared by all of the world's frame contexts, like the main world shares
@@ -1199,6 +1227,17 @@ pub const IsolatedWorld = struct {
     pub fn deinit(self: *IsolatedWorld) void {
         self.removeAllContexts();
         self.arena.release();
+    }
+
+    pub fn seed(self: *IsolatedWorld, frame_id: u32) !void {
+        if (self.isSeeded(frame_id)) {
+            return;
+        }
+        return self.seeded_frames.append(self.arena.allocator(), frame_id);
+    }
+
+    pub fn isSeeded(self: *const IsolatedWorld, frame_id: u32) bool {
+        return std.mem.indexOfScalar(u32, self.seeded_frames.items, frame_id) != null;
     }
 
     // Keyed by Frame, not frame id: a retired root Page keeps its frame id

@@ -158,6 +158,18 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
     }
 
+    // A worldName registers the world itself:
+    var world_name: ?[]const u8 = null;
+    if (params.worldName) |name| {
+        if (name.len > 0) {
+            const gop = try bc.createIsolatedWorld(name, true);
+            // Borrowed from the world's arena, which outlives the script: a
+            // world is only ever removed on the createIsolatedWorld command's
+            // own error path, before any script can name it.
+            world_name = gop.world.name;
+        }
+    }
+
     const script_id = bc.next_script_id;
     bc.next_script_id += 1;
 
@@ -165,6 +177,7 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
     try bc.scripts_on_new_document.append(bc.arena, .{
         .identifier = script_id,
         .source = source_dupe,
+        .world_name = world_name,
     });
 
     var id_buf: [16]u8 = undefined;
@@ -251,7 +264,16 @@ fn createIsolatedWorld(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
-    const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
+    const gop = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
+    const world = gop.world;
+
+    errdefer if (gop.found_existing == false) {
+        bc.removeIsolatedWorld(world);
+    };
+
+    // Seed before creating: frameNavigated only rebuilds contexts for frames
+    // the world was seeded into.
+    try world.seed(frame._frame_id);
 
     // use the existing world context for a frame if we have it, else create one
     const js_context = world.contextFor(frame) orelse try createIsolatedWorldContext(cmd.arena, bc, world, frame, null);
@@ -272,8 +294,13 @@ fn createIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: 
 }
 
 // Registers a world context with the inspector, which assigns the id clients
-// use and sends Runtime.executionContextCreated. Registering a context again
-// assigns it a new id, so this only happens when the previous id is gone.
+// use and sends Runtime.executionContextCreated. We may re-register a living
+// context, the client will get a new id, but both ids are still valid. This
+// happens when we fast-path via `canNavigateInPlace`, `frameNavigated` still
+// fires so registerIsolatedWorldContext gets re-called for the same context.
+// Not the end of the world since it's bound to a single about:blank -> navigate
+// and necessary since we call executionContextsCleared which tells the client
+// the old id is invalid
 fn registerIsolatedWorldContext(arena: Allocator, bc: *CDP.BrowserContext, world: *CDP.IsolatedWorld, js_context: *js.Context, frame: *const Frame, loader_id: ?[]const u8) !void {
     const frame_id = &id.toFrameId(frame._frame_id);
     const aux_data = if (loader_id) |lid|
@@ -721,7 +748,17 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             is_root_frame,
         );
     }
-    // Each known world must get a context per frame
+    // A worldName preload script seeds its world into every frame. This is the
+    // only way for a world to reach a frame besides the explicit Page.createIsolatedWorld.
+    for (bc.scripts_on_new_document.items) |script| {
+        const world = bc.findIsolatedWorld(script.world_name orelse continue) orelse continue;
+        world.seed(frame._frame_id) catch |err| {
+            log.warn(.cdp, "isolated world seed", .{ .err = err, .world = world.name, .frame_id = frame._frame_id });
+        };
+    }
+
+    // Every world seeded into this frame gets a context, rebuilt on each
+    // navigation as blink rebuilds a detached isolated-world window proxy.
     for (bc.isolated_worlds.items) |isolated_world| {
         if (isolated_world.contextFor(frame)) |js_context| {
             // The context was already created ahead of time (createIsolatedWorld).
@@ -737,6 +774,10 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             continue;
         }
 
+        if (!isolated_world.isSeeded(frame._frame_id)) {
+            continue;
+        }
+
         _ = createIsolatedWorldContext(arena, bc, isolated_world, frame, loader_id) catch |err| {
             log.warn(.cdp, "isolated world context", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
         };
@@ -746,21 +787,24 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // Must run after the execution context is created but before the client
     // receives frameNavigated/loadEventFired so polyfills are available for
     // subsequent CDP commands.
-    if (bc.scripts_on_new_document.items.len > 0) {
+    for (bc.scripts_on_new_document.items) |script| {
+        const js_context = if (script.world_name) |name| blk: {
+            const world = bc.findIsolatedWorld(name) orelse continue;
+            break :blk world.contextFor(frame) orelse continue;
+        } else frame.js;
+
         var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
+        js_context.localScope(&ls);
         defer ls.deinit();
 
-        for (bc.scripts_on_new_document.items) |script| {
-            var try_catch: lp.js.TryCatch = undefined;
-            try_catch.init(&ls.local);
-            defer try_catch.deinit();
+        var try_catch: lp.js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
 
-            ls.local.eval(script.source, null) catch |err| {
-                const caught = try_catch.caughtOrError(arena, err);
-                log.warn(.cdp, "script on new doc", .{ .caught = caught });
-            };
-        }
+        ls.local.eval(script.source, null) catch |err| {
+            const caught = try_catch.caughtOrError(arena, err);
+            log.warn(.cdp, "script on new doc", .{ .caught = caught });
+        };
     }
 
     // The DOM.documentUpdated event must be send after the frameNavigated one.
@@ -1361,6 +1405,82 @@ test "cdp.frame: createIsolatedWorld targets the requested frame" {
         .contextId = root_ctx,
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Parent jobs" } }, .{ .id = 37 });
+}
+
+// Chrome only puts a world in a frame on an explicit trigger. A world the
+// client asked for on the root must not appear in a sibling frame just
+// because that frame navigated afterwards.
+test "cdp.frame: an unseeded frame gets no isolated world context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IWS", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 30, .method = "Runtime.enable", .sessionId = "SID-X" });
+    try ctx.processMessage(.{ .id = 31, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+
+    const world = bc.findIsolatedWorld("utility") orelse unreachable;
+    try testing.expect(world.contextFor(root) != null);
+
+    // Navigating the child is what used to create a context for it.
+    try ctx.processMessage(.{ .id = 32, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.querySelector('iframe').src = 'isolated_world_two.html'",
+    } });
+    try testing.waitForPage(bc);
+
+    try testing.expect(world.isSeeded(root._frame_id));
+    try testing.expect(world.isSeeded(child._frame_id) == false);
+    try testing.expect(world.contextFor(child) == null);
+}
+
+// A worldName preload script is the one trigger that reaches frames the client
+// never named, matching blink's InjectScripts. Puppeteer relies on it to give
+// dynamically-added iframes a utility world.
+test "cdp.frame: a worldName preload script seeds every frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IWP", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+
+    try ctx.processMessage(.{ .id = 30, .method = "Runtime.enable", .sessionId = "SID-X" });
+    try ctx.processMessage(.{ .id = 31, .method = "Page.addScriptToEvaluateOnNewDocument", .params = .{
+        .source = "globalThis.__seeded = 'yes';",
+        .worldName = "utility",
+    } });
+
+    // Registering the script registers the world, but seeds nothing yet.
+    const world = bc.findIsolatedWorld("utility") orelse unreachable;
+    try testing.expect(world.contextFor(child) == null);
+
+    try ctx.processMessage(.{ .id = 32, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.querySelector('iframe').src = 'isolated_world_two.html'",
+    } });
+    try testing.waitForPage(bc);
+
+    // The child was never named in a Page.createIsolatedWorld, but the script
+    // seeded it on navigation.
+    try testing.expect(world.isSeeded(child._frame_id));
+    const child_ctx = try isolatedWorldContextId(bc, child);
+    try ctx.processMessage(.{ .id = 33, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "__seeded",
+        .contextId = child_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "yes" } }, .{ .id = 33 });
+
+    // ...and ran there, not in the main world.
+    try ctx.processMessage(.{ .id = 34, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "typeof globalThis.__seeded",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "undefined" } }, .{ .id = 34 });
 }
 
 // puppeteer: the utility world is created on the bootstrap about:blank and
