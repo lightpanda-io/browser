@@ -1012,7 +1012,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
         const resolved_kind: NavigationKind = switch (opts.kind) {
-            .push => .{ .replace = null },
+            .push => switch (nt) {
+                .script => .{ .replace = null },
+                else => opts.kind,
+            },
             else => opts.kind,
         };
         _ = try session.navigation.navigateSameDocument(resolved_url, resolved_kind, target);
