@@ -36,6 +36,7 @@ const Navigation = @This();
 pub const Proto = EventTarget;
 
 const Location = @import("../Location.zig");
+const Element = @import("../Element.zig");
 
 const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationActivation = @import("NavigationActivation.zig");
@@ -362,6 +363,7 @@ fn fireNavigateEvent(
     hash_change: bool,
     can_intercept: bool,
     info: ?js.Value,
+    source_element: ?*Element,
     frame: *Frame,
 ) !*NavigateEvent {
     const event = try NavigateEvent.initTrusted(
@@ -375,6 +377,7 @@ fn fireNavigateEvent(
             .destination = destination,
             .downloadRequest = null,
             .info = info,
+            .sourceElement = source_element,
             .hasUAVisualTransition = false,
         },
         frame,
@@ -501,6 +504,7 @@ pub fn navigateSameDocument(
     self: *Navigation,
     url: [:0]const u8,
     kind: NavigationKind,
+    source_element: ?*Element,
     frame: *Frame,
 ) !NavigationReturn {
     const arena = frame._session.arena;
@@ -540,6 +544,7 @@ pub fn navigateSameDocument(
         hash_change,
         true,
         null,
+        source_element,
         frame,
     );
     defer navigate_event._destination._arena.release();
@@ -630,7 +635,7 @@ pub fn navigateInner(
     const is_same_document = URL.eqlDocument(new_url, frame.url);
 
     if (is_same_document and kind != .reload) {
-        return self.navigateSameDocument(url, kind, frame);
+        return self.navigateSameDocument(url, kind, null, frame);
     }
 
     const local = frame.js.local.?;
@@ -660,6 +665,7 @@ pub fn navigateInner(
         false,
         false,
         false,
+        null,
         null,
         frame,
     );
