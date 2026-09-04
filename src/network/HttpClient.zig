@@ -29,7 +29,7 @@ const URL = @import("../browser/URL.zig");
 const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const Cookie = @import("../browser/webapi/storage/Cookie.zig");
-const CookieJar = Cookie.Jar;
+const Performance = @import("../browser/webapi/Performance.zig");
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -40,6 +40,7 @@ const UrlBlocklist = @import("UrlBlocklist.zig");
 pub const BlockPattern = UrlBlocklist.Pattern;
 
 const log = lp.log;
+const CookieJar = Cookie.Jar;
 const Allocator = std.mem.Allocator;
 
 pub const Method = http.Method;
@@ -1113,7 +1114,7 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
     switch (cache_result) {
         .hit => |cached| {
             lp.metrics.http_cache.incr(.hit);
-            try transfer.bufferCached(cached);
+            try transfer.bufferCached(cached, .local);
             return true;
         },
         .revalidate => |cached| {
@@ -1170,7 +1171,7 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     };
 
     lp.metrics.http_cache.incr(.revalidated);
-    try transfer.bufferCached(stale);
+    try transfer.bufferCached(stale, .validated);
     return true;
 }
 
@@ -1363,6 +1364,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     };
     transfer._conn = conn;
     transfer.state = .inflight;
+    transfer._timing.hop_start = lp.datetime.microTimestamp(.boot);
 
     // Start the request (and move along any other request).
     _ = try self.handles.perform();
@@ -1740,6 +1742,7 @@ pub const Request = struct {
         stylesheet,
         eventsource,
         image,
+        worker,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1754,6 +1757,7 @@ pub const Request = struct {
                 .stylesheet => "Stylesheet",
                 .eventsource => "EventSource",
                 .image => "Image",
+                .worker => "Script",
             };
         }
     };
@@ -1940,6 +1944,7 @@ fn fulfillRedirect(
         }
     }
 
+    transfer.redirectTiming(headers);
     try transfer.applyRedirectTarget(transfer.req.url, location, status);
     try self.pipeline(transfer, .after_intercept);
 }
@@ -2005,6 +2010,7 @@ pub const Owner = struct {
     document_frame_id: u32,
     loader_id: u32,
     cookie_jar: *CookieJar,
+    performance: *Performance,
     notification: *Notification,
 
     const Blob = @import("../browser/webapi/Blob.zig");
@@ -2143,6 +2149,7 @@ pub const Transfer = struct {
 
     _conn_id: i64 = 0,
     _conn_reused: bool = false,
+    _timing: ResourceTiming = .{},
 
     // Set by the first deinit. A retired transfer is unlinked from
     // everything and sits on client.graveyard
@@ -2264,6 +2271,7 @@ pub const Transfer = struct {
             return;
         }
 
+        self._timing.start(self.req.url);
         self.client.pipeline(self, .start) catch |err| {
             self.abortPipelineError(err);
             return err;
@@ -2609,6 +2617,12 @@ pub const Transfer = struct {
             });
         }
 
+        if (err != error.TransferCanceled) {
+            // A failed fetch gets recorded. A cancelled fetch, doesn't.
+            // (aborted is already skipped above)
+            self.recordResourceTiming();
+        }
+
         self._outcome_delivered = true;
         self.req.error_callback(self.req.ctx, err);
     }
@@ -2661,6 +2675,183 @@ pub const Transfer = struct {
         self.client.dispatch_count += 1;
     }
 
+    fn captureTiming(self: *Transfer, conn: *const http.Connection) void {
+        const t = &self._timing;
+        const ct = conn.getTiming() catch return;
+        const base = t.hop_start + ct.queue;
+        const tls = std.mem.startsWith(u8, self.req.url, "https://");
+
+        if (self._conn_reused) {
+            // Nothing was resolved or connected for this fetch
+            t.dns_start = t.fetch_start;
+            t.dns_end = t.fetch_start;
+            t.connect_start = t.fetch_start;
+            t.connect_end = t.fetch_start;
+            t.secure_start = if (tls) t.fetch_start else 0;
+        } else {
+            t.dns_start = base;
+            t.dns_end = base + ct.namelookup;
+            t.connect_start = t.dns_end;
+            t.connect_end = base + @max(ct.connect, ct.appconnect);
+            t.secure_start = if (tls) base + ct.connect else 0;
+        }
+        t.request_start = base + ct.pretransfer;
+        t.response_start = base + ct.starttransfer;
+        // the stream's response_end will get captured in recordResourceTiming
+        t.response_end = if (self.req.streaming) 0 else base + ct.total;
+
+        t.encoded_body_size = conn.getDownloadSize() catch 0;
+        t.protocol = switch (conn.getHttpVersion() catch .none) {
+            .v1_0 => "http/1.0",
+            .v1_1 => "http/1.1",
+            .v2 => "h2",
+            .v3 => "h3",
+            else => "",
+        };
+    }
+
+    fn redirectTiming(self: *Transfer, headers: []const http.Header) void {
+        const t = &self._timing;
+        const now = lp.datetime.microTimestamp(.boot);
+        if (t.redirect_start == 0) {
+            t.redirect_start = t.start_time;
+        }
+        t.redirect_end = now;
+        t.fetch_start = now;
+        if (t.timing_allow) {
+            const target = self.timingTarget() orelse return;
+            t.timing_allow = timingAllowPassed(target.origin, self.req.url, headers, t.tainted);
+        }
+    }
+
+    // If A -> B -> A, we sent the tainted flag (on the B -> A transition) so
+    // that we know how to apply the timing-allow-origin header.
+    fn redirectTaint(self: *Transfer, url: []const u8) void {
+        const target = self.timingTarget() orelse return;
+        const origin = target.origin orelse "null";
+        if (!URL.isSameOrigin(self.req.url, origin) and !URL.isSameOrigin(url, self.req.url)) {
+            self._timing.tainted = true;
+        }
+    }
+
+    const TimingTarget = struct {
+        origin: ?[]const u8,
+        performance: *Performance,
+    };
+
+    fn timingTarget(self: *const Transfer) ?TimingTarget {
+        const owner = self.owner orelse return null;
+        const target: *const Owner = if (self.req.resource_type == .document)
+            owner.parent orelse return null
+        else
+            owner;
+        return .{ .performance = target.performance, .origin = target.origin.* };
+    }
+
+    // https://fetch.spec.whatwg.org/#concept-tao-check
+    fn timingAllowPassed(document_origin: ?[]const u8, url: []const u8, headers: []const http.Header, tainted: bool) bool {
+        const origin = document_origin orelse "null";
+        if (!tainted and URL.isSameOrigin(url, origin)) {
+            return true;
+        }
+        for (headers) |hdr| {
+            if (!std.ascii.eqlIgnoreCase(hdr.name, "timing-allow-origin")) {
+                continue;
+            }
+            var it = std.mem.splitScalar(u8, hdr.value, ',');
+            while (it.next()) |part| {
+                const value = std.mem.trim(u8, part, " \t");
+                if (std.mem.eql(u8, value, "*") or (!tainted and std.mem.eql(u8, value, origin))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Timing gets passed to the owner
+    fn recordResourceTiming(self: *Transfer) void {
+        const t = &self._timing;
+        if (t.recorded or t.start_time == 0 or self.req.internal) {
+            return;
+        }
+        t.recorded = true;
+        const target = self.timingTarget() orelse return;
+
+        if (t.response_end == 0) {
+            // Cache hit, interceptor-fulfilled, or failed: delivered now.
+            t.response_end = lp.datetime.microTimestamp(.boot);
+        }
+        // Force phases that never happened to fetch_start
+        inline for (.{ "dns_start", "dns_end", "connect_start", "connect_end", "request_start", "response_start" }) |phase| {
+            if (@field(t, phase) == 0) {
+                @field(t, phase) = t.fetch_start;
+            }
+        }
+
+        var status: u16 = 0;
+        var content_type: []const u8 = "";
+        var timing_allow = false;
+        if (self.res.header) |*rh| {
+            status = rh.status;
+            content_type = rh.contentType() orelse "";
+            timing_allow = t.timing_allow and timingAllowPassed(target.origin, self.req.url, self.res.headers, t.tainted);
+        }
+
+        // A cached body is stored decoded; its wire size is long gone. A
+        // headers_only fetch (images) tears the body off the wire: the
+        // Content-Length, else whatever arrived before the abort, is the
+        // best size we have for both.
+        var decoded_body_size = t.decoded_body_size;
+        var encoded_body_size = if (t.cache == .none) t.encoded_body_size else decoded_body_size;
+        if (self.req.headers_only) {
+            const known = if (self._content_length > 0) self._content_length else t.encoded_body_size;
+            decoded_body_size = known;
+            encoded_body_size = known;
+        }
+
+        target.performance.addResource(.{
+            .name = t.url,
+            .initiator = switch (self.req.resource_type) {
+                // A document fetch only makes the timeline as a child frame.
+                .document => "iframe",
+                .xhr => "xmlhttprequest",
+                .script => "script",
+                .fetch => "fetch",
+                .stylesheet => "link",
+                .eventsource, .worker => "other",
+                .image => "img",
+            },
+            .protocol = t.protocol,
+            .start = t.start_time,
+            .redirect_start = t.redirect_start,
+            .redirect_end = t.redirect_end,
+            .fetch_start = t.fetch_start,
+            .dns_start = t.dns_start,
+            .dns_end = t.dns_end,
+            .connect_start = t.connect_start,
+            .connect_end = t.connect_end,
+            .secure_start = t.secure_start,
+            .request_start = t.request_start,
+            .response_start = t.response_start,
+            .response_end = t.response_end,
+            .transfer_size = switch (t.cache) {
+                .none => encoded_body_size + 300, // +300 is per spec
+                .validated => 300,
+                .local => 0,
+            },
+            .encoded_body_size = encoded_body_size,
+            .decoded_body_size = decoded_body_size,
+            .status = status,
+            .content_type = content_type,
+            .content_encoding = findHeader(self.res.headers, "content-encoding") orelse "",
+            .from_cache = t.cache != .none,
+            .timing_allow = timing_allow,
+        }) catch |err| {
+            log.err(.http, "resource timing", .{ .err = err, .req = self });
+        };
+    }
+
     // Buffer the standard success event sequence. `body` is either owned by
     // transfer.arena OR, through some other mechanism, outlives the transfer.
     fn bufferEvents(self: *Transfer, body: []const u8) !void {
@@ -2707,7 +2898,7 @@ pub const Transfer = struct {
 
     // Serve a cache entry as this transfer's response. Takes ownership of
     // `cached` (file-backed bodies are read into the arena and closed).
-    fn bufferCached(self: *Transfer, cached: Cache.CachedResponse) !void {
+    fn bufferCached(self: *Transfer, cached: Cache.CachedResponse, cache_state: ResourceTiming.CacheState) !void {
         const body: []const u8 = switch (cached.data) {
             .buffer => |b| b,
         };
@@ -2715,6 +2906,7 @@ pub const Transfer = struct {
         self.setResponseHead(cached.status, cached.content_type);
         self.res.headers = cached.headers;
         self._from_cache = true;
+        self._timing.cache = cache_state;
         self._content_length = body.len;
         try self.bufferEvents(body);
     }
@@ -2763,6 +2955,7 @@ pub const Transfer = struct {
         const conn_id = conn.getConnId() catch -1;
         self._conn_id = if (conn_id < 0) 0 else conn_id + 1;
         self._conn_reused = conn.isConnReused() catch false;
+        self.captureTiming(conn);
 
         const arena = self.arena;
 
@@ -2941,6 +3134,7 @@ pub const Transfer = struct {
         // fresh arena-owned copy that gets stored in transfer.req.url.
         const base_url = try conn.getEffectiveUrl();
         const status = try conn.getResponseCode();
+        transfer.redirectTiming(transfer.res.headers);
         try transfer.applyRedirectTarget(std.mem.span(base_url), location, status);
     }
 
@@ -2992,6 +3186,7 @@ pub const Transfer = struct {
             transfer.removeHeader("Authorization");
         }
 
+        transfer.redirectTaint(url);
         try transfer.updateURL(url);
         // 301, 302, 303 → change to GET, drop body.
         // 307, 308 → keep method and body.
@@ -3432,6 +3627,7 @@ pub const Transfer = struct {
                             .transfer = transfer,
                         });
                     }
+                    transfer._timing.decoded_body_size += chunk.len;
                     req.data_callback(transfer, chunk) catch |err| {
                         return transfer.failDelivery(err);
                     };
@@ -3454,6 +3650,7 @@ pub const Transfer = struct {
                             .transfer = transfer,
                         });
                     }
+                    transfer._timing.decoded_body_size += chunk.len;
                     req.data_callback(transfer, chunk) catch |err| {
                         return transfer.failDelivery(err);
                     };
@@ -3467,6 +3664,9 @@ pub const Transfer = struct {
                             .content_length = transfer._content_length,
                         });
                     }
+                    // Before done_callback: a load handler can already see
+                    // the entry, as in a browser.
+                    transfer.recordResourceTiming();
                     transfer._outcome_delivered = true;
                     req.done_callback(req.ctx) catch |err| {
                         return transfer.failDelivery(err);
@@ -3497,6 +3697,51 @@ pub const Transfer = struct {
             self.req.shutdown_callback(self.req.ctx);
         }
         self.deinit();
+    }
+};
+
+// What a transfer collects for its PerformanceResourceTiming entry. Absolute
+// boot-clock microseconds, 0 = not (yet) known. Lives on the Transfer, not
+// on Response: the redirect fields span hops and reset() must not clear it.
+const ResourceTiming = struct {
+    // The URL as requested; the entry's name. Redirects rewrite req.url.
+    url: [:0]const u8 = "",
+    start_time: u64 = 0,
+    redirect_start: u64 = 0,
+    redirect_end: u64 = 0,
+    // Start of the final hop (== start_time without a redirect).
+    fetch_start: u64 = 0,
+    // When the current hop's conn was handed to the multi.
+    hop_start: u64 = 0,
+    dns_start: u64 = 0,
+    dns_end: u64 = 0,
+    connect_start: u64 = 0,
+    connect_end: u64 = 0,
+    secure_start: u64 = 0,
+    request_start: u64 = 0,
+    response_start: u64 = 0,
+    response_end: u64 = 0,
+    // Wire bytes, from libcurl; body bytes handed to the consumer, counted
+    // as they're delivered (so a cache hit or a stream is right too).
+    encoded_body_size: u64 = 0,
+    decoded_body_size: u64 = 0,
+    protocol: []const u8 = "",
+    cache: CacheState = .none,
+    // Cleared by the first redirect response that fails the TAO check.
+    timing_allow: bool = true,
+    // Set once a redirect hops from one foreign origin to another; from then
+    // on only a wildcard Timing-Allow-Origin passes, same-origin included.
+    // https://fetch.spec.whatwg.org/#concept-request-tainted-origin
+    tainted: bool = false,
+    recorded: bool = false,
+
+    const CacheState = enum { none, local, validated };
+
+    fn start(self: *ResourceTiming, url: [:0]const u8) void {
+        const now = lp.datetime.microTimestamp(.boot);
+        self.url = url;
+        self.start_time = now;
+        self.fetch_start = now;
     }
 };
 
@@ -3638,6 +3883,7 @@ fn testOwner() Owner {
         .loader_id = 0,
         .cookie_jar = undefined,
         .notification = undefined,
+        .performance = undefined,
     };
 }
 const AdBlocker = @import("adblock/AdBlocker.zig");

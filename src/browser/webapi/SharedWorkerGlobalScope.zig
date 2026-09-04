@@ -104,7 +104,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         .ctx = self,
         .method = .GET,
         .url = owned_url,
-        .resource_type = .script,
+        .resource_type = .worker,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,

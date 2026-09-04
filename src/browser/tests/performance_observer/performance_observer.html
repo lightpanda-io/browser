@@ -71,7 +71,7 @@
 </script>
 
 <script>
-  testing.expectEqual(['mark', 'measure'], PerformanceObserver.supportedEntryTypes);
+  testing.expectEqual(['mark', 'measure', 'resource'], PerformanceObserver.supportedEntryTypes);
 </script>
 
 <script id="list_get_entries_by_type">
@@ -171,6 +171,39 @@
     testing.expectEqual(2, receivedEntries.length);
     testing.expectEqual("early1", receivedEntries[0].name);
     testing.expectEqual("early2", receivedEntries[1].name);
+  });
+}
+</script>
+
+<script id="observe_mode_is_fixed">
+{
+  const observer = new PerformanceObserver(() => {});
+  observer.observe({ entryTypes: ["mark"] });
+  testing.expectError("InvalidModificationError", () => observer.observe({ type: "mark" }));
+  observer.disconnect();
+
+  const single = new PerformanceObserver(() => {});
+  single.observe({ type: "mark" });
+  testing.expectError("InvalidModificationError", () => single.observe({ entryTypes: ["mark"] }));
+  testing.expectError("TypeError", () => single.observe({ type: "mark", entryTypes: ["mark"] }));
+  testing.expectError("TypeError", () => single.observe({}));
+  single.disconnect();
+}
+</script>
+
+<script id="buffered_ignored_with_entry_types" type=module>
+{
+  const state = await testing.async();
+  performance.mark("before_observer");
+  // Like every engine (and unlike the spec's TypeError), buffered is
+  // ignored alongside entryTypes: no past entry is delivered.
+  let delivered = 0;
+  const observer = new PerformanceObserver((list) => { delivered += list.getEntries().length; });
+  observer.observe({ entryTypes: ["mark"], buffered: true });
+  setTimeout(() => state.resolve(), 20);
+  await state.done(() => {
+    observer.disconnect();
+    testing.expectEqual(0, delivered);
   });
 }
 </script>

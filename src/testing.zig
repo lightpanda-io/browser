@@ -696,6 +696,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Scripts, so a cross-origin (localhost) load doesn't depend on CORS.
+    if (std.mem.eql(u8, path, "/resource-timing/tao")) {
+        return req.respond("window.__rt_tao = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+                .{ .name = "Timing-Allow-Origin", .value = "https://example.com, *" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/plain")) {
+        return req.respond("window.__rt_plain = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/resource-timing/plain" },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/redirect-no-fragment")) {
         return req.respond("", .{
             .status = .found,

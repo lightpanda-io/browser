@@ -234,7 +234,11 @@ pub const CurlOption = enum(c.CURLoption) {
 
 pub const CurlHttpVersion = enum(c_long) {
     none = c.CURL_HTTP_VERSION_NONE, // libcurl's own defaults, picks the best
+    v1_0 = c.CURL_HTTP_VERSION_1_0,
     v1_1 = c.CURL_HTTP_VERSION_1_1,
+    v2 = c.CURL_HTTP_VERSION_2_0,
+    v3 = c.CURL_HTTP_VERSION_3,
+    _,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
@@ -249,6 +253,14 @@ pub const CurlInfo = enum(c.CURLINFO) {
     response_code = c.CURLINFO_RESPONSE_CODE,
     connect_code = c.CURLINFO_HTTP_CONNECTCODE,
     total_time_t = c.CURLINFO_TOTAL_TIME_T,
+    queue_time_t = c.CURLINFO_QUEUE_TIME_T,
+    namelookup_time_t = c.CURLINFO_NAMELOOKUP_TIME_T,
+    connect_time_t = c.CURLINFO_CONNECT_TIME_T,
+    appconnect_time_t = c.CURLINFO_APPCONNECT_TIME_T,
+    pretransfer_time_t = c.CURLINFO_PRETRANSFER_TIME_T,
+    starttransfer_time_t = c.CURLINFO_STARTTRANSFER_TIME_T,
+    size_download_t = c.CURLINFO_SIZE_DOWNLOAD_T,
+    http_version = c.CURLINFO_HTTP_VERSION,
     num_connects = c.CURLINFO_NUM_CONNECTS,
     conn_id = c.CURLINFO_CONN_ID,
 };
@@ -669,11 +681,19 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         .connect_code,
         .redirect_count,
         .num_connects,
+        .http_version,
         => blk: {
             const p: *c_long = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
         .total_time_t,
+        .queue_time_t,
+        .namelookup_time_t,
+        .connect_time_t,
+        .appconnect_time_t,
+        .pretransfer_time_t,
+        .starttransfer_time_t,
+        .size_download_t,
         .conn_id,
         => blk: {
             const p: *c.curl_off_t = out;

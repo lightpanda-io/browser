@@ -166,7 +166,7 @@ pub fn init(
             ._event_manager = .init(arena),
             ._script_manager = undefined,
             ._location = .{ ._url = url },
-            ._performance = .init(),
+            ._performance = .init(factory, arena),
             ._http_owner = undefined,
         },
         leaf_value,
@@ -184,6 +184,7 @@ pub fn init(
         .loader_id = loader_id,
         .cookie_jar = &session.cookie_jar,
         .notification = session.notification,
+        .performance = &self._performance,
     };
 
     self._script_manager = ScriptManagerBase.init(
@@ -198,6 +199,7 @@ pub fn init(
         .identity_arena = arena,
         .identity = &self._identity,
     });
+    self._performance._scheduler = &self.js.scheduler;
 
     // A dedicated worker is in the same agent cluster and inherits its creator's
     // origin. Adopt the parent frame's origin (shared *Origin + v8 security
@@ -427,7 +429,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     const transfer = http_client.newRequest(.{
         .url = resolved_url,
         .method = .GET,
-        .resource_type = .script,
+        .resource_type = .worker,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
