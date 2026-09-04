@@ -404,6 +404,11 @@ fn fireNavigateEvent(
             .info = info,
             .hasUAVisualTransition = false,
         });
+    } else {
+        try frame._event_manager.dispatch(
+            self.asEventTarget(),
+            event.asEvent(),
+        );
     }
 
     return event;

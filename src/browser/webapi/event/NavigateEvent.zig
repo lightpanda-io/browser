@@ -27,6 +27,10 @@ const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig
 const NavigationType = @import("../navigation/root.zig").NavigationType;
 const NavigationDestination = @import("../navigation/NavigationDestination.zig");
 
+const FormData = @import("../net/FormData.zig");
+const AbortSignal = @import("../AbortSignal.zig");
+const Element = @import("../Element.zig");
+
 const String = lp.String;
 
 const NavigateEvent = @This();
@@ -42,6 +46,9 @@ _download_request: ?[]const u8,
 _info: ?js.Value.Global,
 _has_ua_visual_transition: bool,
 _destination: *NavigationDestination,
+_form_data: ?*FormData = null,
+_signal: ?*AbortSignal = null,
+_source_element: ?*Element = null,
 
 _intercepted: bool = false,
 
@@ -53,14 +60,14 @@ const NavigateEventOptions = struct {
     canIntercept: bool = false,
     destination: *NavigationDestination,
     downloadRequest: ?[]const u8 = null,
+    formData: ?*FormData = null,
     hasUAVisualTransition: bool = false,
     hashChange: bool = false,
     info: ?js.Value = null,
     navigationType: ?[]const u8 = null,
+    signal: ?*AbortSignal = null,
+    sourceElement: ?*Element = null,
     userInitiated: bool = false,
-    // TODO: formData
-    // TODO: signal
-    // TODO: sourceElement
 };
 
 const Options = Event.inheritOptions(NavigateEvent, NavigateEventOptions);
@@ -103,10 +110,10 @@ fn initWithTrusted(
             ._can_intercept = opts.canIntercept,
             ._user_initiated = opts.userInitiated,
             ._hash_change = opts.hashChange,
-            // TODO: signal
-            // TODO: formData
-            // TODO: sourceElement
             ._download_request = opts.downloadRequest,
+            ._form_data = opts.formData,
+            ._signal = opts.signal,
+            ._source_element = opts.sourceElement,
             ._info = info,
             ._has_ua_visual_transition = opts.hasUAVisualTransition,
         },
@@ -141,6 +148,18 @@ pub fn getHashChange(self: *const NavigateEvent) bool {
 
 pub fn getDownloadRequest(self: *const NavigateEvent) ?[]const u8 {
     return self._download_request;
+}
+
+pub fn getFormData(self: *const NavigateEvent) ?*FormData {
+    return self._form_data;
+}
+
+pub fn getSignal(self: *const NavigateEvent) ?*AbortSignal {
+    return self._signal;
+}
+
+pub fn getSourceElement(self: *const NavigateEvent) ?*Element {
+    return self._source_element;
 }
 
 pub fn getInfo(self: *const NavigateEvent, exec: *const js.Execution) ?js.Value {
@@ -200,5 +219,8 @@ pub const JsApi = struct {
     pub const downloadRequest = bridge.accessor(NavigateEvent.getDownloadRequest, null, .{});
     pub const info = bridge.accessor(NavigateEvent.getInfo, null, .{});
     pub const hasUAVisualTransition = bridge.accessor(NavigateEvent.getHasUAVisualTransition, null, .{});
+    pub const formData = bridge.accessor(NavigateEvent.getFormData, null, .{});
+    pub const signal = bridge.accessor(NavigateEvent.getSignal, null, .{});
+    pub const sourceElement = bridge.accessor(NavigateEvent.getSourceElement, null, .{});
     pub const intercept = bridge.function(NavigateEvent.intercept, .{});
 };
