@@ -68,6 +68,14 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         }
     }
 
+    const body_bytes: []const u8 = switch (request._body) {
+        .stream => |stream| stream.collectBodyBytes(request._arena.allocator()) catch {
+            resolver.rejectError("fetch init error", .{ .type_error = "Failed to read body stream" });
+            return resolver.promise();
+        },
+        else => request.bodyBytes(),
+    };
+
     const response = try Response.initPending(exec);
     errdefer response.deinit(exec.page);
 
@@ -91,7 +99,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .body = request._body,
+        .body = body_bytes,
         .resource_type = .fetch,
         .cookies = switch (request._credentials) {
             .omit => false,

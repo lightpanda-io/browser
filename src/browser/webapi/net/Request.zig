@@ -32,6 +32,7 @@ const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Execution = js.Execution;
 
@@ -41,13 +42,31 @@ _rc: lp.RC = .{},
 _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,
-_body: ?[]const u8,
+_body: Body,
 _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
 _redirect: Redirect,
 _signal: ?*AbortSignal,
 _body_used: bool = false,
+
+const Body = union(enum) {
+    none,
+    bytes: []const u8,
+    stream: *ReadableStream,
+
+    fn isPresent(self: Body) bool {
+        return self != .none;
+    }
+
+    fn clone(self: Body, allocator: std.mem.Allocator) !Body {
+        switch (self) {
+            .none => return .none,
+            .bytes => |b| return .{ .bytes = try allocator.dupe(u8, b) },
+            .stream => |s| return .{ .stream = s },
+        }
+    }
+};
 
 pub const Input = union(enum) {
     request: *Request,
@@ -122,23 +141,36 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._headers,
     };
 
-    const body = if (opts.body) |b| blk: {
-        const extracted = try b.extract(arena.allocator());
-        // Per Fetch §6.5 step 11, the default Content-Type only applies if
-        // the user has not already set one via the headers init dict.
-        if (extracted.content_type) |ct| {
-            const hs = headers orelse try Headers.init(null, exec);
-            if (!hs.has("content-type", exec)) {
-                try hs.append("content-type", ct, exec);
-            }
-            headers = hs;
+    const body: Body = if (opts.body) |b| blk: {
+        switch (b) {
+            .stream => |stream| {
+                break :blk .{ .stream = stream };
+            },
+            else => {
+                const extracted = try b.extract(arena.allocator());
+                // Per Fetch §6.5 step 11, the default Content-Type only applies if
+                // the user has not already set one via the headers init dict.
+                if (extracted.content_type) |ct| {
+                    const hs = headers orelse try Headers.init(null, exec);
+                    if (!hs.has("content-type", exec)) {
+                        try hs.append("content-type", ct, exec);
+                    }
+                    headers = hs;
+                }
+                break :blk .{ .bytes = extracted.bytes };
+            },
         }
-        break :blk extracted.bytes;
     } else switch (input) {
-        .url => null,
-        // Dupe: the source Request owns its body bytes and may be finalized
-        // before this one.
-        .request => |r| if (r._body) |b| try arena.dupe(u8, b) else null,
+        .url => .none,
+        // Dupe: the source Request owns its body bytes/stream and may be
+        // finalized before this one.
+        .request => |r| switch (r._body) {
+            .none => .none,
+            .bytes => |b| .{ .bytes = try arena.dupe(u8, b) },
+            .stream => |s| blk: {
+                break :blk .{ .stream = s };
+            },
+        },
     };
 
     const signal = if (opts.signal) |s|
@@ -231,7 +263,7 @@ pub fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
 }
 
 pub fn getBodyUsed(self: *const Request) bool {
-    if (self._body == null) {
+    if (!self._body.isPresent()) {
         return false;
     }
     return self._body_used;
@@ -239,15 +271,27 @@ pub fn getBodyUsed(self: *const Request) bool {
 
 // Marks a present body consumed; returns a rejected promise if it already was.
 fn consume(self: *Request, local: *const js.Local) ?js.Promise {
-    if (self._body == null) {
-        return null;
-    }
-
     if (self._body_used) {
         return local.rejectPromise(.{ .type_error = "Body has already been read" });
     }
+
+    if (self._body == .stream) {
+        const stream = self._body.stream;
+        const stream_bytes = stream.collectBodyBytes(self._arena.allocator()) catch {
+            return local.rejectPromise(.{ .type_error = "Failed to read body stream" });
+        };
+        self._body = .{ .bytes = stream_bytes };
+    }
+
     self._body_used = true;
     return null;
+}
+
+pub fn bodyBytes(self: *const Request) []const u8 {
+    return switch (self._body) {
+        .bytes => |b| b,
+        .none, .stream => "",
+    };
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
@@ -256,7 +300,7 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
         return rejected;
     }
 
-    const body = self._body orelse "";
+    const body = self.bodyBytes();
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
@@ -269,7 +313,7 @@ pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     if (self.consume(local)) |rejected| {
         return rejected;
     }
-    return local.resolvePromise(body_init.stripUtf8Bom(self._body orelse ""));
+    return local.resolvePromise(body_init.stripUtf8Bom(self.bodyBytes()));
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
@@ -278,7 +322,7 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
         return rejected;
     }
 
-    const value = local.parseJSON(body_init.stripUtf8Bom(self._body orelse "")) catch {
+    const value = local.parseJSON(body_init.stripUtf8Bom(self.bodyBytes())) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
     };
     return local.resolvePromise(try value.persist());
@@ -289,7 +333,7 @@ pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
     if (self.consume(local)) |rejected| {
         return rejected;
     }
-    return local.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+    return local.resolvePromise(js.ArrayBuffer{ .values = self.bodyBytes() });
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
@@ -297,7 +341,7 @@ pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     if (self.consume(local)) |rejected| {
         return rejected;
     }
-    return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+    return local.resolvePromise(js.TypedArray(u8){ .values = self.bodyBytes() });
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
@@ -307,7 +351,7 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     }
 
     // Per Fetch, a null body acts as an empty byte sequence.
-    const body = self._body orelse "";
+    const body = self.bodyBytes();
 
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse {
@@ -344,7 +388,7 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    const arena = try exec.getPinnedArena(if (self._body) |b| b.len else 512, "Request.clone");
+    const arena = try exec.getPinnedArena(512, "Request.clone");
     errdefer arena.release();
 
     const request = try arena.create(Request);
@@ -356,7 +400,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
-        ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
+        ._body = try self._body.clone(arena.allocator()),
         ._signal = self._signal,
     };
     arena.report();
