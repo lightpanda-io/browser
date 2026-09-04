@@ -474,6 +474,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .local_arena = self.local_arena,
     });
     errdefer browser.env.destroyContext(self.js);
+    self.window._performance._scheduler = &self.js.scheduler;
 
     const location = try Location.init("about:blank", self);
     // We're holding a reference in Zig-side.

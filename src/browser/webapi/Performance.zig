@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
 const Factory = @import("../Factory.zig");
+const Scheduler = @import("../js/Scheduler.zig");
 
 const EventCounts = @import("EventCounts.zig");
 const PerformanceObserver = @import("PerformanceObserver.zig");
@@ -51,9 +52,11 @@ _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
 
-// Captured when the first observer registers. Entries created outside of
-// JS (resource timing, from the HTTP client) need it to notify observers.
-_exec: ?*const Execution = null,
+// The owner's task scheduler, set by the owner once its JS context exists
+// (Frame builds the Window, and thus this, before the context). Never taken
+// from a caller's Execution: an isolated-world or cross-frame caller's
+// context can be destroyed while we live on.
+_scheduler: *Scheduler = undefined,
 
 // PerformanceObserver infrastructure. Lives here (rather than on the owning
 // Frame/WorkerGlobalScope) so that both contexts get observers for free.
@@ -112,7 +115,7 @@ pub fn mark(
     const start_time = opts.startTime orelse self.now();
     const m = try Mark.init(name, opts.detail, start_time, exec);
     try self.insertOrdered(&self._entries, m._proto);
-    try self.notifyObservers(m._proto, exec);
+    try self.notifyObservers(m._proto);
     return m;
 }
 
@@ -163,7 +166,7 @@ pub fn measure(
                 exec,
             );
             try self.insertOrdered(&self._entries, m._proto);
-            try self.notifyObservers(m._proto, exec);
+            try self.notifyObservers(m._proto);
             return m;
         },
         .start_mark => |start_mark| {
@@ -187,14 +190,14 @@ pub fn measure(
                 exec,
             );
             try self.insertOrdered(&self._entries, m._proto);
-            try self.notifyObservers(m._proto, exec);
+            try self.notifyObservers(m._proto);
             return m;
         },
     };
 
     const m = try Measure.init(name, null, 0.0, self.now(), null, exec);
     try self.insertOrdered(&self._entries, m._proto);
-    try self.notifyObservers(m._proto, exec);
+    try self.notifyObservers(m._proto);
     return m;
 }
 
@@ -260,9 +263,10 @@ pub const ResourceInfo = struct {
 };
 
 pub fn addResource(self: *Performance, info: ResourceInfo) !void {
-    if (self._resources.items.len >= self._resource_buffer_size) {
-        // TODO: Perfomance should be an EventTarget and it should fire
-        // a resourcetimingbufferfull event
+    // TODO: Perfomance should be an EventTarget and it should fire
+    // a resourcetimingbufferfull event
+    const buffer_full = self._resources.items.len >= self._resource_buffer_size;
+    if (buffer_full and !self.hasObserverFor(.resource)) {
         return;
     }
 
@@ -305,10 +309,10 @@ pub fn addResource(self: *Performance, info: ResourceInfo) !void {
         },
     });
     rt._proto._type = .{ .resource = rt };
-    try self.insertOrdered(&self._resources, rt._proto);
-
-    if (self._exec) |exec| {
-        try self.notifyObservers(rt._proto, exec);
+    // Observers see every entry; only the buffer has a cap.
+    try self.notifyObservers(rt._proto);
+    if (!buffer_full) {
+        try self.insertOrdered(&self._resources, rt._proto);
     }
 }
 
@@ -519,8 +523,7 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
     return error.SyntaxError; // Mark not found
 }
 
-pub fn registerObserver(self: *Performance, observer: *PerformanceObserver, exec: *const Execution) !void {
-    self._exec = exec;
+pub fn registerObserver(self: *Performance, observer: *PerformanceObserver) !void {
     for (self._observers.items) |o| {
         if (o == observer) {
             return;
@@ -544,28 +547,37 @@ pub fn unregisterObserver(self: *Performance, observer: *PerformanceObserver) vo
 /// Append the entry to every interested observer's queue and schedule async
 /// delivery. Does NOT fire the callbacks synchronously — that happens later
 /// via the scheduled task.
-pub fn notifyObservers(self: *Performance, entry: *Entry, exec: *const Execution) !void {
+fn notifyObservers(self: *Performance, entry: *Entry) !void {
     if (self._observers.items.len == 0) {
         return;
     }
     for (self._observers.items) |observer| {
         if (observer.interested(entry)) {
-            observer._entries.append(exec.arena, entry) catch |err| {
+            observer._entries.append(observer._arena, entry) catch |err| {
                 lp.log.err(.frame, "Performance.notifyObservers", .{ .err = err });
             };
         }
     }
 
-    try self.scheduleDelivery(exec);
+    try self.scheduleDelivery();
 }
 
-pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
+fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
+    for (self._observers.items) |observer| {
+        if (observer.interestedIn(kind)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn scheduleDelivery(self: *Performance) !void {
     if (self._delivery_scheduled) {
         return;
     }
     self._delivery_scheduled = true;
 
-    return exec._scheduler.add(
+    return self._scheduler.add(
         self,
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {

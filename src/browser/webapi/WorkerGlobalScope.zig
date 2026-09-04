@@ -199,6 +199,7 @@ pub fn init(
         .identity_arena = arena,
         .identity = &self._identity,
     });
+    self._performance._scheduler = &self.js.scheduler;
 
     // A dedicated worker is in the same agent cluster and inherits its creator's
     // origin. Adopt the parent frame's origin (shared *Origin + v8 security

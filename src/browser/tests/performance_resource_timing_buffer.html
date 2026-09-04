@@ -10,14 +10,22 @@
     testing.expectEqual(0, performance.getEntriesByType('resource').length);
 
     performance.setResourceTimingBufferSize(1);
+    const observed = [];
+    const observer = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) observed.push(e.name);
+      if (observed.length === 2) state.resolve();
+    });
+    observer.observe({ type: 'resource' });
     await (await fetch(testing.ORIGIN + '/xhr')).text();
     await (await fetch(testing.ORIGIN + '/xhr/json')).text();
-    state.resolve();
     await state.done(() => {
-      // The buffer was full: the second fetch's entry is dropped.
+      observer.disconnect();
+      // The buffer was full: the second fetch's entry is dropped from the
+      // buffer, but the observer still sees it.
       const list = performance.getEntriesByType('resource');
       testing.expectEqual(1, list.length);
       testing.expectEqual(testing.ORIGIN + '/xhr', list[0].name);
+      testing.expectEqual([testing.ORIGIN + '/xhr', testing.ORIGIN + '/xhr/json'], observed);
       testing.expectEqual(0, performance.getEntries().filter((e) => e.entryType !== 'resource').length);
 
       // getEntries merges marks and resources in startTime order.
