@@ -397,16 +397,7 @@ fn isUrlBlocked(self: *const Client, transfer: *const Transfer) bool {
     if (self.url_blocklist) |*blocklist| {
         if (blocklist.isBlocked(req.url)) return true;
     }
-    return self.isAdblocked(transfer);
-}
-
-fn isAdblocked(self: *const Client, transfer: *const Transfer) bool {
-    const blocker = if (self.network.adblocker) |*b| b else return false;
-    var buffers: AdBlocker.Request.Buffers = undefined;
-    const target = AdBlocker.Request.fromHttp(transfer, &buffers) orelse return false;
-    const verdict = blocker.match(target);
-    lp.metrics.adblock_verdicts.incr(verdict);
-    return verdict == .blocked;
+    return if (self.network.adblocker) |*blocker| blocker.isBlocked(transfer) else false;
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {

@@ -23,6 +23,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const Config = @import("../../Config.zig");
+const HttpClient = @import("../HttpClient.zig");
 
 const Parser = @import("Parser.zig");
 const Engine = @import("Engine.zig");
@@ -305,6 +306,14 @@ fn addToTrie(self: *AdBlocker, root: u32, hostname: []const u8) !void {
 }
 
 pub const Verdict = enum { none, allowed, blocked };
+
+pub fn isBlocked(self: *const AdBlocker, transfer: *const HttpClient.Transfer) bool {
+    var buffers: Request.Buffers = undefined;
+    const request = Request.fromHttp(transfer, &buffers) orelse return false;
+    const verdict = self.match(request);
+    lp.metrics.adblock_verdicts.incr(verdict);
+    return verdict == .blocked;
+}
 
 /// The verdict for one request.
 /// `$important` blocks outrank exceptions, which outrank plain blocks; same as uBO.
