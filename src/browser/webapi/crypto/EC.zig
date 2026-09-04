@@ -94,9 +94,7 @@ pub fn generate(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    validate(params, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    try validate(params, key_usages);
 
     const name = canonicalName(params.name).?;
     const curve = curveCanonical(params.namedCurve).?;
@@ -111,7 +109,7 @@ pub fn generate(
     const ec = crypto.EC_KEY_new_by_curve_name(nid) orelse return error.OutOfMemory;
     defer crypto.EC_KEY_free(ec);
     if (crypto.EC_KEY_generate_key(ec) != 1) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.OperationError } });
+        return error.OperationError;
     }
 
     const private_pkey = crypto.EVP_PKEY_new() orelse return error.OutOfMemory;
@@ -167,28 +165,28 @@ pub fn import(
 
     const canonical = canonicalName(name).?;
     const curve = curveCanonical(named_curve) orelse {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     };
 
     var ptr: [*c]const u8 = der.ptr;
     const pkey: *crypto.EVP_PKEY = blk: {
         if (std.mem.eql(u8, format, "spki")) {
             break :blk crypto.d2i_PUBKEY(null, &ptr, @intCast(der.len)) orelse {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+                return error.DataError;
             };
         }
         if (std.mem.eql(u8, format, "pkcs8")) {
             break :blk crypto.d2i_AutoPrivateKey(null, &ptr, @intCast(der.len)) orelse {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+                return error.DataError;
             };
         }
         // jwk / raw not implemented yet.
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     };
     errdefer crypto.EVP_PKEY_free(pkey);
 
     if (crypto.EVP_PKEY_id(pkey) != crypto.EVP_PKEY_EC) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+        return error.DataError;
     }
 
     const crypto_key = try CryptoKey.init(exec, .{

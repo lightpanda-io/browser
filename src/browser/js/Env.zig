@@ -109,6 +109,10 @@ tearing_down: bool = false,
 
 heap_limit_protected: bool = false,
 
+// Message for the next TypeError the bridge builds. Set by local.typeError.
+// Think of it as our own little global errno. How cute.
+error_message: ?[]const u8 = null,
+
 pub const InitOpts = struct {
     with_inspector: bool = false,
 };
