@@ -1011,7 +1011,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
-        _ = try session.navigation.navigateSameDocument(resolved_url, opts.kind, target);
+        const resolved_kind: NavigationKind = switch (opts.kind) {
+            .push => .{ .replace = null },
+            else => opts.kind,
+        };
+        _ = try session.navigation.navigateSameDocument(resolved_url, resolved_kind, target);
         arena.release();
         return;
     }
