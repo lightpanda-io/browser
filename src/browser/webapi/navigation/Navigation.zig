@@ -407,6 +407,18 @@ fn fireNavigateEvent(
     return event;
 }
 
+fn resolveFinished(self: *Navigation, resolver: js.PromiseResolver, comptime source: []const u8, frame: *Frame) void {
+    resolver.resolve(source, {});
+    self.fireNavigateSuccess(frame);
+}
+
+fn rejectFinished(self: *Navigation, resolver: js.PromiseResolver, reason: js.Value, frame: *Frame) void {
+    resolver.rejectValue(reason) catch |err| {
+        log.warn(.event, "Navigation.intercept reject", .{ .err = err });
+    };
+    self.fireNavigateError(reason, frame);
+}
+
 fn runInterceptHandler(
     self: *Navigation,
     navigate_event: *NavigateEvent,
@@ -416,7 +428,7 @@ fn runInterceptHandler(
     var resolver = finished;
 
     const handler = navigate_event._handler orelse {
-        resolver.resolve("navigation not intercepted", {});
+        self.resolveFinished(resolver, "navigation not intercepted", frame);
         return;
     };
     defer handler.release();
@@ -432,8 +444,7 @@ fn runInterceptHandler(
     };
 
     if (!ret.isPromise()) {
-        finished.resolve("navigation intercept (non-promise return)", {});
-        self.fireNavigateSuccess(frame);
+        self.resolveFinished(resolver, "navigation intecept (non-promise return)", frame);
         return;
     }
 
@@ -462,8 +473,7 @@ fn runInterceptHandler(
     const on_fulfilled = local.newCallback(struct {
         fn f(c: *InterceptContext, exec: *const js.Execution) void {
             const l = exec.js.local.?;
-            c.finished.local(l).resolve("navigation intercept fulfilled", {});
-            c.navigation.fireNavigateSuccess(c.frame);
+            c.navigation.resolveFinished(c.finished.local(l), "navigation intercept fulfilled", c.frame);
             c.finished.release();
         }
     }.f, ctx);
@@ -471,10 +481,7 @@ fn runInterceptHandler(
     const on_rejected = local.newCallback(struct {
         fn f(c: *InterceptContext, reason: js.Value, exec: *const js.Execution) void {
             const l = exec.js.local.?;
-            c.finished.local(l).rejectValue(reason) catch |err| {
-                log.warn(.event, "Navigation.intercept reject", .{ .err = err });
-            };
-            c.navigation.fireNavigateError(reason, c.frame);
+            c.navigation.rejectFinished(c.finished.local(l), reason, c.frame);
             c.finished.release();
         }
     }.f, ctx);
@@ -567,8 +574,7 @@ pub fn navigateSameDocument(
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
-                finished.resolve("navigation push", {});
-                self.fireNavigateSuccess(frame);
+                self.resolveFinished(finished, "navigation push", frame);
             }
             _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
         },
@@ -580,8 +586,7 @@ pub fn navigateSameDocument(
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
-                finished.resolve("navigation replace", {});
-                self.fireNavigateSuccess(frame);
+                self.resolveFinished(finished, "navigation replace", frame);
             }
             _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
         },
@@ -594,8 +599,7 @@ pub fn navigateSameDocument(
             if (navigate_event._intercepted) {
                 self.runInterceptHandler(navigate_event, finished, frame);
             } else {
-                finished.resolve("navigation traverse", {});
-                self.fireNavigateSuccess(frame);
+                self.resolveFinished(finished, "navigation traverse", frame);
             }
         },
         .reload => unreachable,
