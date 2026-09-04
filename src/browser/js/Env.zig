@@ -583,15 +583,11 @@ pub fn terminate(self: *Env) void {
     v8.v8__Isolate__TerminateExecution(self.isolate.handle);
 }
 
-// We need a stable pointer for *Env, so can't be setup in init.
+/// We need a stable pointer for `*Env`, so can't be setup in `init`.
 pub fn protectHeapLimit(self: *Env) void {
     self.heap_limit_protected = true;
     v8.v8__Isolate__AddNearHeapLimitCallback(self.isolate.handle, nearHeapLimit, self);
-    // TODO: uncomment this when https://github.com/lightpanda-io/zig-v8-fork/pull/187 lands
-    // if our nearHeapLimit extends the memory, we want to  restore the original
-    // value, since the isolate can be long lived (relative to the page/script
-    // that caused the memory spike).
-    // v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
+    v8.v8__Isolate__AutomaticallyRestoreInitialHeapLimit(self.isolate.handle, 0.5);
 }
 
 // v8 is telling us it's about to run out of memory for this isolate. We'll
