@@ -45,6 +45,10 @@ _destination: *NavigationDestination,
 
 _intercepted: bool = false,
 
+_handler: ?js.Function.Global = null,
+_focus_reset: ?[]const u8 = null,
+_scroll: ?[]const u8 = null,
+
 const NavigateEventOptions = struct {
     canIntercept: bool = false,
     destination: *NavigationDestination,
@@ -158,26 +162,24 @@ const InterceptOptions = struct {
 };
 
 // https://html.spec.whatwg.org/#dom-navigateevent-intercept
-// TODO: this only records interception state; it does not yet hook into
-// navigation commit timing to actually run `handler` or apply
-// `focusReset`/`scroll` at the correct point in the algorithm.
-pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions, exec: *const js.Execution) !void {
+pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions) !void {
+    lp.log.warn(.browser, "navigate intercept 1", .{});
+
     if (!self._can_intercept) {
         return error.InvalidStateError;
     }
     if (!self._proto.getCancelable()) {
         return error.InvalidStateError;
     }
+
+    lp.log.warn(.browser, "navigate intercept 2", .{});
     self._intercepted = true;
 
     if (opts) |o| {
-        if (o.handler) |handler| {
-            _ = handler; // TODO: queue and run during the navigate event's commit step.
-        }
-        _ = o.focusReset;
-        _ = o.scroll;
+        if (o.handler) |handler| self._handler = try handler.persist();
+        self._focus_reset = o.focusReset;
+        self._scroll = o.scroll;
     }
-    _ = exec;
 }
 
 pub const JsApi = struct {
