@@ -150,6 +150,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
+    const is_opaque = self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin;
 
     if (self._signal) |signal| {
         if (signal._aborted) {
@@ -158,8 +159,10 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     }
 
     const arena = self._response._arena;
-    if (transfer.getContentLength()) |cl| {
-        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
+    if (!is_opaque) {
+        if (transfer.getContentLength()) |cl| {
+            try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
+        }
     }
 
     const res = self._response;
@@ -179,7 +182,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     // no-cors mode: regardless of what the server returned, JS only ever sees
     // an opaque response — status 0, no headers, no body, url "".
-    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
+    if (is_opaque) {
         res._status = 0;
         res._status_text = "";
         res._url = "";
