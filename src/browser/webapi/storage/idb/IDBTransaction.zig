@@ -293,15 +293,21 @@ pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) err
     self._error = reason;
 
     // An aborted upgrade reverts the schema: stores and indexes created during
-    // it no longer exist, so handles the caller still holds must report deleted.
+    // it no longer exist, so handles the caller still holds must report
+    // deleted; pre-existing ones that were renamed get their names back (a
+    // created one has no earlier name to go back to and keeps its last).
     if (self._mode == .versionchange) {
         for (self._stores.items) |store| {
             if (store._created) {
                 store._deleted = true;
+            } else if (store._original_name) |name| {
+                store._name = name;
             }
             for (store._indexes.items) |idx| {
                 if (idx._created) {
                     idx._deleted = true;
+                } else if (idx._original_name) |name| {
+                    idx._name = name;
                 }
             }
         }
