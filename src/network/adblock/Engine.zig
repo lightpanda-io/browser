@@ -176,7 +176,7 @@ pub const Histogram = std.AutoHashMapUnmanaged(u32, u32);
 const TOKENS_MAX = 32;
 
 /// The first filter that matches, or null.
-pub fn match(self: *const Engine, request: Request) ?*const NetworkFilter {
+pub fn match(self: *const Engine, request: *const Request) ?*const NetworkFilter {
     if (self.filters.len != 0) {
         for (request.tokens()) |token| {
             const bucket = self.buckets.get(token) orelse continue;
@@ -186,7 +186,7 @@ pub fn match(self: *const Engine, request: Request) ?*const NetworkFilter {
     return self.matchIn(self.fallback, request);
 }
 
-fn matchIn(self: *const Engine, bucket: []const u32, request: Request) ?*const NetworkFilter {
+fn matchIn(self: *const Engine, bucket: []const u32, request: *const Request) ?*const NetworkFilter {
     for (bucket) |index| {
         const filter = &self.filters[index];
         if (matchesFilter(filter, request)) return filter;
@@ -196,7 +196,7 @@ fn matchIn(self: *const Engine, bucket: []const u32, request: Request) ?*const N
 
 /// Cheapest constraint first: the type and party bits are two comparisons,
 /// the pattern walk is the expensive one.
-fn matchesFilter(filter: *const NetworkFilter, request: Request) bool {
+fn matchesFilter(filter: *const NetworkFilter, request: *const Request) bool {
     if (filter.types.bits() & request.kind.bits() == 0) return false;
     if (request.third_party) {
         if (!filter.third_party) return false;
@@ -277,7 +277,7 @@ pub fn build(
 }
 
 /// Runs of alphanumerics. Everything else ('.', '/', '-', '%', '_', '?') is a boundary.
-pub const Tokens = struct {
+const Tokens = struct {
     text: []const u8,
     i: usize = 0,
 

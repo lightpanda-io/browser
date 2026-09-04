@@ -92,7 +92,7 @@ http_navigation_delay_ms: Histogram(&.{
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
 adblock_verdicts: CounterEnum("verdict", @import("network/adblock/AdBlocker.zig").Verdict) = .{},
-adblock_rules: GaugeEnum("state", enum { loaded, skipped }) = .{},
+adblock_rules: GaugeEnum("state", enum { loaded, skipped, cosmetic }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
@@ -125,8 +125,8 @@ const help = .{
     .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
-    .adblock_verdicts = "Adblocker decisions for evaluated requests, by verdict (none = no filter matched)",
-    .adblock_rules = "Filter-list rules by fate: loaded into the matcher, or skipped as unsupported",
+    .adblock_verdicts = "Adblocker decisions for evaluated requests, by verdict (none = not blocked, allowed = an exception overrode a block)",
+    .adblock_rules = "Filter-list rules by fate: loaded into the matcher, skipped as unsupported, or cosmetic (domain-scoped element hiding, outside the network realm)",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {

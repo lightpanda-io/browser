@@ -119,6 +119,9 @@ pub const ParseError = error{
     UnsupportedPattern,
     NoSupportedDomains,
     UnsupportedModifier,
+    // Element hiding ("example.com##.ad"): a rule for another realm, not a
+    // network rule we failed to read.
+    CosmeticFilter,
     // Hosts-file noise ("127.0.0.1 localhost"), skip silently.
     Ignored,
 } || std.mem.Allocator.Error;
@@ -258,6 +261,10 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     if (rest.len == 0) return error.InvalidPattern;
 
     const split = splitOptions(rest);
+    // Cosmetic filters classify as network.
+    if (!isRegexLiteral(split.pattern) and hasCosmeticSeparator(split.pattern)) {
+        return error.CosmeticFilter;
+    }
     var explicit_types = false;
     if (split.options) |options| {
         try filter.parseOptions(arena, options, &explicit_types);
@@ -285,6 +292,23 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     }
 
     return filter;
+}
+
+inline fn isRegexLiteral(text: []const u8) bool {
+    return text.len > 2 and text[0] == '/' and text[text.len - 1] == '/';
+}
+
+/// Whether `text` carries a cosmetic separator.
+/// "##", "#@#", "#?#", "#$#", "#%#" and their combinations, like "#@$?#".
+fn hasCosmeticSeparator(text: []const u8) bool {
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, start, '#')) |pos| {
+        var i = pos + 1;
+        while (i < text.len and std.mem.indexOfScalar(u8, "@$?%", text[i]) != null) i += 1;
+        if (i < text.len and text[i] == '#') return true;
+        start = pos + 1;
+    }
+    return false;
 }
 
 /// uBO allows a trailing "  # comment" on lines containing whitespace.
@@ -561,16 +585,12 @@ fn parsePattern(
     }
 
     // Whole-pattern regex literal: /.../ with anything between the slashes.
-    if (raw.len > 2 and raw[0] == '/' and raw[raw.len - 1] == '/') {
+    if (isRegexLiteral(raw)) {
         self.kind = .regex;
         self.pattern = raw;
         return;
     }
 
-    // A literal '#' can never match: request URLs have their fragment
-    // stripped before matching. This is also what drops cosmetic filter
-    // lines (example.com##.ad-banner), which classify as network now that
-    // there is no cosmetic-separator scan.
     if (std.mem.indexOfScalar(u8, raw, '#') != null) return error.UnsupportedPattern;
 
     var pattern = raw;
@@ -1070,10 +1090,15 @@ test "adblock.NetworkFilter: option-only and invalid patterns" {
     try testing.expectError(error.InvalidPattern, testParse(arena, "foo bar$script"));
     try testing.expectError(error.UnsupportedPattern, testParse(arena, "||exämple.com^"));
 
-    // Cosmetic lines reach this parser undetected (no separator scan) and
-    // drop here: a '#' never matches a fragment-stripped request URL.
-    try testing.expectError(error.UnsupportedPattern, testParse(arena, "example.com##.ad-banner"));
-    try testing.expectError(error.UnsupportedPattern, testParse(arena, "example.com#@#.sponsored"));
+    // Cosmetic lines reach this parser as network lines, there being no
+    // separator scan up front, and are told apart by their separator,
+    // whichever flavour...
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com##.ad-banner"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#@#.sponsored"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#?#.ad:has(> a)"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#@$#body { background: none }"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com##+js(no-fetch-if, ads)"));
+    // ...while a lone '#' is a fragment, which never matches a request URL.
     try testing.expectError(error.UnsupportedPattern, testParse(arena, "|https://a.com/x#y|"));
     // ... but '#' inside a /regex/ body is untouched.
     const regex = try testParse(arena, "/ads#[0-9]+/");

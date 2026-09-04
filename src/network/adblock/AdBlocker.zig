@@ -34,8 +34,8 @@ const log = lp.log;
 
 const AdBlocker = @This();
 
-pub const Request = Engine.Request;
-pub const ResourceTypes = NetworkFilter.ResourceTypes;
+const Request = Engine.Request;
+const ResourceTypes = NetworkFilter.ResourceTypes;
 
 allocator: Allocator,
 /// Owns everything the filters point at.
@@ -66,6 +66,11 @@ rules_loaded: usize,
 /// Rules the lists carry and we do not apply, across those same lists: the
 /// ones the parser could not read, plus the ones no matcher can express.
 rules_skipped: usize,
+/// Domain-scoped element-hiding rules and cosmetic-realm exceptions, across
+/// those same lists. Not ours to apply, but not rules we failed at either, so
+/// they stay out of `rules_skipped`. Generic "##" rules read as comments and
+/// are counted nowhere.
+rules_cosmetic: usize,
 
 /// Read buffer for filter lists, and therefore the longest line we can see.
 /// Real-world rules are well under 1KB; the parser skips anything longer.
@@ -95,6 +100,7 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
         .exceptions = .empty,
         .rules_loaded = 0,
         .rules_skipped = 0,
+        .rules_cosmetic = 0,
     };
 }
 
@@ -132,9 +138,11 @@ pub fn fromConfig(allocator: Allocator, config: *const Config) !?AdBlocker {
         try blocker.build();
         lp.metrics.adblock_rules.add(.loaded, @intCast(blocker.rules_loaded));
         lp.metrics.adblock_rules.add(.skipped, @intCast(blocker.rules_skipped));
+        lp.metrics.adblock_rules.add(.cosmetic, @intCast(blocker.rules_cosmetic));
         log.info(.app, "adblock lists loaded", .{
             .loaded = blocker.rules_loaded,
             .skipped = blocker.rules_skipped,
+            .cosmetic = blocker.rules_cosmetic,
             .indexed = blocker.filters.items.len,
         });
     }
@@ -161,7 +169,10 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
     var parser: Parser = .init(reader);
     // Lines the parser dropped are rules we did not load just as much as the
     // ones we drop below, and on a real list they are the bulk of them.
-    defer self.rules_skipped += parser.skipped;
+    defer {
+        self.rules_skipped += parser.skipped;
+        self.rules_cosmetic += parser.cosmetic;
+    }
 
     const arena = self.arena.allocator();
     while (try parser.next(scratch)) |item| {
@@ -183,6 +194,13 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
             .filter => |filter| filter,
         };
 
+        // Cosmetic-realm exceptions ($generichide and friends) modify element
+        // hiding, which no network matcher applies: another realm's rule, not
+        // one we failed at.
+        if (filter.generichide or filter.specifichide or filter.elemhide) {
+            self.rules_cosmetic += 1;
+            continue;
+        }
         if (!isSupported(&filter)) {
             self.rules_skipped += 1;
             continue;
@@ -310,14 +328,14 @@ pub const Verdict = enum { none, allowed, blocked };
 pub fn isBlocked(self: *const AdBlocker, transfer: *const HttpClient.Transfer) bool {
     var buffers: Request.Buffers = undefined;
     const request = Request.fromHttp(transfer, &buffers) orelse return false;
-    const verdict = self.match(request);
+    const verdict = self.match(&request);
     lp.metrics.adblock_verdicts.incr(verdict);
     return verdict == .blocked;
 }
 
 /// The verdict for one request.
 /// `$important` blocks outrank exceptions, which outrank plain blocks; same as uBO.
-pub fn match(self: *const AdBlocker, request: Request) Verdict {
+pub fn match(self: *const AdBlocker, request: *const Request) Verdict {
     std.debug.assert(self.built);
 
     const hostname = request.url.hostname();
@@ -340,10 +358,7 @@ pub fn match(self: *const AdBlocker, request: Request) Verdict {
 /// Whether we can evaluate this filter at all.
 fn isSupported(filter: *const NetworkFilter) bool {
     // No regex engine to run them with.
-    if (filter.kind == .regex) return false;
-    // Cosmetic-realm exceptions never say anything about network requests.
-    if (filter.generichide or filter.specifichide or filter.elemhide) return false;
-    return true;
+    return filter.kind != .regex;
 }
 
 /// Whether the filter's whole effect is "every request to this hostname and
@@ -434,7 +449,8 @@ fn expectVerdict(
     // are lowercased too, so a rule spelled "/embed/C-iDzdvIg1Y" still lands.
     var buf: [512]u8 = undefined;
     const lowered = std.ascii.lowerString(buf[0..url.len], url);
-    try testing.expectEqual(expected, blocker.match(.init(lowered, source, kind)));
+    const request: Request = .init(lowered, source, kind);
+    try testing.expectEqual(expected, blocker.match(&request));
 }
 
 const script: ResourceTypes = .{ .script = true };
@@ -548,10 +564,28 @@ test "adblock.AdBlocker: parse accumulates across lists" {
     try expectVerdict(&blocker, .none, "https://tracker.net/x", "sports.news.com", script);
     try expectVerdict(&blocker, .none, "https://tracker.net/x", "other.com", script);
 
-    // Three rules loaded across the two lists; the cosmetic line is a rule
-    // the list carries and we do not apply, so it counts as skipped.
+    // Three rules loaded across the two lists; the cosmetic line is a rule of
+    // another realm, counted as such rather than as one we failed to apply.
     try testing.expectEqual(3, blocker.rules_loaded);
+    try testing.expectEqual(0, blocker.rules_skipped);
+    try testing.expectEqual(1, blocker.rules_cosmetic);
+}
+
+test "adblock.AdBlocker: cosmetic-realm rules are not skipped rules" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\||ads.example.com^
+        \\@@||example.com^$generichide
+        \\@@||example.com^$elemhide
+        \\example.com##.ad-banner
+        \\/regex-we-cannot-run/
+    );
+
+    try testing.expectEqual(1, blocker.rules_loaded);
     try testing.expectEqual(1, blocker.rules_skipped);
+    try testing.expectEqual(3, blocker.rules_cosmetic);
 }
 
 test "adblock.AdBlocker: verdict precedence" {

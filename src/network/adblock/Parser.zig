@@ -34,6 +34,7 @@ first_line: bool = true,
 /// not rules, so they never count. The caller adds this to whatever it drops
 /// afterwards, so that "skipped" means every rule the list has and we do not.
 skipped: usize = 0,
+cosmetic: usize = 0,
 
 pub const Error = error{ OutOfMemory, ReadFailed };
 
@@ -42,7 +43,7 @@ pub const Error = error{ OutOfMemory, ReadFailed };
 /// on that hostname is not meant to be blocked.
 pub const Item = union(enum) {
     filter: NetworkFilter,
-    /// Already counted in `skipped`; the caller only inspects it.
+    /// Already counted in `skipped` or `cosmetic`; the caller only inspects it.
     dropped: Dropped,
 };
 
@@ -82,6 +83,10 @@ pub fn next(self: *Parser, arena: Allocator) Error!?Item {
                     return .{ .filter = filter };
                 } else |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
+                    error.CosmeticFilter => {
+                        self.cosmetic += 1;
+                        return .{ .dropped = .{ .line = line, .reason = err } };
+                    },
                     // Anything else is a line outside the supported subset
                     // or malformed; either way it is not ours to enforce.
                     else => {
@@ -167,8 +172,8 @@ test "adblock.Parser: line classification" {
     try testing.expectEqual(.network, LineClass.fromLine("||ads.example.com^"));
     try testing.expectEqual(.network, LineClass.fromLine("@@|https://example.com/path#frag|"));
     try testing.expectEqual(.network, LineClass.fromLine("0.0.0.0 tracker.com"));
-    // Domain-prefixed cosmetic lines classify as network; the filter
-    // parser drops them via their '#' (see NetworkFilter tests).
+    // Domain-prefixed cosmetic lines classify as network; the filter parser
+    // tells them apart by their separator (see NetworkFilter tests).
     try testing.expectEqual(.network, LineClass.fromLine("example.com#@#.ad"));
     try testing.expectEqual(.network, LineClass.fromLine("example.com#?#.ad:has-text(x)"));
     try testing.expectEqual(.network, LineClass.fromLine("example.com#$#body { padding: 0 }"));
@@ -206,7 +211,7 @@ test "adblock.Parser: yields one item per next() call" {
     // with the reason the filter parser gave.
     const second = (try parser.next(arena)).?;
     try testing.expectString("example.com##.ad-banner", second.dropped.line);
-    try testing.expectEqual(error.UnsupportedPattern, second.dropped.reason.?);
+    try testing.expectEqual(error.CosmeticFilter, second.dropped.reason.?);
 
     const third = (try parser.next(arena)).?;
     try testing.expectString("tracker.net", third.filter.hostname);
@@ -238,8 +243,10 @@ test "adblock.Parser: only rule-shaped lines count as skipped" {
 
     // The header, the comment and the blank line are not rules.
     try testing.expectEqual(1, count);
-    // The cosmetic filter, the unknown option and the AdGuard line are.
-    try testing.expectEqual(3, parser.skipped);
+    // The unknown option and the AdGuard line are rules we do not apply; the
+    // cosmetic filter is a rule for another realm, counted as such.
+    try testing.expectEqual(2, parser.skipped);
+    try testing.expectEqual(1, parser.cosmetic);
 }
 
 test "adblock.Parser: a line too long for the buffer is skipped" {
@@ -319,7 +326,11 @@ test "adblock.Parser: full list" {
 
     // 5 direct network filters + both branches of the !#if block: the
     // directives are comments, their contents parse unconditionally.
-    // Everything else in the list — cosmetic lines, the scriptlet, the
-    // hosts-file noise, $removeparam and the unknown option — is skipped.
+    // Everything else in the list is either cosmetic (the domain-prefixed
+    // element-hiding lines and the scriptlet; the generic "##.ad-banner" is
+    // a comment) or skipped (the hosts-file noise, $removeparam and the
+    // unknown option).
     try testing.expectEqual(7, count);
+    try testing.expectEqual(3, parser.cosmetic);
+    try testing.expectEqual(3, parser.skipped);
 }
