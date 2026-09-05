@@ -25,12 +25,12 @@ const public_suffix_list = @import("../../data/public_suffix_list.zig");
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
 const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
-const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
@@ -373,13 +373,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try Frame.node_factory.createElementNS(frame, ns, normalized_name, null);
+    const node = try self.createElementNode(ns, normalized_name, frame);
     const element = node.as(Element);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
@@ -394,7 +389,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
+    const node = try self.createElementNode(ns, name, frame);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
@@ -403,12 +398,25 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
             try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
         }
     }
+    return node.as(Element);
+}
+
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8, frame: *Frame) !*Node {
+    const previous_creation = frame._custom_element_creation;
+    if (self._frame == null) {
+        // a document without a browser context, e.g. DOMParser, has no custom
+        // element registry
+        frame._custom_element_creation = .undefined;
+    }
+    defer frame._custom_element_creation = previous_creation;
+
+    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
 
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
     }
-    return node.as(Element);
+    return node;
 }
 
 pub fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {

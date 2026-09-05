@@ -50,6 +50,18 @@ fn htmlAsChildrenInner(frame: *Frame, node: *Node, html: []const u8, opts: Fragm
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;
 
+    // A context element in a document without a browsing context
+    // (createHTMLDocument, new Document, DOMParser output) has no custom
+    // element registry.
+    const previous_creation = frame._custom_element_creation;
+    const document = node.ownerDocument(frame) orelse node.as(Document);
+    if (document._frame == null) {
+        // a document without a browsing context (DOMParser et al.) has
+        // no custom element and should stay undefined.
+        frame._custom_element_creation = .undefined;
+    }
+    defer frame._custom_element_creation = previous_creation;
+
     // The html5ever wrapper-unwrap below rebinds children without going
     // through the insertion path, so recompute slot assignments for any
     // shadow tree this fragment landed in (idempotent; signals only on diff).
@@ -108,6 +120,11 @@ pub fn xmlDocument(frame: *Frame, xml: []const u8) !?*Document.XMLDocument {
     const previous_parse_mode = frame._parse_mode;
     frame._parse_mode = .fragment;
     defer frame._parse_mode = previous_parse_mode;
+
+    // No browsing context, so no custom element registry.
+    const previous_creation = frame._custom_element_creation;
+    frame._custom_element_creation = .undefined;
+    defer frame._custom_element_creation = previous_creation;
 
     const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
     const doc_node = doc.asNode();
