@@ -268,10 +268,16 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // TransferCanceled is not a load failure: terminate() (or worker teardown)
+    // cancelled a still-inflight script fetch. We shouldn't fireErrorEvent
+    // (or bother logging)
+    const canceled = err == error.TransferCanceled;
+    if (!canceled) {
+        log.err(.browser, "worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onmessage will never be registered.
     // Drain any buffered messages so they get dispatched (and silently
@@ -280,7 +286,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    if (!canceled) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {
@@ -481,7 +489,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    testing.silenceLog(&.{.http});
+    testing.silenceLog(&.{ .http, .browser, .browser });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can
