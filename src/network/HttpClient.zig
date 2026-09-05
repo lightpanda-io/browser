@@ -1000,7 +1000,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 try wba.signRequest(transfer, authority);
             }
 
-            if (self.serve_mode) {
+            if (self.serve_mode and !transfer.req.internal) {
                 transfer._notify_cdp = true;
                 transfer.notify(.http_request_start, &.{
                     .transfer = transfer,
