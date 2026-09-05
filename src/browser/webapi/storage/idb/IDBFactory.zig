@@ -392,7 +392,7 @@ const DeleteContext = struct {
 pub fn databases(_: *IDBFactory, exec: *Execution) !js.Promise {
     const local = exec.js.local.?;
     // unavailable for opaque origins, e.g. about:blank
-    const origin = exec.origin() orelse return local.rejectPromise(.{ .dom_exception = .{ .err = error.SecurityError } });
+    const origin = exec.origin() orelse return error.SecurityError;
     const engine = try exec.session.idb.engineForOrigin(origin);
     return local.resolvePromise(try engine.databases(exec.call_arena));
 }

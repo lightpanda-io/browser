@@ -1512,6 +1512,15 @@ pub fn stackTrace(self: *const Local) !?[]const u8 {
     return buf.written();
 }
 
+// We sometimes need to reject with a specific TypeError message. We can't
+// attach an anything to `error.TypeError`, but we can use a pseudo-global.
+// When caller catches the error.TypeError, it'll look into env.error_message
+// for the message.
+pub fn typeError(self: *const Local, message: []const u8) error{TypeError} {
+    self.ctx.env.error_message = message;
+    return error.TypeError;
+}
+
 // == Promise Helpers ==
 pub fn rejectPromise(self: *const Local, err: js.PromiseResolver.RejectError) js.Promise {
     var resolver = js.PromiseResolver.init(self);

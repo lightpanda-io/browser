@@ -292,43 +292,38 @@ pub fn getBodyUsed(self: *const Response) bool {
     };
 }
 
-// Marks a present body consumed; returns a rejected promise if it already was.
-fn consume(self: *Response, local: *const js.Local) ?js.Promise {
+// Marks a present body consumed; a TypeError if it already was.
+fn consume(self: *Response, local: *const js.Local) !void {
     switch (self._body) {
-        .empty => return null,
+        .empty => return,
         else => {},
     }
     if (self._body_used) {
-        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+        return local.typeError("Body has already been read");
     }
     self._body_used = true;
-    return null;
 }
 
 pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     const body = switch (self._body) {
         .bytes => |b| body_init.stripUtf8Bom(b),
         .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read text from stream body" }),
+        .stream => return local.typeError("Cannot read text from stream body"),
     };
     return local.resolvePromise(body);
 }
 
 pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     const body = switch (self._body) {
         .bytes => |b| body_init.stripUtf8Bom(b),
         .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read JSON from stream body" }),
+        .stream => return local.typeError("Cannot read JSON from stream body"),
     };
     const value = local.parseJSON(body) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
@@ -338,9 +333,7 @@ pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     return switch (self._body) {
         .bytes => |body| local.resolvePromise(js.ArrayBuffer{ .values = body }),
@@ -464,11 +457,11 @@ const StreamConsumer = struct {
 
 pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
+    try self.consume(local);
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read blob from stream body" }),
+        .stream => return local.typeError("Cannot read blob from stream body"),
     };
     const content_type = try self._headers.get("content-type", exec) orelse "";
     const b = try Blob.initFromBytes(body, content_type, exec);
@@ -477,26 +470,26 @@ pub fn blob(self: *Response, exec: *const Execution) !js.Promise {
 
 pub fn bytes(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
+    try self.consume(local);
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read bytes from stream body" }),
+        .stream => return local.typeError("Cannot read bytes from stream body"),
     };
     return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
 pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| return rejected;
+    try self.consume(local);
     const body = switch (self._body) {
         .bytes => |b| b,
         .empty => "",
-        .stream => return local.rejectPromise(.{ .type_error = "Cannot read FormData from stream body" }),
+        .stream => return local.typeError("Cannot read FormData from stream body"),
     };
 
     const content_type = try self._headers.get("content-type", exec) orelse {
-        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+        return local.typeError("Failed to parse body as FormData");
     };
     var it = ContentTypeIterator.init(content_type);
     const essence = it.essence;
@@ -507,12 +500,12 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
         const boundary = it.findBoundary();
         if (boundary.len == 0) {
-            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+            return local.typeError("Failed to parse body as FormData");
         }
 
         const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+            else => return local.typeError("Failed to parse body as FormData"),
         };
         return local.resolvePromise(form_data);
     }
@@ -520,12 +513,12 @@ pub fn formData(self: *Response, exec: *const Execution) !js.Promise {
     if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
         const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+            else => return local.typeError("Failed to parse body as FormData"),
         };
         return local.resolvePromise(form_data);
     }
 
-    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    return local.typeError("Failed to parse body as FormData");
 }
 
 pub fn clone(self: *const Response, exec: *const Execution) !*Response {

@@ -85,9 +85,7 @@ pub fn generate(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    validate(params, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    try validate(params, key_usages);
 
     // validate() already confirmed the usages and length are well-formed.
     const allowed = allowedUsages(params.name).?;
@@ -122,15 +120,13 @@ pub fn import(
     const local = exec.js.local.?;
 
     const canonical = canonicalName(name) orelse {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     };
 
-    const mask = common.usageMask(allowedUsages(name).?, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    const mask = try common.usageMask(allowedUsages(name).?, key_usages);
 
     if (raw.len != 16 and raw.len != 24 and raw.len != 32) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+        return error.DataError;
     }
 
     const crypto_key = try CryptoKey.init(exec, .{
