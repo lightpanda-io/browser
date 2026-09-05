@@ -566,7 +566,7 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     try frame.scheduleNavigation(href, .{
         .reason = .script,
         .kind = .{ .push = null },
-    }, .{ .anchor = target_frame });
+    }, .{ .anchor = .{ .frame = target_frame, .element = element } });
 }
 
 pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {

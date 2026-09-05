@@ -1006,10 +1006,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
         break :blk .{ u, false };
     };
 
-    const target = switch (nt) {
-        .form, .anchor => |p| p,
-        .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
+    const target: *Frame, const source_element: ?*Element = switch (nt) {
+        .form => |p| .{ p.frame, p.element },
+        .anchor => |p| .{ p.frame, p.element },
+        .script => |p| .{ p orelse originator, null },
+        .iframe => |iframe| .{ iframe._window.?._frame, null },
     };
 
     const session = target._session;
@@ -1032,21 +1033,19 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
-        const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
-
-        const location = try Location.init(target.url, target);
-        location.acquireRef();
-        target.window._location.releaseRef(target._page);
-        target.window._location = location;
-
-        if (target.parent == null) {
-            try session.navigation.updateEntries(target.url, opts.kind, target, true);
-        }
-
-        try target.queueHashChange(old_url, target.url);
-
-        // don't defer this, the caller is responsible for freeing it on error
+        const resolved_kind: NavigationKind = switch (opts.kind) {
+            .push => switch (nt) {
+                .script => .{ .replace = null },
+                else => opts.kind,
+            },
+            else => opts.kind,
+        };
+        _ = try session.navigation.navigateSameDocument(
+            resolved_url,
+            resolved_kind,
+            source_element,
+            target,
+        );
         arena.release();
         return;
     }
@@ -3448,9 +3447,9 @@ const NavigationType = enum {
 };
 
 const Navigation = union(NavigationType) {
-    form: *Frame,
+    form: struct { frame: *Frame, element: ?*Element = null },
     script: ?*Frame,
-    anchor: *Frame,
+    anchor: struct { frame: *Frame, element: ?*Element = null },
     iframe: *IFrame,
 };
 
@@ -3764,7 +3763,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         .frame => |f| f,
         .blank => try form_element.ownerFrame(self).openBlankTarget(form_element, ""),
     };
-    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
+    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = .{ .frame = target_frame, .element = submitter_ orelse form_element } });
 }
 
 const testing = @import("../testing.zig");
