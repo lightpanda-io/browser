@@ -553,3 +553,42 @@
     });
   }
 </script>
+
+<script id="worker_terminate_during_fetch_fires_no_error" type=module>
+  // terminate() cancels the still-inflight script fetch. That's a
+  // cancellation, not a load failure: a terminated worker fires no further
+  // events, error included. Challenge scripts create a blob worker and
+  // terminate it in the same tick, and probe for exactly this.
+  {
+    const state = await testing.async();
+    const blobUrl = URL.createObjectURL(new Blob(["postMessage('loaded');"], { type: 'text/javascript' }));
+    const worker = new Worker(blobUrl);
+    let fired = null;
+    worker.onerror = () => { fired = 'error'; };
+    worker.onmessage = () => { fired = 'message'; };
+    worker.terminate();
+
+    setTimeout(() => state.resolve(fired), 100);
+    await state.done((fired) => {
+      testing.expectEqual(null, fired);
+      URL.revokeObjectURL(blobUrl);
+    });
+  }
+</script>
+
+<script id="worker_missing_script_fires_error" type=module>
+  // A non-2xx script response is a load failure, and must keep firing the
+  // error event: it travels the same error callback as a cancellation.
+  {
+    const state = await testing.async();
+    const worker = new Worker('./does-not-exist.js');
+    worker.onerror = (e) => {
+      e.preventDefault();
+      state.resolve(e);
+    };
+
+    await state.done((e) => {
+      testing.expectTrue(e instanceof ErrorEvent);
+    });
+  }
+</script>
