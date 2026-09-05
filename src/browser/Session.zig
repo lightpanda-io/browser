@@ -335,8 +335,8 @@ fn tearDownPage(self: *Session, page: *Page) void {
 }
 
 // Allocate a Page in a free slot, publish it as the active page, and
-// dispatch `frame_created` so CDP creates fresh isolated-world V8
-// contexts. Used by createPage and by the synthetic-nav path. Does NOT
+// dispatch `frame_created` so CDP can bind its page handle to the new
+// frame. Used by createPage and by the synthetic-nav path. Does NOT
 // dispatch `frame_navigate` — the caller does that (or doesn't, for a
 // blank initial page).
 //
@@ -351,8 +351,8 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     errdefer _ = self.pages.pop();
 
     const frame = &page.frame;
-    // Inform CDP the main frame has been created such that additional
-    // context for other Worlds can be created as well.
+    // Inform CDP the main frame has been created so it can point its page
+    // handle at the new frame.
     self.notification.dispatch(.frame_created, frame);
     return frame;
 }
@@ -890,12 +890,14 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 //      isolated world contexts plus the node_registry. OLD is still the live
 //      page and its memory is alive (intentional: CDP teardown can walk
 //      old-page state without UAF).
-//   2. frame_created dispatch — CDP creates fresh isolated world contexts
-//      against the new frame. `replacement.replaces` is still set, so the
-//      session still reports an in-flight nav and CDP's frameCreated skips
-//      its frame_arena reset and captured_responses zeroing (the captured
-//      response for the request we are committing was just inserted by
-//      onHttpResponseHeadersDone moments earlier and must survive).
+//   2. frame_created dispatch — CDP rebinds its page handle to the new
+//      frame. `replacement.replaces` is still set, so the session still
+//      reports an in-flight nav and CDP's frameCreated skips its frame_arena
+//      reset and captured_responses zeroing (the captured response for the
+//      request we are committing was just inserted by
+//      onHttpResponseHeadersDone moments earlier and must survive). The
+//      isolated worlds emptied in step 1 are NOT refilled here — CDP rebuilds
+//      their contexts on the frame_navigate the caller dispatches afterwards.
 //   3. Promote: clear `replaces` and unlink OLD from `pages`, so
 //      `currentFrame()` / `livePage()` now resolve to `replacement`. Done AFTER
 //      step 2 so the in-commit signal (replaces != null) survives the dispatch

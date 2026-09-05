@@ -565,6 +565,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_navigated_within_document, self, onFrameNavigatedWithinDocument);
         try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_destroyed, self, onFrameDestroyed);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
@@ -636,35 +637,35 @@ pub const BrowserContext = struct {
         self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
-    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-        // The name is the world's identity (matching Chrome). Clients re-issue
-        // this call after every navigation; appending a duplicate each time
-        // would grow the per-page context count without bound.
+    pub const GetOrPutIsolatedWorld = struct {
+        world: *IsolatedWorld,
+        found_existing: bool,
+    };
+
+    pub fn findIsolatedWorld(self: *const BrowserContext, world_name: []const u8) ?*IsolatedWorld {
         for (self.isolated_worlds.items) |world| {
             if (std.mem.eql(u8, world.name, world_name)) {
-                if (world.grant_universal_access != grant_universal_access) {
-                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
-                }
                 return world;
             }
+        }
+        return null;
+    }
+
+    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !GetOrPutIsolatedWorld {
+        if (self.findIsolatedWorld(world_name)) |world| {
+            if (world.grant_universal_access != grant_universal_access) {
+                log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+            }
+            return .{ .world = world, .found_existing = true };
         }
 
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer arena.release();
 
-        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
-        errdefer call_arena.release();
-
-        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
-        errdefer local_arena.release();
-
         const world = try arena.create(IsolatedWorld);
         world.* = .{
             .arena = arena,
-            .call_arena = call_arena,
-            .local_arena = local_arena,
-            .context = null,
             .browser = browser,
             .name = try arena.dupe(u8, world_name),
             .grant_universal_access = grant_universal_access,
@@ -672,7 +673,19 @@ pub const BrowserContext = struct {
 
         try self.isolated_worlds.append(self.arena, world);
 
-        return world;
+        return .{ .world = world, .found_existing = false };
+    }
+
+    // only called when we fail to fully create a world (e.g. errdefer in
+    // Page.createIsolatedWorld).
+    pub fn removeIsolatedWorld(self: *BrowserContext, world: *IsolatedWorld) void {
+        for (self.isolated_worlds.items, 0..) |w, i| {
+            if (w == world) {
+                _ = self.isolated_worlds.swapRemove(i);
+                world.deinit();
+                return;
+            }
+        }
     }
 
     pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
@@ -931,6 +944,11 @@ pub const BrowserContext = struct {
         return @import("domains/page.zig").frameNavigatedWithinDocument(self, msg);
     }
 
+    pub fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        @import("domains/page.zig").frameDestroyed(self, frame);
+    }
+
     pub fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
@@ -1165,66 +1183,132 @@ pub const BrowserContext = struct {
 const ScriptOnNewDocument = struct {
     identifier: u32,
     source: []const u8,
+    // Page.addScriptToEvaluateOnNewDocument's worldName. null means the main
+    // world. A named world is seeded into every frame (see IsolatedWorld).
+    world_name: ?[]const u8,
 };
 
-/// in the isolated world by using its Context ID or the worldName.
-/// grantUniversalAccess Indicates whether the isolated world can reference objects like the DOM or other JS Objects.
-/// An isolated world has it's own instance of globals like Window.
-/// Generally the client needs to resolve a node into the isolated world to be able to work with it.
-/// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
-const IsolatedWorld = struct {
+/// An isolated world is identified by its name and has one V8::Context per
+/// frame it has been seeded into. A world enters a frame on an explicit
+/// trigger: Page.createIsolatedWorld or, or a preload script which is seeded
+/// into every frame. Once seeded, the frame's context is rebuilt on every
+/// navigation with no further client involvement.
+/// Frame ids are stable across a child frame's re-navigation (the Frame is
+/// torn down and re-initialized in place), so a per-frame context is removed
+/// on frame_destroyed and created again on the frame's next frame_navigated.
+pub const IsolatedWorld = struct {
     arena: *lp.Arena,
-    call_arena: *lp.Arena,
-    local_arena: *lp.Arena,
     browser: *Browser,
     name: []const u8,
-    context: ?*js.Context = null,
     grant_universal_access: bool,
+    contexts: std.ArrayList(FrameContext) = .empty,
+
+    // Frames this world has been seeded into, by frame id.
+    seeded_frames: std.ArrayList(u32) = .empty,
 
     // Identity tracking for this isolated world (separate from main world).
-    // This ensures CDP inspector contexts don't share v8::Globals with main world.
+    // Shared by all of the world's frame contexts, like the main world shares
+    // Page.identity across frames, and reset with them on root teardown.
     identity: js.Identity = .{},
 
+    const FrameContext = struct {
+        frame: *const Frame,
+        context: *js.Context,
+        // Per-context, not per-world: the call_arena is reset when a context's
+        // call depth returns to 0, which would free the data of another frame's
+        // in-flight call if they shared one.
+        call_arena: *lp.Arena,
+        local_arena: *lp.Arena,
+    };
+
     pub fn deinit(self: *IsolatedWorld) void {
-        self.removeContext();
-        self.call_arena.release();
-        self.local_arena.release();
+        self.removeAllContexts();
         self.arena.release();
     }
 
-    pub fn removeContext(self: *IsolatedWorld) void {
-        if (self.context) |ctx| {
-            self.browser.env.destroyContext(ctx);
-            self.context = null;
+    pub fn seed(self: *IsolatedWorld, frame_id: u32) !void {
+        if (self.isSeeded(frame_id)) {
+            return;
         }
-        // I don't think it's possible to have any identity without a context,
-        // but there's no harm in being safe.
+        return self.seeded_frames.append(self.arena.allocator(), frame_id);
+    }
+
+    pub fn isSeeded(self: *const IsolatedWorld, frame_id: u32) bool {
+        return std.mem.indexOfScalar(u32, self.seeded_frames.items, frame_id) != null;
+    }
+
+    // Keyed by Frame, not frame id: a retired root Page keeps its frame id
+    // while its deferred teardown is pending, and that teardown must not
+    // touch the live page's context.
+    pub fn contextFor(self: *const IsolatedWorld, frame: *const Frame) ?*js.Context {
+        for (self.contexts.items) |fc| {
+            if (fc.frame == frame) {
+                return fc.context;
+            }
+        }
+        return null;
+    }
+
+    // Callers must register the returned context with the inspector
+    pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
+        lp.assert(self.contextFor(frame) == null, "IsolatedWorld.createContext duplicate", .{ .frame_id = frame._frame_id });
+
+        const browser = self.browser;
+        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
+        errdefer call_arena.release();
+
+        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
+        errdefer local_arena.release();
+
+        const ctx = try browser.env.createContext(frame, .{
+            .identity = &self.identity,
+            .identity_arena = self.arena.allocator(),
+            .call_arena = call_arena.allocator(),
+            .local_arena = local_arena.allocator(),
+            .debug_name = "IsolatedContext",
+        });
+        errdefer browser.env.destroyContext(ctx);
+        try ctx.setOrigin(frame.origin);
+
+        try self.contexts.append(self.arena.allocator(), .{
+            .frame = frame,
+            .context = ctx,
+            .call_arena = call_arena,
+            .local_arena = local_arena,
+        });
+        return ctx;
+    }
+
+    pub fn removeContext(self: *IsolatedWorld, frame: *const Frame) void {
+        for (self.contexts.items, 0..) |fc, i| {
+            if (fc.frame == frame) {
+                self.destroyFrameContext(fc);
+                _ = self.contexts.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    pub fn removeAllContexts(self: *IsolatedWorld) void {
+        for (self.contexts.items) |fc| {
+            self.destroyFrameContext(fc);
+        }
+        self.contexts.clearRetainingCapacity();
+
+        // The page's objects are going away with the root frame; wrappers
+        // keyed by their addresses must not survive to alias a new page's.
         self.identity.deinit();
         self.identity = .{};
     }
 
-    // The isolate world must share at least some of the state with the related frame, specifically the DocumentHTML
-    // (assuming grantUniversalAccess will be set to True!).
-    // We just created the world and the frame. The frame's state lives in the session, but is update on navigation.
-    // This also means this pointer becomes invalid after removePage until a new frame is created.
-    // Currently we have only 1 frame and thus also only 1 state in the isolate world.
-    pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
-        if (self.context == null) {
-            const ctx = try self.browser.env.createContext(frame, .{
-                .identity = &self.identity,
-                .identity_arena = self.arena.allocator(),
-                .call_arena = self.call_arena.allocator(),
-                .local_arena = self.local_arena.allocator(),
-                .debug_name = "IsolatedContext",
-            });
-            self.context = ctx;
-        } else {
-            log.warn(.cdp, "not implemented", .{
-                .feature = "createContext: Not implemented second isolated context creation",
-                .info = "reuse existing context",
-            });
-        }
-        return self.context.?;
+    fn destroyFrameContext(self: *IsolatedWorld, fc: FrameContext) void {
+        // A re-navigating child frame keeps its Window, and the identity map
+        // keeps the window's global proxy; detach it from this context so the
+        // frame's next context can reattach it (as the main world does).
+        fc.context.detachGlobal();
+        self.browser.env.destroyContext(fc.context);
+        fc.call_arena.release();
+        fc.local_arena.release();
     }
 };
 
