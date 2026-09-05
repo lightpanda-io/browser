@@ -19,7 +19,6 @@
 const lp = @import("lightpanda");
 const Factory = @import("../../../Factory.zig");
 const js = @import("../../../js/js.zig");
-const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");

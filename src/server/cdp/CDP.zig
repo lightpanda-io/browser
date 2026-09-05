@@ -36,7 +36,6 @@ const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
 const Link = @import("../Link.zig");
-const Server = @import("../Server.zig");
 const Incrementing = @import("id.zig").Incrementing;
 
 const fetch = @import("domains/fetch.zig");

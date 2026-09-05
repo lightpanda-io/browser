@@ -21,7 +21,6 @@ const lp = @import("lightpanda");
 
 const App = @import("../../App.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
-const Server = @import("../Server.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");

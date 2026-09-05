@@ -25,7 +25,6 @@ const js = @import("../../browser/js/js.zig");
 const URL = @import("../../browser/URL.zig");
 const Node = @import("../../browser/webapi/Node.zig");
 const Frame = @import("../../browser/Frame.zig");
-const Session = @import("../../browser/Session.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 const xpath = @import("../../browser/xpath/Evaluator.zig");
 const XPathParser = @import("../../browser/xpath/Parser.zig");

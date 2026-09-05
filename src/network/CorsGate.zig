@@ -20,16 +20,13 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const URL = @import("../browser/URL.zig");
-const ArenaPool = @import("../ArenaPool.zig");
 
 const http = @import("http.zig");
-const Network = @import("Network.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
 const HttpClient = @import("HttpClient.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const CorsGate = @This();
 

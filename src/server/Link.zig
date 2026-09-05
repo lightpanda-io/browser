@@ -28,7 +28,6 @@ const WS = @import("WS.zig");
 const CDP = @import("cdp/CDP.zig");
 const Driver = @import("Driver.zig");
 
-const log = lp.log;
 const posix = std.posix;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
