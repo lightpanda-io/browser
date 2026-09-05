@@ -293,7 +293,7 @@ test "cdp.Emulation: viewport override fires matchMedia change events" {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    const v = try ls.local.exec("events.join() === 'listener:true,onchange:(max-width: 500px),listener:false,onchange:(max-width: 500px)'", null);
+    const v = try ls.local.exec("events.join() === 'onchange:(max-width: 500px),listener:true,onchange:(max-width: 500px),listener:false'", null);
     try testing.expect(v.toBool());
 }
 
