@@ -581,7 +581,9 @@ pub const Jar = struct {
     pub const LookupOpts = struct {
         is_http: bool,
         request_time: ?u64 = null,
-        is_navigation: bool = true,
+        // True only for a top-level navigation using a safe HTTP method.
+        // Caller who forget to set it withholds cookies rather than leaking them.
+        is_navigation: bool = false,
         prefix: ?[]const u8 = null,
         origin_url: SiteForCookies,
     };
@@ -935,12 +937,14 @@ test "Jar: forRequest" {
     try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, "https://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
+        .is_navigation = true,
     });
 
     // navigational cross domain, insecure
     try expectCookies("global1=1; global2=2; sitelax=7", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
+        .is_navigation = true,
     });
 
     // non-navigational cross domain, insecure
@@ -1020,6 +1024,7 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
     try expectCookies("", &jar, "http://victim.example/transfer", .{
         .origin_url = .{ .url = "http://attacker.test/strict-form" },
         .is_http = true,
+        .is_navigation = true,
     });
 
     // Browser-initiated navigation: the initiator is the destination itself.
@@ -1054,6 +1059,7 @@ test "Jar: forRequest with .none site-for-cookies" {
     try expectCookies("lax=2; none=3", &jar, victim_url, .{
         .origin_url = .none,
         .is_http = true,
+        .is_navigation = true,
     });
 
     // Sub-resources from such a frame only carry SameSite=None cookies.
