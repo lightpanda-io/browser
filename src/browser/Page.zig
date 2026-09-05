@@ -159,6 +159,14 @@ pub fn getViewport(self: *const Page) Viewport {
     return self.session.browser.getViewport();
 }
 
+pub fn viewportChanged(self: *Page) void {
+    self.frame.viewportChanged();
+    var i: usize = 0;
+    while (i < self.popups.items.len) : (i += 1) {
+        self.popups.items[i].viewportChanged();
+    }
+}
+
 // Initialize a Page and its root Frame.
 pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
     const frame_arena = try session.arena_pool.acquire(.large, "Page.frame_arena");

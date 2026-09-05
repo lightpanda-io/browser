@@ -130,17 +130,17 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
     const current = browser.getViewport();
     // Same convention for deviceScaleFactor: 0 means "don't override".
     const dsf: f32 = if (params.deviceScaleFactor) |v| @floatCast(v) else 0;
-    browser.viewport_override = .{
+    browser.setViewportOverride(.{
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
         .scale = if (dsf > 0) dsf else current.scale,
-    };
+    });
 
     return cmd.sendResult(null, .{});
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
-    cmd.cdp.browser.viewport_override = null;
+    cmd.cdp.browser.setViewportOverride(null);
     return cmd.sendResult(null, .{});
 }
 
@@ -264,6 +264,37 @@ test "cdp.Emulation: locale, timezone and script execution stubs" {
 
     try ctx.processMessage(.{ .id = 5, .method = "Emulation.setDefaultBackgroundColorOverride", .params = .{ .color = .{ .r = 0, .g = 0, .b = 0, .a = 0 } } });
     try ctx.expectSentResult(null, .{ .id = 5 });
+}
+
+test "cdp.Emulation: viewport override fires matchMedia change events" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-MQL", .url = "hi.html", .target_id = "FID-0000000MQL".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec(
+            \\window.mql = matchMedia('(max-width: 500px)');
+            \\window.events = [];
+            \\mql.addListener(e => events.push('listener:' + e.matches));
+            \\mql.onchange = e => events.push('onchange:' + e.media);
+        , null);
+    }
+
+    try ctx.processMessage(.{ .id = 1, .method = "Emulation.setDeviceMetricsOverride", .params = .{ .width = 400, .height = 800, .deviceScaleFactor = 1, .mobile = false } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    // Same side of the breakpoint: nothing to report.
+    try ctx.processMessage(.{ .id = 2, .method = "Emulation.setDeviceMetricsOverride", .params = .{ .width = 300, .height = 800, .deviceScaleFactor = 1, .mobile = false } });
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.clearDeviceMetricsOverride" });
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("events.join() === 'onchange:(max-width: 500px),listener:true,onchange:(max-width: 500px),listener:false'", null);
+    try testing.expect(v.toBool());
 }
 
 test "cdp.Emulation: setUserAgentOverride with valid user agent" {
