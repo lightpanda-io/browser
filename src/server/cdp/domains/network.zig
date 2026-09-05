@@ -30,7 +30,6 @@ const Notification = @import("../../../Notification.zig");
 
 const HttpClient = @import("../../../network/HttpClient.zig");
 const Cache = @import("../../../network/cache/Cache.zig");
-const Headers = @import("../../../network/HttpClient.zig").Headers;
 const Transfer = @import("../../../network/HttpClient.zig").Transfer;
 
 const CdpStorage = @import("storage.zig");

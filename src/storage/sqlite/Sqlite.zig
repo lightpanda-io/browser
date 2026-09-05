@@ -19,11 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Pool = @import("Pool.zig");
 pub const c = @import("sqlite3");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const Sqlite = @This();
 

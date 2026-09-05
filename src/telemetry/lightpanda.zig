@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const build_config = @import("build_config");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");

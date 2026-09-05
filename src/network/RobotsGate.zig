@@ -34,7 +34,6 @@ const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const RobotsGate = @This();
 
