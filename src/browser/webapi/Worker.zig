@@ -489,7 +489,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    testing.silenceLog(&.{.http, .browser, .browser});
+    testing.silenceLog(&.{ .http, .browser, .browser });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can
