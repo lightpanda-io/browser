@@ -248,7 +248,7 @@ You may still encounter errors or crashes. Please open an issue with specifics i
 
 Here are the key features we have implemented:
 
-- [ ] CORS [#2015](https://github.com/lightpanda-io/browser/issues/2015)
+- [x] CORS (enable with `--experimental-features cors`)
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree
