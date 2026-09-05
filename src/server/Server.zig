@@ -695,13 +695,11 @@ const Worker = struct {
         Worker.notifyLoopOfChange(server, .{ .ws = ws, .op = .{ .attach = driver } });
         driver.run();
         // Release first: until the loop has let go of this websocket it can
-        // still drop the link, and onLinkDisconnect requests a terminate. Doing
-        // it the other way round left that request landing after the cancel,
-        // so the teardown below ran with a pending terminate -- which is the
-        // one thing the cancel is here to prevent (cdp.deinit() and
-        // bidi.deinit() in our caller need V8 in a usable state).
+        // still drop the link, and onLinkDisconnect requests a terminate.
         Worker.releaseConnection(server, ws);
-        driver.browser.env.cancelTerminate();
+
+        // CDP/BiDi close the session before Browser.deinit, so disarm now.
+        driver.browser.prepareForTeardown();
     }
 
     // Worker -> loop: synchronous release. Blocks until the loop has dropped the

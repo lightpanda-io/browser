@@ -142,14 +142,13 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
 pub fn deinit(self: *Browser) void {
     const allocator = self.allocator;
 
+    self.prepareForTeardown();
+
     self.closeSession();
 
     lp.metrics.js_heap_physical_bytes.add(-@as(i64, @intCast(self.last_reported_js_bytes)));
     self.last_reported_js_bytes = 0;
 
-    // After this returns, the watchdog thread holds no reference to our env
-    // or http_client — required before either is torn down.
-    self.app.watchdog.unregister(&self.watchdog_entry);
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
     // fire — only now is it safe to free the pool backing their parameters.
@@ -160,6 +159,12 @@ pub fn deinit(self: *Browser) void {
     self.clearPermissions();
     self.permissions.deinit(allocator);
     self.selector_cache.deinit();
+}
+
+// Wait out a watchdog scan before clearing its termination request.
+pub fn prepareForTeardown(self: *Browser) void {
+    self.app.watchdog.unregister(&self.watchdog_entry);
+    self.env.cancelTerminate();
 }
 
 // Set (or overwrite) the stored state for a permission. The name is duped into
