@@ -158,15 +158,12 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
     }
 
-    // A worldName registers the world itself:
+    // A worldName registers the world itself.
     var world_name: ?[]const u8 = null;
     if (params.worldName) |name| {
         if (name.len > 0) {
-            const gop = try bc.createIsolatedWorld(name, true);
-            // Borrowed from the world's arena, which outlives the script: a
-            // world is only ever removed on the createIsolatedWorld command's
-            // own error path, before any script can name it.
-            world_name = gop.world.name;
+            _ = try bc.createIsolatedWorld(name, true);
+            world_name = try bc.arena.dupe(u8, name);
         }
     }
 
@@ -1563,6 +1560,37 @@ test "cdp.frame: isolated world survives the old page's deferred teardown" {
         .contextId = page_ctx,
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page two" } }, .{ .id = 52 });
+}
+
+test "cdp.frame: isolated world contexts share their frame's origin token" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW3", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const root_id = id.toFrameId(root._frame_id);
+    const child_id = id.toFrameId(child._frame_id);
+
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.enable", .sessionId = "SID-X" });
+    try ctx.processMessage(.{ .id = 61, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    try ctx.processMessage(.{ .id = 62, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &child_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+
+    // frames[0] is the child's window in this world; same origin as the root,
+    // so V8 must let the root's context through.
+    try ctx.processMessage(.{ .id = 63, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "frames[0].document.title",
+        .contextId = try isolatedWorldContextId(bc, root),
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 63 });
 }
 
 fn isolatedWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {

@@ -1271,6 +1271,7 @@ pub const IsolatedWorld = struct {
             .debug_name = "IsolatedContext",
         });
         errdefer browser.env.destroyContext(ctx);
+        try ctx.setOrigin(frame.origin);
 
         try self.contexts.append(self.arena.allocator(), .{
             .frame = frame,
