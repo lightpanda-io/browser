@@ -485,8 +485,9 @@ fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualNa
 // create.
 fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    self.frame._skip_custom_element_upgrade = true;
-    defer self.frame._skip_custom_element_upgrade = false;
+    const previous_creation = self.frame._custom_element_creation;
+    self.frame._custom_element_creation = .bare_context;
+    defer self.frame._custom_element_creation = previous_creation;
     return self._createElementCallback(data, qname, attributes, .unknown) catch |err| {
         self.err = .{ .err = err, .source = .create_element };
         return null;
