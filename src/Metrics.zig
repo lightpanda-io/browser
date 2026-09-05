@@ -24,6 +24,7 @@ const Driver = @import("server/Driver.zig").Protocol;
 
 serve_http_requests: CounterEnum("status", @import("network/http.zig").StatusCategory) = .{},
 serve_http_evictions: Counter = .{},
+serve_session_timeouts: Counter = .{},
 serve_inbox_backlog: Counter = .{},
 serve_connections: CounterEnum("driver", Driver) = .{},
 serve_connection_limit: Counter = .{},
@@ -100,10 +101,11 @@ cors_response: CounterEnum("result", enum { allowed, blocked }) = .{},
 const help = .{
     .serve_http_requests = "HTTP responses sent, by status category (includes the pre-parse 400/413 rejections)",
     .serve_http_evictions = "HTTP connections closed for sitting past their deadline without completing a request",
+    .serve_session_timeouts = "WebDriver sessions timed out",
     .serve_inbox_backlog = "Websocket connections closed for queueing more unprocessed messages than the worker could drain",
-    .serve_connections = "Websocket connections accepted, by driver protocol",
+    .serve_connections = "Drivers started, by protocol",
     .serve_connection_limit = "Accepts deferred because the connection budget was full: the listener pauses until a slot frees (counted before any handshake, so no driver label)",
-    .serve_active_connections = "Currently connected clients, by driver protocol",
+    .serve_active_connections = "Drivers currently running, by protocol",
     .serve_commands = "Commands dispatched, by driver protocol",
     .serve_unknown_commands = "Commands rejected for an unknown domain, module or method, by driver protocol",
     .js_heap_limits = "Pages terminated for reaching the V8 heap limit",
@@ -197,7 +199,11 @@ const Gauge = struct {
 
     fn write(self: *const Gauge, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
         try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
-        try writer.print(name ++ " {d}\n", .{@atomicLoad(isize, &self.value, .monotonic)});
+        try writer.print(name ++ " {d}\n", .{self.get()});
+    }
+
+    fn get(self: *const Gauge) isize {
+        return @atomicLoad(isize, &self.value, .monotonic);
     }
 };
 
@@ -218,11 +224,14 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
             self.values.getPtr(tag).decr();
         }
 
+        pub fn get(self: *const Self, tag: T) isize {
+            return self.values.getPtrConst(tag).get();
+        }
+
         fn write(self: *const Self, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
             try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
             inline for (comptime std.enums.values(Tag)) |tag| {
-                const value = @atomicLoad(isize, &self.values.getPtrConst(tag).value, .monotonic);
-                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{value});
+                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{self.get(tag)});
             }
         }
     };

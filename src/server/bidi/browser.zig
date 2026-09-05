@@ -47,7 +47,7 @@ fn close(cmd: *const BiDi.Command) !void {
 
     const bidi = cmd.bidi;
     const arena = try bidi.browser.arena_pool.acquire(.tiny, "bidi browser close");
-    bidi.conn.inbox.push(arena, .close);
+    bidi.inbox.push(arena, .quit);
 }
 
 const UserContextInfo = struct { userContext: []const u8 };
