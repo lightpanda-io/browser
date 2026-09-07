@@ -40,7 +40,6 @@ pub const Opts = struct {
     height: u32 = 0,
     clip: ?Clip = null,
     scale: f32 = 1.0,
-    strip: RenderTree.Strip = .{},
 
     const Clip = struct {
         x: f32,
@@ -117,38 +116,38 @@ pub fn rendererFor(frame: *Frame) !*Renderer {
     return r;
 }
 
-pub fn png(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
-    const prepared = try preparePng(arena, node, opts, frame);
+pub fn png(arena: Allocator, state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !u32 {
+    const prepared = try preparePng(arena, state, opts, frame);
     return prepared.write(writer);
 }
 
 /// The height a render at `width` would have.
 pub fn contentHeight(arena: Allocator, node: *Node, width: u32, frame: *Frame) !u32 {
-    const prepared = try preparePng(arena, node, .{ .width = width }, frame);
+    const prepared = try preparePng(arena, .{ .root = node }, .{ .width = width }, frame);
     return prepared.measure();
 }
 
 // The DOM walk, done up front so it can fail (allocation) before any output
 // starts. Rasterizing is then a pure write: `Prepared` can be embedded in a
 // std.json value and streams itself as a base64 string.
-pub fn preparePng(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepared {
+pub fn preparePng(arena: Allocator, state: RenderTree.State, opts: Opts, frame: *Frame) !Prepared {
     if (opts.width == 0 or !(opts.scale > 0 and opts.scale <= 8)) {
         return error.InvalidScreenshotOptions;
     }
     return .{
         .opts = opts,
-        .blocks = try collect(arena, node, opts.strip, frame),
+        .blocks = try collect(arena, state, frame),
         .renderer = try rendererFor(frame),
     };
 }
 
-pub fn collect(arena: Allocator, node: *Node, strip: RenderTree.Strip, frame: *Frame) ![]const LpBlock {
+pub fn collect(arena: Allocator, state: RenderTree.State, frame: *Frame) ![]const LpBlock {
     var builder: Builder = .{
         .frame = frame,
         .arena = arena,
-        .tree = .{ .frame = frame, .root = node, .strip = strip },
+        .tree = .{ .frame = frame, .state = state },
     };
-    try builder.render(node);
+    try builder.render(state.root);
     try builder.closeBlock();
     return builder.blocks.items;
 }
@@ -1170,7 +1169,7 @@ test "browser.screenshot: fixed height, clip and scale" {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>one</p><p>two</p><p>three</p>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    const content_height = try png(testing.arena_allocator, div.asNode(), .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
+    const content_height = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300, .height = 50, .scale = 2.0 }, &aw.writer, frame);
     try testing.expectEqual(true, content_height > 50);
     try testing.expectEqual(600, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(100, std.mem.readInt(u32, aw.written()[20..24], .big));
@@ -1178,7 +1177,7 @@ test "browser.screenshot: fixed height, clip and scale" {
     try testing.expectEqual(content_height, try contentHeight(frame.call_arena, div.asNode(), 300, frame));
 
     aw.clearRetainingCapacity();
-    _ = try png(frame.call_arena, div.asNode(), .{
+    _ = try png(frame.call_arena, .{ .root = div.asNode() }, .{
         .width = 300,
         .clip = .{ .x = 10, .y = 10, .width = 100, .height = 40 },
     }, &aw.writer, frame);
@@ -1198,7 +1197,7 @@ test "browser.screenshot: a clip past the viewport extends the strip" {
     try testing.expectEqual(true, full > 100);
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    _ = try png(frame.call_arena, div.asNode(), .{
+    _ = try png(frame.call_arena, .{ .root = div.asNode() }, .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = @floatFromInt(full) },
@@ -1209,7 +1208,7 @@ test "browser.screenshot: a clip past the viewport extends the strip" {
     // Never past the content, so an absurd probe resolves to the full page
     // instead of a 1e8-tall raster.
     aw.clearRetainingCapacity();
-    _ = try png(testing.arena_allocator, div.asNode(), .{
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{
         .width = 300,
         .height = 100,
         .clip = .{ .x = 0, .y = 0, .width = 300, .height = 1e8 },
@@ -1227,12 +1226,12 @@ test "browser.screenshot: raster is bounded" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
 
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 300000, .height = 8 }, &aw.writer, frame);
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300000, .height = 8 }, &aw.writer, frame);
     try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[20..24], .big));
 
     aw.clearRetainingCapacity();
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = 8, .height = 100000 }, &aw.writer, frame);
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 8, .height = 100000 }, &aw.writer, frame);
     try testing.expectEqual(8, std.mem.readInt(u32, aw.written()[16..20], .big));
     try testing.expectEqual(16384, std.mem.readInt(u32, aw.written()[20..24], .big));
 }
@@ -1250,7 +1249,7 @@ test "browser.screenshot: a refused write fails the capture" {
     // has to surface as an error and not as a truncated image.
     var buf: [64]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, div.asNode(), .{ .width = 300 }, &w, frame));
+    try testing.expectError(error.WriteFailed, png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 300 }, &w, frame));
 }
 
 test "browser.screenshot: json streams base64" {
@@ -1261,7 +1260,7 @@ test "browser.screenshot: json streams base64" {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<p>hello</p>");
 
-    const prepared = try preparePng(testing.arena_allocator, div.asNode(), .{ .width = 200 }, frame);
+    const prepared = try preparePng(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = 200 }, frame);
 
     var raw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer raw.deinit();
@@ -1300,7 +1299,7 @@ test "browser.screenshot: block extraction" {
         \\<div>   </div>
     );
 
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .root = div.asNode() } };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
     try builder.render(div.asNode());
     try builder.closeBlock();
 
@@ -1373,7 +1372,7 @@ test "browser.screenshot: adjacent anchors" {
         \\<p><a href="/a">Log In</a><a href="/b">Sign Up</a><b>!</b> see <a href="/c">this</a>.</p>
     );
 
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .root = div.asNode() } };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
@@ -1395,7 +1394,7 @@ test "browser.screenshot: standalone anchors get their own block" {
         \\<p>inline <a href="/x">link</a> here</p>
     );
 
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .root = div.asNode() } };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
@@ -1421,7 +1420,7 @@ test "browser.screenshot: shadow dom and slots" {
         \\<x-host><template shadowrootmode="open"><p>shadow <slot></slot></p></template>light</x-host>
     , frame);
 
-    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .root = div.asNode() } };
+    var builder: Builder = .{ .arena = testing.arena_allocator, .frame = frame, .tree = .{ .frame = frame, .state = .{ .root = div.asNode() } } };
     try builder.render(div.asNode());
     try builder.closeBlock();
     const blocks = builder.blocks.items;
@@ -1488,7 +1487,7 @@ test "browser.screenshot: flex from a stylesheet" {
 // The text of each block on its own line: what renders, not how.
 fn collectLines(node: *Node, frame: *Frame) ![]const u8 {
     const arena = testing.arena_allocator;
-    const blocks = try collect(arena, node, .{}, frame);
+    const blocks = try collect(arena, .{ .root = node }, frame);
     var out: std.ArrayList(u8) = .empty;
     for (blocks, 0..) |b, i| {
         if (i > 0) try out.append(arena, '\n');
@@ -1506,7 +1505,7 @@ fn testPng(html: []const u8, width: u32) ![]const u8 {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    _ = try png(testing.arena_allocator, div.asNode(), .{ .width = width }, &aw.writer, frame);
+    _ = try png(testing.arena_allocator, .{ .root = div.asNode() }, .{ .width = width }, &aw.writer, frame);
     return aw.written();
 }
 
@@ -1529,10 +1528,10 @@ test "browser.screenshot: collect honours strip flags" {
         }
     };
 
-    const all = try collect(arena, div.asNode(), .{}, frame);
+    const all = try collect(arena, .{ .root = div.asNode() }, frame);
     try testing.expectEqual(4, all.len);
 
-    const stripped = try collect(arena, div.asNode(), .{ .shell = true, .ui = true }, frame);
+    const stripped = try collect(arena, .{ .root = div.asNode(), .strip = .{ .shell = true, .ui = true } }, frame);
     try testing.expectEqual(1, stripped.len);
     try testing.expectEqual("Body text", try S.text(stripped[0], arena));
 }

@@ -120,11 +120,15 @@
     \\          Tag group to remove from dump. Can be passed multiple times.
     \\          Defaults to stripping nothing.
     \\          Allowed values:
+    \\              clutter   Heuristic to keep only the main content, in the
+    \\                        manner of reader modes. May fallback to `shell`
+    \\                        (which my itself fallback to a full dump).
     \\              css       Includes style and link[rel=stylesheet].
     \\              js        Script and link[as=script, rel=preload].
     \\              invisible Best-effort (e.g. display:none) hidden elements
-    \\              shell     Heuristic to attempt to remove headers, footer,
-    \\                        and other non-content decoration.
+    \\              shell     Page chrome by markup: nav, aside, dialog,
+    \\                        page-level header and footer. Full dump when
+    \\                        `shell` would remove most of the text.
     \\              ui        Includes img, picture, video, CSS and SVG.
     \\  --terminate-ms <INT>
     \\          Hard deadline in milliseconds. After this time elapses, JavaScript

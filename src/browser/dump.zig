@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
+const RenderTree = @import("RenderTree.zig");
 const LimitedWriter = @import("../LimitedWriter.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
@@ -29,16 +30,21 @@ pub const Opts = struct {
     with_frames: bool = false,
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
+
     /// Soft cap: output is cut at a UTF-8 boundary and a truncation marker
     /// appended.
     max_bytes: ?u32 = null,
 
-    pub const Strip = packed struct(u5) {
+    // Nodes to remove (clutter remove, from RenderTree.resolve)
+    pruned: ?*const RenderTree.PruneSet = null,
+
+    pub const Strip = packed struct(u6) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
         invisible: bool = false,
         shell: bool = false,
+        clutter: bool = false,
     };
 
     pub const Shadow = union(enum) {
@@ -83,7 +89,7 @@ fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: 
                 }
             }
             // But if the doc has no child, or the first child isn't a doctype
-            // well force it.
+            // we'll force it.
             try writer.writeAll("<!DOCTYPE html>");
         }
 
@@ -111,6 +117,9 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) erro
 fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => {
+            if (opts.pruned) |set| {
+                if (set.contains(node)) return;
+            }
             const cd = node.subtype(Node.CData);
             if (node.is(Node.CData.Comment)) |_| {
                 try writer.writeAll("<!--");
@@ -132,7 +141,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         },
         .element => {
             const el = node.subtype(Node.Element);
-            if (shouldStripElement(el, opts.strip, frame)) {
+            if (shouldStripElement(el, opts.strip, opts.pruned, frame)) {
                 return;
             }
 
@@ -363,9 +372,9 @@ fn isVoidElement(el: *Node.Element) bool {
     };
 }
 
-pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) bool {
+pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const RenderTree.PruneSet, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u5, @bitCast(strip)) == 0) {
+    if (@as(u6, @bitCast(strip)) == 0) {
         return false;
     }
 
@@ -417,6 +426,12 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) b
         return true;
     }
 
+    if (pruned) |set| {
+        if (set.contains(el.asNode())) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -429,9 +444,28 @@ pub fn isShellElement(el: *Node.Element) bool {
         .header, .footer => return !hasSectioningAncestor(el),
         else => {},
     }
-    return hasRole(el, &.{ "banner", "complementary", "contentinfo", "navigation", "search", "dialog", "alertdialog", "menu", "menubar" });
+    if (hasRole(el, &.{ "banner", "complementary", "contentinfo", "navigation", "search", "dialog", "alertdialog", "menu", "menubar" })) {
+        return true;
+    }
+    if (hasShellToken(el.getClassName()) or hasShellToken(el.getId())) {
+        return !hasSectioningAncestor(el);
+    }
+    return false;
 }
 
+// Words that name page chrome and nothing else. "menu" is left out: it also
+// names content.
+const shell_tokens = [_][]const u8{ "header", "footer", "nav", "navbar", "navigation", "sidebar", "masthead" };
+
+fn hasShellToken(value: ?[]const u8) bool {
+    var it = std.mem.tokenizeAny(u8, value orelse return false, " \t\n\r");
+    while (it.next()) |token| {
+        for (shell_tokens) |shell_token| {
+            if (std.ascii.eqlIgnoreCase(token, shell_token)) return true;
+        }
+    }
+    return false;
+}
 fn hasSectioningAncestor(el: *Node.Element) bool {
     var node = el.asNode().parentNode();
     while (node) |n| : (node = n.parentNode()) {
@@ -636,6 +670,14 @@ test "dump: strip.shell removes page chrome but keeps sectioned header/footer" {
         \\<header>H</header><nav>N</nav><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article><aside>A</aside><dialog>D</dialog><footer>F</footer>
     ,
         \\<div><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article></div>
+    );
+}
+
+test "dump: strip.shell honours chrome class and id tokens" {
+    try expectShellDump(
+        \\<div class="header">H</div><div id="Footer">F</div><div class="site navbar">N</div><div class="subheader">S</div><div class="post-footer">P</div><main><div class="header">MH</div><p>x</p></main><div class="menu">M</div>
+    ,
+        \\<div><div class="subheader">S</div><div class="post-footer">P</div><main><div class="header">MH</div><p>x</p></main><div class="menu">M</div></div>
     );
 }
 

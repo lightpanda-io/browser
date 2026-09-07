@@ -174,7 +174,7 @@ fn dump(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
-    const root = blk: {
+    const target = blk: {
         if (params.backendNodeId) |id| {
             break :blk (bc.node_registry.lookup_by_id.get(id) orelse return error.InvalidNodeId).dom;
         }
@@ -185,15 +185,16 @@ fn dump(cmd: anytype) !void {
         break :blk frame.document.asNode();
     };
 
-    const strip = lp.RenderTree.resolveStrip(root, params.strip, frame);
+    const state = try lp.RenderTree.resolve(cmd.arena, target, params.strip, frame);
+    const root = state.root;
 
     switch (params.format) {
         .html, .markdown => {
             var aw: std.Io.Writer.Allocating = .init(cmd.arena);
             defer aw.deinit();
-            const opts: lp.dump.Opts = .{ .strip = strip, .max_bytes = params.maxBytes };
+            const opts: lp.dump.Opts = .{ .strip = state.strip, .pruned = state.pruned, .max_bytes = params.maxBytes };
             if (params.format == .markdown) {
-                try markdown.dump(root, .{ .strip = strip, .max_bytes = params.maxBytes }, &aw.writer, frame);
+                try markdown.dump(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
             } else if (root.is(DOMNode.Document)) |doc| {
                 try lp.dump.root(doc, opts, &aw.writer, frame);
             } else {
@@ -205,16 +206,15 @@ fn dump(cmd: anytype) !void {
             if (params.maxBytes != null) {
                 return error.InvalidParams;
             }
-            var opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
-            opts.strip = strip;
-            const prepared = try lp.screenshot.preparePng(cmd.arena, root, opts, frame);
+            const opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
+            const prepared = try lp.screenshot.preparePng(cmd.arena, state, opts, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },
         .pdf => {
             if (params.maxBytes != null) {
                 return error.InvalidParams;
             }
-            const prepared = try lp.pdf.prepare(cmd.arena, root, .{ .strip = strip }, frame);
+            const prepared = try lp.pdf.prepare(cmd.arena, state, .{}, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },
     }
@@ -237,7 +237,7 @@ fn getMarkdown(cmd: anytype) !void {
 
     var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     defer aw.deinit();
-    try markdown.dump(dom_node, .{}, &aw.writer, frame);
+    try markdown.dump(.{ .root = dom_node }, .{}, &aw.writer, frame);
 
     return cmd.sendResult(.{
         .markdown = aw.written(),

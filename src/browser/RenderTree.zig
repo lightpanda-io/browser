@@ -28,16 +28,24 @@ const TreeWalker = @import("webapi/TreeWalker.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
 const dump_html = @import("dump.zig");
+const clutter = @import("clutter.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 const log = lp.log;
 pub const Strip = dump_html.Opts.Strip;
+pub const PruneSet = std.AutoHashMapUnmanaged(*Node, void);
 
 const RenderTree = @This();
 
+// What / how we're going to render.
+pub const State = struct {
+    root: *Node, // the not to start from
+    strip: Strip = .{}, // the strip flag we'll use
+    pruned: ?*const PruneSet = null, // the nodes that'll get pruned
+};
+
+state: State,
 frame: *Frame,
-root: *Node,
-strip: Strip = .{},
 
 pub const Child = struct {
     node: *Node,
@@ -121,6 +129,11 @@ pub fn classify(self: *const RenderTree, node: *Node, opts: ClassifyOpts) ?Child
         return .{ .node = node, .what = .{ .element = d }, .separated = false };
     }
     const text_node = node.is(Node.CData.Text) orelse return null;
+    if (self.state.pruned) |set| {
+        if (set.contains(node)) {
+            return null;
+        }
+    }
     var text = text_node.ownData();
     if (opts.boxed) {
         text = std.mem.trim(u8, text, &std.ascii.whitespace);
@@ -140,10 +153,14 @@ pub fn classify(self: *const RenderTree, node: *Node, opts: ClassifyOpts) ?Child
 
 fn display(self: *const RenderTree, el: *Element, is_slotted: bool) ?StyleManager.Display {
     const d = visibleDisplay(el, self.frame) orelse {
-        if (el.asNode() != self.root) return null;
+        if (el.asNode() != self.state.root) {
+            return null;
+        }
         return .other;
     };
-    if (dump_html.shouldStripElement(el, self.strip, self.frame)) return null;
+    if (dump_html.shouldStripElement(el, self.state.strip, self.state.pruned, self.frame)) {
+        return null;
+    }
     if (!is_slotted and el.getSlot() != null) return null;
     return d;
 }
@@ -219,11 +236,32 @@ pub fn isStandaloneAnchor(el: *Element, frame: *Frame) bool {
     return true;
 }
 
+/// Decides once, before rendering, what a dump of `root` renders: the strip
+/// bits that survive their safeguards and, for clutter, the prune set.
+/// Every dump entry point calls this and renders the result. The prune set
+/// lives in `allocator` for as long as the dump.
+pub fn resolve(allocator: std.mem.Allocator, root: *Node, requested_strip: Strip, frame: *Frame) !State {
+    var strip = requested_strip;
+    if (strip.clutter) {
+        // The shell strip is the floor the selection stands on.
+        strip.shell = true;
+        strip.invisible = true;
+    }
+    strip = resolveShell(root, strip, frame);
+    if (strip.clutter) {
+        if (try clutter.select(allocator, root, strip, frame)) |pruned| {
+            return .{ .root = root, .strip = strip, .pruned = pruned };
+        }
+        strip.clutter = false;
+    }
+    return .{ .root = root, .strip = strip };
+}
+
 /// Shell stripping is undone when it would remove most of the content. Better
 /// to leave too much in than to strip too muchout. Non-link text is
 /// the measure (nav and footer text is mostly links); a page with none is
 /// judged on all of its text.
-pub fn resolveStrip(root: *Node, strip: Strip, frame: *Frame) Strip {
+fn resolveShell(root: *Node, strip: Strip, frame: *Frame) Strip {
     if (strip.shell == false) {
         return strip;
     }
@@ -232,7 +270,7 @@ pub fn resolveStrip(root: *Node, strip: Strip, frame: *Frame) Strip {
     render_with_shell.shell = false;
 
     var m: Measure = .{};
-    const tree: RenderTree = .{ .frame = frame, .root = root, .strip = render_with_shell };
+    const tree: RenderTree = .{ .frame = frame, .state = .{ .root = root, .strip = render_with_shell } };
     tree.measure(root, .{}, &m);
 
     const total, const shell = if (m.prose > 0) .{ m.prose, m.shell_prose } else .{ m.all, m.shell_all };
@@ -357,22 +395,22 @@ pub fn analyzeContent(root: *Node, frame: *Frame) ContentInfo {
 const testing = @import("../testing.zig");
 
 test "RenderTree: resolveStrip keeps shell when the content holds the text" {
-    try testing.expectEqual(true, try resolveShell(
+    try testing.expectEqual(true, try shellSurvives(
         \\<nav><a href="/">Home</a><a href="/about">About us</a><a href="/blog">Blog</a></nav><main><p>Some article text.</p></main><footer>Copyright</footer>
     ));
 }
 
 test "RenderTree: resolveStrip undoes shell when the shell holds the text" {
-    try testing.expectEqual(false, try resolveShell(
+    try testing.expectEqual(false, try shellSurvives(
         \\<nav><p>All of the text on this page lives inside a nav element.</p></nav><main>hi</main>
     ));
 }
 
 test "RenderTree: resolveStrip judges an all-link page on its links" {
-    try testing.expectEqual(false, try resolveShell(
+    try testing.expectEqual(false, try shellSurvives(
         \\<nav><a href="/1">one</a><a href="/2">two</a><a href="/3">three</a></nav><p><a href="/x">x</a></p>
     ));
-    try testing.expectEqual(true, try resolveShell(
+    try testing.expectEqual(true, try shellSurvives(
         \\<nav><a href="/1">one</a></nav><p><a href="/x">a longer list of links</a><a href="/y">and another</a></p>
     ));
 }
@@ -380,12 +418,12 @@ test "RenderTree: resolveStrip judges an all-link page on its links" {
 test "RenderTree: resolveStrip ignores what other strip bits already drop" {
     // The script text is not content; without strip.js it would tip the
     // balance toward keeping the shell.
-    try testing.expectEqual(false, try resolveShell(
+    try testing.expectEqual(false, try shellSurvives(
         \\<nav><p>All of the text on this page lives inside a nav element.</p></nav><main>hi<script>var a_very_long_script_body_that_is_not_content = 1;</script></main>
     ));
 }
 
-fn resolveShell(html: []const u8) !bool {
+fn shellSurvives(html: []const u8) !bool {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -393,7 +431,7 @@ fn resolveShell(html: []const u8) !bool {
     const div = try doc.createElement("div", null, frame);
     try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
 
-    const strip = resolveStrip(div.asNode(), .{ .js = true, .shell = true }, frame);
+    const strip = resolveShell(div.asNode(), .{ .js = true, .shell = true }, frame);
     // Only the shell bit is ever undone.
     try testing.expectEqual(true, strip.js);
     return strip.shell;

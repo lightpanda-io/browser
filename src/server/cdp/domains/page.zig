@@ -1067,7 +1067,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     }
 
     // Prepared streams itself as base64 straight into the outgoing message.
-    const shot = try lp.screenshot.preparePng(cmd.arena, frame.window._document.asNode(), opts, frame);
+    const shot = try lp.screenshot.preparePng(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame);
     return cmd.sendResult(.{ .data = shot }, .{});
 }
 
@@ -1112,7 +1112,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
             error.OutOfMemory => return error.OutOfMemory,
         },
     };
-    const prepared = lp.pdf.prepare(cmd.arena, frame.window._document.asNode(), opts, frame) catch |err| switch (err) {
+    const prepared = lp.pdf.prepare(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame) catch |err| switch (err) {
         error.InvalidPdfOptions => return cmd.sendError(-32602, "invalid print parameters", .{}),
         error.PageRangeExceedsPageCount => return cmd.sendError(-32000, "Page range exceeds page count", .{}),
         else => return err,

@@ -1296,7 +1296,7 @@ fn writeSingleLine(w: *std.Io.Writer, text: []const u8) !void {
 
 fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(frame.document.asNode(), .{}, &aw.writer, frame) catch
+    lp.markdown.dump(.{ .root = frame.document.asNode() }, .{}, &aw.writer, frame) catch
         return ToolError.InternalError;
     return aw.written();
 }
@@ -1315,7 +1315,7 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(node, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
+    lp.markdown.dump(.{ .root = node }, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
     return aw.written();
 }
 
@@ -1340,16 +1340,18 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const whole = args.selector == null and args.backendNodeId == null;
-    const node = if (whole) page.document.asNode() else (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
+    const target = if (whole) page.document.asNode() else (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
+    const state = lp.RenderTree.resolve(arena, target, args.strip, page) catch return ToolError.OutOfMemory;
     const opts: lp.dump.Opts = .{
-        .strip = lp.RenderTree.resolveStrip(node, args.strip, page),
+        .strip = state.strip,
+        .pruned = state.pruned,
         .max_bytes = args.maxBytes,
     };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (whole) {
-        lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
+    if (state.root.is(DOMNode.Document)) |document| {
+        lp.dump.root(document, opts, &aw.writer, page) catch return ToolError.InternalError;
     } else {
-        lp.dump.deep(node, opts, &aw.writer, page) catch return ToolError.InternalError;
+        lp.dump.deep(state.root, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
     return aw.written();
 }
@@ -1371,10 +1373,10 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         return .{ .text = "pass `path`: this client cannot display an inline image", .is_error = true };
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
-    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
-    var opts: lp.screenshot.Opts = .fromViewport(page._page.getViewport(), args.fullPage);
-    opts.strip = lp.RenderTree.resolveStrip(node, args.strip, page);
-    var prepared = lp.screenshot.preparePng(arena, node, opts, page) catch
+    const scope = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    const state = lp.RenderTree.resolve(arena, scope, args.strip, page) catch return ToolError.OutOfMemory;
+    const opts: lp.screenshot.Opts = .fromViewport(page._page.getViewport(), args.fullPage);
+    var prepared = lp.screenshot.preparePng(arena, state, opts, page) catch
         return ToolError.InternalError;
 
     if (args.path) |path| {

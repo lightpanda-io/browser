@@ -18,22 +18,20 @@
 
 const std = @import("std");
 
+const URL = @import("URL.zig");
 const Frame = @import("Frame.zig");
 const RenderTree = @import("RenderTree.zig");
 const StyleManager = @import("StyleManager.zig");
-const URL = @import("URL.zig");
 
 const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
 
-const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 const LimitedWriter = @import("../LimitedWriter.zig");
-const Strip = RenderTree.Strip;
+const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 pub const Opts = struct {
     max_bytes: ?u32 = null,
-    strip: Strip = .{},
 };
 
 const truncation_marker = LimitedWriter.truncation_marker;
@@ -417,14 +415,15 @@ const Context = struct {
     }
 };
 
-pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+pub fn dump(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    const node = state.root;
     if (opts.max_bytes) |limit| {
         var lw = LimitedWriter.init(writer, limit);
         var ctx: Context = .{
             .state = .{},
             .writer = &lw.writer,
             .frame = frame,
-            .tree = .{ .frame = frame, .root = node, .strip = opts.strip },
+            .tree = .{ .frame = frame, .state = state },
         };
         ctx.render(node) catch |err| switch (err) {
             error.WriteFailed => {
@@ -443,7 +442,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !voi
         .state = .{},
         .writer = writer,
         .frame = frame,
-        .tree = .{ .frame = frame, .root = node, .strip = opts.strip },
+        .tree = .{ .frame = frame, .state = state },
     };
     try ctx.render(node);
     if (!ctx.state.last_char_was_newline) {
@@ -465,7 +464,7 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(expected, aw.written());
 }
@@ -532,7 +531,7 @@ test "browser.markdown: flex from a stylesheet" {
     const frame = page.frame().?;
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    try dump(frame.window._document.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
     try testing.expectString(
         \\[Title **Aug 04 2026**](http://127.0.0.1:9582/p)
         \\
@@ -700,7 +699,7 @@ test "browser.markdown: resolve links" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(
         \\[Link](https://example.com/a/b)
@@ -751,7 +750,7 @@ test "browser.markdown: stylesheet display:none is skipped" {
     const frame = page.frame().?;
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    try dump(frame.window._document.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = frame.window._document.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(
         \\
@@ -783,7 +782,7 @@ test "browser.markdown: scoped dump of a hidden subtree still renders it" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(modal, .{}, &aw.writer, frame);
+    try dump(.{ .root = modal }, .{}, &aw.writer, frame);
 
     try testing.expectString("\ndialog text\n", aw.written());
 }
@@ -799,7 +798,7 @@ test "browser.markdown: strip.ui drops images and other visual elements" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .strip = .{ .ui = true } }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode(), .strip = .{ .ui = true } }, .{}, &aw.writer, frame);
 
     try testing.expectString("\nText  more\n", aw.written());
 }
@@ -815,7 +814,7 @@ test "browser.markdown: strip.shell drops page chrome" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .strip = .{ .shell = true } }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode(), .strip = .{ .shell = true } }, .{}, &aw.writer, frame);
 
     try testing.expectString("\nBody\n", aw.written());
 }
@@ -831,7 +830,7 @@ test "browser.markdown: max_bytes leaves output untouched when under cap" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .max_bytes = 1024 }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{ .max_bytes = 1024 }, &aw.writer, frame);
 
     try testing.expectString("\nShort\n", aw.written());
 }
@@ -847,7 +846,7 @@ test "browser.markdown: max_bytes truncates with marker" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(div.asNode(), .{ .max_bytes = 50 }, &aw.writer, frame);
+    try dump(.{ .root = div.asNode() }, .{ .max_bytes = 50 }, &aw.writer, frame);
 
     const out = aw.written();
     try testing.expect(std.mem.endsWith(u8, out, "[truncated]\n"));
@@ -874,7 +873,7 @@ fn testMarkdownShadow(light: []const u8, shadow: []const u8, expected: []const u
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(host.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = host.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString(expected, aw.written());
 }
@@ -924,7 +923,7 @@ test "browser.markdown: declarative shadow DOM renders through piercing" {
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
-    try dump(host.asNode(), .{}, &aw.writer, frame);
+    try dump(.{ .root = host.asNode() }, .{}, &aw.writer, frame);
 
     try testing.expectString("\nshadow content\n", aw.written());
 }
