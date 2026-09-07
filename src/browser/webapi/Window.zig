@@ -942,6 +942,9 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
         .opts => |o| .{ @intCast(@max(0, o.left)), @intCast(@max(0, o.top)) },
     };
 
+    // Before the early return: a scroll to the same offset still re-arms.
+    try Frame.observers.rearmIntersectionSentinels(frame, self._scroll_pos.y, new_y);
+
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;
     }

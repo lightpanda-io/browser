@@ -1510,6 +1510,7 @@ pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
         gop.value_ptr.* = .{};
     }
     const new_y: u32 = @intCast(@max(0, value));
+    try Frame.observers.rearmIntersectionSentinels(owner, gop.value_ptr.y, new_y);
     if (gop.value_ptr.y != new_y) {
         gop.value_ptr.y = new_y;
         try self.scheduleScrollEvents(owner);
@@ -1911,6 +1912,7 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
             if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
         },
     }
+    try Frame.observers.rearmIntersectionSentinels(owner, old_y, gop.value_ptr.y);
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }
@@ -1932,6 +1934,7 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     const old_y = gop.value_ptr.y;
     gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
     gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
+    try Frame.observers.rearmIntersectionSentinels(owner, old_y, gop.value_ptr.y);
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }

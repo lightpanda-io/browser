@@ -67,13 +67,17 @@ pub const Intersection = struct {
 
     // Times each target was reported intersecting this navigation.
     reported: std.AutoHashMapUnmanaged(*Element, u8) = .{},
+    // Targets a check refused to report because they reached the limit.
+    // Re-armed by the next scroll down, see rearmIntersectionSentinels.
+    capped: std.AutoHashMapUnmanaged(*Element, void) = .{},
     sentinel_logged: bool = false,
 };
 
 // Without layout every attached element intersects, so an infinite-scroll
 // sentinel fires each time the page re-observes it after loading a batch, and
 // the burst guard above only catches that after 10 s. A target reported this
-// many times in one navigation is treated as below the fold from then on.
+// many times in one navigation is treated as below the fold from then on,
+// until the page scrolls down (rearmIntersectionSentinels).
 // Three leaves room for several observers watching one element.
 pub const INTERSECTION_TARGET_REPORT_LIMIT = 3;
 
@@ -156,6 +160,44 @@ pub fn hasIntersectionObservers(frame: *const Frame) bool {
 pub fn checkIntersections(frame: *Frame) !void {
     for (frame._intersection.observers.items) |observer| {
         try observer.checkIntersections(frame);
+    }
+}
+
+// In a real browser a sentinel that stopped firing is below the fold, and
+// scrolling down brings it back into view for one more batch. Model that: a
+// scroll that does not move up grants every capped target one more report per
+// observer still watching it. One, not a reset, so a page that keeps
+// re-observing the same node loads a batch per scroll, the way it does in
+// Chrome, while a page that never scrolls stays at the limit.
+//
+// A scroll to the same position counts. The scrolling element's scrollHeight
+// is a constant here (Element.getScrollHeight), so the usual scrape loop,
+// `scrollTo(0, document.body.scrollHeight)` until nothing new appears, lands on
+// the same offset from its second iteration on.
+pub fn rearmIntersectionSentinels(frame: *Frame, from_y: u32, to_y: u32) !void {
+    if (to_y == 0 or to_y < from_y) {
+        return;
+    }
+    const capped = &frame._intersection.capped;
+    if (capped.count() == 0) {
+        return;
+    }
+
+    var rearmed = false;
+    var it = capped.keyIterator();
+    while (it.next()) |target| {
+        for (frame._intersection.observers.items) |observer| {
+            if (try observer.rearm(target.*)) {
+                rearmed = true;
+            }
+        }
+    }
+    // A target nobody observes anymore is dropped; if it is observed again it
+    // trips the cap and comes back.
+    capped.clearRetainingCapacity();
+
+    if (rearmed) {
+        scheduleIntersectionChecks(frame);
     }
 }
 
