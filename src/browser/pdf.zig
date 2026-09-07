@@ -31,6 +31,7 @@ const Base64Writer = @import("../Base64Writer.zig");
 
 const Frame = @import("Frame.zig");
 const screenshot = @import("screenshot.zig");
+const RenderTree = @import("RenderTree.zig");
 
 const Node = @import("webapi/Node.zig");
 
@@ -55,6 +56,7 @@ pub const Opts = struct {
     /// that ends up empty is an error. `parsePageRanges` reads CDP's text
     /// form.
     page_ranges: []const PageRange = &.{},
+    strip: RenderTree.Strip = .{},
 };
 
 /// 1-based, inclusive. `to = maxInt(u32)` for an open end ("5-").
@@ -121,7 +123,7 @@ pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepar
     const prepared: Prepared = .{
         .arena = arena,
         .opts = opts,
-        .blocks = try screenshot.collect(arena, node, frame),
+        .blocks = try screenshot.collect(arena, node, opts.strip, frame),
         .renderer = try screenshot.rendererFor(frame),
     };
     if (opts.page_ranges.len > 0) {

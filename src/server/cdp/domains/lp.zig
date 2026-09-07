@@ -23,6 +23,7 @@ const CDP = @import("../CDP.zig");
 
 const Robots = @import("../../../network/Robots.zig");
 const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Selector = @import("../../../browser/webapi/selector/Selector.zig");
 const NodeRegistry = @import("../../../NodeRegistry.zig");
 
 const markdown = lp.markdown;
@@ -32,6 +33,7 @@ const structured_data = lp.structured_data;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
+        dump,
         getMarkdown,
         getSemanticTree,
         getInteractiveElements,
@@ -50,6 +52,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .dump => return dump(cmd),
         .getMarkdown => return getMarkdown(cmd),
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
@@ -158,6 +161,66 @@ fn getSemanticTree(cmd: anytype) !void {
     }, .{});
 }
 
+fn dump(cmd: anytype) !void {
+    const Params = struct {
+        format: enum { html, markdown, png, pdf },
+        strip: lp.dump.Opts.Strip = .{},
+        selector: ?[]const u8 = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        maxBytes: ?u32 = null,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const root = blk: {
+        if (params.backendNodeId) |id| {
+            break :blk (bc.node_registry.lookup_by_id.get(id) orelse return error.InvalidNodeId).dom;
+        }
+        if (params.selector) |selector| {
+            const el = Selector.querySelector(frame.document.asNode(), selector, frame) catch return error.InvalidParams;
+            break :blk (el orelse return error.InvalidParams).asNode();
+        }
+        break :blk frame.document.asNode();
+    };
+
+    const strip = lp.RenderTree.resolveStrip(root, params.strip, frame);
+
+    switch (params.format) {
+        .html, .markdown => {
+            var aw: std.Io.Writer.Allocating = .init(cmd.arena);
+            defer aw.deinit();
+            const opts: lp.dump.Opts = .{ .strip = strip, .max_bytes = params.maxBytes };
+            if (params.format == .markdown) {
+                try markdown.dump(root, .{ .strip = strip, .max_bytes = params.maxBytes }, &aw.writer, frame);
+            } else if (root.is(DOMNode.Document)) |doc| {
+                try lp.dump.root(doc, opts, &aw.writer, frame);
+            } else {
+                try lp.dump.deep(root, opts, &aw.writer, frame);
+            }
+            return cmd.sendResult(.{ .format = params.format, .content = aw.written() }, .{});
+        },
+        .png => {
+            if (params.maxBytes != null) {
+                return error.InvalidParams;
+            }
+            var opts: lp.screenshot.Opts = .fromViewport(cmd.cdp.browser.getViewport(), true);
+            opts.strip = strip;
+            const prepared = try lp.screenshot.preparePng(cmd.arena, root, opts, frame);
+            return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
+        },
+        .pdf => {
+            if (params.maxBytes != null) {
+                return error.InvalidParams;
+            }
+            const prepared = try lp.pdf.prepare(cmd.arena, root, .{ .strip = strip }, frame);
+            return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
+        },
+    }
+}
+
+// Deprecated: LP.dump with format "markdown". Kept for existing callers.
 fn getMarkdown(cmd: anytype) !void {
     const Params = struct {
         nodeId: ?NodeRegistry.Id = null,
@@ -506,6 +569,53 @@ test "cdp.lp: getMarkdown" {
 
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("markdown") != null);
+}
+
+test "cdp.lp: dump formats, strip and scoping" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S", .url = "cdp/strip.html", .target_id = "FID-000000000S".* });
+
+    // markdown, no strip: chrome and content both present.
+    try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "markdown" } });
+    var content = try dumpContent(&ctx, 1, "markdown");
+    try testing.expect(std.mem.indexOf(u8, content, "Site menu") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "Article body") != null);
+
+    // markdown + shell: chrome gone, the article's own header kept.
+    try ctx.processMessage(.{ .id = 2, .method = "LP.dump", .params = .{ .format = "markdown", .strip = .{ .shell = true } } });
+    content = try dumpContent(&ctx, 2, "markdown");
+    try testing.expectEqual("Byline\n\nArticle body\n", content);
+
+    // html + shell, scoped by selector.
+    try ctx.processMessage(.{ .id = 3, .method = "LP.dump", .params = .{ .format = "html", .selector = "main", .strip = .{ .shell = true, .js = true } } });
+    content = try dumpContent(&ctx, 3, "html");
+    try testing.expectEqual("<main><article><header>Byline</header><p>Article body</p></article></main>", content);
+
+    // html, whole document, capped.
+    try ctx.processMessage(.{ .id = 4, .method = "LP.dump", .params = .{ .format = "html", .maxBytes = 20 } });
+    content = try dumpContent(&ctx, 4, "html");
+    try testing.expect(std.mem.startsWith(u8, content, "<!DOCTYPE html>"));
+    try testing.expect(content.len < 100);
+
+    // png and pdf come back base64; maxBytes is a text-only option.
+    try ctx.processMessage(.{ .id = 5, .method = "LP.dump", .params = .{ .format = "png", .strip = .{ .shell = true } } });
+    content = try dumpContent(&ctx, 5, "png");
+    try testing.expect(std.mem.startsWith(u8, content, "iVBOR"));
+
+    try ctx.processMessage(.{ .id = 6, .method = "LP.dump", .params = .{ .format = "pdf" } });
+    content = try dumpContent(&ctx, 6, "pdf");
+    try testing.expect(std.mem.startsWith(u8, content, "JVBER"));
+
+    try ctx.processMessage(.{ .id = 7, .method = "LP.dump", .params = .{ .format = "png", .maxBytes = 10 } });
+    try testing.expect((try dumpReply(&ctx, 7)).get("error") != null);
+
+    // Unknown selector and missing format are errors.
+    try ctx.processMessage(.{ .id = 8, .method = "LP.dump", .params = .{ .format = "markdown", .selector = "#nope" } });
+    try testing.expect((try dumpReply(&ctx, 8)).get("error") != null);
+    try ctx.processMessage(.{ .id = 9, .method = "LP.dump", .params = .{ .strip = .{ .shell = true } } });
+    try testing.expect((try dumpReply(&ctx, 9)).get("error") != null);
 }
 
 test "cdp.lp: getInteractiveElements" {
@@ -873,4 +983,21 @@ test "cdp.lp: configureLoading toggles externalStylesheets independently" {
     try testing.expectEqual(false, bc.session.load_resources.stylesheet);
     try testing.expectEqual(true, bc.session.load_resources.iframe);
     try testing.expectEqual(true, bc.session.load_resources.worker);
+}
+
+fn dumpReply(ctx: *testing.TestContext, id: i64) !std.json.ObjectMap {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |m| : (i += 1) {
+        const msg_id = m.object.get("id") orelse continue;
+        if (msg_id.integer == id) {
+            return m.object;
+        }
+    }
+    return error.MissingReply;
+}
+
+fn dumpContent(ctx: *testing.TestContext, id: i64, format: []const u8) ![]const u8 {
+    const result = (try dumpReply(ctx, id)).get("result").?.object;
+    try testing.expectEqual(format, result.get("format").?.string);
+    return result.get("content").?.string;
 }

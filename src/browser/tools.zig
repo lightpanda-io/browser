@@ -401,7 +401,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
-                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" } } },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -419,6 +419,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -1338,12 +1339,16 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const opts: lp.dump.Opts = .{ .strip = args.strip, .max_bytes = args.maxBytes };
+    const whole = args.selector == null and args.backendNodeId == null;
+    const node = if (whole) page.document.asNode() else (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
+    const opts: lp.dump.Opts = .{
+        .strip = lp.RenderTree.resolveStrip(node, args.strip, page),
+        .max_bytes = args.maxBytes,
+    };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (args.selector == null and args.backendNodeId == null) {
+    if (whole) {
         lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
     } else {
-        const node = (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
         lp.dump.deep(node, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
     return aw.written();
@@ -1355,6 +1360,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
         selector: ?[]const u8 = null,
         backendNodeId: ?NodeRegistry.Id = null,
         fullPage: bool = false,
+        strip: lp.dump.Opts.Strip = .{},
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
     };
@@ -1366,7 +1372,9 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     }
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
-    var prepared = lp.screenshot.preparePng(arena, node, .fromViewport(page._page.getViewport(), args.fullPage), page) catch
+    var opts: lp.screenshot.Opts = .fromViewport(page._page.getViewport(), args.fullPage);
+    opts.strip = lp.RenderTree.resolveStrip(node, args.strip, page);
+    var prepared = lp.screenshot.preparePng(arena, node, opts, page) catch
         return ToolError.InternalError;
 
     if (args.path) |path| {

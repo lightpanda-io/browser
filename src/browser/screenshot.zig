@@ -40,6 +40,7 @@ pub const Opts = struct {
     height: u32 = 0,
     clip: ?Clip = null,
     scale: f32 = 1.0,
+    strip: RenderTree.Strip = .{},
 
     const Clip = struct {
         x: f32,
@@ -136,16 +137,16 @@ pub fn preparePng(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Pre
     }
     return .{
         .opts = opts,
-        .blocks = try collect(arena, node, frame),
+        .blocks = try collect(arena, node, opts.strip, frame),
         .renderer = try rendererFor(frame),
     };
 }
 
-pub fn collect(arena: Allocator, node: *Node, frame: *Frame) ![]const LpBlock {
+pub fn collect(arena: Allocator, node: *Node, strip: RenderTree.Strip, frame: *Frame) ![]const LpBlock {
     var builder: Builder = .{
         .frame = frame,
         .arena = arena,
-        .tree = .{ .frame = frame, .root = node },
+        .tree = .{ .frame = frame, .root = node, .strip = strip },
     };
     try builder.render(node);
     try builder.closeBlock();
@@ -1487,7 +1488,7 @@ test "browser.screenshot: flex from a stylesheet" {
 // The text of each block on its own line: what renders, not how.
 fn collectLines(node: *Node, frame: *Frame) ![]const u8 {
     const arena = testing.arena_allocator;
-    const blocks = try collect(arena, node, frame);
+    const blocks = try collect(arena, node, .{}, frame);
     var out: std.ArrayList(u8) = .empty;
     for (blocks, 0..) |b, i| {
         if (i > 0) try out.append(arena, '\n');
@@ -1507,4 +1508,31 @@ fn testPng(html: []const u8, width: u32) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     _ = try png(testing.arena_allocator, div.asNode(), .{ .width = width }, &aw.writer, frame);
     return aw.written();
+}
+
+test "browser.screenshot: collect honours strip flags" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<nav><p>menu</p></nav><p>Body text</p><img alt="pic"><footer><p>legal</p></footer>
+    );
+
+    const arena = testing.arena_allocator;
+    const S = struct {
+        fn text(b: LpBlock, a: Allocator) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            for (b.spans[0..b.spans_len]) |sp| try out.appendSlice(a, sp.text[0..sp.len]);
+            return out.items;
+        }
+    };
+
+    const all = try collect(arena, div.asNode(), .{}, frame);
+    try testing.expectEqual(4, all.len);
+
+    const stripped = try collect(arena, div.asNode(), .{ .shell = true, .ui = true }, frame);
+    try testing.expectEqual(1, stripped.len);
+    try testing.expectEqual("Body text", try S.text(stripped[0], arena));
 }

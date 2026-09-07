@@ -68,7 +68,6 @@ pub const crash_handler = @import("crash_handler.zig");
 pub const core_dump = @import("core_dump.zig");
 
 pub var metrics = @import("Metrics.zig"){};
-
 pub const IS_TEST = @import("builtin").is_test;
 pub const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -458,11 +457,18 @@ const Binary = union(enum) {
 
 fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
     const root = try dumpRoot(frame, opts.selector);
+    const strip = RenderTree.resolveStrip(root, opts.dump.strip, frame);
     return switch (opts.dump_mode.?) {
-        .png => .{ .png = try screenshot.preparePng(arena, root, .fromViewport(frame._page.getViewport(), true), frame) },
-        .pdf => .{ .pdf = try pdf.prepare(arena, root, .{}, frame) },
+        .png => .{ .png = try screenshot.preparePng(arena, root, pngOpts(frame, strip), frame) },
+        .pdf => .{ .pdf = try pdf.prepare(arena, root, .{ .strip = strip }, frame) },
         else => unreachable,
     };
+}
+
+fn pngOpts(frame: *Frame, strip: dump.Opts.Strip) screenshot.Opts {
+    var opts: screenshot.Opts = .fromViewport(frame._page.getViewport(), true);
+    opts.strip = strip;
+    return opts;
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -474,21 +480,23 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
 
 fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
     const root = try dumpRoot(frame, opts.selector);
+    var dump_opts = opts.dump;
+    dump_opts.strip = RenderTree.resolveStrip(root, dump_opts.strip, frame);
     switch (mode) {
         .html => if (opts.selector == null)
-            try dump.root(frame.window._document, opts.dump, writer, frame)
+            try dump.root(frame.window._document, dump_opts, writer, frame)
         else
-            try dump.deep(root, opts.dump, writer, frame),
-        .markdown => try markdown.dump(root, .{ .max_bytes = opts.dump.max_bytes, .strip = opts.dump.strip }, writer, frame),
+            try dump.deep(root, dump_opts, writer, frame),
+        .markdown => try markdown.dump(root, .{ .max_bytes = dump_opts.max_bytes, .strip = dump_opts.strip }, writer, frame),
         .png => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
-            _ = try screenshot.png(arena.allocator(), root, .fromViewport(frame._page.getViewport(), true), writer, frame);
+            _ = try screenshot.png(arena.allocator(), root, pngOpts(frame, dump_opts.strip), writer, frame);
         },
         .pdf => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
-            try pdf.print(arena.allocator(), root, .{}, writer, frame);
+            try pdf.print(arena.allocator(), root, .{ .strip = dump_opts.strip }, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
             var registry = NodeRegistry.init(app.allocator);

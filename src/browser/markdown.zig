@@ -804,6 +804,22 @@ test "browser.markdown: strip.ui drops images and other visual elements" {
     try testing.expectString("\nText  more\n", aw.written());
 }
 
+test "browser.markdown: strip.shell drops page chrome" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    frame.url = "http://localhost/";
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<nav><a href=\"/\">Home</a></nav><main><p>Body</p></main><footer>Legal</footer>");
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{ .strip = .{ .shell = true } }, &aw.writer, frame);
+
+    try testing.expectString("\nBody\n", aw.written());
+}
+
 test "browser.markdown: max_bytes leaves output untouched when under cap" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

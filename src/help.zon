@@ -118,15 +118,14 @@
     \\          Defaults to false.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
-    \\          In markdown only 'ui' changes the output: scripts, styles and
-    \\          hidden elements are never rendered.
-    \\          Defaults to no-strip.
+    \\          Defaults to stripping nothing.
     \\          Allowed values:
-    \\              js        Script and link[as=script, rel=preload].
-    \\              ui        Includes img, picture, video, CSS and SVG.
     \\              css       Includes style and link[rel=stylesheet].
+    \\              js        Script and link[as=script, rel=preload].
     \\              invisible Best-effort (e.g. display:none) hidden elements
-    \\              full      Strip everything.
+    \\              shell     Heuristic to attempt to remove headers, footer,
+    \\                        and other non-content decoration.
+    \\              ui        Includes img, picture, video, CSS and SVG.
     \\  --terminate-ms <INT>
     \\          Hard deadline in milliseconds. After this time elapses, JavaScript
     \\          execution is forcibly terminated (e.g. for pages with endless scripts).

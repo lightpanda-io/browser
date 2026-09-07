@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const Frame = @import("Frame.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -28,6 +29,8 @@ const Slot = @import("webapi/element/html/Slot.zig");
 
 const dump_html = @import("dump.zig");
 const isAllWhitespace = @import("../string.zig").isAllWhitespace;
+
+const log = lp.log;
 pub const Strip = dump_html.Opts.Strip;
 
 const RenderTree = @This();
@@ -216,6 +219,104 @@ pub fn isStandaloneAnchor(el: *Element, frame: *Frame) bool {
     return true;
 }
 
+/// Shell stripping is undone when it would remove most of the content. Better
+/// to leave too much in than to strip too muchout. Non-link text is
+/// the measure (nav and footer text is mostly links); a page with none is
+/// judged on all of its text.
+pub fn resolveStrip(root: *Node, strip: Strip, frame: *Frame) Strip {
+    if (strip.shell == false) {
+        return strip;
+    }
+
+    var render_with_shell = strip;
+    render_with_shell.shell = false;
+
+    var m: Measure = .{};
+    const tree: RenderTree = .{ .frame = frame, .root = root, .strip = render_with_shell };
+    tree.measure(root, .{}, &m);
+
+    const total, const shell = if (m.prose > 0) .{ m.prose, m.shell_prose } else .{ m.all, m.shell_all };
+    const kept = total - shell;
+    if (kept * shell_undo_ratio < total) {
+        log.info(.browser, "strip shell undone", .{ .kept = kept, .total = total });
+        return render_with_shell;
+    }
+    return strip;
+}
+
+/// Undo when the shell holds more than this share of the text.
+const shell_undo_ratio = 4;
+
+const Measure = struct {
+    all: usize = 0,
+    prose: usize = 0,
+    shell_all: usize = 0,
+    shell_prose: usize = 0,
+
+    const Where = struct {
+        shell: bool = false,
+        link: bool = false,
+    };
+
+    fn count(self: *Measure, text: []const u8, where: Where) void {
+        var n: usize = 0;
+        for (text) |c| {
+            if (!std.ascii.isWhitespace(c)) {
+                n += 1;
+            }
+        }
+        self.all += n;
+        if (where.shell) {
+            self.shell_all += n;
+        }
+        if (!where.link) {
+            self.prose += n;
+            if (where.shell) {
+                self.shell_prose += n;
+            }
+        }
+    }
+};
+
+fn measure(self: *const RenderTree, node: *Node, where: Measure.Where, m: *Measure) void {
+    switch (node._type) {
+        .document, .document_fragment => {
+            var it = self.children(node, false);
+            while (it.next()) |child| {
+                self.measureChild(child, where, m);
+            }
+        },
+        else => if (self.classify(node, .{})) |child| {
+            self.measureChild(child, where, m);
+        },
+    }
+}
+
+fn measureChild(self: *const RenderTree, child: Child, where: Measure.Where, m: *Measure) void {
+    switch (child.what) {
+        .text => |text| m.count(text, where),
+        .element => |d| {
+            const el = child.node.subtype(Element);
+            const inner: Measure.Where = .{
+                .shell = where.shell or dump_html.isShellElement(el),
+                .link = where.link or el.getTag() == .anchor,
+            };
+            if (el.is(Slot)) |slot| {
+                var it = self.slotted(slot);
+                while (it.next()) |c| {
+                    self.measureChild(c, inner, m);
+                }
+                return;
+            }
+            const boxed = d == .flex or d == .grid;
+            var it = self.content(el, boxed);
+            while (it.next()) |c| {
+                self.measureChild(c, inner, m);
+            }
+        },
+    }
+}
+
 const ContentInfo = struct {
     has_visible: bool,
     has_block: bool,
@@ -251,4 +352,49 @@ pub fn analyzeContent(root: *Node, frame: *Frame) ContentInfo {
         }
     }
     return result;
+}
+
+const testing = @import("../testing.zig");
+
+test "RenderTree: resolveStrip keeps shell when the content holds the text" {
+    try testing.expectEqual(true, try resolveShell(
+        \\<nav><a href="/">Home</a><a href="/about">About us</a><a href="/blog">Blog</a></nav><main><p>Some article text.</p></main><footer>Copyright</footer>
+    ));
+}
+
+test "RenderTree: resolveStrip undoes shell when the shell holds the text" {
+    try testing.expectEqual(false, try resolveShell(
+        \\<nav><p>All of the text on this page lives inside a nav element.</p></nav><main>hi</main>
+    ));
+}
+
+test "RenderTree: resolveStrip judges an all-link page on its links" {
+    try testing.expectEqual(false, try resolveShell(
+        \\<nav><a href="/1">one</a><a href="/2">two</a><a href="/3">three</a></nav><p><a href="/x">x</a></p>
+    ));
+    try testing.expectEqual(true, try resolveShell(
+        \\<nav><a href="/1">one</a></nav><p><a href="/x">a longer list of links</a><a href="/y">and another</a></p>
+    ));
+}
+
+test "RenderTree: resolveStrip ignores what other strip bits already drop" {
+    // The script text is not content; without strip.js it would tip the
+    // balance toward keeping the shell.
+    try testing.expectEqual(false, try resolveShell(
+        \\<nav><p>All of the text on this page lives inside a nav element.</p></nav><main>hi<script>var a_very_long_script_body_that_is_not_content = 1;</script></main>
+    ));
+}
+
+fn resolveShell(html: []const u8) !bool {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    const strip = resolveStrip(div.asNode(), .{ .js = true, .shell = true }, frame);
+    // Only the shell bit is ever undone.
+    try testing.expectEqual(true, strip.js);
+    return strip.shell;
 }

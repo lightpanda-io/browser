@@ -33,11 +33,12 @@ pub const Opts = struct {
     /// appended.
     max_bytes: ?u32 = null,
 
-    pub const Strip = packed struct(u4) {
+    pub const Strip = packed struct(u5) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
         invisible: bool = false,
+        shell: bool = false,
     };
 
     pub const Shadow = union(enum) {
@@ -364,7 +365,7 @@ fn isVoidElement(el: *Node.Element) bool {
 
 pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u4, @bitCast(strip)) == 0) {
+    if (@as(u5, @bitCast(strip)) == 0) {
         return false;
     }
 
@@ -412,6 +413,51 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) b
         return true;
     }
 
+    if (strip.shell and isShellElement(el)) {
+        return true;
+    }
+
+    return false;
+}
+
+/// Page chrome by markup alone. <header> and <footer> only count at the page
+/// level: inside an article, section, main, nav or aside they belong to that
+/// content, which is also how the banner/contentinfo roles are assigned.
+pub fn isShellElement(el: *Node.Element) bool {
+    switch (el.getTag()) {
+        .nav, .aside, .dialog => return true,
+        .header, .footer => return !hasSectioningAncestor(el),
+        else => {},
+    }
+    return hasRole(el, &.{ "banner", "complementary", "contentinfo", "navigation", "search", "dialog", "alertdialog", "menu", "menubar" });
+}
+
+fn hasSectioningAncestor(el: *Node.Element) bool {
+    var node = el.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Node.Element)) |ancestor| {
+            switch (ancestor.getTag()) {
+                .article, .aside, .main, .nav, .section => return true,
+                else => {},
+            }
+            if (hasRole(ancestor, &.{ "article", "complementary", "main", "navigation", "region" })) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// ARIA `role` is a space-separated fallback list; the first token wins.
+fn hasRole(el: *Node.Element, roles: []const []const u8) bool {
+    const attr = el.getAttributeSafe(comptime .wrap("role")) orelse return false;
+    var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
+    const role = it.next() orelse return false;
+    for (roles) |candidate| {
+        if (std.ascii.eqlIgnoreCase(role, candidate)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -583,4 +629,34 @@ test "dump: strip.invisible removes author display:none elements" {
         \\<!DOCTYPE html>
         \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: strip.shell removes page chrome but keeps sectioned header/footer" {
+    try expectShellDump(
+        \\<header>H</header><nav>N</nav><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article><aside>A</aside><dialog>D</dialog><footer>F</footer>
+    ,
+        \\<div><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article></div>
+    );
+}
+
+test "dump: strip.shell honours landmark roles" {
+    try expectShellDump(
+        \\<div role="navigation">N</div><div role="BANNER search">B</div><section><div role="contentinfo">C</div></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div>
+    ,
+        \\<div><section></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div></div>
+    );
+}
+
+fn expectShellDump(html: []const u8, expected: []const u8) !void {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{ .strip = .{ .shell = true } }, &aw.writer, frame);
+    try testing.expectString(expected, aw.written());
 }
