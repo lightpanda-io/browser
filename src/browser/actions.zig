@@ -39,54 +39,76 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) !void {
+fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame) !void {
+    frame._event_manager.dispatch(el.asEventTarget(), event) catch |err| {
+        lp.log.err(.app, "click " ++ typ ++ " failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+}
+
+// Dispatches a trusted pointer event and reports whether it was cancelled.
+fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail: u32, frame: *Frame) !bool {
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .button = button,
         .buttons = buttons,
+        .detail = detail,
         .pointerId = 1,
         .pointerType = "mouse",
         .isPrimary = true,
+        .pressure = if (buttons != 0) 0.5 else 0.0,
     }, frame);
-    frame._event_manager.dispatch(el.asEventTarget(), event.asEvent()) catch |err| {
-        lp.log.err(.app, "click failed", .{ .err = err, .type = typ });
-        return error.ActionFailed;
-    };
+
+    // Keep the event alive past dispatch (which runs handlers/microtasks) so
+    // we can read _prevent_default afterwards.
+    const base_event = event.asEvent();
+    base_event.acquireRef();
+    defer base_event.releaseRef(frame._page);
+
+    try dispatch(el, base_event, typ, frame);
+    return base_event.getDefaultPrevented();
 }
 
-fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) !void {
+fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !void {
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .button = button,
         .buttons = buttons,
         .detail = 1,
-        .clientX = 0,
-        .clientY = 0,
     }, frame);
-    frame._event_manager.dispatch(el.asEventTarget(), event.asEvent()) catch |err| {
-        lp.log.err(.app, "click failed", .{ .err = err, .type = typ });
-        return error.ActionFailed;
-    };
+    try dispatch(el, event.asEvent(), typ, frame);
 }
 
-// A full trusted primary-button click sequence on the element, as a real user
-// click would produce: pointerdown, mousedown, pointerup, mouseup, click.
-// Unlike a single bare "click" event, many widgets (autocomplete/combobox
-// components in particular) key their open/interaction behavior off
-// mousedown or pointerdown, not click alone -- see WebDriver.zig's `click`,
-// which already implements this same sequence for testdriver's `click`.
+/// A full trusted primary-button click sequence, as a real user click would
+/// produce: pointerdown, mousedown, pointerup, mouseup, click.
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
-    try dispatchPointer(el, "pointerdown", 0, 1, frame);
-    try dispatchMouse(el, "mousedown", 0, 1, frame);
-    try dispatchPointer(el, "pointerup", 0, 0, frame);
-    try dispatchMouse(el, "mouseup", 0, 0, frame);
-    try dispatchMouse(el, "click", 0, 0, frame);
+    if (el.isDisabled()) {
+        return;
+    }
+
+    Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
+
+    // preventDefault() on pointerdown suppresses both compatibility mouse
+    // events (mousedown and mouseup) for the rest of this gesture; click
+    // still fires.
+    const suppress_mouse = try dispatchPointer(el, "pointerdown", 1, 0, frame);
+    if (!suppress_mouse) {
+        try dispatchMouse(el, "mousedown", 1, frame);
+        Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
+            lp.log.warn(.app, "click editable focus", .{ .err = err });
+        };
+    }
+
+    _ = try dispatchPointer(el, "pointerup", 0, 0, frame);
+    if (!suppress_mouse) {
+        try dispatchMouse(el, "mouseup", 0, frame);
+    }
+
+    _ = try dispatchPointer(el, "click", 0, 1, frame);
 }
 
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
