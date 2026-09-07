@@ -1,5 +1,5 @@
-// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
 //
@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../../App.zig");
+const Inbox = @import("../../Inbox.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
@@ -27,7 +28,7 @@ const Notification = @import("../../Notification.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
 
 const Link = @import("../Link.zig");
-const Inbox = @import("../../Inbox.zig");
+const Server = @import("../Server.zig");
 
 const script = @import("script.zig");
 const remote_value = @import("remote_value.zig");
