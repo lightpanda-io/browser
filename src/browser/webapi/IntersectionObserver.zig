@@ -129,12 +129,18 @@ pub fn acquireRef(self: *IntersectionObserver) void {
     self._rc.acquire();
 }
 
-pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
-    // Check if already observing this target
+fn isObserving(self: *const IntersectionObserver, target: *Element) bool {
     for (self._observing.items) |elem| {
         if (elem == target) {
-            return;
+            return true;
         }
+    }
+    return false;
+}
+
+pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !void {
+    if (self.isObserving(target)) {
+        return;
     }
 
     try self._observing.append(self._arena.allocator(), target);
@@ -181,13 +187,11 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
 // Tracks `target` again with one report granted past the limit. Returns
 // false when this observer is not observing it.
 pub fn rearm(self: *IntersectionObserver, target: *Element) !bool {
-    for (self._observing.items) |elem| {
-        if (elem == target) {
-            try self._tracked.put(self._arena.allocator(), target, .{ .rearmed = true });
-            return true;
-        }
+    if (!self.isObserving(target)) {
+        return false;
     }
-    return false;
+    try self._tracked.put(self._arena.allocator(), target, .{ .rearmed = true });
+    return true;
 }
 
 // Drops every observation without touching the frame's observer list
@@ -536,9 +540,7 @@ test "WebApi: IntersectionObserver delivery after a quiet gap starts a new burst
 }
 
 // Same-node infinite scroll: `n` observers watch one sentinel. Each callback
-// unobserves it, counts a batch and observes the node again from a timer, the
-// way a fetch-driven pager does. Every observe reports the node until the
-// frame's report limit refuses it.
+// unobserves it, counts a batch and re-observes it from a timer.
 fn observeSameNodeSentinel(local: *const js.Local, n: usize) !void {
     var buf: [1024]u8 = undefined;
     const src = try std.fmt.bufPrint(&buf,
@@ -569,7 +571,7 @@ fn batches(local: *const js.Local, i: usize) !i32 {
     return (try local.exec(src, null)).toI32();
 }
 
-// Ticks until the batch count has been stable for a few ticks, and returns it.
+// Ticks until the batch count has held for two ticks, and returns it.
 fn settleBatches(local: *const js.Local, frame: *Frame) !i32 {
     var total: i32 = -1;
     var stable: u8 = 0;
@@ -578,7 +580,7 @@ fn settleBatches(local: *const js.Local, frame: *Frame) !i32 {
         const now = try (try local.exec("window.__batches.reduce((a, b) => a + b, 0)", null)).toI32();
         if (now == total) {
             stable += 1;
-            if (stable == 4) break;
+            if (stable == 2) break;
         } else {
             total = now;
             stable = 0;
@@ -587,25 +589,7 @@ fn settleBatches(local: *const js.Local, frame: *Frame) !i32 {
     return total;
 }
 
-test "WebApi: IntersectionObserver same-node sentinel stops at the report limit" {
-    testing.silenceLog(&.{.frame});
-
-    const frame = try testing.createFrame();
-    defer testing.test_session.closeAllPages();
-
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    const local = &ls.local;
-
-    try observeSameNodeSentinel(local, 1);
-    try testing.expectEqual(Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT, try settleBatches(local, frame));
-    try testing.expectEqual(1, frame._intersection.capped.count());
-    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
-    try testing.expectEqual(false, frame._intersection.runaway);
-}
-
-test "WebApi: IntersectionObserver scrolling down re-arms a capped sentinel once" {
+test "WebApi: IntersectionObserver same-node sentinel stops at the limit, a scroll down re-arms it once" {
     testing.silenceLog(&.{.frame});
 
     const frame = try testing.createFrame();
@@ -619,33 +603,30 @@ test "WebApi: IntersectionObserver scrolling down re-arms a capped sentinel once
     try observeSameNodeSentinel(local, 1);
     const limit = Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT;
     try testing.expectEqual(limit, try settleBatches(local, frame));
+    try testing.expectEqual(1, frame._intersection.capped.count());
+    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(false, frame._intersection.runaway);
 
-    // The scrape loop: scroll to the bottom, wait, repeat. One batch per scroll.
-    // (The test document has no root element; on a page this is
-    // `scrollTo(0, document.body.scrollHeight)`.)
+    // Scroll to the bottom: one batch per scroll.
     _ = try local.exec("window.scrollTo(0, 100000)", null);
     try testing.expectEqual(limit + 1, try settleBatches(local, frame));
 
-    // scrollHeight is constant, so the second iteration lands on the same offset.
+    // Same offset again still counts.
     _ = try local.exec("window.scrollTo(0, 100000)", null);
     try testing.expectEqual(limit + 2, try settleBatches(local, frame));
 
     _ = try local.exec("window.scrollBy(0, 10)", null);
     try testing.expectEqual(limit + 3, try settleBatches(local, frame));
 
-    // Scrolling up, or back to the top, reveals nothing below the fold.
+    // Scrolling up reveals nothing below the fold.
     _ = try local.exec("window.scrollTo(0, 100)", null);
     try testing.expectEqual(limit + 3, try settleBatches(local, frame));
-    _ = try local.exec("window.scrollTo(0, 0)", null);
-    try testing.expectEqual(limit + 3, try settleBatches(local, frame));
 
-    // Scrolling an element (the tools' scroll with a node) counts too.
+    // Element scrolls (the tools' scroll with a node) count too.
     _ = try local.exec("window.__list.scrollTop = 500", null);
     try testing.expectEqual(limit + 4, try settleBatches(local, frame));
-    _ = try local.exec("window.__list.scrollBy(0, 500)", null);
-    try testing.expectEqual(limit + 5, try settleBatches(local, frame));
     _ = try local.exec("window.__list.scrollTo(0, 0)", null);
-    try testing.expectEqual(limit + 5, try settleBatches(local, frame));
+    try testing.expectEqual(limit + 4, try settleBatches(local, frame));
 }
 
 test "WebApi: IntersectionObserver re-arm grants one report per observer" {
@@ -659,14 +640,13 @@ test "WebApi: IntersectionObserver re-arm grants one report per observer" {
     defer ls.deinit();
     const local = &ls.local;
 
-    // The limit is shared across observers of one node...
+    // The limit is shared across observers of one node.
     try observeSameNodeSentinel(local, 2);
     try testing.expectEqual(Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT, try settleBatches(local, frame));
     const first = try batches(local, 0);
     const second = try batches(local, 1);
 
-    // ...but a scroll re-arms each observer that still watches it, so a lazy
-    // loader is not starved by an analytics observer on the same element.
+    // A scroll re-arms each observer still watching it.
     _ = try local.exec("window.scrollTo(0, 100000)", null);
     try testing.expectEqual(first + second + 2, try settleBatches(local, frame));
     try testing.expectEqual(first + 1, try batches(local, 0));

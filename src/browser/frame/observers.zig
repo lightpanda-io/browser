@@ -163,17 +163,12 @@ pub fn checkIntersections(frame: *Frame) !void {
     }
 }
 
-// In a real browser a sentinel that stopped firing is below the fold, and
-// scrolling down brings it back into view for one more batch. Model that: a
-// scroll that does not move up grants every capped target one more report per
-// observer still watching it. One, not a reset, so a page that keeps
-// re-observing the same node loads a batch per scroll, the way it does in
-// Chrome, while a page that never scrolls stays at the limit.
-//
-// A scroll to the same position counts. The scrolling element's scrollHeight
-// is a constant here (Element.getScrollHeight), so the usual scrape loop,
-// `scrollTo(0, document.body.scrollHeight)` until nothing new appears, lands on
-// the same offset from its second iteration on.
+// A scroll that does not move up grants each capped target one more report per
+// observer still watching it: a below-the-fold sentinel comes back into view for
+// one batch per scroll. One, not a reset, so a page that never scrolls stays
+// capped. Per observer, so a lazy loader sharing the node with an analytics
+// observer is not starved. Same offset counts: scrollHeight is constant here, so
+// the usual `scrollTo(0, document.body.scrollHeight)` loop repeats the offset.
 pub fn rearmIntersectionSentinels(frame: *Frame, from_y: u32, to_y: u32) !void {
     if (to_y == 0 or to_y < from_y) {
         return;
@@ -183,22 +178,16 @@ pub fn rearmIntersectionSentinels(frame: *Frame, from_y: u32, to_y: u32) !void {
         return;
     }
 
-    var rearmed = false;
     var it = capped.keyIterator();
     while (it.next()) |target| {
         for (frame._intersection.observers.items) |observer| {
             if (try observer.rearm(target.*)) {
-                rearmed = true;
+                scheduleIntersectionChecks(frame);
             }
         }
     }
-    // A target nobody observes anymore is dropped; if it is observed again it
-    // trips the cap and comes back.
+    // Unobserved targets drop out; re-observing trips the cap again.
     capped.clearRetainingCapacity();
-
-    if (rearmed) {
-        scheduleIntersectionChecks(frame);
-    }
 }
 
 pub fn scheduleMutationDelivery(frame: *Frame) !void {

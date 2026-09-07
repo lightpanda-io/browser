@@ -1505,16 +1505,8 @@ pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
     const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const new_y: u32 = @intCast(@max(0, value));
-    try Frame.observers.rearmIntersectionSentinels(owner, gop.value_ptr.y, new_y);
-    if (gop.value_ptr.y != new_y) {
-        gop.value_ptr.y = new_y;
-        try self.scheduleScrollEvents(owner);
-    }
+    const pos = owner._element_scroll_positions.get(self) orelse ScrollPosition{};
+    try self.setScrollPosition(owner, pos.x, @intCast(@max(0, value)));
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
@@ -1525,13 +1517,20 @@ pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
     const owner = self.ownerFrame(frame);
+    const pos = owner._element_scroll_positions.get(self) orelse ScrollPosition{};
+    try self.setScrollPosition(owner, @intCast(@max(0, value)), pos.y);
+}
+
+// Shared tail of the scroll setters. `owner` is the element's owner frame.
+fn setScrollPosition(self: *Element, owner: *Frame, new_x: u32, new_y: u32) !void {
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    const new_x: u32 = @intCast(@max(0, value));
-    if (gop.value_ptr.x != new_x) {
+    try Frame.observers.rearmIntersectionSentinels(owner, gop.value_ptr.y, new_y);
+    if (gop.value_ptr.x != new_x or gop.value_ptr.y != new_y) {
         gop.value_ptr.x = new_x;
+        gop.value_ptr.y = new_y;
         try self.scheduleScrollEvents(owner);
     }
 }
@@ -1896,48 +1895,31 @@ const ScrollToOpts = union(enum) {
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
     const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const old_x = gop.value_ptr.x;
-    const old_y = gop.value_ptr.y;
-    switch (o) {
-        .x => |x| {
-            gop.value_ptr.x = @intCast(@max(0, x));
-            gop.value_ptr.y = @intCast(@max(0, y orelse 0));
+    const pos = owner._element_scroll_positions.get(self) orelse ScrollPosition{};
+    const new_x: u32, const new_y: u32 = switch (o) {
+        .x => |x| .{ @intCast(@max(0, x)), @intCast(@max(0, y orelse 0)) },
+        .opts => |dict| .{
+            if (dict.left) |left| @intCast(@max(0, left)) else pos.x,
+            if (dict.top) |top| @intCast(@max(0, top)) else pos.y,
         },
-        .opts => |dict| {
-            if (dict.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
-            if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
-        },
-    }
-    try Frame.observers.rearmIntersectionSentinels(owner, old_y, gop.value_ptr.y);
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
-    }
+    };
+    try self.setScrollPosition(owner, new_x, new_y);
 }
 
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
     const owner = self.ownerFrame(frame);
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
+    const pos = owner._element_scroll_positions.get(self) orelse ScrollPosition{};
     const dx: i32, const dy: i32 = switch (o) {
         .x => |x| .{ x, y orelse 0 },
         .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
     };
-    const old_x = gop.value_ptr.x;
-    const old_y = gop.value_ptr.y;
-    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
-    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
-    try Frame.observers.rearmIntersectionSentinels(owner, old_y, gop.value_ptr.y);
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
-    }
+    try self.setScrollPosition(
+        owner,
+        @intCast(@max(0, @as(i32, @intCast(pos.x)) + dx)),
+        @intCast(@max(0, @as(i32, @intCast(pos.y)) + dy)),
+    );
 }
 
 // Scrolling an element fires a scroll event and then a scrollend event,
