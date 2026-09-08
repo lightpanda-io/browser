@@ -295,7 +295,7 @@ pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(frame.local_arena);
     try frame._session.cookie_jar.forRequest(frame.url, &aw.writer, .{
         .is_http = false,
-        .is_navigation = false,
+        .kind = .subresource,
         .origin_url = frame.siteForCookies(),
     });
     return aw.written();

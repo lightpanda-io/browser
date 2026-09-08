@@ -97,7 +97,7 @@ pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?Web
 
     jar.removeExpired(null);
     for (jar.cookies.items) |*cookie| {
-        if (cookie.appliesTo(&target, true, true, true) == false) {
+        if (cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }) == false) {
             continue;
         }
         if (std.mem.eql(u8, cookie.name, name) == false) {

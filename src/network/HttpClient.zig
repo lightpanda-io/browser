@@ -2617,6 +2617,27 @@ pub const Transfer = struct {
         return transfer.req.origin orelse "null";
     }
 
+    /// How this request reaches its target, which is what a cross-site
+    /// request's SameSite=Lax cookies hang on (RFC 6265bis 5.5).
+    ///
+    /// `.document` alone isn't a top-level navigation, `Frame.navigate` makes
+    /// a `.document` request for every frame it loads, and an iframe's src is
+    /// a navigation that just isn't a top-level one. The owner of a
+    /// `.document` request is the frame being navigated, so a parent on it
+    /// means we're loading a sub-frame.
+    ///
+    /// No owner means no attribution, and no way to show the request is
+    /// top-level: fail closed (such a request has no cookie jar either, so
+    /// `getCookieString` has already returned).
+    fn requestKind(self: *const Transfer) Cookie.RequestKind {
+        const req = &self.req;
+        if (req.resource_type != .document or self.owner == null) return .subresource;
+        const owner = self.owner.?;
+        if (owner.parent != null) return .subresource;
+
+        return if (req.method.isSafe()) .navigation else .unsafe_navigation;
+    }
+
     pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
         const req = &self.req;
         if (!req.credentialsAllowed()) return null;
@@ -2626,7 +2647,7 @@ pub const Transfer = struct {
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.cookie_origin,
-            .is_navigation = req.resource_type == .document,
+            .kind = self.requestKind(),
         });
         if (aw.written().len == 0) {
             return null;

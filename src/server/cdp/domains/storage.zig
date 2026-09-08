@@ -191,7 +191,7 @@ pub const CookieWriter = struct {
         if (self.urls) |urls| {
             for (self.cookies) |*cookie| {
                 for (urls) |*url| {
-                    if (cookie.appliesTo(url, true, true, true)) { // TBD same_site, should we compare to the pages url?
+                    if (cookie.appliesTo(url, .{ .same_site = true, .is_http = true, .kind = .navigation })) { // TBD same_site, should we compare to the pages url?
                         try writeCookie(cookie, w);
                         break;
                     }

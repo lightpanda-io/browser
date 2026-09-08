@@ -85,7 +85,7 @@ fn onCookieChanged(ctx: *anyopaque, data: *const Notification.CookieChanged) !vo
         .same_site = data.same_site,
     };
     const same_site = Cookie.areSameSite(exec.siteForCookies(), target.host);
-    if (!probe.appliesTo(&target, same_site, false, false)) {
+    if (!probe.appliesTo(&target, .{ .same_site = same_site, .is_http = false })) {
         return;
     }
 
@@ -383,7 +383,7 @@ fn matchCookies(
     for (session.cookie_jar.cookies.items) |*cookie| {
         // CookieStore exposes only cookies that script would see for the
         // current document. HttpOnly cookies stay hidden.
-        if (cookie.appliesTo(&target, same_site, false, false) == false) {
+        if (cookie.appliesTo(&target, .{ .same_site = same_site, .is_http = false }) == false) {
             continue;
         }
         if (normalized_name) |n| {

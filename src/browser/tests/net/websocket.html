@@ -737,7 +737,7 @@
 <script id=cookies_on_upgrade_samesite_strict type=module>
 {
   // SameSite=Strict on a same-site upgrade (origin and target share
-  // host 127.0.0.1) MUST attach. The patch passes is_navigation=false;
+  // host 127.0.0.1) MUST attach. The upgrade is a .subresource lookup;
   // the cookie jar's SameSite logic only blocks Strict cookies when
   // the request is cross-site, regardless of navigation status. This
   // test pins the same-site path so a regression that breaks same-site
