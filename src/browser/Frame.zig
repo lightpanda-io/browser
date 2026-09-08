@@ -24,6 +24,7 @@ const Mime = @import("Mime.zig");
 const Page = @import("Page.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
+const VirtualTime = @import("VirtualTime.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 const StyleManager = @import("StyleManager.zig");
@@ -3374,13 +3375,13 @@ const IdleNotification = union(enum) {
                     // the first time after being un-triggered). Record the time
                     // so that if the condition holds for long enough, we can
                     // send a notification.
-                    self.* = .{ .triggered = lp.datetime.milliTimestamp(.boot) };
+                    self.* = .{ .triggered = VirtualTime.milli() };
                 },
                 .triggered => |ms| {
                     // The condition was already triggered and was triggered
                     // again. When this condition holds for 500+ms, we'll send
                     // a notification.
-                    if (lp.datetime.milliTimestamp(.boot) - ms >= 500) {
+                    if (VirtualTime.milli() - ms >= 500) {
                         // This is the only place in this function where we can
                         // return true. The only place where we can tell our caller
                         // "send the notification!".

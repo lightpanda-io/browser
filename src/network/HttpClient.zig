@@ -26,6 +26,7 @@ const Notification = @import("../Notification.zig");
 const Driver = @import("../server/Driver.zig");
 
 const URL = @import("../browser/URL.zig");
+const VirtualTime = @import("../browser/VirtualTime.zig");
 const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const Cookie = @import("../browser/webapi/storage/Cookie.zig");
@@ -1472,7 +1473,7 @@ fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyer
     };
     transfer._conn = conn;
     transfer.state = .inflight;
-    transfer._timing.hop_start = lp.datetime.microTimestamp(.boot);
+    transfer._timing.hop_start = VirtualTime.micro();
 
     // Start the request (and move along any other request).
     _ = try self.handles.perform();
@@ -2913,7 +2914,7 @@ pub const Transfer = struct {
 
     fn redirectTiming(self: *Transfer, headers: []const http.Header) void {
         const t = &self._timing;
-        const now = lp.datetime.microTimestamp(.boot);
+        const now = VirtualTime.micro();
         if (t.redirect_start == 0) {
             t.redirect_start = t.start_time;
         }
@@ -2981,7 +2982,7 @@ pub const Transfer = struct {
 
         if (t.response_end == 0) {
             // Cache hit, interceptor-fulfilled, or failed: delivered now.
-            t.response_end = lp.datetime.microTimestamp(.boot);
+            t.response_end = VirtualTime.micro();
         }
         // Force phases that never happened to fetch_start
         inline for (.{ "dns_start", "dns_end", "connect_start", "connect_end", "request_start", "response_start" }) |phase| {
@@ -3977,7 +3978,7 @@ const ResourceTiming = struct {
     const CacheState = enum { none, local, validated };
 
     fn start(self: *ResourceTiming, url: [:0]const u8) void {
-        const now = lp.datetime.microTimestamp(.boot);
+        const now = VirtualTime.micro();
         self.url = url;
         self.start_time = now;
         self.fetch_start = now;
