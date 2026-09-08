@@ -17,18 +17,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
-const collections = @import("../../collections.zig");
-const Form = @import("Form.zig");
 const Event = @import("../../Event.zig");
-const ValidityState = @import("ValidityState.zig");
+const Element = @import("../../Element.zig");
+const collections = @import("../../collections.zig");
+
+const HtmlElement = @import("../Html.zig");
+const reflection = @import("../reflection.zig");
+
+const Form = @import("Form.zig");
 pub const Option = @import("Option.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const Select = @This();
 
@@ -90,6 +94,48 @@ const OptionIterator = struct {
         return null;
     }
 };
+
+pub fn deselectOthers(self: *const Select, keep: *const Option) void {
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        if (option != keep) option._selected = false;
+    }
+}
+
+// A non-multiple select with a display size < 2 always has 1 item selected.
+pub fn resetToDefaultSelection(self: *const Select) void {
+    if (self.getMultiple() or self.displaySize() > 1) {
+        return;
+    }
+
+    var first_enabled: ?*Option = null;
+    var last_selected: ?*Option = null;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        if (option._selected) {
+            if (last_selected) |prev| prev._selected = false;
+            last_selected = option;
+        }
+        if (first_enabled == null and !option.asElement().isDisabled()) {
+            first_enabled = option;
+        }
+    }
+
+    if (last_selected == null) {
+        if (first_enabled) |option| {
+            option._selected = true;
+        }
+    }
+}
+
+// The size attribute, as the size IDL attribute parses it (0 when absent or
+// invalid). Whether the select renders as a menu list or a list box hinges on
+// this, and with it whether an option can be deselected outright.
+fn displaySize(self: *const Select) i64 {
+    const value = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 0;
+    const parsed = reflection.parseInteger(value) orelse return 0;
+    return @max(parsed, 0);
+}
 
 // Resolves the option whose selectedness contributes to the select's value
 // per HTML §form-elements§selectedness-setting-algorithm: an explicitly
@@ -269,7 +315,7 @@ pub fn getLabels(self: *Select, frame: *Frame) !js.Array {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
 pub fn getWillValidate(self: *const Select) bool {
-    return !self.getDisabled();
+    return !self.asConstElement().isDisabled();
 }
 
 pub fn getValidity(self: *Select, frame: *Frame) !*ValidityState {

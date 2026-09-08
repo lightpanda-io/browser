@@ -79,6 +79,7 @@ pub const PseudoElement = enum {
 
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
+pub const PartListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 
@@ -569,7 +570,8 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     var fragment: ?*Node = null;
     if (html.len > 0) {
         const frag = (try Node.DocumentFragment.init(frame)).asNode();
-        try Frame.parse.htmlAsChildren(frame, frag, html);
+        // The parent is the parse context (a fragment parent means body).
+        try Frame.parse.fragment(frame, frag, html, .{ .context = parent.is(Element) });
         fragment = frag;
     }
 
@@ -619,13 +621,13 @@ pub fn getHTML(self: *Element, opts: dump.Opts.Shadow.Declarative, writer: *std.
 
 pub fn setInnerHTML(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
-    return parent.setHTML(html, false, frame);
+    return parent.setHTML(html, .{}, frame);
 }
 
 /// allows declarative shadow dom
 pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
-    return parent.setHTML(html, true, frame);
+    return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
 }
 
 pub fn getId(self: *const Element) []const u8 {
@@ -735,7 +737,7 @@ pub fn hasDisabledConcept(self: *const Element) bool {
     };
 }
 
-pub fn isDisabled(self: *Element) bool {
+pub fn isDisabled(self: *const Element) bool {
     if (!self.hasDisabledConcept()) {
         return false;
     }
@@ -749,7 +751,7 @@ pub fn isDisabled(self: *Element) bool {
     // <optgroup disabled>. It does NOT inherit from <select disabled> or
     // an ancestor <fieldset disabled>.
     if (self.getTag() == .option) {
-        if (self.asNode()._parent) |parent_node| {
+        if (self.asConstNode()._parent) |parent_node| {
             if (parent_node.is(Element)) |parent_el| {
                 if (parent_el.getTag() == .optgroup and
                     parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
@@ -761,7 +763,7 @@ pub fn isDisabled(self: *Element) bool {
         return false;
     }
 
-    const element_node = self.asNode();
+    const element_node = self.asConstNode();
     var current: ?*Node = element_node._parent;
     while (current) |node| {
         current = node._parent;
@@ -1024,6 +1026,17 @@ pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
     const class_list = try self.getClassList(frame);
     try class_list.setValue(value, frame);
+}
+
+pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
+    const gop = try frame._element_part_lists.getOrPut(frame.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
+            ._element = self,
+            ._attribute_name = comptime .wrap("part"),
+        });
+    }
+    return gop.value_ptr.*;
 }
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
@@ -1398,17 +1411,35 @@ pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.S
 // width / height treshold is reached. If the size isn't explicit, we fallback
 // to the content size.
 pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
-        return 0.0;
-    }
-    return self.boxAxis(frame, .width);
+    return self.clientAxis(frame, .width);
 }
 
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
+    return self.clientAxis(frame, .height);
+}
+
+fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     if (!self.checkVisibilityCached(null, frame, .materialize)) {
         return 0.0;
     }
-    return self.boxAxis(frame, .height);
+    return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
+}
+
+fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    const tag = self.getTag();
+    if (tag != .html and tag != .body) {
+        return null;
+    }
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    if ((tag == .body) != doc.isQuirksMode()) {
+        return null;
+    }
+    // In quicks mode, the root element (the body) reports the viewport for
+    // clientWidth and clientHeight rather than its own MASSIVE box. This
+    // fixes jstracker's uiContourMap which attempts to tile the clientHeight
+    // of the body. (https://github.com/lightpanda-io/browser/issues/3251)
+    const viewport = frame._page.getViewport();
+    return @floatFromInt(if (axis == .width) viewport.width else viewport.height);
 }
 
 // Caller must have made sure self is visible.
@@ -1581,12 +1612,20 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     return total;
 }
 
+// Unlike clientHeight, the root's offsetHeight is its box (the document
+// extent), so it stays on the synthetic root default.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
-    return self.getClientHeight(frame);
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+        return 0.0;
+    }
+    return self.boxAxis(frame, .height);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
-    return self.getClientWidth(frame);
+    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+        return 0.0;
+    }
+    return self.boxAxis(frame, .width);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
@@ -1839,7 +1878,7 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     // Positions come from the faux-layout document position (top = preorder
     // depth-scaled y), the same source getBoundingClientRect uses.
     const y = calculateDocumentPosition(self.asNode());
-    frame.window.scrollTo(.{ .x = 0 }, @intFromFloat(@max(0, y)), frame) catch {};
+    frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 
 const ScrollToOpts = union(enum) {
@@ -2405,6 +2444,7 @@ pub const JsApi = struct {
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
+    pub const part = bridge.accessor(Element.getPartList, null, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getOrCreateStyle, Element.setStyle, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

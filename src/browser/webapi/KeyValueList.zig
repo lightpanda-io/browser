@@ -63,21 +63,40 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
 }
 
 pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {
-    var it = try js_obj.nameIterator();
+    var it = try js_obj.iterator();
+
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
 
-    while (try it.next()) |name| {
-        const js_value = try js_obj.get(name);
+    while (try it.next()) |kv| {
+        const name = kv.name;
         const normalized = if (comptime normalizer) |n| n(name, buf) else name;
+
+        // Two JS keys can mape to the same string, and in such cases, it's
+        // an update, not an append.
+        if (comptime normalizer == null) {
+            if (list.getEntryPtr(name)) |entry| {
+                entry.value = try kv.value.toSSOWithAlloc(arena);
+                continue;
+            }
+        }
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
-            .value = try js_value.toSSOWithAlloc(arena),
+            .value = try kv.value.toSSOWithAlloc(arena),
         });
     }
 
     return list;
+}
+
+fn getEntryPtr(self: *KeyValueList, name: []const u8) ?*Entry {
+    for (self._entries.items) |*entry| {
+        if (entry.name.eqlSlice(name)) {
+            return entry;
+        }
+    }
+    return null;
 }
 
 pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, buf: []u8) !KeyValueList {

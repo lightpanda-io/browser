@@ -121,6 +121,20 @@
   <a id="link" href="foo" class="ok">OK</a>
 </div>
 
+<script id=custom_name_outlives_call>
+  // The constructor's strings come from the call arena: they must be copied.
+  window.__custom_exception = new DOMException('took too ' + 'long', 'Timeout' + 'Error');
+  testing.expectEqual('TimeoutError', window.__custom_exception.name);
+</script>
+
+<script id=custom_name_outlives_call_2>
+  const e = window.__custom_exception;
+  testing.expectEqual('TimeoutError', e.name);
+  testing.expectEqual('took too long', e.message);
+  testing.expectEqual(23, e.code);
+  testing.expectEqual('TimeoutError: took too long', e.toString());
+</script>
+
 <script id=hierarchy_error>
   let link = $('#link');
   let content = $('#content');

@@ -48,6 +48,14 @@
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.
+    \\  --protocol <PROTOCOL>
+    \\          Automation protocol to serve. Can be passed multiple times to
+    \\          serve several on the same port.
+    \\          Defaults to cdp.
+    \\          Allowed values:
+    \\              cdp        Chrome DevTools Protocol (WebSocket on /).
+    \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
+    \\                         classic WebDriver session endpoints.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -72,6 +80,18 @@
     \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
     \\              semantic_tree_text Pruned plain-text semantic tree.
+    \\  --dump-max-bytes <INT>
+    \\          Soft cap on the dumped html or markdown, in bytes. Output is cut
+    \\          at a UTF-8 boundary and a '[truncated]' marker is appended.
+    \\          Defaults to no cap.
+    \\  --dump-selector <QUERY>
+    \\          Dump only the first element matching the CSS selector instead
+    \\          of the whole document. Fails if nothing matches.
+    \\  --fail-on-http-error
+    \\          Exit with code 22 when any page's HTTP status is 400 or above.
+    \\          The dump is still written. Navigation and wait failures exit
+    \\          with code 1 regardless of this flag.
+    \\          Defaults to false.
     \\  --inject-script <EXPR>
     \\          JavaScript to execute as the document's <head> is parsed, before any
     \\          other scripts in the page run. Can be passed multiple times; scripts
@@ -83,13 +103,18 @@
     \\          Capture and print the status of the fetch as JSON. A single URL
     \\          prints one object; multiple URLs print {{"results": [ ... ]}} with
     \\          one object per URL. When used with --dump <MODE> the dumped
-    \\          content is wrapped within each object.
+    \\          content is wrapped within each object. Each object carries an
+    \\          "error" field: null, or the name of the navigation, wait or
+    \\          dump failure for that URL. One failed URL does not stop the
+    \\          others; the process exits 1 if any URL failed.
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.
     \\          Defaults to false.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
+    \\          In markdown only 'ui' changes the output: scripts, styles and
+    \\          hidden elements are never rendered.
     \\          Defaults to no-strip.
     \\          Allowed values:
     \\              js        Script and link[as=script, rel=preload].
@@ -310,7 +335,8 @@
     \\common options:
     \\  --adblock-lists <LIST>
     \\          EasyList-syntax filter files to load. Can be passed multiple times.
-    \\          Requests to a hostname blocked by any list are failed before they leave.
+    \\          Requests a list blocks are failed before they leave; the URL,
+    \\          resource type, party and $domain= of each one decide.
     \\          e.g. --adblock-lists easylist.txt --adblock-lists easyprivacy.txt
     \\  --block-cidrs <CIDR>
     \\          Additional CIDR ranges to block. Can be passed multiple times.
@@ -341,28 +367,34 @@
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
-    \\  --disable-subframes
-    \\          Skip loading <iframe> elements. The parser still registers them in the
-    \\          DOM, but no child frame or Page.frameAttached events are produced.
-    \\          Defaults to false.
-    \\  --disable-workers
-    \\          Skip loading dedicated Web Workers. The Worker constructor still
-    \\          returns a Worker object, but no script fetch is initiated and its scope
-    \\          never runs.
-    \\          Defaults to false.
-    \\  --enable-external-stylesheets
-    \\          Fetch external <link rel=stylesheet> resources so their rules
-    \\          contribute to computed styles (and therefore to visibility checks like
-    \\          display, visibility, opacity, pointer-events).
-    \\          Defaults to false, except in agent mode with an LLM, where it is on.
+    \\  --experimental-features <FEATURE>
+    \\          Enable an experimental, unstable feature. Can be passed multiple times.
+    \\          Behavior may change or be removed without notice.
+    \\          Defaults to none enabled.
+    \\          Allowed values:
+    \\              cors      Obey CORS (cross-origin resource sharing) checks
+    \\                        on fetch/XHR requests instead of allowing them
+    \\                        unconditionally.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to requesting none of them.
     \\          Allowed values:
-    \\              image     <img> sources, so that load/error reflects the real
-    \\                        HTTP status. Only the response headers are read;
-    \\                        images are never decoded, so naturalWidth and
-    \\                        naturalHeight stay 0. Delays the window load event.
+    \\             iframe      When enabled, <iframe> elements are fully loaded.
+    \\
+    \\             image       <img> sources, so that load/error reflects the real
+    \\                         HTTP status. Only the response headers are read;
+    \\                         images are never decoded, so naturalWidth and
+    \\                         naturalHeight stay 0. Delays the window load event.
+    \\
+    \\             stylesheet  Fetch external <link rel=stylesheet> resources so
+    \\                         their rules contribute to computed styles (and
+    \\                         therefore to visibility checks like display,
+    \\                         visibility, opacity, pointer-events).
+    \\
+    \\             worker      Enable loading dedicated and shared workers. When
+    \\                         disabled, the Worker constructor still returns a
+    \\                         Worker, but no script fetch is initiated and the
+    \\                         Worker never runs.
     \\  --http-cache-dir <PATH>
     \\          Directory used as a filesystem cache for network resources. Omitting
     \\          this disables caching.
@@ -375,7 +407,7 @@
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
-    \\          Defaults to 0.
+    \\          Defaults to 8000.
     \\  --http-header <HEADER>
     \\          Extra custom header added to every outgoing HTTP request, including redirections,
     \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
@@ -409,17 +441,22 @@
     \\          Defaults to none.
     \\  --http-timeout <INT>
     \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
-    \\          Defaults to 10000.
+    \\          Defaults to 15000.
+    \\  --http-version <VERSION>
+    \\          HTTP version to negotiate. "1.1" never offers HTTP/2. "auto"
+    \\          picks the best available option.
+    \\          Defaults to "auto".
+    \\          Allowed values: "auto", "1.1".
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.
-    \\  --log-filter-scopes <SCOPE>
+    \\  --log-filter <SCOPE>
     \\          Filter logs per scope, applied first-to-last. Can be passed multiple times.
     \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
     \\          "all" targets every scope.
-    \\          e.g. --log-filter-scopes http --log-filter-scopes unknown_prop
+    \\          e.g. --log-filter http --log-filter unknown_prop
     \\          hides those two.
-    \\          --log-filter-scopes -all --log-filter-scopes +cdp
+    \\          --log-filter -all --log-filter +cdp
     \\          hides everything except cdp.
     \\  --log-format <FORMAT>
     \\          The log format.

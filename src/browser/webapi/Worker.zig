@@ -91,14 +91,8 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
     self._worker_scope = dedicated_worker;
     try frame.trackWorker(self);
 
-    // `--disable-workers` (or `LP.configureLoading { worker: false }`):
-    // skip the script fetch and eval. The Worker object is still
-    // constructed so JS `new Worker(url)` does not throw, but the
-    // worker's eval never runs (postMessage from the page is queued
-    // indefinitely with no handler to drain it). Mirrors the
-    // `subframe_loading_enabled` pattern for iframes.
-    if (!session.worker_loading_enabled) {
-        log.debug(.browser, "worker disabled", .{ .url = resolved_url });
+    if (session.load_resources.worker == false) {
+        log.warnDisabledWorker();
         return self;
     }
 
@@ -111,10 +105,10 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .url = resolved_url,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = resolved_url,
-        .notification = session.notification,
+        .resource_type = if (self._type == .module) .script else .worker,
+        .origin = frame.origin,
+        .request_mode = .same_origin,
+        .credentials_mode = .same_origin,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -145,7 +139,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 pub fn deinit(self: *Worker) void {
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
-        res.abort(error.Abort);
+        res.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();
@@ -274,10 +268,16 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // TransferCanceled is not a load failure: terminate() (or worker teardown)
+    // cancelled a still-inflight script fetch. We shouldn't fireErrorEvent
+    // (or bother logging)
+    const canceled = err == error.TransferCanceled;
+    if (!canceled) {
+        log.err(.browser, "worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onmessage will never be registered.
     // Drain any buffered messages so they get dispatched (and silently
@@ -286,7 +286,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    if (!canceled) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {
@@ -330,7 +332,7 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
 pub fn terminate(self: *Worker) void {
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
-        resp.abort(error.Abort);
+        resp.cancel();
         self._http_transfer = null;
     }
 }
@@ -487,7 +489,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    testing.silenceLog(&.{.http});
+    testing.silenceLog(&.{ .http, .browser, .browser });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can

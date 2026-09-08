@@ -30,6 +30,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const Element = @import("webapi/Element.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
+const MediaQueryList = @import("webapi/css/MediaQueryList.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -87,6 +88,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     switch (target._type) {
         .node => try self.dispatchNode(target.subtype(Node), event),
         .xhr => try self.dispatchDirect(target, event, target.subtype(XMLHttpRequestEventTarget).inlineHandler(event._type_string), .{ .context = "dispatch" }),
+        .media_query_list => try self.dispatchDirect(target, event, target.subtype(MediaQueryList).inlineHandler(event._type_string), .{ .context = "dispatch" }),
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }

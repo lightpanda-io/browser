@@ -20,16 +20,16 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const zenai = @import("zenai");
 
+const NodeRegistry = @import("../NodeRegistry.zig");
+
+const DOMNode = @import("webapi/Node.zig");
+const Selector = @import("webapi/selector/Selector.zig");
+
 const log = lp.log;
 const tavily = zenai.search.tavily;
 const brave = zenai.search.brave;
 const exa = zenai.search.exa;
 const keenable = zenai.search.keenable;
-
-const DOMNode = @import("webapi/Node.zig");
-const CDPNode = @import("../cdp/Node.zig");
-const LimitedWriter = @import("../LimitedWriter.zig");
-const Selector = @import("webapi/selector/Selector.zig");
 
 /// Conventions any LLM driving Lightpanda should follow. The standalone
 /// agent prepends this to its own system prompt; the MCP server returns
@@ -40,8 +40,8 @@ const Selector = @import("webapi/selector/Selector.zig");
 /// recordable as JavaScript agent scripts.
 pub const driver_guidance =
     \\You are driving Lightpanda, a headless browser, through text tools:
-    \\no screenshots, no images, no PDFs — you reason over pages as a
-    \\semantic tree, markdown or HTML.
+    \\you reason over pages as a semantic tree, markdown or HTML. `screenshot`
+    \\renders that text layout as a PNG: for spatial layout, not a primary read.
     \\
     \\Reading pages (cheap → expensive — prefer cheaper):
     \\- `tree` → semantic overview (role, name, value, backendNodeId per
@@ -225,6 +225,14 @@ pub fn isPathSafe(path: []const u8) bool {
     return true;
 }
 
+pub const unsafe_path_message = "path must be relative and must not contain '..' segments";
+
+/// The cwd is the server's, not one the user picked, so report where a file
+/// really went.
+pub fn absolutePath(arena: std.mem.Allocator, path: []const u8) []const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(lp.io, path, arena) catch path;
+}
+
 /// Hand-written so per-tool semantics (record/heal/locator/data) and
 /// LLM-facing metadata (`definition`) live as exhaustive switches on the
 /// tag — adding a new tool is a compile error until each predicate AND
@@ -235,6 +243,7 @@ pub const Tool = enum {
     search,
     markdown,
     html,
+    screenshot,
     links,
     evaluate,
     extract,
@@ -264,7 +273,7 @@ pub const Tool = enum {
     /// with noise.
     pub fn isRecorded(self: Tool) bool {
         return switch (self) {
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
+            .goto, .screenshot, .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => true,
             .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
@@ -276,7 +285,7 @@ pub const Tool = enum {
     pub fn isAsync(self: Tool) bool {
         return switch (self) {
             .goto => true,
-            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .evaluate, .extract, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -286,7 +295,7 @@ pub const Tool = enum {
     pub fn waitsForReadiness(self: Tool) bool {
         return switch (self) {
             .waitForSelector, .waitForScript, .waitForState => true,
-            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .goto, .evaluate, .extract, .click, .fill, .scroll, .hover, .press, .selectOption, .setChecked, .search, .markdown, .html, .screenshot, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
@@ -296,18 +305,18 @@ pub const Tool = enum {
     /// `getCookies` (`url` filters, not navigates).
     pub fn navigatesToUrl(self: Tool) bool {
         return switch (self) {
-            .markdown, .html, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
+            .markdown, .html, .screenshot, .links, .tree, .interactiveElements, .structuredData, .detectForms => true,
             .goto, .search, .evaluate, .extract, .nodeDetails, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
         };
     }
 
-    /// Tool requires a target element (selector or backendNodeId) at
-    /// runtime even though the JSON schema marks both as optional. Used by
-    /// the recorder to skip lines that can't be replayed.
-    pub fn needsLocator(self: Tool) bool {
+    /// Args a replay needs even though the schema marks them optional; the
+    /// recorder skips a line missing one. Exhaustive so a new tool must choose.
+    pub fn replayRequires(self: Tool) []const []const u8 {
         return switch (self) {
-            .click, .fill, .hover, .selectOption, .setChecked => true,
-            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => false,
+            .click, .fill, .hover, .selectOption, .setChecked => &.{"selector"},
+            .screenshot => &.{"path"},
+            .goto, .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .scroll, .waitForSelector, .waitForScript, .waitForState, .press, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => &.{},
         };
     }
 
@@ -316,7 +325,7 @@ pub const Tool = enum {
     pub fn producesData(self: Tool) bool {
         return switch (self) {
             .search, .markdown, .html, .links, .evaluate, .extract, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => true,
-            .goto, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
+            .goto, .screenshot, .click, .fill, .scroll, .waitForSelector, .waitForScript, .waitForState, .hover, .press, .selectOption, .setChecked => false,
         };
     }
 
@@ -399,10 +408,36 @@ pub const Tool = enum {
                     \\}
                 ),
             },
+            .screenshot => .{
+                .description = std.fmt.comptimePrint("Render the page, or one node, as a PNG: the text layout Lightpanda computes, not a pixel-accurate browser rendering (no images, fonts or CSS colours). With `path`, writes the file at full size and returns its location; without it, returns the image inline where the client can display one, at most {d}px wide and {d}px tall. Use it to see spatial layout; read content with `markdown`/`tree`.", .{ inline_image_max_width, inline_image_max_height }),
+                .summary = "Screenshot of the page or a node",
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "path": { "type": "string", "description": "Optional relative path (no '..' segments) to write the PNG to. Created or overwritten. Without it the image is returned inline, which needs a client that can display images." },
+                    \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
+                    \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
+                    \\  }
+                    \\}
+                ),
+            },
             .links => .{
-                .description = "Extract all links in the opened page as JSON objects with `text` (visible anchor text), `href` (resolved URL), and `backendNodeId` (pass to click/nodeDetails). If a url is provided, it navigates to that url first.",
+                .description = "Extract the visible links in the opened page as JSON objects with `text` (anchor text, falling back to aria-label/title/image alt), `href` (resolved URL), and `backendNodeId` (pass to click/nodeDetails). One entry per href; hidden links are omitted. If a url is provided, it navigates to that url first.",
                 .summary = "List all links on the page",
-                .input_schema = url_params_schema,
+                .input_schema = minify(
+                    \\{
+                    \\  "type": "object",
+                    \\  "properties": {
+                    \\    "limit": { "type": "integer", "description": "Optional. Return at most this many links, in document order." },
+                    \\    "url": { "type": "string", "description": "Optional URL to navigate to before processing." },
+                    \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
+                    \\  }
+                    \\}
+                ),
             },
             .evaluate => .{
                 .description = "Evaluate JavaScript in the current page context — an escape hatch for page-side logic the dedicated tools can't express; prefer `extract` for data and click/fill/etc. for actions. It runs in the page, so it cannot see the agent script's variables or builtins — interpolate any value into the `script` string. A bare trailing expression yields its value; top-level `await` and `return` are supported (the body then runs as an async function, so use `return` to produce a value). Objects and arrays return as JSON, so no `JSON.stringify` is needed. If a url is provided, it navigates there first. The `globalThis.lp` object exposes a Session-scoped bridge store: values written via `lp.foo = ...` auto-sync at end of evaluate, surviving navigation; values previously set via `/extract save=` or `/evaluate save=` appear as `lp.<name>`.",
@@ -695,7 +730,8 @@ pub const Tool = enum {
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(10000);
+    // Cumulative: tool_defs evaluates every schema in one comptime scope.
+    @setEvalBranchQuota(100_000);
     return comptime blk: {
         var buf: [json.len]u8 = undefined;
         var len: usize = 0;
@@ -785,6 +821,8 @@ pub const ToolResult = struct {
     /// Set only by a successful `extract`: each top-level result field and
     /// whether it carried data, so consumers tally without re-parsing `text`.
     fields: ?[]const lp.extract.ExtractField = null,
+    /// Only set when the caller passed `CallOpts.inline_image`.
+    image: ?lp.screenshot.Prepared = null,
 };
 
 pub const GotoParams = struct {
@@ -800,7 +838,7 @@ pub const UrlParams = struct {
 
 const ActionTarget = union(enum) {
     selector: []const u8,
-    backend_node_id: CDPNode.Id,
+    backend_node_id: NodeRegistry.Id,
 
     pub fn format(self: ActionTarget, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
@@ -812,21 +850,24 @@ const ActionTarget = union(enum) {
 
 const NodeAndPage = struct { node: *DOMNode, page: *lp.Frame, target: ActionTarget };
 
-/// Fresh browsing session with console capture enabled and `registry`
-/// cleared — node IDs are session-scoped.
-pub fn freshSession(browser: *lp.Browser, notification: *lp.Notification, registry: *CDPNode.Registry) !*lp.Session {
-    const session = try browser.newSession(notification);
-    try session.enableConsoleCapture();
-    registry.reset();
-    return session;
-}
+/// What the caller can do with a result beyond its text.
+pub const CallOpts = struct {
+    /// The caller can hand an image to a model.
+    inline_image: bool = false,
+};
+
+// An inline screenshot is re-sent on every turn; keep it within what models
+// consume. Files written to `path` are full size.
+pub const inline_image_max_width = 1280;
+pub const inline_image_max_height = 4096;
 
 pub fn call(
     arena: std.mem.Allocator,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     tool_name: []const u8,
     arguments: ?std.json.Value,
+    opts: CallOpts,
 ) ToolError!ToolResult {
     // In-band so an LLM that invented a tool name (e.g. OpenAI's internal
     // `multi_tool_use.parallel` wrapper) learns the name is wrong instead of
@@ -845,7 +886,7 @@ pub fn call(
     };
     const substituted = try substituteStringArgs(arena, tool, normalized);
 
-    return dispatch(arena, session, registry, tool, substituted) catch |err| {
+    return dispatch(arena, session, registry, tool, substituted, opts) catch |err| {
         if (err == error.NavigationFailed) {
             if (formatNavigationError(arena, session)) |text|
                 return .{ .text = text, .is_error = true };
@@ -857,15 +898,17 @@ pub fn call(
 fn dispatch(
     arena: std.mem.Allocator,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     tool: Tool,
     substituted: ?std.json.Value,
+    opts: CallOpts,
 ) ToolError!ToolResult {
     return switch (tool) {
         .goto => .{ .text = try execGoto(arena, session, registry, substituted) },
         .search => execSearch(arena, substituted),
         .markdown => .{ .text = try execMarkdown(arena, session, registry, substituted) },
         .html => .{ .text = try execHtml(arena, session, registry, substituted) },
+        .screenshot => try execScreenshot(arena, session, registry, substituted, opts.inline_image),
         .links => .{ .text = try execLinks(arena, session, registry, substituted) },
         .tree => .{ .text = try execTree(arena, session, registry, substituted) },
         .nodeDetails => .{ .text = try execNodeDetails(arena, session, registry, substituted) },
@@ -903,7 +946,7 @@ fn formatNavigationError(arena: std.mem.Allocator, session: *lp.Session) ?[]cons
 pub fn evalScript(
     arena: std.mem.Allocator,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     script: []const u8,
 ) ToolError!ToolResult {
     const z = try arena.dupeZ(u8, script);
@@ -917,7 +960,7 @@ pub fn evalScript(
 pub fn extract(
     arena: std.mem.Allocator,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     schema_json: []const u8,
 ) ToolError!ToolResult {
     const trimmed = std.mem.trim(u8, schema_json, &std.ascii.whitespace);
@@ -993,7 +1036,7 @@ const schema_walker_prefix =
 ;
 const schema_walker_suffix = ")";
 
-fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgs(GotoParams, arena, arguments);
     return switch (try performGoto(session, registry, args.url, .{ .timeout = args.timeout, .wait_until = args.waitUntil })) {
         .completed => "Navigated successfully.",
@@ -1271,10 +1314,10 @@ fn renderFrameMarkdown(arena: std.mem.Allocator, frame: *lp.Frame) ToolError![]c
     return aw.written();
 }
 
-fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: ?[]const u8 = null,
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         maxBytes: ?u32 = null,
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
@@ -1282,74 +1325,111 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const opts: lp.markdown.Opts = .{ .max_bytes = args.maxBytes };
+    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        lp.markdown.dump(resolved.node, opts, &aw.writer, resolved.page) catch return ToolError.InternalError;
-    } else {
-        lp.markdown.dump(page.document.asNode(), opts, &aw.writer, page) catch return ToolError.InternalError;
-    }
+    lp.markdown.dump(node, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
     return aw.written();
+}
+
+/// The node a read tool works on: the selector match, the registry node, or
+/// the whole document. All three live in the current frame.
+fn resolveScope(session: *lp.Session, registry: *NodeRegistry, page: *lp.Frame, selector: ?[]const u8, node_id: ?NodeRegistry.Id) ToolError!*DOMNode {
+    if (selector == null and node_id == null) return page.document.asNode();
+    return (try resolveTarget(session, registry, selector, node_id)).node;
 }
 
 const HtmlParams = struct {
     selector: ?[]const u8 = null,
-    backendNodeId: ?CDPNode.Id = null,
+    backendNodeId: ?NodeRegistry.Id = null,
     maxBytes: ?u32 = null,
     strip: lp.dump.Opts.Strip = .{},
     url: ?[:0]const u8 = null,
     timeout: ?u32 = null,
 };
 
-fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
+    const opts: lp.dump.Opts = .{ .strip = args.strip, .max_bytes = args.maxBytes };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    var lw: LimitedWriter = .init(&aw.writer, args.maxBytes);
-    dumpHtml(session, registry, page, args, &lw.writer) catch |err| switch (err) {
-        error.WriteFailed => if (!lw.truncated) return ToolError.InternalError,
-        else => |e| return e,
-    };
-    if (lw.truncated) {
-        aw.writer.writeAll(LimitedWriter.truncation_marker) catch return ToolError.InternalError;
+    if (args.selector == null and args.backendNodeId == null) {
+        lp.dump.root(page.document, opts, &aw.writer, page) catch return ToolError.InternalError;
+    } else {
+        const node = (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
+        lp.dump.deep(node, opts, &aw.writer, page) catch return ToolError.InternalError;
     }
     return aw.written();
 }
 
-fn dumpHtml(session: *lp.Session, registry: *CDPNode.Registry, page: *lp.Frame, args: HtmlParams, writer: *std.Io.Writer) (ToolError || error{WriteFailed})!void {
-    const opts: lp.dump.Opts = .{ .strip = args.strip };
-    if (args.selector) |sel| {
-        const resolved = try resolveBySelector(session, sel);
-        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
+fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value, inline_image: bool) ToolError!ToolResult {
+    const Params = struct {
+        path: ?[]const u8 = null,
+        selector: ?[]const u8 = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        fullPage: bool = false,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
+    if (args.path) |path| {
+        if (!isPathSafe(path)) return .{ .text = unsafe_path_message, .is_error = true };
+    } else if (!inline_image) {
+        return .{ .text = "pass `path`: this client cannot display an inline image", .is_error = true };
     }
-    if (args.backendNodeId) |nid| {
-        const resolved = try resolveNodeAndPage(session, registry, nid);
-        return lp.dump.deep(resolved.node, opts, writer, resolved.page);
+    const page = try ensurePage(session, registry, args.url, args.timeout);
+    const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    var prepared = lp.screenshot.preparePng(arena, node, .fromViewport(page._page.getViewport(), args.fullPage), page) catch
+        return ToolError.InternalError;
+
+    if (args.path) |path| {
+        const content_height = writePng(&prepared, path) catch |err| return .{
+            .text = std.fmt.allocPrint(arena, "could not write {s}: {s}", .{ path, @errorName(err) }) catch return ToolError.OutOfMemory,
+            .is_error = true,
+        };
+        // The renderer reports the content height; a fixed strip is its own height.
+        const height = if (prepared.opts.height == 0) content_height else prepared.opts.height;
+        return .{ .text = std.fmt.allocPrint(arena, "Saved {d}x{d} PNG to {s}", .{ prepared.opts.width, height, absolutePath(arena, path) }) catch return ToolError.OutOfMemory };
     }
-    return lp.dump.root(page.document, opts, writer, page) catch |err| switch (err) {
-        error.WriteFailed => error.WriteFailed,
-        else => ToolError.InternalError,
+
+    prepared.fit(inline_image_max_width, inline_image_max_height) catch return ToolError.InternalError;
+    return .{
+        .text = std.fmt.allocPrint(arena, "PNG, {d}x{d}", .{ prepared.opts.width, prepared.opts.height }) catch return ToolError.OutOfMemory,
+        .image = prepared,
     };
 }
 
-fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const args = try parseArgsOrDefault(UrlParams, arena, arguments);
+fn writePng(prepared: *const lp.screenshot.Prepared, path: []const u8) !u32 {
+    const file = try std.Io.Dir.cwd().createFile(lp.io, path, .{ .truncate = true });
+    defer file.close(lp.io);
+    var buf: [8 * 1024]u8 = undefined;
+    var writer = file.writer(lp.io, &buf);
+    const height = try prepared.write(&writer.interface);
+    try writer.interface.flush();
+    return height;
+}
+
+fn execLinks(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct {
+        limit: ?u32 = null,
+        url: ?[:0]const u8 = null,
+        timeout: ?u32 = null,
+    };
+    const args = try parseArgsOrDefault(Params, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
+    var links_list = lp.links.collectLinks(arena, page.document.asNode(), page) catch
         return ToolError.InternalError;
+    if (args.limit) |limit| {
+        links_list = links_list[0..@min(limit, links_list.len)];
+    }
     lp.links.registerNodes(links_list, registry) catch
         return ToolError.InternalError;
     return renderJson(arena, links_list);
 }
 
-fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const TreeParams = struct {
         url: ?[:0]const u8 = null,
         backendNodeId: ?u32 = null,
@@ -1375,8 +1455,8 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     return aw.written();
 }
 
-fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
-    const Params = struct { backendNodeId: CDPNode.Id };
+fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+    const Params = struct { backendNodeId: NodeRegistry.Id };
     const args = try parseArgs(Params, arena, arguments);
 
     const page = try requireFrame(session);
@@ -1388,7 +1468,7 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     return renderJson(arena, &details);
 }
 
-fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
@@ -1399,7 +1479,7 @@ fn execInteractiveElements(arena: std.mem.Allocator, session: *lp.Session, regis
     return renderJson(arena, elements);
 }
 
-fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
@@ -1408,7 +1488,7 @@ fn execStructuredData(arena: std.mem.Allocator, session: *lp.Session, registry: 
     return renderJson(arena, data);
 }
 
-fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const args = try parseArgsOrDefault(UrlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
@@ -1419,7 +1499,7 @@ fn execDetectForms(arena: std.mem.Allocator, session: *lp.Session, registry: *CD
     return renderJson(arena, forms_data);
 }
 
-fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         script: [:0]const u8,
         url: ?[:0]const u8 = null,
@@ -1479,7 +1559,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     }
 
     // Script may have queued a navigation (e.g. `top.location = …`).
-    try awaitQueuedNavigation(session, page._frame_id);
+    try awaitQueuedNavigation(session, page);
     const after = session.currentFrame() orelse return result;
     if (before == null or before.? == after) return result;
 
@@ -1493,7 +1573,7 @@ fn execEvaluate(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNo
     return .{ .text = text };
 }
 
-fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError!ToolResult {
+fn execExtract(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         schema: []const u8,
         save: ?[]const u8 = null,
@@ -1668,9 +1748,9 @@ fn bridgeStorePut(allocator: std.mem.Allocator, store: *BridgeStore, name: []con
 /// Resolve a target element from either a CSS selector or a backendNodeId.
 fn resolveTarget(
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     selector: ?[]const u8,
-    backend_node_id: ?CDPNode.Id,
+    backend_node_id: ?NodeRegistry.Id,
 ) ToolError!NodeAndPage {
     if (selector) |sel| return resolveBySelector(session, sel);
     if (backend_node_id) |nid| return resolveNodeAndPage(session, registry, nid);
@@ -1679,7 +1759,7 @@ fn resolveTarget(
 
 /// Look up an optional DOM node by backendNodeId. Returns null when no id was
 /// supplied, errors when the id doesn't resolve.
-fn resolveOptionalNode(registry: *CDPNode.Registry, backend_node_id: ?CDPNode.Id) ToolError!?*DOMNode {
+fn resolveOptionalNode(registry: *NodeRegistry, backend_node_id: ?NodeRegistry.Id) ToolError!?*DOMNode {
     const id = backend_node_id orelse return null;
     const node = registry.lookup_by_id.get(id) orelse return ToolError.NodeNotFound;
     return node.dom;
@@ -1693,13 +1773,17 @@ fn mapActionError(err: anytype) ToolError {
 
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
-fn awaitQueuedNavigation(session: *lp.Session, frame_id: u32) ToolError!void {
+fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void {
+    // Runner waits are keyed by Page root (a popup lives on its opener's
+    // Page). Read it before processing: a synthetic root navigation frees
+    // the Page in place.
+    const root_frame_id = frame._page.frame._frame_id;
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
         return;
     }
     var runner = session.runner(.{});
-    runner.waitForFrame(frame_id, 10000, .{ .until = .done }) catch |err|
+    runner.waitForFrame(root_frame_id, 10000, .{ .until = .done }) catch |err|
         return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
 }
 
@@ -1712,43 +1796,74 @@ fn formatActionResult(
     return std.fmt.allocPrint(arena, "{s} ({f}){s}", .{ prefix, target, suffix }) catch ToolError.InternalError;
 }
 
+/// What `finalizeAction` compares against; take it before the action runs.
+const ActionScope = struct {
+    frame: ?*lp.Frame,
+    popups: usize,
+};
+
+fn beginAction(session: *lp.Session) ActionScope {
+    const frame = session.currentFrame();
+    return .{ .frame = frame, .popups = if (frame) |f| f._page.popups.items.len else 0 };
+}
+
 /// Finish a state-changing action: drain any queued navigation triggered by
 /// the action, then tag `body` with the resulting page URL and title so the
 /// caller (LLM, MCP client) can see whether the action triggered navigation.
-fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, body: []const u8) ToolError![]const u8 {
-    const before = session.currentFrame();
+fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, scope: ActionScope, body: []const u8) ToolError![]const u8 {
+    const before = scope.frame;
     if (before) |b| {
-        try awaitQueuedNavigation(session, b._frame_id);
+        try awaitQueuedNavigation(session, b);
     }
-    const page = try requireFrame(session);
+    var page = try requireFrame(session);
     // A queued navigation that swaps the root frame tears down the previous
     // Page (`Session.replaceRootImmediate` / `commitPendingPage`), so every
     // DOMNode pointer in the registry now dangles. Drop the registry so the
     // next action can't dereference freed memory.
     if (before != null and before.? != page) registry.reset();
+
+    var note: []const u8 = "";
+    if (page._page.popups.items.len > scope.popups) {
+        // The action opened a new window (target=_blank or window.open).
+        // Follow it, as a user whose click opened a tab would.
+        var runner = session.runner(.{});
+        runner.waitForFrame(page._page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+            return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
+        page = try requireFrame(session);
+        const popups = page._page.popups.items;
+        if (popups.len > scope.popups) {
+            page = popups[popups.len - 1];
+            session.followPopup(page._frame_id);
+            registry.reset();
+            note = " Opened a new window; tools now act on it.";
+        }
+    }
+
     const page_title = page.getTitle() catch null;
-    return std.fmt.allocPrint(arena, "{s}. Page url: {s}, title: {s}", .{
-        body, page.url, page_title orelse "(none)",
+    return std.fmt.allocPrint(arena, "{s}.{s} Page url: {s}, title: {s}", .{
+        body, note, page.url, page_title orelse "(none)",
     }) catch ToolError.InternalError;
 }
 
-fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execClick(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.click(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
     const body = try formatActionResult(arena, "Clicked element", resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
         value: []const u8,
     };
@@ -1757,17 +1872,19 @@ fn execFill(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.R
     const text = try substituteEnvVars(arena, raw_text);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.fill(resolved.node, text, resolved.page) catch |err| return mapActionError(err);
 
     // Show the original reference (e.g. $LP_PASSWORD) in the result, not the resolved value
     const suffix = std.fmt.allocPrint(arena, " with \"{s}\"", .{raw_text}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Filled element", resolved.target, suffix);
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         x: ?i32 = null,
         y: ?i32 = null,
     };
@@ -1795,7 +1912,7 @@ pub fn defaultWaitTimeout(frame: *const lp.Frame) u32 {
     return default_nav_timeout_ms + default_wait_timeout_ms;
 }
 
-fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execWaitForSelector(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         selector: [:0]const u8,
         timeout: ?u32 = null,
@@ -1845,7 +1962,7 @@ fn execWaitForScript(arena: std.mem.Allocator, session: *lp.Session, arguments: 
 
     // script may have queued a navigation (e.g. top.location=…); drain it so
     // the next command reads post-navigation state
-    try awaitQueuedNavigation(session, frame._frame_id);
+    try awaitQueuedNavigation(session, frame);
 
     return "Script returned truthy.";
 }
@@ -1873,25 +1990,27 @@ fn execWaitForState(arena: std.mem.Allocator, session: *lp.Session, arguments: ?
     return std.fmt.allocPrint(arena, "Page reached {s}.", .{@tagName(args.state)}) catch return ToolError.InternalError;
 }
 
-fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execHover(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
     };
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.hover(resolved.node, resolved.page) catch |err| return mapActionError(err);
 
     const body = try formatActionResult(arena, "Hovered element", resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         key: []const u8,
         selector: ?[]const u8 = null,
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
     };
     const args = try parseArgs(Params, arena, arguments);
 
@@ -1906,48 +2025,54 @@ fn execPress(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.
         target_node = try resolveOptionalNode(registry, args.backendNodeId);
     }
 
+    const scope = beginAction(session);
+
     lp.actions.press(target_node, args.key, page) catch |err| return mapActionError(err);
 
     // Pressing Enter on a form input triggers implicit form submission;
     // `finalizeAction` drains the queued navigation before tagging the body.
     const body = std.fmt.allocPrint(arena, "Pressed key '{s}'", .{args.key}) catch return ToolError.InternalError;
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execSelectOption(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
         value: []const u8,
     };
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.selectOption(resolved.node, args.value, resolved.page) catch |err| return mapActionError(err);
 
     const prefix = std.fmt.allocPrint(arena, "Selected option '{s}'", .{args.value}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, prefix, resolved.target, "");
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         selector: ?[]const u8 = null,
         checked: bool = true,
     };
     const args = try parseArgs(Params, arena, arguments);
     const resolved = try resolveTarget(session, registry, args.selector, args.backendNodeId);
 
+    const scope = beginAction(session);
+
     lp.actions.setChecked(resolved.node, args.checked, resolved.page) catch |err| return mapActionError(err);
 
     const state_str: []const u8 = if (args.checked) "checked" else "unchecked";
     const suffix = std.fmt.allocPrint(arena, " to {s}", .{state_str}) catch return ToolError.InternalError;
     const body = try formatActionResult(arena, "Set element", resolved.target, suffix);
-    return finalizeAction(arena, session, registry, body);
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *CDPNode.Registry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct {
         role: ?[]const u8 = null,
         name: ?[]const u8 = null,
@@ -2092,7 +2217,7 @@ fn renderJson(arena: std.mem.Allocator, value: anytype) ToolError![]const u8 {
     return aw.written();
 }
 
-fn ensurePage(session: *lp.Session, registry: *CDPNode.Registry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
+fn ensurePage(session: *lp.Session, registry: *NodeRegistry, url: ?[:0]const u8, timeout: ?u32) ToolError!*lp.Frame {
     if (url) |u| {
         if (session.currentFrame()) |frame| {
             if (std.mem.eql(u8, frame.url, u)) return frame;
@@ -2135,7 +2260,7 @@ fn openPage(session: *lp.Session, url: [:0]const u8) ToolError!lp.Session.PageHa
 pub fn startGoto(
     arena: std.mem.Allocator,
     session: *lp.Session,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     arguments: ?std.json.Value,
     receiver_frame_id: ?u32,
 ) ToolError!StartedGoto {
@@ -2160,7 +2285,7 @@ const PerformGotoOpts = struct {
     wait_until: lp.Config.WaitUntil = default_nav_wait,
 };
 
-fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const u8, opts: PerformGotoOpts) ToolError!lp.Session.Runner.WaitResult {
+fn performGoto(session: *lp.Session, registry: *NodeRegistry, url: [:0]const u8, opts: PerformGotoOpts) ToolError!lp.Session.Runner.WaitResult {
     if (session.primaryPage()) |old_page| {
         registry.reset();
         old_page.close();
@@ -2180,7 +2305,7 @@ fn performGoto(session: *lp.Session, registry: *CDPNode.Registry, url: [:0]const
     return result;
 }
 
-fn resolveNodeAndPage(session: *lp.Session, registry: *CDPNode.Registry, node_id: CDPNode.Id) ToolError!NodeAndPage {
+fn resolveNodeAndPage(session: *lp.Session, registry: *NodeRegistry, node_id: NodeRegistry.Id) ToolError!NodeAndPage {
     const page = try requireFrame(session);
     const node = registry.lookup_by_id.get(node_id) orelse return ToolError.NodeNotFound;
     return .{ .node = node.dom, .page = page, .target = .{ .backend_node_id = node_id } };
@@ -2406,7 +2531,7 @@ test "call: unknown tool name surfaces in-band" {
 
     // Session/registry are never touched on this branch; the name check is
     // the first thing `call` does.
-    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null);
+    const r = try call(arena.allocator(), undefined, undefined, "multi_tool_use.parallel", null, .{});
     try std.testing.expect(r.is_error);
     try std.testing.expectEqualStrings("Unknown tool: multi_tool_use.parallel", r.text);
 }
@@ -2417,27 +2542,27 @@ test "parseValue: zero-filled optional backendNodeId treated as omitted" {
     const aa = arena.allocator();
 
     const Params = struct {
-        backendNodeId: ?CDPNode.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
         maxDepth: ?u32 = null,
     };
     const zeroed = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"backendNodeId":0,"maxDepth":2}
     , .{});
     const args = try parseValue(Params, aa, zeroed);
-    try std.testing.expectEqual(@as(?CDPNode.Id, null), args.backendNodeId);
+    try std.testing.expectEqual(@as(?NodeRegistry.Id, null), args.backendNodeId);
     try std.testing.expectEqual(@as(?u32, 2), args.maxDepth);
 
     const real = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"backendNodeId":7}
     , .{});
-    try std.testing.expectEqual(@as(?CDPNode.Id, 7), (try parseValue(Params, aa, real)).backendNodeId);
+    try std.testing.expectEqual(@as(?NodeRegistry.Id, 7), (try parseValue(Params, aa, real)).backendNodeId);
 
     // Non-optional ids (nodeDetails) pass through untouched.
-    const Required = struct { backendNodeId: CDPNode.Id };
+    const Required = struct { backendNodeId: NodeRegistry.Id };
     const zero_required = try std.json.parseFromSliceLeaky(std.json.Value, aa,
         \\{"backendNodeId":0}
     , .{});
-    try std.testing.expectEqual(@as(CDPNode.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
+    try std.testing.expectEqual(@as(NodeRegistry.Id, 0), (try parseValue(Required, aa, zero_required)).backendNodeId);
 }
 
 test "substituteEnvVars resolves LP_* vars" {

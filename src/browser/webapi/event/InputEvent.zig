@@ -80,11 +80,18 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
 
     Event.populatePrototypes(event, opts, trusted);
 
-    // https://developer.mozilla.org/en-US/docs/Web/API/Element/input_event
-    const rootevt = event._proto._proto;
-    rootevt._bubbles = true;
-    rootevt._cancelable = false;
-    rootevt._composed = true;
+    if (trusted) {
+        // Browser-generated input events bubble and are composed. `beforeinput`
+        // is cancelable — cancelling it vetoes the edit — while `input` is
+        // dispatched after the fact and is not:
+        // https://w3c.github.io/uievents/#event-type-beforeinput
+        // https://w3c.github.io/uievents/#event-type-input
+        // Synthetic ones follow the EventInit dictionary defaults.
+        const rootevt = event._proto._proto;
+        rootevt._bubbles = true;
+        rootevt._cancelable = typ.eqlSlice("beforeinput");
+        rootevt._composed = true;
+    }
 
     // Hold a ref on the DataTransfer (when present) for this event's lifetime;
     // released in deinit. Almost always null for input events, but keeps the
@@ -146,3 +153,8 @@ pub const JsApi = struct {
     pub const inputType = bridge.accessor(InputEvent.getInputType, null, .{});
     pub const isComposing = bridge.accessor(InputEvent.getIsComposing, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: InputEvent" {
+    try testing.htmlRunner("event/input.html", .{});
+}

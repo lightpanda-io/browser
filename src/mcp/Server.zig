@@ -1,15 +1,31 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
-
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const testing = @import("../testing.zig");
+
+const tools = @import("tools.zig");
+const router = @import("router.zig");
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
-const router = @import("router.zig");
-const tools = @import("tools.zig");
 const Transport = @import("Transport.zig");
-const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
 
@@ -18,91 +34,36 @@ const Self = @This();
 /// `Mcp-Session-Id`.
 pub const default_session_id = "default";
 
-/// One isolated browsing context. Each owns its own V8 isolate (via
-/// `Browser`), so two agents driving different sessions never touch the same
-/// page. Heap-allocated and never moved after `init`: `Browser` registers
-/// self-pointers (watchdog, http_client) that must stay stable.
-pub const Session = struct {
-    id: []const u8,
-    browser: lp.Browser,
-    session: *lp.Session,
-    notification: *lp.Notification,
-    node_registry: CDPNode.Registry,
-    /// Owns `heal_target`'s strings; freed on every overwrite.
-    heal_arena: std.heap.ArenaAllocator,
-    /// The cure target `heal_commit` validates against: the finding of the
-    /// last failed/suspicious file `replay`, minus the detail the cure check
-    /// never reads. Server-held so a client cannot widen or retarget it — an
-    /// echoed `threw` would let a fix-by-deletion commit; `heal_commit`'s
-    /// `fields` may only narrow it.
-    heal_target: ?HealTarget = null,
-
-    const HealTarget = struct {
-        path: []const u8,
-        /// `detail` left blank — the cure check never reads it.
-        failure: lp.replay.Failure,
-    };
-
-    fn isDefault(self: *const Session) bool {
-        return std.mem.eql(u8, self.id, default_session_id);
-    }
-
-    /// A file replay speaks for its file: failed or suspicious arms the cure
-    /// target, clean retires it. A `script` trial is neither — don't note it.
-    pub fn noteFileReplay(self: *Session, report: lp.replay.RunReport) error{OutOfMemory}!void {
-        switch (report.status) {
-            .ok => return self.retireHealTarget(report.path),
-            .failed, .suspicious => {},
-        }
-        const failure = report.failure.?;
-        // Drop first: an OOM mid-copy must not leave a target pointing into
-        // the freed arena.
-        self.dropHealTarget();
-        const arena = self.heal_arena.allocator();
-        const dry_fields = try arena.alloc([]const u8, failure.dry_fields.len);
-        for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try arena.dupe(u8, field);
-        self.heal_target = .{
-            .path = try arena.dupe(u8, report.path),
-            .failure = .{ .kind = failure.kind, .dry_fields = dry_fields },
-        };
-    }
-
-    /// Forget `path`'s target — a clean replay or a committed cure. No-op for
-    /// any other path.
-    pub fn retireHealTarget(self: *Session, path: []const u8) void {
-        const target = self.heal_target orelse return;
-        if (std.mem.eql(u8, target.path, path)) self.dropHealTarget();
-    }
-
-    pub fn cureTarget(self: *const Session, path: []const u8) ?lp.replay.Failure {
-        const target = self.heal_target orelse return null;
-        return if (std.mem.eql(u8, target.path, path)) target.failure else null;
-    }
-
-    fn dropHealTarget(self: *Session) void {
-        self.heal_target = null;
-        _ = self.heal_arena.reset(.free_all);
-    }
-};
-
 allocator: std.mem.Allocator,
 app: *App,
 
-sessions: std.StringHashMapUnmanaged(*Session) = .empty,
+sessions: std.StringHashMapUnmanaged(*lp.ToolSession) = .empty,
+/// The cure target `heal_commit` validates against, per session: the finding
+/// of the last failed/suspicious file `replay`, minus the detail the cure
+/// check never reads. Server-held so a client cannot widen or retarget it —
+/// an echoed `threw` would let a fix-by-deletion commit; `heal_commit`'s
+/// `fields` may only narrow it.
+heal_targets: std.AutoHashMapUnmanaged(*lp.ToolSession, HealTarget) = .empty,
 /// Monotonic counter backing auto-generated session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
-/// When several sessions (each its own V8 isolate) share one thread, V8's
-/// "current isolate" is a per-thread stack, so an isolate must be *entered*
-/// around any use of it and left un-entered otherwise. The HTTP transport
-/// sets this; stdio (one isolate, permanently entered by `Env`) leaves it
-/// false and keeps its historical behavior. See `enterIsolate`/`exitIsolate`.
-park_isolates: bool = false,
+/// Whether the transport can route a request to a named session. HTTP does
+/// (`Mcp-Session-Id`); over stdio the session tools are refused, since a
+/// session created there could never be addressed.
+multi_session: bool = false,
 /// The session the request currently being handled targets. Safe as a single
 /// field because every request is dispatched on one thread, one at a time;
 /// the transport sets it (via `useSession`) before each dispatch. Tools and
 /// resources read it rather than threading a session through every call.
-active_session: *Session = undefined,
+active_session: *lp.ToolSession = undefined,
 transport: Transport,
+
+const HealTarget = struct {
+    /// Owns `path` and `failure.dry_fields`.
+    arena: std.heap.ArenaAllocator,
+    path: []const u8,
+    /// `detail` left blank — the cure check never reads it.
+    failure: lp.replay.Failure,
+};
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     const self = try allocator.create(Self);
@@ -120,119 +81,127 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*S
 }
 
 pub fn deinit(self: *Self) void {
-    var it = self.sessions.valueIterator();
-    while (it.next()) |entry| self.destroySession(entry.*);
+    var it = self.sessions.iterator();
+    while (it.next()) |kv| self.destroySession(kv.key_ptr.*, kv.value_ptr.*);
     self.sessions.deinit(self.allocator);
+    self.heal_targets.deinit(self.allocator);
 
     self.transport.deinit();
     self.allocator.destroy(self);
 }
 
 /// Create the session named `id`, or return the existing one. The `id` is
-/// duped, so the caller keeps ownership of its slice.
-pub fn createSession(self: *Self, id: []const u8) !*Session {
+/// duped, so the caller keeps ownership of its slice. Sessions are
+/// heap-allocated and never moved: `Browser` registers self-pointers.
+pub fn createSession(self: *Self, id: []const u8) !*lp.ToolSession {
     if (self.sessions.get(id)) |existing| return existing;
 
     const owned_id = try self.allocator.dupe(u8, id);
     errdefer self.allocator.free(owned_id);
 
-    const entry = try self.allocator.create(Session);
+    const entry = try self.allocator.create(lp.ToolSession);
     errdefer self.allocator.destroy(entry);
 
-    const notification = try lp.Notification.init(self.allocator);
-    errdefer notification.deinit();
-
-    entry.* = .{
-        .id = owned_id,
-        .browser = undefined,
-        .session = undefined,
-        .notification = notification,
-        .node_registry = CDPNode.Registry.init(self.allocator),
-        .heal_arena = .init(self.allocator),
-    };
-    errdefer entry.node_registry.deinit();
-    errdefer entry.heal_arena.deinit();
-
-    try entry.browser.init(self.app, .{}, null);
-    errdefer entry.browser.deinit();
-
-    try self.restartSession(entry);
+    try entry.init(self.app);
+    errdefer entry.deinit();
+    if (isDefault(id)) self.loadCookieFile(entry.session);
 
     try self.sessions.put(self.allocator, owned_id, entry);
-    // Browser.init left the isolate entered; park it (see park_isolates).
-    self.exitIsolate(entry);
+    entry.exitIsolate();
     return entry;
 }
 
 /// Point `entry` at a fresh browsing session — pages, cookies and node ids
-/// dropped. Bring-up for `createSession` and the reset heal validation
-/// requires. Only the default session is backed by the on-disk cookie file:
-/// named sessions stay isolated, and a restart discards the in-memory
-/// failure-state cookies for that clean baseline identity.
-pub fn restartSession(self: *Self, entry: *Session) !void {
-    entry.session = try lp.tools.freshSession(&entry.browser, entry.notification, &entry.node_registry);
-    if (entry.isDefault()) {
-        if (self.app.config.cookieFile()) |cookie_path| {
-            lp.cookies.loadFromFile(entry.session, cookie_path);
-        }
-    }
+/// dropped. Heal validation restarts so failure-state cookies and pages can't
+/// mask a still-broken script; the default session gets its on-disk cookie
+/// file back for that clean baseline identity.
+pub fn restartSession(self: *Self, entry: *lp.ToolSession) !void {
+    try entry.restartSession();
+    entry.registry.reset();
+    if (entry == self.defaultSession()) self.loadCookieFile(entry.session);
 }
 
-/// Switch to the multi-isolate discipline: park the default (which `Server.init`
-/// left entered) and require every use to bracket with `enterIsolate`. The HTTP
-/// transport calls this on its worker thread before serving anyone.
-pub fn enableIsolateParking(self: *Self) void {
-    self.park_isolates = true;
-    self.exitIsolate(self.defaultSession());
+/// Only the default session is backed by the on-disk cookie file; named
+/// sessions start clean so agents stay isolated by default.
+fn loadCookieFile(self: *Self, session: *lp.Session) void {
+    if (self.app.config.cookieFile()) |cookie_path| lp.cookies.loadFromFile(session, cookie_path);
 }
 
-/// Make `entry`'s isolate the current one for this thread. Must bracket any
-/// use of its Browser/Session (dispatch, idle pumping, teardown). No-op under
-/// stdio, where the single isolate is permanently current.
-pub fn enterIsolate(self: *Self, entry: *Session) void {
-    if (self.park_isolates) entry.browser.env.isolate.enter();
-}
-
-pub fn exitIsolate(self: *Self, entry: *Session) void {
-    if (self.park_isolates) entry.browser.env.isolate.exit();
+fn isDefault(id: []const u8) bool {
+    return std.mem.eql(u8, id, default_session_id);
 }
 
 /// Tear down the session named `id`. Returns false if no such session, or if
 /// it is the default (which lives for the whole process).
 pub fn closeSession(self: *Self, id: []const u8) bool {
-    if (std.mem.eql(u8, id, default_session_id)) return false;
-    const entry = self.sessions.fetchRemove(id) orelse return false;
-    if (self.active_session == entry.value) self.active_session = self.defaultSession();
-    self.destroySession(entry.value);
+    if (isDefault(id)) return false;
+    const kv = self.sessions.fetchRemove(id) orelse return false;
+    if (self.active_session == kv.value) self.active_session = self.defaultSession();
+    self.destroySession(kv.key, kv.value);
     return true;
 }
 
-fn destroySession(self: *Self, entry: *Session) void {
-    if (entry.isDefault()) {
+fn destroySession(self: *Self, id: []const u8, entry: *lp.ToolSession) void {
+    if (isDefault(id)) {
         if (self.app.config.cookieJarFile()) |cookie_jar_path| {
             lp.cookies.saveToFile(&entry.session.cookie_jar, cookie_jar_path);
         }
     }
 
-    // Re-enter so `Browser.deinit`'s `Env.deinit` exit stays balanced against
-    // a parked isolate (and operates on the current one).
-    self.enterIsolate(entry);
-    entry.heal_arena.deinit();
-    entry.node_registry.deinit();
-    entry.browser.deinit();
-    entry.notification.deinit();
-    self.allocator.free(entry.id);
+    self.dropHealTarget(entry);
+    entry.enterIsolate();
+    entry.deinit();
+    self.allocator.free(id);
     self.allocator.destroy(entry);
 }
 
+/// A file replay speaks for its file: failed or suspicious arms `entry`'s cure
+/// target, clean retires it. A `script` trial is neither — don't note it.
+pub fn noteFileReplay(self: *Self, entry: *lp.ToolSession, report: lp.replay.RunReport) error{OutOfMemory}!void {
+    switch (report.status) {
+        .ok => return self.retireHealTarget(entry, report.path),
+        .failed, .suspicious => {},
+    }
+    const failure = report.failure.?;
+    self.dropHealTarget(entry);
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    errdefer arena.deinit();
+    const aa = arena.allocator();
+    const dry_fields = try aa.alloc([]const u8, failure.dry_fields.len);
+    for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try aa.dupe(u8, field);
+    const path = try aa.dupe(u8, report.path);
+    try self.heal_targets.put(self.allocator, entry, .{
+        .arena = arena,
+        .path = path,
+        .failure = .{ .kind = failure.kind, .dry_fields = dry_fields },
+    });
+}
+
+/// Forget `path`'s target — a clean replay or a committed cure. No-op for any
+/// other path.
+pub fn retireHealTarget(self: *Self, entry: *lp.ToolSession, path: []const u8) void {
+    const target = self.heal_targets.get(entry) orelse return;
+    if (std.mem.eql(u8, target.path, path)) self.dropHealTarget(entry);
+}
+
+pub fn cureTarget(self: *const Self, entry: *lp.ToolSession, path: []const u8) ?lp.replay.Failure {
+    const target = self.heal_targets.get(entry) orelse return null;
+    return if (std.mem.eql(u8, target.path, path)) target.failure else null;
+}
+
+fn dropHealTarget(self: *Self, entry: *lp.ToolSession) void {
+    var kv = self.heal_targets.fetchRemove(entry) orelse return;
+    kv.value.arena.deinit();
+}
+
 /// The session an un-scoped (stdio, or header-less HTTP) request targets.
-pub fn defaultSession(self: *Self) *Session {
+pub fn defaultSession(self: *Self) *lp.ToolSession {
     return self.sessions.get(default_session_id).?;
 }
 
 /// Point subsequent tool/resource dispatch at the session named `id`, creating
 /// it on first use. A null or empty `id` selects the default.
-pub fn useSession(self: *Self, id: ?[]const u8) !*Session {
+pub fn useSession(self: *Self, id: ?[]const u8) !*lp.ToolSession {
     const wanted = id orelse "";
     self.active_session = if (wanted.len == 0) self.defaultSession() else try self.createSession(wanted);
     return self.active_session;
@@ -255,9 +224,9 @@ pub fn idle(self: *Self) u31 {
     while (it.next()) |entry| {
         // Pumping may resume JS (e.g. a completed script fetch), so it needs
         // the session's isolate current.
-        self.enterIsolate(entry.*);
+        entry.*.enterIsolate();
         wait = @min(wait, entry.*.session.idleSlice());
-        self.exitIsolate(entry.*);
+        entry.*.exitIsolate();
     }
     return wait;
 }
@@ -290,8 +259,8 @@ pub fn handleToolList(self: *Self, arena: std.mem.Allocator, req: protocol.Reque
 pub fn handleToolCall(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
     // Dispatch runs page JS, so enter the target isolate around it.
     const entry = self.active_session;
-    self.enterIsolate(entry);
-    defer self.exitIsolate(entry);
+    entry.enterIsolate();
+    defer entry.exitIsolate();
     return tools.handleCall(self, arena, req);
 }
 
@@ -301,8 +270,8 @@ pub fn handleResourceList(self: *Self, req: protocol.Request) !void {
 
 pub fn handleResourceRead(self: *Self, arena: std.mem.Allocator, req: protocol.Request) !void {
     const entry = self.active_session;
-    self.enterIsolate(entry);
-    defer self.exitIsolate(entry);
+    entry.enterIsolate();
+    defer entry.exitIsolate();
     return resources.handleRead(self, arena, req);
 }
 

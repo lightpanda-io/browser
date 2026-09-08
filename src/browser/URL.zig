@@ -1013,6 +1013,58 @@ test "URL: resolve validates ASCII punycode (xn--) labels" {
     try testing.expectError(error.TypeError, resolve(testing.arena_allocator, "https://example.com/", "https://xn--a.pt/x", .{}));
 }
 
+test "URL: resolve pops drive-letter lookalike segment for non-file schemes (#2794)" {
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        // A "C:" segment is only a Windows drive letter for file: URLs; for any
+        // other scheme ".." must pop it as an ordinary segment.
+        .{
+            .base = "abc://x/y/z/C:/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // Special (but non-file) scheme hits the same path.
+        .{
+            .base = "http://x/y/z/C:/",
+            .path = "..",
+            .expected = "http://x/y/z/",
+        },
+        // The "C|" (pipe) form is affected too.
+        .{
+            .base = "abc://x/y/z/C|/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // Controls: ordinary segments pop regardless of the letter casing.
+        .{
+            .base = "abc://x/y/z/w/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        .{
+            .base = "abc://x/y/z/Ca/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // A drive-letter lookalike WITHOUT a trailing slash pops fine already.
+        .{
+            .base = "abc://x/y/z/C:",
+            .path = "..",
+            .expected = "abc://x/y/",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
 test "URL: resolve with encoding" {
     const Case = struct {
         base: [:0]const u8,

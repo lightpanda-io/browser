@@ -88,6 +88,10 @@ pub const Direction = enum {
     fn reverse(self: Direction) bool {
         return self == .prev or self == .prevunique;
     }
+
+    fn unique(self: Direction) bool {
+        return self == .nextunique or self == .prevunique;
+    }
 };
 
 // What this cursor iterates — used only by the `source` accessor.
@@ -186,7 +190,9 @@ pub fn beforeDeliver(self: *IDBCursor) void {
 pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void {
     try self.assertIterable();
 
-    if (key_arg) |k| {
+    // An explicit `undefined` is an absent optional argument, not a key.
+    if (key_arg != null and !key_arg.?.isUndefined()) {
+        const k = key_arg.?;
         // Key conversion (DataError) must run before the got-value flag is
         // cleared, so a failing continue() leaves the cursor re-iterable.
         const encoded = try Key.encodeValue(self._txn._arena.allocator(), k);
@@ -205,7 +211,7 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
 
 pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: js.Value, exec: *Execution) !void {
     // Only meaningful on an index cursor with a directed (non-unique) direction.
-    if (self._index_id == null or self._direction == .nextunique or self._direction == .prevunique) {
+    if (self._index_id == null or self._direction.unique()) {
         return error.InvalidAccessError;
     }
     try self.assertIterable();
@@ -250,8 +256,13 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
     // Structured-clone the value now, synchronously: an unserializable value must
     // throw DataCloneError from update() itself, not fail later in the drain. The
     // stored clone also decouples the record from any later mutation of the arg.
-    const serialized = value.serialize() catch return error.TryCatchRethrow;
-    defer serialized.deinit();
+    const serialized = blk: {
+        self._txn._cloning = true;
+        defer self._txn._cloning = false;
+        break :blk value.serialize() catch return error.TryCatchRethrow;
+    };
+    const clone = try self._txn.holdClone(serialized);
+    errdefer self._txn.releaseClone(clone);
 
     // For an in-line store, the value's own key must match the record's key.
     if (self._store._key_path) |kp| {
@@ -262,28 +273,22 @@ pub fn update(self: *IDBCursor, value: js.Value, exec: *Execution) !*IDBRequest 
         }
     }
 
-    // Snapshot the record key and the serialized clone onto the transaction arena:
-    // the write runs in the drain, by which point a `continue` could have moved
-    // the cursor's live position (and reused its key buffer).
+    // Snapshot the record key onto the transaction arena: the write runs in the
+    // drain, by which point a `continue` could have moved the cursor's live
+    // position (and reused its key buffer).
     const key = try self._txn._arena.dupe(u8, current_key);
-    const bytes = try self._txn._arena.dupe(u8, serialized.bytes());
     const request = try self._txn.newRequest();
-    return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = bytes } }, exec);
+    return request.submit(.{ .cursor_update = .{ .cursor = self, .key = key, .value = clone } }, exec);
 }
 
-pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, bytes: []const u8, exec: *Execution) !void {
-    const local = exec.js.local.?;
-    const value = js.Value.deserialize(local, bytes) catch |err| {
-        request.setError(err);
-        return;
-    };
-
-    self._store.writeAt(key, value, bytes, exec) catch |err| {
+pub fn runUpdate(self: *IDBCursor, request: *IDBRequest, key: []const u8, clone: usize, exec: *Execution) !void {
+    defer self._txn.releaseClone(clone);
+    self._store.writeAt(key, self._txn.cloneBytes(clone), exec) catch |err| {
         log.warn(.storage, "idb cursor update", .{ .err = err, .sqlite = self._engine.lastError() });
         request.setError(err);
         return;
     };
-    try request.setValue(try Key.decodeToJs(exec.call_arena, local, key));
+    try request.setValue(try Key.decodeToJs(exec.call_arena, exec.js.local.?, key));
 }
 
 pub fn delete(self: *IDBCursor, exec: *Execution) !*IDBRequest {
@@ -331,13 +336,16 @@ fn iterate(self: *IDBCursor, seek: Seek, offset: u32, exec: *Execution) !void {
     const store_id = self._store._store_id;
 
     if (self._index_id) |index_id| {
+        const unique = self._direction.unique();
         const from_key, const from_pk, const pk_inclusive = switch (seek) {
             .first => .{ startSentinel(reverse), startSentinel(reverse), false },
-            .next => .{ self._key.?, self._primary_key.?, false },
+            // A unique direction moves past every record of the current key:
+            // the far sentinel makes the same-key branch of the seek unmatchable.
+            .next => .{ self._key.?, if (unique) startSentinel(!reverse) else self._primary_key.?, false },
             .to => |t| .{ t, startSentinel(reverse), false },
             .to_primary => |tp| .{ tp.key, tp.primary_key, true },
         };
-        const rec = try self._engine.indexCursorSeek(arena, store_id, index_id, self._bounds, reverse, from_key, from_pk, pk_inclusive, !self._key_only, offset);
+        const rec = try self._engine.indexCursorSeek(arena, store_id, index_id, self._bounds, reverse, unique, from_key, from_pk, pk_inclusive, !self._key_only, offset);
         if (rec) |r| try self.position(r.key, r.primary_key, r.value) else self.exhaust();
     } else {
         const from_op, const from_key = switch (seek) {

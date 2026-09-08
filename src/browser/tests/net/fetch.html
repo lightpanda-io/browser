@@ -484,6 +484,27 @@
   }
 </script>
 
+<script id=fetch_redirect_authorization type=module>
+  {
+    // Authorization must not follow a cross-origin redirect. Custom headers
+    // are not stripped by the redirect itself (that is a CORS job).
+    const state = await testing.async();
+    const headers = { Authorization: 'Bearer secret', 'X-Hop': 'keep' };
+    const same = await (await fetch('/redirect_same_echo_headers', { headers })).text();
+    const cross = await (await fetch('/redirect_cross_echo_headers', { headers })).text();
+    state.resolve();
+
+    await state.done(() => {
+      const s = same.toLowerCase();
+      const c = cross.toLowerCase();
+      testing.expectEqual(true, s.includes('authorization: bearer secret'));
+      testing.expectEqual(true, s.includes('x-hop: keep'));
+      testing.expectEqual(false, c.includes('authorization'));
+      testing.expectEqual(true, c.includes('x-hop: keep'));
+    });
+  }
+</script>
+
 <script id=fetch_redirect_referer type=module>
   {
     const state = await testing.async();
@@ -494,6 +515,21 @@
     await state.done(() => {
       testing.expectEqual(`<html><body>referer=${location.href}</body></html>`, same);
       testing.expectEqual('<html><body>referer=http://127.0.0.1:9582/</body></html>', cross);
+    });
+  }
+</script>
+
+<script id=fetch_forbidden_response_header type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/set_cookie');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('yes', response.headers.get('x-visible'));
+      testing.expectEqual(null, response.headers.get('set-cookie'));
+      testing.expectEqual(0, response.headers.getSetCookie().length);
+      testing.expectEqual(false, [...response.headers.keys()].includes('set-cookie'));
     });
   }
 </script>

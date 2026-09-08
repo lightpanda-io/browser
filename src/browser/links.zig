@@ -18,11 +18,11 @@
 
 const std = @import("std");
 
+const AXNode = @import("../server/cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const Frame = @import("Frame.zig");
 const Selector = @import("webapi/selector/Selector.zig");
-const interactive = @import("interactive.zig");
 const log = @import("../lightpanda.zig").log;
 
 const Allocator = std.mem.Allocator;
@@ -57,36 +57,49 @@ pub fn registerNodes(links: []Link, registry: anytype) !void {
     }
 }
 
-/// Collect all links (anchor tags with an href) under `root`.
+/// Collect the visible links (anchor tags with an href) under `root`, one
+/// entry per resolved href. `text` is the accessible name, the same one the
+/// semantic tree reports for the node.
 pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
-    var links: std.ArrayList(Link) = .empty;
+    var links: std.StringArrayHashMapUnmanaged(Link) = .empty;
+    var visibility_cache: Element.VisibilityCache = .empty;
+    var labels: Label.LabelByForIndex = .{};
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
         defer list.deinit(frame._page);
 
         for (list._nodes) |node| {
             const anchor = node.is(Element.Html.Anchor) orelse continue;
+            const el = anchor.asElement();
+            if (!el.checkVisibilityCached(&visibility_cache, frame, .scan)) continue;
+
             const href = anchor.getHref(frame) catch |err| {
                 log.err(.app, "resolve href failed", .{ .err = err });
                 continue;
             };
             if (href.len == 0) continue;
 
-            try links.append(arena, .{
+            const gop = try links.getOrPut(arena, href);
+            if (gop.found_existing) {
+                if (gop.value_ptr.text == null) gop.value_ptr.text = try AXNode.fromNode(node).getName(frame, arena, &labels);
+                continue;
+            }
+            gop.value_ptr.* = .{
                 .node = node,
-                .text = interactive.getTextContent(node, arena) catch null,
+                .text = try AXNode.fromNode(node).getName(frame, arena, &labels),
                 .href = href,
-            });
+            };
         }
     } else |err| {
         log.err(.app, "query links failed", .{ .err = err });
         return err;
     }
 
-    return links.items;
+    return links.values();
 }
 
 const testing = @import("../testing.zig");
+const Label = @import("webapi/element/html/Label.zig");
 
 fn testLinks(html: []const u8) ![]Link {
     const frame = try testing.createFrame();
@@ -121,4 +134,48 @@ test "links: empty text" {
 
     try testing.expectEqual(1, links.len);
     try testing.expectEqual(null, links[0].text);
+}
+
+test "links: text fallbacks for image and icon links" {
+    defer testing.test_session.closeAllPages();
+    const links = try testLinks(
+        \\<a href="/logo"><img src="logo.png" alt="Acme"></a>
+        \\<a href="/discord" aria-label="Discord"><svg></svg></a>
+        \\<a href="/help" title="Help"><svg></svg></a>
+        \\<a href="/both" aria-label="Label"><img alt="Alt"></a>
+    );
+
+    try testing.expectEqual(4, links.len);
+    try testing.expectEqual("Acme", links[0].text.?);
+    try testing.expectEqual("Discord", links[1].text.?);
+    try testing.expectEqual("Help", links[2].text.?);
+    try testing.expectEqual("Label", links[3].text.?);
+}
+
+test "links: one entry per href, keeping the first with text" {
+    defer testing.test_session.closeAllPages();
+    const links = try testLinks(
+        \\<a href="/post/1"><img src="t.png"></a>
+        \\<a href="/post/1">Read the post</a>
+        \\<a href="/post/1">Comments</a>
+        \\<a href="/post/2">Other</a>
+    );
+
+    try testing.expectEqual(2, links.len);
+    try testing.expectEqual("Read the post", links[0].text.?);
+    try testing.expectEqual("/post/1", links[0].href);
+    try testing.expectEqual("Other", links[1].text.?);
+}
+
+test "links: hidden links are skipped" {
+    defer testing.test_session.closeAllPages();
+    const links = try testLinks(
+        \\<a href="/a" style="display:none">Inline</a>
+        \\<a href="/b" hidden>Attribute</a>
+        \\<div style="display:none"><a href="/c">Ancestor</a></div>
+        \\<a href="/d">Visible</a>
+    );
+
+    try testing.expectEqual(1, links.len);
+    try testing.expectEqual("Visible", links[0].text.?);
 }

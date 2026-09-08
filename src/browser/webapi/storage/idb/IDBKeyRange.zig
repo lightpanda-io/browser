@@ -161,13 +161,13 @@ pub const GetAllArgs = struct {
 // IDBGetAllOptions dictionary as the first argument. Per Web IDL, the first
 // argument is the options dictionary when it's an object that is not itself a key
 // or an IDBKeyRange; otherwise it's the query and `count` is the count.
-pub fn resolveGetAll(arena: Allocator, query_or_options: ?js.Value, count: ?u32, exec: *Execution) !GetAllArgs {
+pub fn resolveGetAll(arena: Allocator, query_or_options: ?js.Value, count: ?f64, exec: *Execution) !GetAllArgs {
     if (query_or_options) |v| {
         if (isOptionsDictionary(v, exec)) {
             return resolveOptions(arena, v, exec);
         }
     }
-    return .{ .bounds = try resolveQuery(arena, query_or_options, exec), .count = normalizeCount(count) };
+    return .{ .bounds = try resolveQuery(arena, query_or_options, exec), .count = try normalizeCount(count) };
 }
 
 // getAllRecords always takes an IDBGetAllOptions dictionary (or nothing).
@@ -200,7 +200,7 @@ fn resolveOptions(arena: Allocator, v: js.Value, exec: *Execution) !GetAllArgs {
 
     const count = try obj.get("count");
     if (!count.isNullOrUndefined()) {
-        args.count = normalizeCount(try count.toU32());
+        args.count = try normalizeCount(try count.toF64());
     }
 
     const direction = try obj.get("direction");
@@ -211,9 +211,19 @@ fn resolveOptions(arena: Allocator, v: js.Value, exec: *Execution) !GetAllArgs {
     return args;
 }
 
-fn normalizeCount(count: ?u32) ?u32 {
+// count is [EnforceRange] unsigned long: NaN, the infinities and anything
+// outside [0, 2^32) are a TypeError (fractions truncate). 0 means "no limit".
+fn normalizeCount(count: ?f64) !?u32 {
     const c = count orelse return null;
-    return if (c == 0) null else c;
+    if (!std.math.isFinite(c)) {
+        return error.TypeError;
+    }
+    const truncated = @trunc(c);
+    if (truncated < 0 or truncated > std.math.maxInt(u32)) {
+        return error.TypeError;
+    }
+    const n: u32 = @intFromFloat(truncated);
+    return if (n == 0) null else n;
 }
 
 pub const JsApi = struct {

@@ -26,6 +26,7 @@ const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Select = @import("Select.zig");
 
 const String = lp.String;
 
@@ -79,10 +80,27 @@ pub fn getSelected(self: *const Option) bool {
 }
 
 pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
-    // TODO: When setting selected=true, may need to unselect other options
-    // in the parent <select> if it doesn't have multiple attribute
     self._selected = selected;
+    if (self.ownerSelect()) |select| {
+        if (selected) {
+            if (!select.getMultiple()) {
+                select.deselectOthers(self);
+            }
+        } else {
+            select.resetToDefaultSelection();
+        }
+    }
     frame.domChanged();
+}
+
+/// The <select> this option belongs to, directly or through an <optgroup>.
+fn ownerSelect(self: *Option) ?*Select {
+    var node = self.asNode().parentNode();
+    while (node) |n| : (node = n.parentNode()) {
+        if (n.is(Select)) |select| return select;
+        if (n.is(Element.Html.OptGroup) == null) return null;
+    }
+    return null;
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {
@@ -99,14 +117,11 @@ pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-option-label
-// On getting, return the `label` content attribute if present and non-empty,
-// otherwise the value of the `text` IDL attribute. On setting, reflect to the
-// `label` content attribute.
+// On getting, return the `label` content attribute if present (verbatim, even
+// when empty), otherwise the value of the `text` IDL attribute. On setting,
+// reflect to the `label` content attribute.
 pub fn getLabel(self: *const Option, frame: *Frame) []const u8 {
-    if (self.asConstElement().getAttributeSafe(comptime .wrap("label"))) |label| {
-        if (label.len != 0) return label;
-    }
-    return self.getText(frame);
+    return self.asConstElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
 
 pub fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
@@ -130,7 +145,6 @@ pub const JsApi = struct {
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, Option.setDefaultSelected, .{ .ce_reactions = true });
     pub const disabled = reflect.boolean("disabled");
-    pub const name = reflect.string("name");
 };
 
 pub const Build = struct {

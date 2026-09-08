@@ -54,7 +54,7 @@ pub fn getContent(self: *Template) *DocumentFragment {
 }
 
 pub fn setInnerHTML(self: *Template, html: []const u8, frame: *Frame) !void {
-    return self._content.setInnerHTML(html, frame);
+    return self._content.asNode().setHTML(html, .{ .context = self.asElement() }, frame);
 }
 
 pub fn getShadowRootMode(self: *const Template) []const u8 {

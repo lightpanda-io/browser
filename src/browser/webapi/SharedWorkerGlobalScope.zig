@@ -92,8 +92,8 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
     const proto = self._proto;
     errdefer proto.deinit();
 
-    if (!session.worker_loading_enabled) {
-        log.debug(.browser, "shared worker disabled", .{ .url = owned_url });
+    if (session.load_resources.worker == false) {
+        log.warnDisabledWorker();
         return self;
     }
 
@@ -104,12 +104,10 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
         .ctx = self,
         .method = .GET,
         .url = owned_url,
-        .frame_id = self._frame_id,
-        .loader_id = self._loader_id,
-        .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = owned_url,
-        .notification = session.notification,
+        .resource_type = .worker,
+        .origin = frame.origin,
+        .credentials_mode = .same_origin,
+        .request_mode = .same_origin,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -135,7 +133,7 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
 // Called from Page.deinit of the owning (creating) page.
 pub fn deinit(self: *SharedWorkerGlobalScope) void {
     if (self._http_transfer) |transfer| {
-        transfer.abort(error.Abort);
+        transfer.cancel();
         self._http_transfer = null;
     }
     self.releaseScriptArena();
@@ -252,10 +250,14 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "shared worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // TransferCanceled is teardown cancelling a still-inflight script fetch,
+    // not a load failure.
+    if (err != error.TransferCanceled) {
+        log.err(.browser, "shared worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onconnect will never be registered.
     // Drain the buffered connects so they get dispatched (and dropped at the

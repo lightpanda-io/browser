@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+A ReadableStream body can be built in one realm and handed to another realm's
+fetch/Request (iframe.contentWindow.fetch(url, {body: rs})). Draining it must
+open a scope on the stream's own context, which has no active local scope at
+that point.
+-->
+
+<iframe id=if_body src="support/cross_realm_collection.html"></iframe>
+
+<script id=cross_realm_stream_request_body type=module>
+{
+  const state = await testing.async();
+  const iframe = document.getElementById('if_body');
+  await new Promise((resolve) => {
+    if (iframe.contentDocument.readyState === 'complete') return resolve();
+    iframe.addEventListener('load', resolve);
+  });
+
+  const rs = new ReadableStream({start(c) {
+    c.enqueue('i am the ');
+    c.enqueue(new TextEncoder().encode('request body'));
+    c.close();
+  }});
+
+  const req = new (iframe.contentWindow.Request)('/', {
+    method: 'POST', body: rs, duplex: 'half'});
+  state.resolve(await req.text());
+
+  await state.done((text) => {
+    testing.expectEqual('i am the request body', text);
+  });
+}
+</script>

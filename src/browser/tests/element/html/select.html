@@ -1,18 +1,18 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
 
-<select id="select1">
+<select id="select1" autocomplete="off">
   <option value="val1">Option 1</option>
   <option value="val2" selected>Option 2</option>
   <option value="val3">Option 3</option>
 </select>
 
-<select id="select2">
+<select id="select2" autocomplete="off">
   <option value="a">A</option>
   <option value="b">B</option>
 </select>
 
-<select id="select3" disabled>
+<select id="select3" disabled autocomplete="off">
   <option value="x">X</option>
 </select>
 
@@ -127,7 +127,7 @@
   }
 </script>
 
-<select id="select_multi" multiple>
+<select id="select_multi" multiple autocomplete="off">
   <option value="opt1">Option 1</option>
   <option value="opt2" selected>Option 2</option>
   <option value="opt3">Option 3</option>
@@ -490,4 +490,35 @@
     testing.expectEqual('d1', select.options[0].value)
     testing.expectEqual('d2', select.options[1].value)
   }
+</script>
+
+<select id="single">
+  <option id="s1" value="1" selected>1</option>
+  <option id="s2" value="2">2</option>
+  <optgroup><option id="s3" value="3">3</option></optgroup>
+</select>
+<select id="multi" multiple>
+  <option id="m1" selected>1</option>
+  <option id="m2">2</option>
+</select>
+
+<script id="option_selected_deselects_siblings">
+{
+  $('#s2').selected = true;
+  testing.expectEqual(true, $('#s2').selected);
+  testing.expectEqual(false, $('#s1').selected);
+  testing.expectEqual('2', $('#single').value);
+
+  $('#s3').selected = true;
+  testing.expectEqual(false, $('#s2').selected);
+  testing.expectEqual('3', $('#single').value);
+
+  $('#m2').selected = true;
+  testing.expectEqual(true, $('#m1').selected);
+  testing.expectEqual(true, $('#m2').selected);
+
+  const orphan = document.createElement('option');
+  orphan.selected = true;
+  testing.expectEqual(true, orphan.selected);
+}
 </script>

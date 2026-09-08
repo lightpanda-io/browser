@@ -39,6 +39,9 @@ _callback: js.Function.Global,
 _duration_threshold: f64,
 /// Entry types we're looking for are encoded as bit flags.
 _interests: u16,
+/// Fixed by the first observe(): a `type` observer can't later observe
+/// `entryTypes`, nor the reverse.
+_mode: enum { unset, single, multiple } = .unset,
 /// Entries this observer hold.
 /// Don't mutate these; other observers may hold pointers to them.
 _entries: std.ArrayList(*Performance.Entry),
@@ -73,8 +76,7 @@ const ObserveOptions = struct {
     type: ?[]const u8 = null,
 };
 
-/// TODO: Support `buffered` option.
-pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec: *const Execution) !void {
+pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions) !void {
     const options: ObserveOptions = maybe_options orelse .{};
     // Update threshold.
     self._duration_threshold = @max(@floor(options.durationThreshold / 8) * 8, 16);
@@ -86,11 +88,21 @@ pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec:
             if (options.entryTypes != null) {
                 return error.TypeError;
             }
-
+            if (self._mode == .multiple) {
+                return error.InvalidModification;
+            }
+            self._mode = .single;
             break :blk &.{entry_type};
         }
 
         if (options.entryTypes) |entry_types| {
+            // The spec wants a TypeError when `buffered` (or
+            // `durationThreshold`) is used with entryTypes. But neither firefox
+            // nor Chrome throw (Chrome does log an warning). They ignore it.
+            if (self._mode == .single) {
+                return error.InvalidModification;
+            }
+            self._mode = .multiple;
             break :blk entry_types;
         }
 
@@ -117,23 +129,24 @@ pub fn observe(self: *PerformanceObserver, maybe_options: ?ObserveOptions, exec:
     // If we had no interests before, it means the Performance is not aware
     // of this observer.
     if (self._interests == 0) {
-        try self._performance.registerObserver(self, exec);
+        try self._performance.registerObserver(self);
     }
 
     // Update interests.
     self._interests = interests;
 
-    // Deliver existing entries if buffered option is set.
-    // Per spec, buffered is only valid with the type option, not entryTypes.
-    // Delivery is async via a queued task, not synchronous.
+    // Deliver existing entries if buffered option is set (only honoured
+    // with `type`, see above). Delivery is async via a queued task.
     if (options.buffered and options.type != null and !self.hasRecords()) {
-        for (self._performance._entries.items) |entry| {
-            if (self.interested(entry)) {
-                try self._entries.append(self._arena, entry);
+        for ([_][]const *Performance.Entry{ self._performance._entries.items, self._performance._resources.items }) |list| {
+            for (list) |entry| {
+                if (self.interested(entry)) {
+                    try self._entries.append(self._arena, entry);
+                }
             }
         }
         if (self.hasRecords()) {
-            try self._performance.scheduleDelivery(exec);
+            try self._performance.scheduleDelivery();
         }
     }
 }
@@ -157,7 +170,7 @@ pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
 }
 
 pub fn getSupportedEntryTypes() []const []const u8 {
-    return &.{ "mark", "measure" };
+    return &.{ "mark", "measure", "resource" };
 }
 
 /// Returns true if observer interested with given entry.
@@ -165,7 +178,11 @@ pub fn interested(
     self: *const PerformanceObserver,
     entry: *const Performance.Entry,
 ) bool {
-    const flag = @as(u16, 1) << @intCast(@intFromEnum(entry._type));
+    return self.interestedIn(entry._type);
+}
+
+pub fn interestedIn(self: *const PerformanceObserver, kind: Performance.Entry.Type.Enum) bool {
+    const flag = @as(u16, 1) << @intCast(@intFromEnum(kind));
     return self._interests & flag != 0;
 }
 
@@ -216,11 +233,13 @@ pub const EntryList = struct {
     }
 
     pub fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByType(exec.local_arena, self._entries, entry_type);
+        const kind = Performance.Entry.Type.Enum.parse(entry_type) orelse return &.{};
+        return Performance.filterEntriesByType(exec.local_arena, self._entries, kind);
     }
 
     pub fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
-        return Performance.filterEntriesByName(exec.local_arena, self._entries, name, entry_type);
+        const kind = if (entry_type) |t| (Performance.Entry.Type.Enum.parse(t) orelse return &.{}) else null;
+        return Performance.filterEntriesByName(exec.local_arena, self._entries, name, kind);
     }
 
     pub const JsApi = struct {

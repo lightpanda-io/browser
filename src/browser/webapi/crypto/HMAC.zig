@@ -40,7 +40,7 @@ pub fn init(
     // The union probe match to get here is pretty simple, so we can end up here
     // for an unknown/invalid algo.
     if (!std.ascii.eqlIgnoreCase(params.name, "HMAC")) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     }
     const hash_name = switch (params.hash) {
         .string => |str| str,
@@ -48,9 +48,7 @@ pub fn init(
     };
     // Per spec, an unrecognized hash is caught during algorithm normalization
     // and surfaces as NotSupportedError.
-    const digest = crypto.findDigest(hash_name) catch return local.rejectPromise(.{
-        .dom_exception = .{ .err = error.NotSupported },
-    });
+    const digest = crypto.findDigest(hash_name) catch return error.NotSupported;
 
     // HMAC only accepts sign / verify; any other usage is a SyntaxError per
     // the spec, even when the entry exists elsewhere in CryptoKey.Usages.
@@ -61,15 +59,11 @@ pub fn init(
         } else if (std.mem.eql(u8, usage, "verify")) {
             mask |= CryptoKey.Usages.verify;
         } else {
-            return local.rejectPromise(.{
-                .dom_exception = .{ .err = error.SyntaxError },
-            });
+            return error.SyntaxError;
         }
     }
     if (key_usages.len == 0) {
-        return local.rejectPromise(.{
-            .dom_exception = .{ .err = error.SyntaxError },
-        });
+        return error.SyntaxError;
     }
 
     const block_size: usize = blk: {
@@ -115,16 +109,12 @@ pub fn import(
 ) !js.Promise {
     const local = exec.js.local.?;
 
-    const digest = crypto.findDigest(hash_name) catch return local.rejectPromise(.{
-        .dom_exception = .{ .err = error.NotSupported },
-    });
+    const digest = crypto.findDigest(hash_name) catch return error.NotSupported;
 
-    const mask = common.usageMask(&.{ "sign", "verify" }, key_usages) catch |err| {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
+    const mask = try common.usageMask(&.{ "sign", "verify" }, key_usages);
 
     if (raw.len == 0) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+        return error.DataError;
     }
 
     const crypto_key = try CryptoKey.init(exec, .{

@@ -82,6 +82,11 @@ pub fn getComplete(self: *const Image) bool {
     return self._complete;
 }
 
+/// Nothing is decoded here, so the image is always ready to insert.
+pub fn decode(_: *const Image, frame: *Frame) !js.Promise {
+    return frame.js.local.?.resolvePromise(js.Undefined{});
+}
+
 /// The one funnel for "this element's src became current": parser-created
 /// images, `img.src = ...` and `setAttribute`/`removeAttribute("src")` all
 /// land here.
@@ -147,6 +152,7 @@ pub const JsApi = struct {
     pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
     pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
     pub const complete = bridge.accessor(Image.getComplete, null, .{});
+    pub const decode = bridge.function(Image.decode, .{});
 };
 
 pub const Build = struct {

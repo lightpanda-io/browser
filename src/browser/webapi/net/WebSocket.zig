@@ -259,7 +259,7 @@ fn connect(self: *WebSocket, protocols: [][]const u8) !void {
         try exec.session.cookie_jar.forRequest(resolved_url, &buf.writer, .{
             .is_http = true,
             .is_navigation = false,
-            .origin_url = exec.url.*,
+            .origin_url = exec.siteForCookies(),
         });
         if (buf.written().len > 0) {
             try buf.writer.writeByte(0);
@@ -522,7 +522,12 @@ fn queueMessage(self: *WebSocket, msg: Message) !void {
     if (was_empty) {
         // Unpause the send callback so libcurl will request data
         if (self._conn) |conn| {
-            try conn.pause(.{ .cont = true });
+            conn.pause(.{ .cont = true }) catch |err| {
+                // our caller is doing `errdefer errdefer arena.release();` which
+                // will free msg. So we have to pop it out.
+                _ = self._send_queue.pop();
+                return err;
+            };
         }
     }
 }
@@ -1053,4 +1058,33 @@ test "WebApi: WebSocket" {
 
 test "WebApi: WebSocket in worker" {
     try testing.htmlRunner("net/websocket_worker.html", .{});
+}
+
+// Production crash (release overflow on unrelated pooled objects): send()
+// released the message arena on a failed unpause while the message stayed in
+// _send_queue, which released it again later — a pooled-arena double release.
+test "WebApi: WebSocket send owns its message arena once when the unpause fails" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var protocols: [0][]const u8 = .{};
+    const ws = try WebSocket.init("ws://127.0.0.1:9582/ws", &protocols, &frame.js.execution);
+    try testing.expect(ws._conn != null);
+
+    // connect() tracked the easy handle but no tick has performed it, so
+    // libcurl has no connection behind it and curl_easy_pause fails: the
+    // same state as a send() on a socket the peer already closed, before
+    // the close has been dispatched.
+    ws._ready_state = .open;
+
+    const message = try ls.local.exec("'hello'", null);
+    try testing.expectError(error.BadFunctionArgument, ws.send(.{ .js_val = message }));
+
+    // The queued message owns the arena. A failed send must not leave it
+    // queued with its arena already released.
+    try testing.expectEqual(0, ws._send_queue.items.len);
 }

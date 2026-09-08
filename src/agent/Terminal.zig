@@ -241,9 +241,16 @@ fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }
     w.flush() catch {};
 }
 
-pub fn printAssistant(self: *Terminal, text: []const u8) void {
+/// Styled on a REPL tty, verbatim otherwise.
+pub fn printMarkdown(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     if (self.styledOutput()) return self.renderStyled(text, .full);
+    self.printPlain(text);
+}
+
+pub fn printPlain(self: *Terminal, text: []const u8) void {
+    _ = self;
+    if (text.len == 0) return;
     _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
     _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
 }

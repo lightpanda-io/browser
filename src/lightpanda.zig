@@ -24,24 +24,28 @@ pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const Network = @import("network/Network.zig");
-pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const String = @import("string.zig").String;
 pub const Notification = @import("Notification.zig");
+pub const Server = @import("server/Server.zig");
 
 pub const URL = @import("browser/URL.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
+pub const ToolSession = @import("ToolSession.zig");
 
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const screenshot = @import("browser/screenshot.zig");
+pub const pdf = @import("browser/pdf.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
+const Selector = @import("browser/webapi/selector/Selector.zig");
+const Node = @import("browser/webapi/Node.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
-pub const CDPNode = @import("cdp/Node.zig");
+pub const NodeRegistry = @import("NodeRegistry.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const links = @import("browser/links.zig");
 pub const forms = @import("browser/forms.zig");
@@ -190,6 +194,10 @@ pub const FetchOpts = struct {
     wait_selector: ?[:0]const u8 = null,
     dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
+    /// Dump only the first match instead of the document.
+    selector: ?[:0]const u8 = null,
+    /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
+    fail_on_http_error: bool = false,
     writer: ?*std.Io.Writer = null,
     json: bool = false,
 };
@@ -205,15 +213,13 @@ fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
 }
 /// Loads each url in `urls` in a fresh session and waits per `opts`.
 ///
-/// Errors:
-///   - `error.Timeout` if the deadline expires while a `wait_selector` or
-///     `wait_script` is still unmet. The `wait_until` phase never raises it:
-///     when the budget runs out the page is dumped as-is.
-///   - `error.Cancelled` if the embedder installed a `Session.cancel_hook`
-///     that returned true during the wait. The hook is opt-in via
-///     `session.cancel_hook = .{...}`; without it, this error never fires.
-///   - Other errors from navigation / parsing / I/O surface as their
-///     underlying tag.
+/// A page's navigation, wait or dump failure is recorded for that page and
+/// does not stop the others: every page is still written (JSON carries the
+/// failure under `error`), then the first failure is returned. Wait failures
+/// are `error.Timeout` when the deadline expires while a `wait_selector` or
+/// `wait_script` is still unmet (the `wait_until` phase never raises it: when
+/// the budget runs out the page is dumped as-is), or `error.Cancelled` if the
+/// embedder's opt-in `Session.cancel_hook` returned true.
 pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: FetchOpts) !void {
     const notification = try Notification.init(app.allocator);
     defer notification.deinit();
@@ -301,32 +307,83 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         try runner.waitForAll(opts.wait_ms, .{ .until = wu });
     }
 
+    // One slot per page; the first failure sticks.
+    const errors = try session.arena.allocator().alloc(?anyerror, pages.items.len);
+    @memset(errors, null);
+
     if (opts.wait_selector) |selector| {
-        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
-        const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) {
-            return error.Timeout;
-        }
-        for (session.pages.items) |p| {
-            if (p.replacement == null) {
-                _ = try runner.waitForSelector(p.frame._frame_id, selector, remaining);
-            }
+        for (pages.items, errors) |page, *err| {
+            if (err.* != null) continue;
+            const frame = page.frame() orelse {
+                err.* = error.FrameClosed;
+                continue;
+            };
+            const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+            _ = runner.waitForSelector(frame._frame_id, selector, remaining) catch |e| {
+                err.* = e;
+            };
         }
     }
 
     if (opts.wait_script) |wait_script| {
-        const elapsed: u32 = @intCast(timer.untilNow(io, .boot).toMilliseconds());
-        const remaining = opts.wait_ms -| elapsed;
-        if (remaining == 0) {
-            return error.Timeout;
+        for (pages.items, errors) |page, *err| {
+            if (err.* != null) continue;
+            const frame = page.frame() orelse {
+                err.* = error.FrameClosed;
+                continue;
+            };
+            const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+            runner.waitForScript(frame._frame_id, wait_script, remaining) catch |e| {
+                err.* = e;
+            };
         }
-        for (session.pages.items) |p| {
-            if (p.replacement == null) {
-                try runner.waitForScript(p.frame._frame_id, wait_script, remaining);
+    }
+
+    var http_error = false;
+    for (pages.items, errors) |page, *err| {
+        const frame = page.frame() orelse {
+            if (err.* == null) {
+                err.* = error.FrameClosed;
+            }
+            continue;
+        };
+        if (err.* == null) {
+            err.* = frame._last_navigate_error;
+        }
+        if (frame._http_status) |status| {
+            if (status >= 400) {
+                http_error = true;
             }
         }
     }
 
+    try writeResults(app, opts, pages.items, errors);
+
+    var failed = false;
+    for (urls, pages.items, errors) |url, page, err| {
+        if (err) |e| {
+            failed = true;
+            log.err(.app, "page failed", .{ .url = url, .err = e });
+            continue;
+        }
+        if (!opts.fail_on_http_error) {
+            continue;
+        }
+        const frame = page.frame() orelse continue;
+        const status = frame._http_status orelse continue;
+        if (status >= 400) {
+            log.err(.app, "page http error", .{ .url = url, .status = status });
+        }
+    }
+    if (failed) {
+        return error.PageFailed;
+    }
+    if (opts.fail_on_http_error and http_error) {
+        return error.HttpError;
+    }
+}
+
+fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, errors: []?anyerror) !void {
     const writer = opts.writer orelse return;
 
     if (opts.json) {
@@ -335,24 +392,28 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         // top-level array is hard to evolve (consumers index it directly),
         // whereas an object lets us add sibling fields later without breaking
         // anyone reading `results`.
-        const wrap = pages.items.len > 1;
+        const wrap = pages.len > 1;
         if (wrap) {
             try writer.writeAll("{\"results\":[");
         }
-        for (pages.items, 0..) |page, i| {
+        for (pages, errors, 0..) |page, *err, i| {
             if (i != 0) {
                 try writer.writeByte(',');
             }
 
             const frame = page.frame();
-            if (opts.dump_mode == .png and frame != null) {
+            if ((opts.dump_mode == .png or opts.dump_mode == .pdf) and frame != null) {
+                // Binary formats stream themselves into the envelope as
+                // base64; nothing is buffered here.
                 const arena = try app.arena_pool.acquire(.large, "screenshot.dump");
                 defer arena.release();
 
-                const shot = try screenshot.prepare(arena.allocator(), frame.?.window._document.asNode(), .{
-                    .width = frame.?._page.getViewport().width,
-                }, frame.?);
-                try writeJsonEnvelope(writer, frame, opts.dump_mode, shot);
+                if (prepareBinary(arena.allocator(), frame.?, opts)) |prepared| {
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, prepared, err.*);
+                } else |e| {
+                    if (err.* == null) err.* = e;
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, "", err.*);
+                }
                 continue;
             }
 
@@ -360,9 +421,12 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
             defer aw.deinit();
 
             if (opts.dump_mode) |mode| {
-                if (frame) |f| try dumpContent(app, mode, opts.dump, f, &aw.writer);
+                if (frame) |f| dumpContent(app, mode, opts, f, &aw.writer) catch |e| {
+                    aw.clearRetainingCapacity();
+                    if (err.* == null) err.* = e;
+                };
             }
-            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written());
+            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written(), err.*);
         }
         if (wrap) {
             try writer.writeAll("]}");
@@ -370,35 +434,71 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         try writer.writeByte('\n');
     } else {
         // main validates that non-JSON dump is only reached with a single url.
-        const page = pages.items[0];
+        const page = pages[0];
         if (opts.dump_mode) |mode| blk: {
             const frame = page.frame() orelse {
                 try writer.writeAll("Frame closed. Please open a bug report including the URL\n");
                 break :blk;
             };
-            try dumpContent(app, mode, opts.dump, frame, writer);
+            try dumpContent(app, mode, opts, frame, writer);
         }
     }
     try writer.flush();
 }
 
-fn dumpContent(app: *App, mode: Config.DumpFormat, dump_opts: dump.Opts, frame: *Frame, writer: *std.Io.Writer) !void {
+// A dump that can only fail before any output starts; it then streams into
+// the JSON envelope as base64.
+const Binary = union(enum) {
+    png: screenshot.Prepared,
+    pdf: pdf.Prepared,
+
+    pub fn jsonStringify(self: *const Binary, jws: *std.json.Stringify) std.Io.Writer.Error!void {
+        switch (self.*) {
+            inline else => |*prepared| try prepared.jsonStringify(jws),
+        }
+    }
+};
+
+fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
+    const root = try dumpRoot(frame, opts.selector);
+    return switch (opts.dump_mode.?) {
+        .png => .{ .png = try screenshot.preparePng(arena, root, .fromViewport(frame._page.getViewport(), true), frame) },
+        .pdf => .{ .pdf = try pdf.prepare(arena, root, .{}, frame) },
+        else => unreachable,
+    };
+}
+
+fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
+    const document = frame.window._document.asNode();
+    const sel = selector orelse return document;
+    const element = try Selector.querySelector(document, sel, frame);
+    return (element orelse return error.SelectorNotFound).asNode();
+}
+
+fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
+    const root = try dumpRoot(frame, opts.selector);
     switch (mode) {
-        .html => try dump.root(frame.window._document, dump_opts, writer, frame),
-        .markdown => try markdown.dump(frame.window._document.asNode(), .{}, writer, frame),
+        .html => if (opts.selector == null)
+            try dump.root(frame.window._document, opts.dump, writer, frame)
+        else
+            try dump.deep(root, opts.dump, writer, frame),
+        .markdown => try markdown.dump(root, .{ .max_bytes = opts.dump.max_bytes, .strip = opts.dump.strip }, writer, frame),
         .png => {
             var arena: std.heap.ArenaAllocator = .init(app.allocator);
             defer arena.deinit();
-            _ = try screenshot.png(arena.allocator(), frame.window._document.asNode(), .{
-                .width = frame._page.getViewport().width,
-            }, writer, frame);
+            _ = try screenshot.png(arena.allocator(), root, .fromViewport(frame._page.getViewport(), true), writer, frame);
+        },
+        .pdf => {
+            var arena: std.heap.ArenaAllocator = .init(app.allocator);
+            defer arena.deinit();
+            try pdf.print(arena.allocator(), root, .{}, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
-            var registry = CDPNode.Registry.init(app.allocator);
+            var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
             const st: SemanticTree = .{
-                .dom_node = frame.window._document.asNode(),
+                .dom_node = root,
                 .registry = &registry,
                 .frame = frame,
                 .arena = frame.call_arena,
@@ -424,7 +524,7 @@ pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
 
 // Writes a single page's result object. Framing (the enclosing array and any
 // separators / trailing newline) is the caller's responsibility.
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype) !void {
+fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype, err: ?anyerror) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
     try std.json.Stringify.value(.{
         .url = if (meta) |m| m.url else "",
@@ -432,6 +532,7 @@ fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.
         .headers = if (meta) |m| m.headers else &.{},
         .dump = if (dump_mode) |mode| @tagName(mode) else "",
         .content = content,
+        .@"error" = if (err) |e| @errorName(e) else null,
     }, .{}, writer);
 }
 
@@ -554,12 +655,25 @@ test "writeJsonEnvelope: null frame" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, null, "");
+    try writeJsonEnvelope(&aw.writer, null, null, "", null);
     try testing.expectJson(.{
         .url = "",
         .http_status = 0,
         .dump = "",
         .content = "",
+    }, aw.written());
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "\"error\":null") != null);
+}
+
+test "writeJsonEnvelope: page error" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try writeJsonEnvelope(&aw.writer, null, .markdown, "", error.Timeout);
+    try testing.expectJson(.{
+        .dump = "markdown",
+        .content = "",
+        .@"error" = "Timeout",
     }, aw.written());
 }
 
@@ -567,7 +681,7 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>");
+    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>", null);
     try testing.expectJson(.{
         .dump = "html",
         .content = "<html><body>hello</body></html>",

@@ -27,7 +27,7 @@ const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
 const Blob = @import("webapi/Blob.zig");
-const WebDriver = @import("webapi/WebDriver.zig");
+const Element = @import("webapi/Element.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
 
 const Allocator = std.mem.Allocator;
@@ -112,7 +112,10 @@ queued_queued_navigation: std.ArrayList(*Frame) = .empty,
 // The root Frame of this Page. Non-optional — a Page always has a root frame.
 frame: Frame,
 
-input_modifiers: if (lp.build_config.wpt_extensions) WebDriver.Modifiers else struct {} = .{},
+input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.zig").Modifiers else struct {} = .{},
+
+// The element the synthetic pointer is currently over
+input_hover_target: ?*Element = null,
 
 // Popup Frames opened by window.open. They are top-level browsing contexts
 // (parent == null, no iframe element) but share this Page's factory, arena,
@@ -154,6 +157,14 @@ destroying: bool = false,
 // every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
     return self.session.browser.getViewport();
+}
+
+pub fn viewportChanged(self: *Page) void {
+    self.frame.viewportChanged();
+    var i: usize = 0;
+    while (i < self.popups.items.len) : (i += 1) {
+        self.popups.items[i].viewportChanged();
+    }
 }
 
 // Initialize a Page and its root Frame.

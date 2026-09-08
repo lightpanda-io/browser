@@ -532,3 +532,61 @@
     testing.expectEqual(false, input_checked.checked);
   }
 </script>
+
+<script id="value_setter_moves_caret">
+  {
+    // Setting `value` moves the text entry cursor to the end of the new value,
+    // unselects any selected text and resets the selection direction.
+    // https://html.spec.whatwg.org/#dom-input-value
+    const input = document.createElement('input');
+    input.type = 'text';
+    document.body.appendChild(input);
+
+    input.value = 'abc';
+    testing.expectEqual(3, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+
+    input.setSelectionRange(1, 2, 'backward');
+    input.value = 'hello';
+    testing.expectEqual(5, input.selectionStart);
+    testing.expectEqual(5, input.selectionEnd);
+    testing.expectEqual('none', input.selectionDirection);
+
+    // The caret follows the _sanitized_ value: a text input strips CR/LF.
+    input.value = 'a\nb';
+    testing.expectEqual(2, input.selectionStart);
+    testing.expectEqual(2, input.selectionEnd);
+
+    // Re-assigning the same value leaves the selection alone
+    // (WPT textfieldselection/selection-after-content-change.html).
+    input.value = 'hello';
+    input.setSelectionRange(1, 3, 'backward');
+    input.value = 'hello';
+    testing.expectEqual(1, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+    testing.expectEqual('backward', input.selectionDirection);
+
+    // ...including when the new value only differs before sanitization.
+    input.value = 'hel\nlo';
+    testing.expectEqual(1, input.selectionStart);
+    testing.expectEqual(3, input.selectionEnd);
+
+    // Assigning a value equal to the default is not a change for the caret,
+    // but it still sets the dirty flag: later attribute edits stay hidden.
+    const dflt = document.createElement('input');
+    dflt.type = 'text';
+    dflt.defaultValue = 'foo';
+    dflt.value = 'foo';
+    testing.expectEqual(0, dflt.selectionStart);
+    testing.expectEqual(0, dflt.selectionEnd);
+    dflt.defaultValue = 'bar';
+    testing.expectEqual('foo', dflt.value);
+
+    // Types with no text entry cursor keep reporting null rather than a number.
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.value = 'on';
+    testing.expectEqual(null, check.selectionStart);
+    testing.expectEqual(null, check.selectionEnd);
+  }
+</script>

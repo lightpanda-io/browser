@@ -592,3 +592,181 @@
     });
   }
 </script>
+
+<!--
+Production crash (release overflow on unrelated pooled objects): a re-send from
+inside onerror stored a new transfer that httpErrorCallback then cleared once
+the handler returned. The re-send was orphaned, so the later abort() found an
+empty slot and never cancelled it, and the request ran on into a freed XHR.
+Observable here without the crash: the orphaned re-send is never aborted, so it
+delivers its response (onload) despite abort(). With the slot cleared before the
+handler runs, abort() cancels the re-send and no load is delivered.
+-->
+<script id=xhr_resend_in_onerror_then_abort type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let loadFired = false;
+    let abortFired = false;
+    let resent = false;
+
+    req.onload = () => { loadFired = true; };
+    req.onabort = () => { abortFired = true; };
+    req.onerror = () => {
+      if (resent) {
+        return;
+      }
+      resent = true;
+      // Retry inside the error handler, like a reconnecting client. The slow
+      // target keeps the retry in flight until the abort below.
+      req.open('GET', 'http://127.0.0.1:9582/xhr/slow');
+      req.send();
+      // After the handler has returned to httpErrorCallback.
+      setTimeout(() => {
+        req.abort();
+        // Long enough for the aborted-but-orphaned re-send to have delivered
+        // /xhr/slow (100ms) if abort() failed to cancel it.
+        setTimeout(() => state.resolve(), 250);
+      }, 0);
+    };
+
+    // Nothing listens on port 1: a network error, not an HTTP one.
+    req.open('GET', 'http://127.0.0.1:1/');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(true, abortFired);
+      // The aborted re-send must never deliver its response.
+      testing.expectEqual(false, loadFired);
+      testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+    });
+  }
+</script>
+
+<script id=xhr_blob type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/binary');
+    req.responseType = 'blob';
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('blob', req.responseType);
+      testing.expectEqual(true, req.response instanceof Blob);
+      testing.expectEqual(7, req.response.size);
+      // Per spec the blob response entity body is cached: the same object comes
+      // back on every access.
+      testing.expectEqual(req.response, req.response);
+      testing.expectEqual('application/octet-stream', req.response.type);
+    });
+
+    testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int8Array(await req.response.arrayBuffer()));
+  }
+</script>
+
+<script id=xhr_blob_type type=module>
+  {
+    // The blob's type is the final MIME type with its parameters, not the
+    // essence Mime.zig keeps. The spec re-serializes it ("text/html;charset=utf-8");
+    // we report the header text as-is, lowercased by Blob.
+    const state = await testing.async();
+
+    const blobType = (path, override) => new Promise((resolve) => {
+      const req = new XMLHttpRequest();
+      req.onload = () => { resolve(req.response.type) };
+      req.open('GET', 'http://127.0.0.1:9582' + path);
+      req.responseType = 'blob';
+      if (override !== undefined) {
+        req.overrideMimeType(override);
+      }
+      req.send();
+    });
+
+    let types;
+    Promise.all([
+      blobType('/xhr'),
+      blobType('/xhr/no_content_type'),
+      blobType('/xhr', 'text/plain;charset=iso-8859-1'),
+      blobType('/xhr', 'nonsense'),
+    ]).then((t) => { types = t; state.resolve() });
+
+    await state.done(() => {
+      testing.expectEqual('text/html; charset=utf-8', types[0]);
+      // Absent a Content-Type, "get a response MIME type" yields text/xml.
+      testing.expectEqual('text/xml', types[1]);
+      // overrideMimeType() wins over the response's own Content-Type.
+      testing.expectEqual('text/plain;charset=iso-8859-1', types[2]);
+      // An unparseable override is application/octet-stream.
+      testing.expectEqual('application/octet-stream', types[3]);
+    });
+  }
+</script>
+
+<script id=xhr_blob_reopen type=module>
+  {
+    // open() discards the cached response, dropping the XHR's reference to the
+    // blob. A blob the script is still holding has to survive that: the cache
+    // and the JS wrapper each own a reference. Release without a matching
+    // acquire (or a double release) frees the arena out from under `first`.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/binary');
+    req.responseType = 'blob';
+    req.send();
+    await state.done(() => testing.expectEqual(200, req.status));
+
+    const first = req.response;
+
+    const state2 = await testing.async();
+    req.onload = () => { state2.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/binary');
+    req.send();
+    await state2.done(() => {
+      testing.expectEqual(true, req.response instanceof Blob);
+      // the second request parses a fresh blob, not the discarded one
+      testing.expectEqual(false, req.response === first);
+    });
+
+    testing.expectEqual(7, first.size);
+    testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int8Array(await first.arrayBuffer()));
+  }
+</script>
+
+<script id=xhr_json_reopen type=module>
+  {
+    // open() releases the persisted handle on the cached json response. That
+    // handle is one v8 root, not ownership of the value, so a script holding
+    // the parsed object must still be able to read it afterwards.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve() };
+    req.open('GET', 'http://127.0.0.1:9582/xhr/json');
+    req.responseType = 'json';
+    req.send();
+    await state.done(() => testing.expectEqual('9000!!!', req.response.over));
+
+    const first = req.response;
+    req.open('GET', 'http://127.0.0.1:9582/xhr/json');
+    testing.expectEqual('9000!!!', first.over);
+  }
+</script>
+
+<script id=xhr_forbidden_response_header type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = (event) => state.resolve(event);
+    req.open('GET', 'http://127.0.0.1:9582/set_cookie');
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual('yes', req.getResponseHeader('X-Visible'));
+      testing.expectEqual(null, req.getResponseHeader('Set-Cookie'));
+      testing.expectEqual(false, req.getAllResponseHeaders().toLowerCase().includes('set-cookie'));
+    });
+  }
+</script>

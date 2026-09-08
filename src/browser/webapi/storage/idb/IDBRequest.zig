@@ -29,6 +29,7 @@ const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
+const IDBOpenDBRequest = @import("IDBOpenDBRequest.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
@@ -44,12 +45,14 @@ const IDBRequest = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
+_type: Type = .generic,
 _op: Operation = .none,
 _error: ?anyerror = null,
 _txn: Txn = .none,
 // Same request can show up multiple times in txn._requests, but it should only
 // be executed/fired in its last append (to preserve ordering).
 _txn_index: usize = 0,
+_abort_reason: ?anyerror = null,
 _cursor: ?*IDBCursor = null,
 _source: Source = .{ .none = null },
 _ready_state: ReadyState = .pending,
@@ -100,8 +103,15 @@ const Txn = union(enum) {
     borrowed: *IDBTransaction,
 };
 
-pub fn init(exec: *Execution) !*IDBRequest {
-    return exec._factory.eventTarget(IDBRequest{ ._proto = undefined });
+pub const Type = union(enum) {
+    generic,
+    open: *IDBOpenDBRequest,
+};
+
+// An open/deleteDatabase request: page-scoped, exposed as IDBOpenDBRequest.
+pub fn initOpen(exec: *Execution) !*IDBRequest {
+    const open = try exec._factory.idbOpenRequest(IDBOpenDBRequest{ ._proto = undefined });
+    return open._proto;
 }
 
 pub fn asEventTarget(self: *IDBRequest) *EventTarget {
@@ -185,6 +195,23 @@ pub fn failed(self: *const IDBRequest) bool {
     return self._error != null;
 }
 
+// Whether the success/error event for the current operation has fired. A
+// re-armed cursor request (continue/advance) is pending again even though
+// its state is done from the previous iteration; a versionchange request runs
+// eagerly (op cleared) but still awaits delivery.
+pub fn delivered(self: *const IDBRequest) bool {
+    return self._op == .none and self._ready_state == .done;
+}
+
+// The transaction aborted before this request's event fired: it now fails with
+// AbortError and no result. Delivery happens from the abort task.
+pub fn failWithAbort(self: *IDBRequest) void {
+    self._op = .none;
+    self.clearOwnedResult();
+    self._result = .{ .none = js.Undefined{} };
+    self._error = error.AbortError;
+}
+
 pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
     self._ready_state = .done;
     if (self._error != null) {
@@ -201,7 +228,23 @@ pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
 pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, new_version: u64) !void {
     self._ready_state = .done;
     const event = try IDBVersionChangeEvent.initTrusted(.wrap("upgradeneeded"), old_version, new_version, exec);
+    // Keep the event alive past dispatch: we read _listeners_did_throw below.
+    event.asEvent().acquireRef();
+    defer _ = event.asEvent().releaseRef(exec.page);
+
     try exec.dispatch(self.asEventTarget(), event.asEvent(), self._on_upgrade_needed, .{ .context = "IDBRequest.upgradeneeded" });
+
+    // A throwing listener aborts the upgrade (after every listener ran).
+    if (event.asEvent()._listeners_did_throw) {
+        switch (self._txn) {
+            .borrowed => |txn| if (!txn.aborted()) {
+                txn.abortWith(exec, error.AbortError) catch |err| {
+                    log.warn(.storage, "idb upgradeneeded abort", .{ .err = err });
+                };
+            },
+            .owned, .none => {},
+        }
+    }
 }
 
 pub fn fireSuccess(self: *IDBRequest, exec: *Execution) !void {
@@ -287,7 +330,10 @@ const JsResult = union(enum) {
     database: *IDBDatabase,
 };
 
-pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
+pub fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     return switch (self._result) {
         .none => |n| .{ .none = n },
         .value => |global| .{ .value = global.local(exec.js.local.?) },
@@ -310,7 +356,10 @@ pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
 
 // Return this as a DOMException directly. If we return an error, the bridge
 // *will* convert it to a DOMException, but it'll throw it, not return it.
-pub fn getError(self: *const IDBRequest) ?DOMException {
+pub fn getError(self: *const IDBRequest) !?DOMException {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     const err = self._error orelse return null;
     const mapped: anyerror = switch (err) {
         // sqlite's generic constraint failure is IDB's ConstraintError.
@@ -372,11 +421,11 @@ pub const Operation = union(enum) {
 
     const StoreQuery = struct { store: *IDBObjectStore, bounds: Engine.Bounds };
     const StoreGetAll = struct { store: *IDBObjectStore, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
-    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: *js.GlobalSlot, key: IDBObjectStore.PreparedKey };
+    const StoreWrite = struct { store: *IDBObjectStore, kind: IDBObjectStore.WriteKind, value: usize, key: IDBObjectStore.PreparedKey };
     const IndexQuery = struct { index: *IDBIndex, bounds: Engine.Bounds };
     const IndexGetAll = struct { index: *IDBIndex, args: IDBKeyRange.GetAllArgs, mode: IDBObjectStore.GetAllMode };
     const CursorIterate = struct { cursor: *IDBCursor, seek: IDBCursor.Seek, offset: u32 };
-    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: []const u8 };
+    const CursorUpdate = struct { cursor: *IDBCursor, key: []const u8, value: usize };
     const CursorDelete = struct { cursor: *IDBCursor, key: []const u8 };
 
     fn source(op: Operation) Source {
@@ -459,9 +508,8 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(IDBRequest.getReadyState, null, .{});
     pub const result = bridge.accessor(IDBRequest.getResult, null, .{});
     pub const source = bridge.accessor(IDBRequest.getSource, null, .{});
-    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{ .null_as_undefined = true });
-    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{ .null_as_undefined = true });
+    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{});
+    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{});
     pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
     pub const onerror = bridge.accessor(IDBRequest.getOnError, IDBRequest.setOnError, .{});
-    pub const onupgradeneeded = bridge.accessor(IDBRequest.getOnUpgradeNeeded, IDBRequest.setOnUpgradeNeeded, .{});
 };

@@ -67,6 +67,10 @@ _arena: *lp.Arena,
 // a v8 Global reset is only idempotent through a single instance.
 _globals: std.ArrayList(*js.GlobalSlot) = .empty,
 
+// V8-owned data queued for a write. Only ever appended to, so an index into it
+// is a stable handle (see holdClone).
+_clones: std.ArrayList(CloneSlot) = .empty,
+
 // objectStore() must return the same object for a given name within one
 // transaction (per spec); this also keeps repeated lookups off sqlite.
 _stores: std.ArrayList(*IDBObjectStore) = .empty,
@@ -83,10 +87,18 @@ _aborted: bool = false,
 _committing: bool = false,
 _error: ?anyerror = null,
 _gate_waiter: Engine.GateWaiter,
+// versionchange only: the version to fall back to if the upgrade aborts.
+_old_version: ?i64 = null,
+_abort_requests: std.ArrayList(*IDBRequest) = .empty,
+_abort_pending: bool = false,
 // A transaction is only active for one execution of a Scheduler's task. We
 // capture the scheduler's generation here and reject any request made in a
 // later generation (see assertActive).
 _active_turn: u64 = 0,
+// Set while a value is being structured-cloned for a write: user getters that
+// run during the clone must see the transaction as inactive (spec: the clone
+// happens with the transaction's active flag cleared).
+_cloning: bool = false,
 
 // The transaction can be freed when v8 doesn't reference it (or any child,
 // e.g. an IDBRequest), when we have no scheduled drain AND when we aren't
@@ -182,6 +194,9 @@ pub fn deinit(self: *IDBTransaction, _: *Page) void {
     for (self._globals.items) |slot| {
         slot.reset();
     }
+    for (self._clones.items) |*slot| {
+        slot.release();
+    }
     self._arena.release();
 }
 
@@ -201,6 +216,36 @@ pub fn persist(self: *IDBTransaction, value: js.Value) !*js.GlobalSlot {
     errdefer slot.reset();
     try self._globals.append(self._arena.allocator(), slot);
     return slot;
+}
+
+const CloneSlot = struct {
+    // optional because it can  be released twice, once after write and then
+    // on deinit.
+    _serialized: ?js.Value.Serialized,
+
+    fn release(self: *CloneSlot) void {
+        if (self._serialized) |serialized| {
+            serialized.deinit();
+            self._serialized = null;
+        }
+    }
+};
+
+// Wraps a js.Value.Serialized so that we're able to manage it. This not only
+// avoids a copy, it means we don't have to (1) bloat the transaction's arena
+// or (2) have a per-request arena
+pub fn holdClone(self: *IDBTransaction, serialized: js.Value.Serialized) !usize {
+    errdefer serialized.deinit();
+    try self._clones.append(self._arena.allocator(), .{ ._serialized = serialized });
+    return self._clones.items.len - 1;
+}
+
+pub fn cloneBytes(self: *const IDBTransaction, clone: usize) []const u8 {
+    return self._clones.items[clone]._serialized.?.bytes();
+}
+
+pub fn releaseClone(self: *IDBTransaction, clone: usize) void {
+    self._clones.items[clone].release();
 }
 
 pub fn dupe(self: *IDBTransaction, value: []const u8) ![]const u8 {
@@ -248,17 +293,26 @@ pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) err
     self._error = reason;
 
     // An aborted upgrade reverts the schema: stores and indexes created during
-    // it no longer exist, so handles the caller still holds must report deleted.
+    // it no longer exist, so handles the caller still holds must report
+    // deleted; pre-existing ones that were renamed get their names back (a
+    // created one has no earlier name to go back to and keeps its last).
     if (self._mode == .versionchange) {
         for (self._stores.items) |store| {
             if (store._created) {
                 store._deleted = true;
+            } else if (store._original_name) |name| {
+                store._name = name;
             }
             for (store._indexes.items) |idx| {
                 if (idx._created) {
                     idx._deleted = true;
+                } else if (idx._original_name) |name| {
+                    idx._name = name;
                 }
             }
+        }
+        if (self._old_version) |old| {
+            self._db._version = old;
         }
     }
 
@@ -272,17 +326,103 @@ pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) err
 
     for ([_]*std.ArrayList(*IDBRequest){ &self._queue_a, &self._queue_b }) |queue| {
         for (queue.items, 0..) |request, i| {
-            if (i != request._txn_index or request._op == .none) {
+            if (i != request._txn_index or request.delivered() or request._abort_reason != null) {
                 continue;
             }
-            request._op = .none;
-            request.setError(error.AbortError);
-            request.deliver(exec) catch |err| {
-                log.warn(.storage, "idb abort deliver", .{ .err = err });
+            // Fail an undelivered request whose event hasn't fired yet (and
+            // which itself isn't an abort).
+            request.failWithAbort();
+            self._abort_requests.append(self._arena.allocator(), request) catch |err| {
+                log.warn(.storage, "idb abort collect", .{ .err = err });
             };
         }
     }
-    self.fire(exec, comptime .wrap("abort"), self._on_abort);
+    self.scheduleAbortDelivery(exec);
+}
+
+pub fn abortDeliveryPending(self: *const IDBTransaction) bool {
+    return self._abort_pending;
+}
+
+// Pin the transaction for the abort-delivery task (like scheduleDrain).
+fn scheduleAbortDelivery(self: *IDBTransaction, exec: *Execution) void {
+    self.acquireRef();
+    exec.js.scheduler.add(self, deliverAbort, 0, .{
+        .name = "IDBTransaction.abort",
+        .finalizer = abortFinalize,
+    }) catch |err| {
+        log.warn(.storage, "idb schedule abort", .{ .err = err });
+        self.releaseRef(exec.page);
+        return;
+    };
+    self._abort_pending = true;
+}
+
+fn deliverAbort(ctx: *anyopaque) !?u32 {
+    const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
+    const exec = self._exec;
+    // The task pin; may free the transaction — must be the last touch.
+    defer self.releaseRef(exec.page);
+    defer self._abort_pending = false;
+
+    // Scheduler tasks run without a js local; dispatch needs one (see deliverBatch).
+    const prev_local = exec.js.local;
+    defer exec.js.local = prev_local;
+    var ls: js.Local.Scope = undefined;
+    exec.js.localScope(&ls);
+    defer ls.deinit();
+    exec.js.local = &ls.local;
+
+    for (self._abort_requests.items) |request| {
+        request.deliver(exec) catch |err| {
+            log.warn(.storage, "idb abort deliver", .{ .err = err });
+        };
+    }
+    self._abort_requests.clearRetainingCapacity();
+    self.fireAbort(exec);
+    return null;
+}
+
+// Scheduler task finalizer for deliverAbort: the context is going away, the
+// events are lost; drop the task pin.
+fn abortFinalize(ctx: *anyopaque) void {
+    const self: *IDBTransaction = @ptrCast(@alignCast(ctx));
+    self._abort_pending = false;
+    self.releaseRef(self._exec.page);
+}
+
+// The abort event bubbles from the transaction to its connection.
+fn fireAbort(self: *IDBTransaction, exec: *Execution) void {
+    const event = Event.initTrusted(comptime .wrap("abort"), .{ .bubbles = true }, exec.page) catch |err| {
+        log.warn(.storage, "idb abort event", .{ .err = err });
+        return;
+    };
+    event.acquireRef();
+    defer _ = event.releaseRef(exec.page);
+
+    const et = self.asEventTarget();
+    event._target = et;
+    event._dispatch_target = et;
+    exec.dispatch(et, event, self._on_abort, .{ .context = "IDBTransaction.abort", .inject_target = false }) catch |err| {
+        log.warn(.storage, "idb abort dispatch", .{ .err = err });
+    };
+    if (event._stop_propagation) {
+        return;
+    }
+    const db = self._db;
+    exec.dispatch(db.asEventTarget(), event, db._on_abort, .{ .context = "IDBDatabase.abort", .inject_target = false }) catch |err| {
+        log.warn(.storage, "idb abort dispatch", .{ .err = err });
+    };
+}
+
+// Queue an abort at the current position in the request queue: the requests
+// ahead of it deliver normally, the ones behind it fail with AbortError. Used
+// where the spec aborts "asynchronously" from within a synchronous call (e.g.
+// createIndex on data that violates a unique constraint).
+pub fn queueAbort(self: *IDBTransaction, reason: anyerror) !void {
+    const marker = try self.newRequest();
+    marker._abort_reason = reason;
+    try self.enqueue(marker);
 }
 
 pub fn settle(self: *IDBTransaction, exec: *Execution) void {
@@ -326,7 +466,7 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
             self._engine.rollback();
             self._begun = false;
             _ = self._engine.releaseGate(&self._gate_waiter);
-            self.fire(exec, comptime .wrap("abort"), self._on_abort);
+            self.fireAbort(exec);
             return;
         };
         self._begun = false;
@@ -341,7 +481,7 @@ fn commitAndComplete(self: *IDBTransaction, exec: *Execution) void {
 // the upgradeneeded dispatch for a versionchange transaction) and again by each
 // delivered batch.
 pub fn assertActive(self: *const IDBTransaction) !void {
-    if (self._settled or self._committing) {
+    if (self._settled or self._committing or self._cloning) {
         return error.TransactionInactiveError;
     }
     if (self._active_turn != self._exec.js.scheduler.generation) {
@@ -373,6 +513,9 @@ pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
 }
 
 pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
+    if (self._settled) {
+        return error.InvalidStateError;
+    }
     for (self._stores.items) |store| {
         if (std.mem.eql(u8, store._name, name)) {
             return store;
@@ -635,9 +778,14 @@ fn deliverBatch(self: *IDBTransaction, exec: *Execution) void {
     self._active_turn = exec.js.scheduler.generation;
 
     for (batch.items) |request| {
-        // A handler may have aborted the transaction mid-delivery; abort() already
-        // delivered AbortError to the remaining requests, so stop here.
+        // A handler may have aborted the transaction mid-delivery; abort()
+        // collected the remaining requests for its own delivery, so stop here.
         if (self._settled) {
+            return;
+        }
+        if (request._abort_reason) |reason| {
+            // see queueAbort
+            self.abortWith(exec, reason) catch {};
             return;
         }
         request.execute(exec) catch |err| {

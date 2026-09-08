@@ -470,6 +470,42 @@ test "WebApi: MutationObserver" {
     try testing.htmlRunner("mutation_observer", .{});
 }
 
+test "WebApi: runaway MutationObserver delivery is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\(function() {
+        \\  const target = document.createElement('div');
+        \\  const children = [target.appendChild(document.createElement('div'))];
+        \\  let n = 0;
+        \\  const mutate = () => {
+        \\    n++;
+        \\    for (const child of children) child.style.transform = `translate3d(${n}px,0,0)`;
+        \\  };
+        \\  new MutationObserver(() => {
+        \\    setTimeout(mutate, 0);
+        \\    mutate();
+        \\  }).observe(target, {attributes: true, subtree: true, attributeFilter: ['style']});
+        \\  mutate();
+        \\})()
+    , null);
+
+    for (0..200) |_| {
+        frame.js.env.runMicrotasks();
+        try frame.js.env.runMacrotasks();
+        if (!Frame.observers.hasMutationObservers(frame)) break;
+    }
+
+    try testing.expectEqual(false, Frame.observers.hasMutationObservers(frame));
+}
+
 // Production watchdog path (lightpanda-io/browser#3130 follow-up): the
 // terminate lands inside a MutationObserver callback, so ExecutionTerminated
 // must unwind out of deliverRecords, stay sticky against further V8 entries,
@@ -534,4 +570,45 @@ test "WebApi: MutationObserver requested termination unwinds delivery" {
     try local.eval("window.__wedge = false; window.__target.setAttribute('x', '2');", null);
     env.runMicrotasks();
     try testing.expectEqual(2, try (try local.exec("window.__delivered", null)).toI32());
+}
+
+test "WebApi: MutationObserver terminated page tears down" {
+    testing.expectLog(&.{ .frame, .frame });
+
+    const frame = try testing.createFrame();
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
+
+        const State = struct {
+            env: *js.Env,
+
+            fn kill(self: *@This()) void {
+                self.env.requestTerminate();
+            }
+        };
+        var state = State{ .env = env };
+        const kill_cb = local.newCallback(State.kill, &state);
+        const setup = try local.exec(
+            \\(function(kill) {
+            \\  const target = document.createElement('div');
+            \\  new MutationObserver(() => { kill(); for(;;){} })
+            \\      .observe(target, { attributes: true });
+            \\  target.setAttribute('x', '1');
+            \\})
+        , null);
+        const setup_fn = js.Function{ .local = local, .handle = @ptrCast(setup.handle) };
+        try setup_fn.call(void, .{kill_cb});
+    }
+
+    env.runMicrotasks();
+    try testing.expectEqual(true, env.terminatePending());
+    try testing.expectEqual(false, js.v8.v8__Isolate__IsExecutionTerminating(env.isolate.handle));
+
+    testing.test_session.closeAllPages();
+    try testing.expectEqual(@as(usize, 0), env.contexts.items.len);
 }

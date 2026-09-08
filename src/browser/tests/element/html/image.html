@@ -170,3 +170,12 @@
     testing.expectEqual(testing.BASE_URL + 'element/html/over%209000!?hello=world%20!', img.src);
   }
 </script>
+
+<script id="decode" type=module>
+  const img = new Image();
+  const p = img.decode();
+  testing.expectEqual(true, p instanceof Promise);
+  testing.expectEqual(undefined, await p);
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+  testing.expectEqual(undefined, await img.decode());
+</script>

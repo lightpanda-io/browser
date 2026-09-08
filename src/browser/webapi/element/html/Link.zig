@@ -193,7 +193,7 @@ test "WebApi: HTML.Link" {
 
 test "WebApi: HTML.Link external stylesheet" {
     testing.silenceLog(&.{.http});
-    try testing.htmlRunner("css/external_stylesheet.html", .{ .load_external_stylesheets = true });
+    try testing.htmlRunner("css/external_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
 }
 
 // Regression: a synchronous external-stylesheet fetch must not strand the
@@ -202,5 +202,5 @@ test "WebApi: HTML.Link external stylesheet" {
 // never drains and the document is stuck at readyState "loading".
 test "WebApi: HTML.Link deferred script then external stylesheet" {
     testing.silenceLog(&.{.http});
-    try testing.htmlRunner("css/deferred_script_then_stylesheet.html", .{ .load_external_stylesheets = true });
+    try testing.htmlRunner("css/deferred_script_then_stylesheet.html", .{ .load_resources = .{ .stylesheet = true } });
 }

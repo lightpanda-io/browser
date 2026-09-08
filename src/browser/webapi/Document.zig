@@ -19,17 +19,18 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const js = @import("../js/js.zig");
-const Frame = @import("../Frame.zig");
-const Window = @import("Window.zig");
-const URL = @import("../URL.zig");
 const idna = @import("../../sys/idna.zig");
 const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
+const URL = @import("../URL.zig");
+const js = @import("../js/js.zig");
+const Frame = @import("../Frame.zig");
+const Parser = @import("../parser/Parser.zig");
+
 const Node = @import("Node.zig");
+const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
-const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
@@ -294,7 +295,8 @@ pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(frame.local_arena);
     try frame._session.cookie_jar.forRequest(frame.url, &aw.writer, .{
         .is_http = false,
-        .is_navigation = true,
+        .is_navigation = false,
+        .origin_url = frame.siteForCookies(),
     });
     return aw.written();
 }
@@ -313,6 +315,10 @@ pub fn setCookie(self: *Document, cookie_str: []const u8, frame: *Frame) ![]cons
     if (c.http_only) {
         c.deinit();
         return ""; // HttpOnly cookies cannot be set from JS
+    }
+    if (c.same_site != .none and frame.siteForCookies() == .none) {
+        c.deinit();
+        return ""; // SameSite cookies cannot be set from a cross-site context.
     }
     try frame._session.cookie_jar.add(c, lp.datetime.timestamp(.real), false);
     return cookie_str;
@@ -367,13 +373,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try Frame.node_factory.createElementNS(frame, ns, normalized_name, null);
+    const node = try self.createElementNode(ns, normalized_name, frame);
     const element = node.as(Element);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
@@ -388,7 +389,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
+    const node = try self.createElementNode(ns, name, frame);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
@@ -397,12 +398,25 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
             try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
         }
     }
+    return node.as(Element);
+}
+
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8, frame: *Frame) !*Node {
+    const previous_creation = frame._custom_element_creation;
+    if (self._frame == null) {
+        // a document without a browser context, e.g. DOMParser, has no custom
+        // element registry
+        frame._custom_element_creation = .undefined;
+    }
+    defer frame._custom_element_creation = previous_creation;
+
+    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
 
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
     }
-    return node.as(Element);
+    return node;
 }
 
 pub fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
@@ -1633,12 +1647,62 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+const HttpClient = @import("../../network/HttpClient.zig");
+
 test "WebApi: Document" {
     try testing.htmlRunner("document", .{});
 }
 
 test "WebApi: Document.evaluate" {
     try testing.htmlRunner("xpath/document_evaluate.html", .{});
+}
+
+test "Document: cookie access from a cross-site frame" {
+    defer testing.test_session.closeAllPages();
+    const frame = try testing.createFrame();
+    const doc = frame.document;
+    const jar = &frame._session.cookie_jar;
+    defer jar.clearRetainingCapacity();
+
+    // victim.example embedded by attacker.example: the ancestor chain is
+    // cross-site, so the frame has no site for cookies.
+    var top_url: [:0]const u8 = "https://attacker.example/";
+    var top: HttpClient.Owner = undefined;
+    top.url = &top_url;
+    top.parent = null;
+    frame.url = "https://victim.example/inner";
+    frame._http_owner.parent = &top;
+    defer frame._http_owner.parent = null;
+
+    try jar.populateFromResponse("https://victim.example/", "strict=1; SameSite=Strict");
+    try jar.populateFromResponse("https://victim.example/", "lax=2; SameSite=Lax");
+    try jar.populateFromResponse("https://victim.example/", "default=3");
+    try jar.populateFromResponse("https://victim.example/", "none=4; SameSite=None; Secure");
+
+    // Reads: only SameSite=None is visible from a cross-site context. Lax
+    // gets no navigation exception for script access.
+    try testing.expectEqual("none=4", try doc.getCookie(frame));
+
+    // Writes: SameSite=None is stored, everything else (including the Lax
+    // default for an unspecified attribute) is silently dropped.
+    _ = try doc.setCookie("set_strict=5; SameSite=Strict", frame);
+    _ = try doc.setCookie("set_lax=6; SameSite=Lax", frame);
+    _ = try doc.setCookie("set_default=7", frame);
+    _ = try doc.setCookie("set_none=8; SameSite=None; Secure", frame);
+    try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
+
+    // The same jar seen from a same-site chain: everything applies, and the
+    // dropped writes really were dropped rather than hidden.
+    top_url = "https://victim.example/";
+    try testing.expectEqual("strict=1; lax=2; default=3; none=4; set_none=8", try doc.getCookie(frame));
+    _ = try doc.setCookie("set_strict=5; SameSite=Strict", frame);
+    _ = try doc.setCookie("set_default=7", frame);
+    try testing.expectEqual("strict=1; lax=2; default=3; none=4; set_none=8; set_strict=5; set_default=7", try doc.getCookie(frame));
+
+    // Back in the cross-site context, the newly written cookies obey the
+    // same visibility rules.
+    top_url = "https://attacker.example/";
+    try testing.expectEqual("none=4; set_none=8", try doc.getCookie(frame));
 }
 
 test "Document: isRelaxableTo" {

@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("js.zig");
 const v8 = js.v8;
 
@@ -60,6 +62,28 @@ pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
 }
 
 pub fn evaluate(self: Module) !js.Value {
+    const status = self.getStatus();
+    switch (status) {
+        .kInstantiated, .kEvaluated, .kErrored => {},
+        .kUninstantiated, .kInstantiating, .kEvaluating => {
+            // V8 aborts the process (a CHECK, not an exception) on any of these.
+            // This CHECK has been reported in production (https://github.com/lightpanda-io/browser/pull/3343)
+            // but I can't see how we're getting there. Digging through v8's
+            // source code, it would appear that we're reaching here when
+            // status == kEvaluating (the other status' would fail differently).
+            // There's no harm in adding this (it will cause a JS module error
+            // but not a process crash).
+            // NOTE to future me: yes, the dynamic module path can legitimately
+            // try to evaluate a module when status == .kEvaluating and we DO
+            // guard against that, but that's via a reentrant path that
+            // shoulnd't be possible here.
+            if (comptime lp.IS_DEBUG) {
+                std.debug.panic("Module.evaluate on {s}", .{@tagName(status)});
+            }
+            return error.InvalidModuleStatus;
+        },
+    }
+
     const res = v8.v8__Module__Evaluate(self.handle, self.local.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {

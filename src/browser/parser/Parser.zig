@@ -77,12 +77,19 @@ buf: std.ArrayList(u8),
 // innerHTML and DOMParser (per spec). Set from Options at init.
 allow_declarative_shadow: bool = false,
 
+// Fragment-parse context element when it isn't the container. html5ever picks
+// the insertion mode and tokenizer state from the context's name. For example
+// a <template> context is processed "in template" mode which has specific
+// behavior.
+context: ?*Element = null,
+
 xml_error: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
 
 pub const Options = struct {
     allow_declarative_shadow: bool = false,
+    context: ?*Element = null,
 };
 
 pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Parser {
@@ -98,6 +105,7 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Parser 
         .pending_text = null,
         .buf = .empty,
         .allow_declarative_shadow = opts.allow_declarative_shadow,
+        .context = opts.context,
     };
 }
 
@@ -274,7 +282,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
 }
 
 pub fn parseFragment(self: *Parser, html: []const u8) void {
-    const context_name: []const u8 = if (self.container.node.is(Element)) |el|
+    const context_name: []const u8 = if (self.context orelse self.container.node.is(Element)) |el|
         el.getLocalName()
     else
         "";
@@ -485,8 +493,9 @@ fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualNa
 // create.
 fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    self.frame._skip_custom_element_upgrade = true;
-    defer self.frame._skip_custom_element_upgrade = false;
+    const previous_creation = self.frame._custom_element_creation;
+    self.frame._custom_element_creation = .bare_context;
+    defer self.frame._custom_element_creation = previous_creation;
     return self._createElementCallback(data, qname, attributes, .unknown) catch |err| {
         self.err = .{ .err = err, .source = .create_element };
         return null;

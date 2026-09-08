@@ -506,13 +506,25 @@ pub const DateTime = struct {
         }
     }
 
+    // Date.prototype.toISOString's form: always exactly three fractional
+    // digits, where format elides them when zero and widens to micros.
+    pub fn formatMillis(self: DateTime, writer: *std.Io.Writer) !void {
+        var buf: [28]u8 = undefined;
+        const n = self.bufWriteWith(&buf, .millis);
+        try writer.writeAll(buf[0..n]);
+    }
+
     fn bufWrite(self: DateTime, buf: []u8) usize {
+        return self.bufWriteWith(buf, .auto);
+    }
+
+    fn bufWriteWith(self: DateTime, buf: []u8, precision: FractionPrecision) usize {
         const date_n = writeDate(buf, self.date());
 
         buf[date_n] = 'T';
 
         const time_start = date_n + 1;
-        const time_n = writeTime(buf[time_start..], self.time());
+        const time_n = writeTimeWith(buf[time_start..], self.time(), precision);
 
         const time_stop = time_start + time_n;
         buf[time_stop] = 'Z';
@@ -558,7 +570,18 @@ fn writeDate(into: []u8, date: Date) u8 {
     return if (year < 0) 11 else 10;
 }
 
+const FractionPrecision = enum {
+    // none when zero, else millis if exact, else micros
+    auto,
+    // always three digits, truncating micros
+    millis,
+};
+
 fn writeTime(into: []u8, time: Time) u8 {
+    return writeTimeWith(into, time, .auto);
+}
+
+fn writeTimeWith(into: []u8, time: Time, precision: FractionPrecision) u8 {
     into[0..2].* = paddingTwoDigits(time.hour);
     into[2] = ':';
     into[3..5].* = paddingTwoDigits(time.min);
@@ -566,11 +589,11 @@ fn writeTime(into: []u8, time: Time) u8 {
     into[6..8].* = paddingTwoDigits(time.sec);
 
     const micros = time.micros;
-    if (micros == 0) {
+    if (micros == 0 and precision == .auto) {
         return 8;
     }
 
-    if (@rem(micros, 1000) == 0) {
+    if (precision == .millis or @rem(micros, 1000) == 0) {
         into[8] = '.';
         _ = std.fmt.printInt(into[9..12], micros / 1000, 10, .lower, .{ .width = 3, .fill = '0' });
         return 12;
@@ -1746,6 +1769,22 @@ test "DateTime: format" {
         var buf: [30]u8 = undefined;
         const out = try std.fmt.bufPrint(&buf, "{f}", .{try DateTime.initUTC(-102, 12, 9, 8, 9, 10, 123456)});
         try testing.expectString("-0102-12-09T08:09:10.123456Z", out);
+    }
+}
+
+test "DateTime: formatMillis" {
+    const cases = [_]struct { micros: u32, expected: []const u8 }{
+        .{ .micros = 0, .expected = "2023-05-22T08:09:10.000Z" },
+        .{ .micros = 12, .expected = "2023-05-22T08:09:10.000Z" },
+        .{ .micros = 1000, .expected = "2023-05-22T08:09:10.001Z" },
+        .{ .micros = 123456, .expected = "2023-05-22T08:09:10.123Z" },
+        .{ .micros = 999999, .expected = "2023-05-22T08:09:10.999Z" },
+    };
+    for (cases) |case| {
+        var buf: [30]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buf);
+        try (try DateTime.initUTC(2023, 5, 22, 8, 9, 10, case.micros)).formatMillis(&w);
+        try testing.expectString(case.expected, w.buffered());
     }
 }
 

@@ -58,3 +58,22 @@
     testing.expectEqual(false, el.isContentEditable);
   }
 </script>
+
+<script id="reflected-attribute">
+  {
+    testing.expectEqual('true', document.getElementById('own-true').contentEditable);
+    testing.expectEqual('true', document.getElementById('own-empty').contentEditable);
+    testing.expectEqual('false', document.getElementById('own-false').contentEditable);
+    testing.expectEqual('plaintext-only', document.getElementById('own-plaintext').contentEditable);
+    testing.expectEqual('inherit', document.getElementById('plain').contentEditable);
+    testing.expectEqual('inherit', document.getElementById('child-of-true').contentEditable);
+
+    const el = document.getElementById('plain');
+    el.contentEditable = 'TRUE';
+    testing.expectEqual('true', el.getAttribute('contenteditable'));
+    testing.expectEqual(false, el.isContentEditable);
+    el.contentEditable = 'inherit';
+    testing.expectEqual(false, el.hasAttribute('contenteditable'));
+    testing.expectError('SyntaxError', () => { el.contentEditable = 'maybe'; });
+  }
+</script>

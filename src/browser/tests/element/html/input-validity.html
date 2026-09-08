@@ -81,10 +81,11 @@
 <script id="too_long">
 {
   const el = $('#too-long');
-  // Pristine value (default) does not trigger tooLong per spec
+  // Only values last changed by a user edit count, so neither the attribute
+  // nor a script-set value ever trips tooLong.
   testing.expectEqual(false, el.validity.tooLong);
   el.value = 'abcdef';
-  testing.expectEqual(true, el.validity.tooLong);
+  testing.expectEqual(false, el.validity.tooLong);
   el.value = 'ab';
   testing.expectEqual(false, el.validity.tooLong);
 }
@@ -151,9 +152,10 @@
 
 <script id="validation_message">
 {
-  testing.expectEqual('Please fill out this field.', $('#empty-required').validationMessage);
-  testing.expectEqual('Please enter an email address.', $('#bad-email').validationMessage);
-  testing.expectEqual('Value is too small.', $('#too-low').validationMessage);
+  // The wording is browser-specific; only presence is checked.
+  testing.expectEqual(true, $('#empty-required').validationMessage.length > 0);
+  testing.expectEqual(true, $('#bad-email').validationMessage.length > 0);
+  testing.expectEqual(true, $('#too-low').validationMessage.length > 0);
   testing.expectEqual('', $('#filled-required').validationMessage);
   // Disabled returns empty
   testing.expectEqual('', $('#disabled-required').validationMessage);
@@ -177,7 +179,8 @@
   testing.expectEqual(-1, $('#filled-required').maxLength);
   testing.expectEqual(3, $('#too-short').minLength);
   testing.expectEqual(-1, $('#filled-required').minLength);
-  testing.expectEqual(true, $('#too-short').validity.tooShort);
+  // Attribute values are not user edits.
+  testing.expectEqual(false, $('#too-short').validity.tooShort);
 
   const el = $('#filled-required');
   el.minLength = 2;
@@ -211,6 +214,8 @@
   testing.expectEqual('foo', el.pattern);
   el.pattern = '';
   testing.expectEqual('', el.getAttribute('pattern'));
+  el.removeAttribute('pattern');
+  testing.expectEqual('', el.pattern);
 }
 </script>
 
@@ -277,5 +282,34 @@
   testing.expectEqual(true, el.validity.patternMismatch);
   el.value = '42';
   testing.expectEqual(false, el.validity.patternMismatch);
+  // An empty pattern compiles to ^(?:)$ and matches only the empty string.
+  el.pattern = '';
+  testing.expectEqual(true, el.validity.patternMismatch);
+  el.removeAttribute('pattern');
+  testing.expectEqual(false, el.validity.patternMismatch);
 }
+</script>
+
+<input id="date-low" type="date" min="2024-01-01" value="2023-12-31">
+<input id="date-ok" type="date" min="2024-01-01" max="2024-12-31" value="2024-06-15">
+<input id="time-high" type="time" max="17:00" value="17:30">
+<input id="month-low" type="month" min="2024-02" value="2024-01">
+<input id="week-ok" type="week" min="2024-W01" value="2024-W10">
+
+<script id="date_time_ranges">
+  {
+    testing.expectEqual(true, $('#date-low').validity.rangeUnderflow);
+    testing.expectEqual(false, $('#date-low').validity.rangeOverflow);
+    testing.expectEqual(false, $('#date-ok').validity.rangeUnderflow);
+    testing.expectEqual(false, $('#date-ok').validity.rangeOverflow);
+    testing.expectEqual(true, $('#time-high').validity.rangeOverflow);
+    // Firefox has no month/week inputs; they fall back to text there.
+    if ($('#month-low').type === 'month') {
+      testing.expectEqual(true, $('#month-low').validity.rangeUnderflow);
+      testing.expectEqual(false, $('#week-ok').validity.rangeUnderflow);
+    }
+    $('#date-ok').value = '2025-01-01';
+    testing.expectEqual(true, $('#date-ok').validity.rangeOverflow);
+    testing.expectEqual(false, $('#date-ok').checkValidity());
+  }
 </script>

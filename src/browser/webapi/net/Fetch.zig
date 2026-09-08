@@ -43,6 +43,7 @@ _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
 _signal: ?*AbortSignal,
 _manual_redirect: bool,
+_no_cors: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -56,6 +57,12 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         resolver.rejectError("fetch init error", .{ .type_error = "Failed to construct Request" });
         return resolver.promise();
     };
+
+    if (request._mode == .navigate) {
+        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
+        return resolver.promise();
+    }
+
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
     request.acquireRef();
@@ -81,36 +88,36 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         ._owns_response = true,
         ._signal = request._signal,
         ._manual_redirect = request._redirect == .manual,
+        ._no_cors = request._mode == .@"no-cors",
     };
-
-    const session = exec.session;
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
 
-    const cookie_jar = switch (request._credentials) {
-        .omit => null,
-        .include => &session.cookie_jar,
-        .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
-    };
-
     const transfer = exec.newRequest(.{
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
         .body = request._body,
         .resource_type = .fetch,
-        .cookie_jar = cookie_jar,
-        .cookie_origin = exec.url.*,
+        .credentials_mode = switch (request._credentials) {
+            .omit => .omit,
+            .@"same-origin" => .same_origin,
+            .include => .include,
+        },
+        .request_mode = switch (request._mode) {
+            .cors => .cors,
+            .@"no-cors" => .no_cors,
+            .@"same-origin" => .same_origin,
+            .navigate => @panic("fetch can't be navigate mode"),
+        },
+        .origin = exec.origin(),
         .redirect = switch (request._redirect) {
             .follow => .follow,
             .manual => .manual,
             .@"error" => .@"error",
         },
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -143,16 +150,19 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
 fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     const self: *Fetch = @ptrCast(@alignCast(transfer.req.ctx));
+    const is_opaque = self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin;
 
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return .abort;
+            return error.TransferCanceled;
         }
     }
 
     const arena = self._response._arena;
-    if (transfer.getContentLength()) |cl| {
-        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
+    if (!is_opaque) {
+        if (transfer.getContentLength()) |cl| {
+            try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
+        }
     }
 
     const res = self._response;
@@ -169,6 +179,17 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
     res._status_text = std.http.Status.phrase(@enumFromInt(transfer.responseStatus().?)) orelse "";
     res._url = try arena.dupeZ(u8, transfer.req.url);
     res._is_redirected = transfer.redirectCount().? > 0;
+
+    // no-cors mode: regardless of what the server returned, JS only ever sees
+    // an opaque response — status 0, no headers, no body, url "".
+    if (is_opaque) {
+        res._status = 0;
+        res._status_text = "";
+        res._url = "";
+        res._type = .@"opaque";
+        res._is_redirected = false;
+        return .proceed;
+    }
 
     // redirect: "manual" surfaces the unfollowed 3xx as an opaque-redirect
     // filtered response: status 0, no headers, no body.
@@ -214,8 +235,12 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
     // Check if aborted
     if (self._signal) |signal| {
         if (signal._aborted) {
-            return error.Abort;
+            return error.TransferCanceled;
         }
+    }
+
+    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
+        return;
     }
 
     try self._buf.appendSlice(self._response._arena.allocator(), data);

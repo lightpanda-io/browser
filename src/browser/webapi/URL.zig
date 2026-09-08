@@ -60,6 +60,9 @@ pub fn parse(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) ?
 
 pub fn deinit(self: *URL, page: *Page) void {
     if (self._search_params) |search_params| {
+        // The params can outlive the URL. Unlink it.
+        search_params._url = null;
+        // And, remove the RC that we (URL) were holding on it.
         search_params.releaseRef(page);
     }
     // Not tracked by arena.
@@ -171,18 +174,8 @@ pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
     _ = U.url_set_port(self._url, port);
 }
 
-pub fn getSearch(self: *const URL, exec: *const Execution) ![]const u8 {
-    if (self._search_params) |search_params| {
-        if (search_params.getSize() == 0) {
-            return "";
-        }
-
-        var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-        try buf.writer.writeByte('?');
-        try search_params.toString(&buf.writer);
-        return buf.written();
-    }
-
+// searchParam pushes its mutations to URL, so self._url is always in sync
+pub fn getSearch(self: *const URL, _: *const Execution) ![]const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     const res = U.url_get_query(self._url, &out, &len);
@@ -257,10 +250,26 @@ pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     const search_value = if (U.url_get_query(self._url, &out, &len) == 0) (out - 1)[0 .. len + 1] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, exec);
-    // Released in deinit; the cached params must outlive their JS wrapper.
     params.acquireRef();
+    params._url = self;
     self._search_params = params;
     return params;
+}
+
+// Every update to the url's _search_params needs to keep the url in sync
+pub fn syncQueryFromParams(self: *URL, exec: *const Execution) !void {
+    const params = self._search_params orelse return;
+    if (params.getSize() == 0) {
+        U.url_set_query_to_null(self._url);
+        return;
+    }
+
+    var buf = std.Io.Writer.Allocating.init(exec.local_arena);
+    try params.toString(&buf.writer);
+    const query = buf.written();
+    if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
+        return error.TypeError;
+    }
 }
 
 pub fn getOrigin(self: *const URL, exec: *const Execution) ![]const u8 {
@@ -288,21 +297,7 @@ pub fn setHref(self: *URL, value: []const u8, exec: *const Execution) !void {
     try search_params.updateFromString(search_value, exec);
 }
 
-pub fn toString(self: *const URL, exec: *const Execution) ![]const u8 {
-    if (self._search_params) |search_params| {
-        if (search_params.getSize() == 0) {
-            U.url_set_query_to_null(self._url);
-        } else {
-            var buf = std.Io.Writer.Allocating.init(exec.local_arena);
-            defer buf.deinit();
-            try search_params.toString(&buf.writer);
-            const query = buf.written();
-            if (U.url_set_query(self._url, query.ptr, query.len) != 0) {
-                return error.ToString;
-            }
-        }
-    }
-
+pub fn toString(self: *const URL, _: *const Execution) ![]const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     U.url_to_string(self._url, &out, &len);

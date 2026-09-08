@@ -22,17 +22,20 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
+const EventManagerBase = @import("../EventManagerBase.zig");
+const Modifiers = @import("../frame/user_input.zig").Modifiers;
+
+const Event = @import("Event.zig");
+const Element = @import("Element.zig");
+const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
-const Element = @import("Element.zig");
-const Event = @import("Event.zig");
-const EventTarget = @import("EventTarget.zig");
 const MouseEvent = @import("event/MouseEvent.zig");
+const TouchEvent = @import("event/TouchEvent.zig");
+const WheelEvent = @import("event/WheelEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
-const WheelEvent = @import("event/WheelEvent.zig");
-const TouchEvent = @import("event/TouchEvent.zig");
-const EventManagerBase = @import("../EventManagerBase.zig");
+const Label = @import("element/html/Label.zig");
 
 const log = lp.log;
 
@@ -46,9 +49,10 @@ pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
 }
 
 pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
-    const AXNode = @import("../../cdp/AXNode.zig");
+    const AXNode = @import("../../server/cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
-    return (try axnode.getName(frame, frame.call_arena)) orelse "";
+    var labels: Label.LabelByForIndex = .{};
+    return (try axnode.getName(frame, frame.call_arena, &labels)) orelse "";
 }
 
 // Implements testdriver's `click`: a full trusted primary-button click
@@ -60,11 +64,7 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     if (element.is(Element.Html)) |html| {
         switch (html._type) {
-            inline .button, .input, .textarea, .select => |tag| {
-                if (html.subtype(Element.Html.Subtype(tag)).getDisabled()) {
-                    return;
-                }
-            },
+            .button, .input, .textarea, .select, .option, .optgroup => if (element.isDisabled()) return,
             else => {},
         }
     }
@@ -234,6 +234,9 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // whose origin resolved to an element.
     var target: ?*Element = null;
     var pressed = false;
+    // The buttons bitmask of the currently depressed button, carried on move
+    // and boundary events while dragging.
+    var pressed_mask: u16 = 0;
     // Where the last pointerDown landed: the click fires at the nearest common
     // inclusive ancestor of the down and up targets when they differ.
     var down_target: ?*Element = null;
@@ -253,20 +256,34 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const origin = try action.get("origin");
             if (origin.isObject()) {
                 target = origin.local.jsValueToZig(*Element, origin) catch null;
+            } else {
+                const y = readI32(action, "y", 0);
+                if (frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null) |el| {
+                    target = el;
+                } else if (frame.document.getDocumentElement()) |root| {
+                    target = root;
+                }
             }
             const el = target orelse continue;
-            dispatchPointer(el, "pointermove", 0, 0, frame);
             if (is_touch) {
+                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
                 if (pressed) {
                     dispatchTouch(el, "touchmove", frame);
                 }
             } else {
-                dispatchMouse(el, "mousemove", 0, 0, 0, frame);
+                Frame.user_input.updateHoverTarget(frame, el, .{
+                    .buttons = pressed_mask,
+                    .modifiers = frame._page.input_modifiers,
+                    .with_pointer = true,
+                });
+                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                dispatchMouse(el, "mousemove", 0, pressed_mask, 0, frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = true;
+            pressed_mask = buttonsMask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
@@ -286,6 +303,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = false;
+            pressed_mask = 0;
             dispatchPointer(el, "pointerup", button, 0, frame);
             if (is_touch) {
                 dispatchTouch(el, "touchend", frame);
@@ -483,13 +501,6 @@ fn webdriverKey(value: []const u8) []const u8 {
         else => value,
     };
 }
-
-pub const Modifiers = struct {
-    ctrl: bool = false,
-    shift: bool = false,
-    alt: bool = false,
-    meta: bool = false,
-};
 
 fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
     if (std.mem.eql(u8, key, "Shift")) {

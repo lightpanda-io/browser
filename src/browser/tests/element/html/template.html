@@ -250,3 +250,37 @@
   testing.expectEqual('x', wrapperClone.querySelector('template').content.querySelector('#in-template').textContent);
 }
 </script>
+
+<script id=innerHTML_table_roots>
+{
+  // The fragment is parsed with the template as context ("in template"
+  // mode), so table-section roots are kept rather than dropped as they
+  // would be in a div.
+  const t = document.createElement('template');
+  t.innerHTML = '<tr title="a"><td>b</td></tr>';
+  testing.expectEqual(1, t.content.children.length);
+  testing.expectEqual('TR', t.content.firstElementChild.tagName);
+  testing.expectEqual('a', t.content.querySelector('tr').getAttribute('title'));
+  testing.expectEqual('b', t.content.querySelector('td').textContent);
+  testing.expectEqual('<tr title="a"><td>b</td></tr>', t.innerHTML);
+
+  t.innerHTML = '<td>b</td>';
+  testing.expectEqual('<td>b</td>', t.innerHTML);
+
+  t.innerHTML = '<col span=2>';
+  testing.expectEqual('<col span="2">', t.innerHTML);
+
+  t.innerHTML = '<caption>x</caption><colgroup></colgroup><thead></thead><tbody></tbody><tfoot></tfoot>';
+  testing.expectEqual(5, t.content.children.length);
+
+  // Replaces, rather than appends to, the previous contents.
+  t.innerHTML = '<div>y</div>';
+  testing.expectEqual('<div>y</div>', t.innerHTML);
+
+  // Control: the same markup in a div drops the table bits.
+  const d = document.createElement('div');
+  d.innerHTML = '<tr><td>b</td></tr>';
+  testing.expectEqual(0, d.children.length);
+  testing.expectEqual('b', d.innerHTML);
+}
+</script>

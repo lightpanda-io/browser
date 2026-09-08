@@ -37,6 +37,7 @@ const HttpClient = @import("../../network/HttpClient.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Console = @import("../webapi/Console.zig");
+const Cookie = @import("../webapi/storage/Cookie.zig");
 const Event = @import("../webapi/Event.zig");
 const EventTarget = @import("../webapi/EventTarget.zig");
 const Performance = @import("../webapi/Performance.zig");
@@ -132,6 +133,10 @@ pub fn origin(self: *const Execution) ?[]const u8 {
     };
 }
 
+pub fn siteForCookies(self: *const Execution) Cookie.SiteForCookies {
+    return self.httpOwner().siteForCookies();
+}
+
 // HttpClient.Owner of the current global (Frame or WGS). Used by code
 // that needs to register an in-flight network operation against the
 // owning scope without caring whether it's a Frame or a Worker — e.g.
@@ -170,17 +175,5 @@ pub fn console(self: *const Execution) *Console {
     return switch (self.js.global) {
         .frame => |frame| frame.window.getConsole(),
         .worker => |worker| worker.getConsole(),
-    };
-}
-
-pub fn frameId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._frame_id,
-    };
-}
-
-pub fn loaderId(self: *const Execution) u32 {
-    return switch (self.js.global) {
-        inline else => |g| g._loader_id,
     };
 }

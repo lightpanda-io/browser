@@ -172,17 +172,22 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     }
 }
 
-pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
+// Drops every observation without touching the frame's observer list
+pub fn reset(self: *IntersectionObserver, page: *Page) void {
     for (self._pending_entries.items) |entry| {
-        entry.deinit(frame._page);
+        entry.deinit(page);
     }
     self._pending_entries.clearRetainingCapacity();
     self._tracked.clearRetainingCapacity();
+    self._observing.clearRetainingCapacity();
+}
 
-    if (self._observing.items.len > 0) {
+pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
+    const registered = self._observing.items.len > 0;
+    self.reset(frame._page);
+    if (registered) {
         Frame.observers.unregisterIntersectionObserver(frame, self);
     }
-    self._observing.clearRetainingCapacity();
 }
 
 pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
@@ -402,6 +407,101 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+// Infinite scroll: the callback observes a fresh sentinel, which we report as
+// intersecting the moment it is attached, so the page never settles on its own.
+// Old sentinels stay observed (_tracked keeps them from re-firing) so that the
+// observer stays registered on the frame for as long as it is alive. `deferred`
+// re-observes from a timer, one delivery per macrotask tick, the way a
+// fetch-driven pager behaves; otherwise the chain never leaves the microtask
+// checkpoint.
+fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\(function(deferred) {
+        \\  const list = document.createElement('div');
+        \\  const observe = () => io.observe(list.appendChild(document.createElement('div')));
+        \\  const io = new IntersectionObserver((entries) => {
+        \\    for (const entry of entries) {
+        \\      if (!entry.isIntersecting) continue;
+        \\      if (deferred) setTimeout(observe, 0); else observe();
+        \\    }
+        \\  });
+        \\  observe();
+        \\})(
+    ++ (if (deferred) "true" else "false") ++ ")", null);
+
+    frame.js.env.runMicrotasks();
+    try frame.js.env.runMacrotasks();
+    try testing.expect(frame._intersection.last_delivery_ms != 0);
+}
+
+// Nested zero-delay timers are clamped to 4ms past a nesting depth of five, so
+// a yielding chain needs real time to pass between ticks.
+fn tick(frame: *Frame) !void {
+    lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
+    frame.js.env.runMicrotasks();
+    try frame.js.env.runMacrotasks();
+}
+
+fn tickUntilDisconnected(frame: *Frame) !void {
+    for (0..200) |_| {
+        try tick(frame);
+        if (!Frame.observers.hasIntersectionObservers(frame)) break;
+    }
+}
+
+test "WebApi: synchronous IntersectionObserver chain is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, false);
+    try tickUntilDisconnected(frame);
+
+    try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(true, frame._intersection.runaway);
+    try testing.expect(frame._intersection.burst_deliveries > Frame.observers.INTERSECTION_BURST_LIMIT);
+}
+
+test "WebApi: IntersectionObserver burst older than the limit is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, true);
+    frame._intersection.burst_start_ms -|= Frame.observers.INTERSECTION_RUNAWAY_MS + 1;
+    try tickUntilDisconnected(frame);
+
+    try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(true, frame._intersection.runaway);
+    try testing.expect(frame._intersection.burst_deliveries <= Frame.observers.INTERSECTION_BURST_LIMIT);
+}
+
+test "WebApi: IntersectionObserver delivery after a quiet gap starts a new burst" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, true);
+
+    // An old burst that went quiet: its age must not count against what follows.
+    frame._intersection.burst_start_ms -|= Frame.observers.INTERSECTION_RUNAWAY_MS + 1;
+    frame._intersection.last_delivery_ms -|= Frame.observers.INTERSECTION_QUIET_MS + 1;
+    const stale_start = frame._intersection.burst_start_ms;
+
+    try tick(frame);
+
+    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(false, frame._intersection.runaway);
+    try testing.expectEqual(1, frame._intersection.burst_deliveries);
+    try testing.expect(frame._intersection.burst_start_ms > stale_start);
+}
+
 test "WebApi: IntersectionObserver" {
     try testing.htmlRunner("intersection_observer", .{});
 }

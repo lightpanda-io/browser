@@ -2,7 +2,6 @@ const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
-const Frame = @import("../../../Frame.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");

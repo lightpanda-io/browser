@@ -43,6 +43,14 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TextEvent {
+    return initWithTrusted(typ, _opts, false, frame);
+}
+
+pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TextEvent {
+    return initWithTrusted(typ, _opts, true, frame);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*TextEvent {
     const arena = try frame.getArena(.tiny, "TextEvent");
     errdefer arena.release();
     const type_string = try String.init(arena.allocator(), typ, .{});
@@ -58,7 +66,7 @@ pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TextEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 
@@ -90,7 +98,8 @@ pub fn initTextEvent(
     event._bubbles = bubbles orelse false;
     event._cancelable = cancelable orelse false;
     ui._view = view;
-    self._data = if (data) |d| try arena.dupe(u8, d) else "";
+    // yup, the literal string "undefined" (not undefined) is the default
+    self._data = if (data) |d| try arena.dupe(u8, d) else "undefined";
 }
 
 pub const JsApi = struct {

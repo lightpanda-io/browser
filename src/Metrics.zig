@@ -20,12 +20,16 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Metrics = @This();
+const Driver = @import("server/Driver.zig").Protocol;
 
-cdp_connections: Counter = .{},
-cdp_connection_limit: Counter = .{},
-cdp_active_connections: Gauge = .{},
-cdp_commands: Counter = .{},
-cdp_unknown_commands: Counter = .{},
+serve_http_requests: CounterEnum("status", @import("network/http.zig").StatusCategory) = .{},
+serve_http_evictions: Counter = .{},
+serve_inbox_backlog: Counter = .{},
+serve_connections: CounterEnum("driver", Driver) = .{},
+serve_connection_limit: Counter = .{},
+serve_active_connections: GaugeEnum("driver", Driver) = .{},
+serve_commands: CounterEnum("driver", Driver) = .{},
+serve_unknown_commands: CounterEnum("driver", Driver) = .{},
 js_heap_limits: Counter = .{},
 script_errors: Counter = .{},
 js_errors: CounterEnum("kind", enum { js_exception, other }) = .{},
@@ -87,15 +91,23 @@ http_navigation_delay_ms: Histogram(&.{
 }) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
+cors_check: CounterEnum("result", enum { same_origin, no_cors, simple, preflight }) = .{},
+cors_preflight: CounterEnum("result", enum { allowed, blocked }) = .{},
+cors_response: CounterEnum("result", enum { allowed, blocked }) = .{},
+adblock_verdicts: CounterEnum("verdict", @import("network/adblock/AdBlocker.zig").Verdict) = .{},
+adblock_rules: GaugeEnum("state", enum { loaded, skipped, cosmetic }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
 const help = .{
-    .cdp_connections = "CDP websocket connections accepted",
-    .cdp_connection_limit = "Connections rejected because --cdp-max-connections was reached",
-    .cdp_active_connections = "Currently connected CDP clients",
-    .cdp_commands = "CDP commands dispatched",
-    .cdp_unknown_commands = "CDP commands rejected for an unknown domain or method",
+    .serve_http_requests = "HTTP responses sent, by status category (includes the pre-parse 400/413 rejections)",
+    .serve_http_evictions = "HTTP connections closed for sitting past their deadline without completing a request",
+    .serve_inbox_backlog = "Websocket connections closed for queueing more unprocessed messages than the worker could drain",
+    .serve_connections = "Websocket connections accepted, by driver protocol",
+    .serve_connection_limit = "Accepts deferred because the connection budget was full: the listener pauses until a slot frees (counted before any handshake, so no driver label)",
+    .serve_active_connections = "Currently connected clients, by driver protocol",
+    .serve_commands = "Commands dispatched, by driver protocol",
+    .serve_unknown_commands = "Commands rejected for an unknown domain, module or method, by driver protocol",
     .js_heap_limits = "Pages terminated for reaching the V8 heap limit",
     .script_errors = "Scripts that failed to evaluate, e.g. an uncaught top-level exception",
     .js_errors = "Uncaught JS errors (script exceptions, listener/callback throws, unhandled promise rejections); kind=js_exception is a thrown JS value, other is an internal failure (e.g. compilation error, terminated execution)",
@@ -104,7 +116,7 @@ const help = .{
     .arena_inflight = "Arenas currently checked out of the pool. Above the bucket's max, every acquisition is a miss and every release is discarded",
     .arena_memory_bytes = "Backing memory held by pooled arenas, including capacity retained on the free list",
     .navigate = "Navigations by initiating frame type",
-    .js_heap_physical_bytes = "V8 heap physical size summed over every live isolate (one per CDP connection).",
+    .js_heap_physical_bytes = "V8 heap physical size summed over every live isolate (one per connection).",
     .js_heap_size_bytes = "V8 heap physical size, sampled when a page is closed",
     .http_requests = "HTTP requests submitted, by dispatch mode (excludes internal requests like robots.txt)",
     .http_status = "Final HTTP response status category (redirects counted once, at the final hop)",
@@ -116,6 +128,11 @@ const help = .{
     .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
+    .cors_check = "CORS initial classification: same_origin/no_cors need no CORS handling, simple needs response validation only, preflight needs an OPTIONS round-trip first",
+    .cors_preflight = "CORS preflight (OPTIONS) results, one per request that required one",
+    .cors_response = "CORS actual-response validation results",
+    .adblock_verdicts = "Adblocker decisions for evaluated requests, by verdict (none = not blocked, allowed = an exception overrode a block)",
+    .adblock_rules = "Filter-list rules by fate: loaded into the matcher, skipped as unsupported, or cosmetic (domain-scoped element hiding, outside the network realm)",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {
@@ -203,6 +220,10 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
 
         pub fn decr(self: *Self, tag: T) void {
             self.values.getPtr(tag).decr();
+        }
+
+        pub fn add(self: *Self, tag: T, n: i64) void {
+            self.values.getPtr(tag).add(n);
         }
 
         fn write(self: *const Self, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {

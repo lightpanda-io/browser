@@ -1,0 +1,1275 @@
+// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
+const lp = @import("lightpanda");
+
+const id = @import("../id.zig");
+const CDP = @import("../CDP.zig");
+const NodeRegistry = @import("../../../NodeRegistry.zig");
+
+const dump = @import("../../../browser/dump.zig");
+const js = @import("../../../browser/js/js.zig");
+const Page = @import("../../../browser/Page.zig");
+const Frame = @import("../../../browser/Frame.zig");
+const File = @import("../../../browser/webapi/File.zig");
+const Blob = @import("../../../browser/webapi/Blob.zig");
+const Factory = @import("../../../browser/Factory.zig");
+const xpath = @import("../../../browser/xpath/Evaluator.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Input = @import("../../../browser/webapi/element/html/Input.zig");
+const Selector = @import("../../../browser/webapi/selector/Selector.zig");
+
+const log = lp.log;
+const Allocator = std.mem.Allocator;
+
+pub fn processMessage(cmd: *CDP.Command) !void {
+    const action = std.meta.stringToEnum(enum {
+        enable,
+        getDocument,
+        performSearch,
+        getSearchResults,
+        discardSearchResults,
+        querySelector,
+        querySelectorAll,
+        resolveNode,
+        describeNode,
+        scrollIntoViewIfNeeded,
+        getContentQuads,
+        getBoxModel,
+        requestChildNodes,
+        getFrameOwner,
+        getOuterHTML,
+        requestNode,
+        setFileInputFiles,
+    }, cmd.input.action) orelse return error.UnknownMethod;
+
+    switch (action) {
+        .enable => return cmd.sendResult(null, .{}),
+        .getDocument => return getDocument(cmd),
+        .performSearch => return performSearch(cmd),
+        .getSearchResults => return getSearchResults(cmd),
+        .discardSearchResults => return discardSearchResults(cmd),
+        .querySelector => return querySelector(cmd),
+        .querySelectorAll => return querySelectorAll(cmd),
+        .resolveNode => return resolveNode(cmd),
+        .describeNode => return describeNode(cmd),
+        .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
+        .getContentQuads => return getContentQuads(cmd),
+        .getBoxModel => return getBoxModel(cmd),
+        .requestChildNodes => return requestChildNodes(cmd),
+        .getFrameOwner => return getFrameOwner(cmd),
+        .getOuterHTML => return getOuterHTML(cmd),
+        .requestNode => return requestNode(cmd),
+        .setFileInputFiles => return setFileInputFiles(cmd),
+    }
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getDocument
+fn getDocument(cmd: *CDP.Command) !void {
+    const Params = struct {
+        // CDP documentation implies that 0 isn't valid, but it _does_ work in Chrome
+        depth: i32 = 3,
+        pierce: bool = false,
+    };
+    const params = try cmd.params(Params) orelse Params{};
+
+    if (params.pierce) {
+        log.warn(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try bc.node_registry.register(frame.window._document.asNode());
+    return cmd.sendResult(.{ .root = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+}
+
+// Closed set of XPath 1.0 named axes. Matched literally before `::` so
+// CSS pseudo-elements (`a::before`, `div::first-line`) don't get
+// misrouted to the XPath evaluator just because they have an
+// identifier-looking word before `::`.
+const xpath_axis_names = std.StaticStringMap(void).initComptime(.{
+    .{ "child", {} },
+    .{ "descendant", {} },
+    .{ "descendant-or-self", {} },
+    .{ "self", {} },
+    .{ "parent", {} },
+    .{ "ancestor", {} },
+    .{ "ancestor-or-self", {} },
+    .{ "following-sibling", {} },
+    .{ "preceding-sibling", {} },
+    .{ "following", {} },
+    .{ "preceding", {} },
+    .{ "attribute", {} },
+    .{ "namespace", {} },
+});
+
+// Heuristic (decision #2/#9): treat the query as XPath when it begins
+// with a path operator or contains an axis specifier; otherwise fall
+// through to CSS.
+fn isXPathQuery(q: []const u8) bool {
+    if (q.len == 0) return false;
+    if (q[0] == '/') return true;
+    if (q[0] == '.' and q.len > 1 and q[1] == '/') return true;
+    if (q[0] == '(' and q.len > 1) {
+        if (q[1] == '/') return true;
+        if (q[1] == '.' and q.len > 2 and q[2] == '/') return true;
+    }
+    // For `::` to be an XPath axis separator, the identifier immediately
+    // before it must be one of the 13 named axes. Walk back the run of
+    // [a-zA-Z-] characters and look it up in the closed set.
+    var idx: usize = 0;
+    while (std.mem.indexOfPos(u8, q, idx, "::")) |hit| : (idx = hit + 1) {
+        if (hit == 0) continue;
+        var start = hit;
+        while (start > 0) {
+            const c = q[start - 1];
+            const is_axis_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '-';
+            if (!is_axis_char) break;
+            start -= 1;
+        }
+        if (start == hit) continue;
+        if (xpath_axis_names.has(q[start..hit])) return true;
+    }
+    return false;
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-performSearch
+fn performSearch(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        query: []const u8,
+        includeUserAgentShadowDOM: ?bool = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const root = frame.window._document.asNode();
+
+    if (isXPathQuery(params.query)) {
+        const arena = try frame.getArena(.medium, "DOM.performSearch");
+        defer arena.release();
+        const nodes = try xpath.searchAll(arena.allocator(), root, params.query, frame);
+        return finishSearch(cmd, bc, nodes);
+    }
+
+    const list = try Selector.querySelectorAll(root, params.query, frame);
+    defer list.deinit(frame._page);
+    return finishSearch(cmd, bc, list._nodes);
+}
+
+fn finishSearch(cmd: *CDP.Command, bc: *CDP.BrowserContext, nodes: []const *DOMNode) !void {
+    const search = try bc.node_search_list.create(nodes);
+    try dispatchSetChildNodes(cmd, nodes);
+    return cmd.sendResult(.{
+        .searchId = search.name,
+        .resultCount = @as(u32, @intCast(search.node_ids.len)),
+    }, .{});
+}
+
+// dispatchSetChildNodes send the setChildNodes event for the whole DOM tree
+// hierarchy of each nodes.
+// We dispatch event in the reverse order: from the top level to the direct parents.
+// We should dispatch a node only if it has never been sent.
+fn dispatchSetChildNodes(cmd: *CDP.Command, dom_nodes: []const *DOMNode) !void {
+    const arena = cmd.arena;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+
+    var parents: std.ArrayList(*NodeRegistry.Node) = .empty;
+    for (dom_nodes) |dom_node| {
+        var current = dom_node;
+        while (true) {
+            const parent_node = current._parent orelse break;
+
+            const node = try bc.node_registry.register(parent_node);
+            if (bc.set_child_nodes_sent.contains(node.id)) {
+                break;
+            }
+            try parents.append(arena, node);
+            current = parent_node;
+        }
+    }
+
+    const plen = parents.items.len;
+    if (plen == 0) {
+        return;
+    }
+
+    var i: usize = plen;
+    // We're going to iterate in reverse order from how we added them.
+    // This ensures that we're emitting the tree of nodes top-down.
+    while (i > 0) {
+        i -= 1;
+        const node = parents.items[i];
+        // Although our above loop won't add an already-sent node to `parents`
+        // this can still be true because two nodes can share the same parent node
+        // so we might have just sent the node a previous iteration of this loop
+        const gop = try bc.set_child_nodes_sent.getOrPut(bc.cdp.allocator, node.id);
+        if (gop.found_existing) continue;
+
+        // If the node has no parent, it's the root node.
+        // We don't dispatch event for it because we assume the root node is
+        // dispatched via the DOM.getDocument command.
+        const dom_parent = node.dom._parent orelse continue;
+
+        // Retrieve the parent from the registry.
+        const parent_node = try bc.node_registry.register(dom_parent);
+
+        try cmd.sendEvent("DOM.setChildNodes", .{
+            .parentId = parent_node.id,
+            .nodes = .{bc.nodeWriter(node, .{})},
+        }, .{
+            .session_id = session_id,
+        });
+    }
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-discardSearchResults
+fn discardSearchResults(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        searchId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    bc.node_search_list.remove(params.searchId);
+    return cmd.sendResult(null, .{});
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getSearchResults
+fn getSearchResults(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        searchId: []const u8,
+        fromIndex: u32,
+        toIndex: u32,
+    })) orelse return error.InvalidParams;
+
+    if (params.fromIndex >= params.toIndex) {
+        return error.BadIndices;
+    }
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const search = bc.node_search_list.get(params.searchId) orelse {
+        return error.SearchResultNotFound;
+    };
+
+    const node_ids = search.node_ids;
+
+    if (params.fromIndex >= node_ids.len) return error.BadFromIndex;
+    if (params.toIndex > node_ids.len) return error.BadToIndex;
+
+    return cmd.sendResult(.{ .nodeIds = node_ids[params.fromIndex..params.toIndex] }, .{});
+}
+
+fn querySelector(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: NodeRegistry.Id,
+        selector: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
+
+    const element = try Selector.querySelector(node.dom, params.selector, frame) orelse return error.NodeNotFoundForGivenId;
+    const dom_node = element.asNode();
+    const registered_node = try bc.node_registry.register(dom_node);
+
+    // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
+    var array = [1]*DOMNode{dom_node};
+    try dispatchSetChildNodes(cmd, array[0..]);
+
+    return cmd.sendResult(.{
+        .nodeId = registered_node.id,
+    }, .{});
+}
+
+fn querySelectorAll(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: NodeRegistry.Id,
+        selector: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return cmd.sendError(-32000, "Could not find node with given id", .{});
+    };
+
+    const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, frame);
+    defer selected_nodes.deinit(frame._page);
+
+    const nodes = selected_nodes._nodes;
+
+    const node_ids = try cmd.arena.alloc(NodeRegistry.Id, nodes.len);
+    for (nodes, node_ids) |selected_node, *node_id| {
+        node_id.* = (try bc.node_registry.register(selected_node)).id;
+    }
+
+    // Dispatch setChildNodesEvents to inform the client of the subpart of node tree covering the results.
+    try dispatchSetChildNodes(cmd, nodes);
+
+    return cmd.sendResult(.{
+        .nodeIds = node_ids,
+    }, .{});
+}
+
+fn resolveNode(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?u32 = null,
+        objectGroup: ?[]const u8 = null,
+        executionContextId: ?u32 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
+
+    // Chrome resolves into the named context, else into the main world of the
+    // node's own document's frame. Drivers adopt a handle found in a child's
+    // utility world into that child's main world this way, so the root's
+    // contexts are not enough.
+    const js_context = if (params.executionContextId) |context_id|
+        findContext(bc, root, context_id) orelse return error.ContextNotFound
+    else
+        nodeFrame(node.dom, root).js;
+
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+
+    // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
+    // So we use the Node.Union when retrieve the value from the environment
+    const remote_object = try bc.inspector_session.getRemoteObject(
+        &ls.local,
+        params.objectGroup orelse "",
+        node.dom,
+    );
+    defer remote_object.deinit();
+
+    const arena = cmd.arena;
+    return cmd.sendResult(.{ .object = .{
+        .type = try remote_object.getType(arena),
+        .subtype = try remote_object.getSubtype(arena),
+        .className = try remote_object.getClassName(arena),
+        .description = try remote_object.getDescription(arena),
+        .objectId = try remote_object.getObjectId(arena),
+    } }, .{});
+}
+
+// The frame owning the node's document. Synthetic documents (DOMParser,
+// DOMImplementation) have no frame and fall back to the root.
+fn nodeFrame(dom_node: *DOMNode, root: *Frame) *Frame {
+    const document = if (dom_node._type == .document)
+        dom_node.subtype(DOMNode.Document)
+    else
+        dom_node.ownerDocument(root) orelse return root;
+    return document._frame orelse root;
+}
+
+// The context the inspector announced under `context_id`: any frame's main
+// world, then any isolated world's per-frame contexts.
+fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Context {
+    if (findMainWorldContext(root, context_id)) |js_context| {
+        return js_context;
+    }
+    for (bc.isolated_worlds.items) |isolated_world| {
+        for (isolated_world.contexts.items) |fc| {
+            if (contextIdOf(fc.context) == context_id) {
+                return fc.context;
+            }
+        }
+    }
+    return null;
+}
+
+fn findMainWorldContext(frame: *Frame, context_id: u32) ?*js.Context {
+    if (contextIdOf(frame.js) == context_id) {
+        return frame.js;
+    }
+    for (frame.child_frames.items) |child| {
+        if (findMainWorldContext(child, context_id)) |js_context| {
+            return js_context;
+        }
+    }
+    return null;
+}
+
+fn contextIdOf(js_context: *js.Context) i32 {
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+    return ls.local.debugContextId();
+}
+
+fn describeNode(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+        depth: i32 = 1,
+        pierce: bool = false,
+    })) orelse return error.InvalidParams;
+
+    if (params.pierce) {
+        log.warn(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
+    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    return cmd.sendResult(.{ .node = bc.nodeWriter(node, .{ .depth = params.depth }) }, .{});
+}
+
+// An array of quad vertices, x immediately followed by y for each point, points clock-wise.
+// Note Y points downward
+// We are assuming the start/endpoint is not repeated.
+const Quad = [8]f64;
+
+const BoxModel = struct {
+    content: Quad,
+    padding: Quad,
+    border: Quad,
+    margin: Quad,
+    width: i32,
+    height: i32,
+    // shapeOutside: ?ShapeOutsideInfo,
+};
+
+fn rectToQuad(rect: DOMNode.Element.DOMRect.Data) Quad {
+    return Quad{
+        rect.x,
+        rect.y,
+        rect.x + rect.width,
+        rect.y,
+        rect.x + rect.width,
+        rect.y + rect.height,
+        rect.x,
+        rect.y + rect.height,
+    };
+}
+
+fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+        rect: ?DOMNode.Element.DOMRect.Data = null,
+    })) orelse return error.InvalidParams;
+    // Only 1 of nodeId, backendNodeId, objectId may be set, but chrome just takes the first non-null
+
+    // We retrieve the node to at least check if it exists and is valid.
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    switch (node.dom._type) {
+        .element => {},
+        .document => {},
+        .cdata => {},
+        else => return error.NodeDoesNotHaveGeometry,
+    }
+
+    return cmd.sendResult(null, .{});
+}
+
+pub fn getNode(arena: Allocator, bc: *CDP.BrowserContext, node_id: ?NodeRegistry.Id, backend_node_id: ?NodeRegistry.Id, object_id: ?[]const u8) !*NodeRegistry.Node {
+    const input_node_id = node_id orelse backend_node_id;
+    if (input_node_id) |input_node_id_| {
+        return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+    }
+    if (object_id) |object_id_| {
+        const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Retrieve the object from which ever context it is in.
+        const parser_node = try bc.inspector_session.getNodePtr(arena, object_id_, &ls.local);
+        return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
+    }
+    return error.MissingParams;
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-getContentQuads
+// Related to: https://drafts.csswg.org/cssom-view/#the-geometryutils-interface
+fn getContentQuads(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    // TODO likely if the following CSS properties are set the quads should be empty
+    // visibility: hidden
+    // display: none
+
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    // TODO implement for document or text
+    // Most likely document would require some hierachgy in the renderer. It is left unimplemented till we have a good example.
+    // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
+    // Elements like SVGElement may have multiple quads.
+
+    const quad = rectToQuad(element.boundingClientRectValues(frame));
+    return cmd.sendResult(.{ .quads = &.{quad} }, .{});
+}
+
+fn getBoxModel(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?u32 = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    // TODO implement for document or text
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+
+    // Without padding, border or margin in the layout, the four boxes coincide.
+    // Drivers read `border` for boundingBox(), so it must not be zero.
+    const rect = element.boundingClientRectValues(frame);
+    const quad = rectToQuad(rect);
+
+    return cmd.sendResult(.{ .model = BoxModel{
+        .content = quad,
+        .padding = quad,
+        .border = quad,
+        .margin = quad,
+        .width = @trunc(rect.width),
+        .height = @trunc(rect.height),
+    } }, .{});
+}
+
+fn requestChildNodes(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: NodeRegistry.Id,
+        depth: i32 = 1,
+        pierce: bool = false,
+    })) orelse return error.InvalidParams;
+
+    if (params.depth == 0) return error.InvalidParams;
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session_id = bc.session_id orelse return error.SessionIdNotLoaded;
+    const node = bc.node_registry.lookup_by_id.get(params.nodeId) orelse {
+        return error.InvalidNode;
+    };
+
+    try cmd.sendEvent("DOM.setChildNodes", .{
+        .parentId = node.id,
+        .nodes = bc.nodeWriter(node, .{ .depth = params.depth, .exclude_root = true }),
+    }, .{
+        .session_id = session_id,
+    });
+
+    return cmd.sendResult(null, .{});
+}
+
+fn getFrameOwner(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        frameId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame_id = try id.parseFrameId(params.frameId);
+
+    const frame = bc.session.findFrameByFrameId(frame_id) orelse {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    };
+
+    const node = try bc.node_registry.register(frame.window._document.asNode());
+    return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
+}
+
+fn getOuterHTML(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+        includeShadowDOM: bool = false,
+    })) orelse return error.InvalidParams;
+
+    if (params.includeShadowDOM) {
+        log.warn(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
+    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    var aw = std.Io.Writer.Allocating.init(cmd.arena);
+    try dump.deep(node.dom, .{}, &aw.writer, frame);
+
+    return cmd.sendResult(.{ .outerHTML = aw.written() }, .{});
+}
+
+fn requestNode(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        objectId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, null, null, params.objectId);
+
+    return cmd.sendResult(.{ .nodeId = node.id }, .{});
+}
+
+// Cap matches Chrome's effective per-file limit; large enough for realistic
+// uploads, small enough to avoid runaway reads from a misbehaving driver.
+const MAX_FILE_BYTES: usize = 100 * 1024 * 1024;
+
+// https://chromedevtools.github.io/devtools-protocol/tot/DOM/#method-setFileInputFiles
+fn setFileInputFiles(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        files: []const []const u8,
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    const input = element.is(Input) orelse return error.NotAnInputElement;
+    if (input._input_type != .file) return error.NotAFileInput;
+
+    var files = try cmd.arena.alloc(*File, params.files.len);
+    {
+        // Files are created at refcount 0; selectFiles takes ownership. If a later
+        // path fails to load, release the arenas of the ones already created.
+        var created: usize = 0;
+        errdefer for (files[0..created]) |f| f._proto.deinit(frame._page);
+        for (params.files, 0..) |path, i| {
+            files[i] = try fileFromDiskPath(path, frame._page);
+            created = i + 1;
+        }
+    }
+    try input.selectFiles(files, frame);
+
+    return cmd.sendResult(null, .{});
+}
+
+fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
+    // Mirror File.init: a Blob and File sharing one reference-counted arena,
+    // but read the bytes straight off disk into it (single copy, no JS parts).
+    const arena = try page.getArena(.large, "File");
+    errdefer arena.release();
+
+    const data = try std.Io.Dir.cwd().readFileAlloc(lp.io, path, arena.allocator(), .limited(MAX_FILE_BYTES));
+    const stat = try std.Io.Dir.cwd().statFile(lp.io, path, .{});
+    const basename = std.fs.path.basename(path);
+
+    const file = try Factory.chainedWithAllocator(arena.allocator(), .{
+        Blob{
+            ._rc = .{},
+            ._arena = arena,
+            ._type = undefined,
+            ._slice = data,
+            ._mime = mimeFromExtension(basename),
+        },
+        File{
+            ._proto = undefined,
+            ._name = try arena.dupe(u8, basename),
+            ._last_modified = stat.mtime.toMilliseconds(),
+        },
+    });
+    file._proto._type = .{ .file = file };
+    return file;
+}
+
+fn mimeFromExtension(name: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return "application/octet-stream";
+    if (dot + 1 >= name.len) return "application/octet-stream";
+    var buf: [16]u8 = undefined;
+    const ext_raw = name[dot + 1 ..];
+    if (ext_raw.len > buf.len) return "application/octet-stream";
+    const ext = std.ascii.lowerString(buf[0..ext_raw.len], ext_raw);
+
+    const Map = std.StaticStringMap([]const u8);
+    const map = Map.initComptime(.{
+        .{ "txt", "text/plain" },
+        .{ "html", "text/html" },
+        .{ "htm", "text/html" },
+        .{ "css", "text/css" },
+        .{ "js", "text/javascript" },
+        .{ "json", "application/json" },
+        .{ "xml", "application/xml" },
+        .{ "pdf", "application/pdf" },
+        .{ "png", "image/png" },
+        .{ "jpg", "image/jpeg" },
+        .{ "jpeg", "image/jpeg" },
+        .{ "gif", "image/gif" },
+        .{ "webp", "image/webp" },
+        .{ "svg", "image/svg+xml" },
+        .{ "csv", "text/csv" },
+        .{ "zip", "application/zip" },
+    });
+    return map.get(ext) orelse "application/octet-stream";
+}
+
+const testing = @import("../testing.zig");
+test "cdp.dom: getSearchResults unknown search id" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{
+        .id = 8,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "Nope", .fromIndex = 0, .toIndex = 10 },
+    });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 8 });
+}
+
+test "cdp.dom: search flow" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 12 });
+
+    {
+        // getSearchResults
+        try ctx.processMessage(.{
+            .id = 13,
+            .method = "DOM.getSearchResults",
+            .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 2 },
+        });
+        try ctx.expectSentResult(.{ .nodeIds = &.{ 1, 2 } }, .{ .id = 13 });
+
+        // different fromIndex
+        try ctx.processMessage(.{
+            .id = 14,
+            .method = "DOM.getSearchResults",
+            .params = .{ .searchId = "0", .fromIndex = 1, .toIndex = 2 },
+        });
+        try ctx.expectSentResult(.{ .nodeIds = &.{2} }, .{ .id = 14 });
+
+        // different toIndex
+        try ctx.processMessage(.{
+            .id = 15,
+            .method = "DOM.getSearchResults",
+            .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+        });
+        try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 15 });
+    }
+
+    try ctx.processMessage(.{
+        .id = 16,
+        .method = "DOM.discardSearchResults",
+        .params = .{ .searchId = "0" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 16 });
+
+    // make sure the delete actually did something
+    try ctx.processMessage(.{
+        .id = 17,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentError(-31998, "SearchResultNotFound", .{ .id = 17 });
+}
+
+test "cdp.dom: performSearch with XPath" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/perform_search_xpath.html" });
+
+    try ctx.processMessage(.{
+        .id = 20,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "//p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 3 }, .{ .id = 20 });
+
+    try ctx.processMessage(.{
+        .id = 21,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "descendant::p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "1", .resultCount = 3 }, .{ .id = 21 });
+
+    try ctx.processMessage(.{
+        .id = 22,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "//*[@id='outer']" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "2", .resultCount = 1 }, .{ .id = 22 });
+
+    try ctx.processMessage(.{
+        .id = 23,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "3", .resultCount = 3 }, .{ .id = 23 });
+
+    try ctx.processMessage(.{
+        .id = 24,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "div p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "4", .resultCount = 2 }, .{ .id = 24 });
+}
+
+test "cdp.dom: setFileInputFiles on file input" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    // Find the file input via performSearch → getSearchResults.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "input" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Drop a temp file we can upload.
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer tmp_dir.close(lp.io);
+    {
+        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        defer f.close(lp.io);
+        try f.writeStreamingAll(lp.io, "hello upload");
+    }
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+}
+
+test "cdp.dom: setFileInputFiles exposes files to JS" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "input" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // Two files, so we can assert ordering as well as identity and iteration.
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer tmp_dir.close(lp.io);
+    {
+        const a = try tmp_dir.createFile(lp.io, "a.txt", .{ .truncate = true });
+        defer a.close(lp.io);
+        try a.writeStreamingAll(lp.io, "aaa");
+        const b = try tmp_dir.createFile(lp.io, "b.txt", .{ .truncate = true });
+        defer b.close(lp.io);
+        try b.writeStreamingAll(lp.io, "bbbb");
+    }
+
+    const frame = bc.mainFrame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // Listen on `document` so reaching the handler also proves the events
+    // bubbled up from the input. Record interface + bubbles + order + target.
+    _ = try ls.local.compileAndRun(
+        \\window.__evts = [];
+        \\const rec = (e) => window.__evts.push(
+        \\  [e.type, e instanceof InputEvent, e.bubbles, e.target.id].join(':'));
+        \\document.addEventListener('input', rec);
+        \\document.addEventListener('change', rec);
+    , null);
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{ ".zig-cache/tmp/a.txt", ".zig-cache/tmp/b.txt" },
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    // The only way to observe a populated FileList from JS: set it via CDP,
+    // then read it back. Covers length, item(), the indexed getter and the
+    // iterator (spread / Array.from), which can't be exercised on an empty list.
+    // Also asserts the fired events: `input` then `change`, both plain bubbling
+    // Events (not InputEvents) targeting the input.
+    const result = try ls.local.compileAndRun(
+        \\const f = document.getElementById('upload');
+        \\f.files.length === 2 &&
+        \\f.files.item(0).name === 'a.txt' &&
+        \\f.files[0] instanceof File && f.files[0].name === 'a.txt' &&
+        \\f.files[1].name === 'b.txt' &&
+        \\f.files[2] === undefined &&
+        \\[...f.files].map((x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Array.from(f.files, (x) => x.name).join(',') === 'a.txt,b.txt' &&
+        \\Object.keys(f.files).join(',') === '0,1' &&
+        \\window.__evts.join(',') === 'input:false:true:upload,change:false:true:upload'
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.dom: setFileInputFiles rejects non-input node" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
+    // dom1.html has <p> elements — pick one by search.
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentError(-31998, "NotAnInputElement", .{ .id = 3 });
+}
+
+test "cdp.dom: setFileInputFiles requires a node identifier" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentError(-31998, "MissingParams", .{ .id = 1 });
+}
+
+test "cdp.dom: setFileInputFiles errors when a path is missing" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_file.html" });
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "input" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    // First path exists, second does not: the first File is created then must be
+    // freed when the second read fails (the test runner panics on a leak).
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer tmp_dir.close(lp.io);
+    {
+        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        defer f.close(lp.io);
+        try f.writeStreamingAll(lp.io, "hello upload");
+    }
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = 1,
+            .files = &[_][]const u8{ ".zig-cache/tmp/upload.txt", ".zig-cache/tmp/does-not-exist.txt" },
+        },
+    });
+    try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
+}
+
+test "cdp.dom: isXPathQuery heuristic" {
+    // XPath-shaped queries — each line covers a distinct heuristic branch.
+    try std.testing.expect(isXPathQuery("/html"));
+    try std.testing.expect(isXPathQuery("//p"));
+    try std.testing.expect(isXPathQuery(".//foo"));
+    try std.testing.expect(isXPathQuery("(//foo)[1]"));
+    try std.testing.expect(isXPathQuery("(./bar)[2]"));
+    try std.testing.expect(isXPathQuery("descendant::p"));
+    try std.testing.expect(isXPathQuery("ancestor-or-self::*"));
+    try std.testing.expect(isXPathQuery("//*[@id='x']"));
+
+    // CSS-shaped queries — fall through to the existing path.
+    try std.testing.expect(!isXPathQuery(""));
+    try std.testing.expect(!isXPathQuery("p"));
+    try std.testing.expect(!isXPathQuery("div p"));
+    try std.testing.expect(!isXPathQuery("#main"));
+    try std.testing.expect(!isXPathQuery(".cls"));
+    try std.testing.expect(!isXPathQuery("[data-x]"));
+    try std.testing.expect(!isXPathQuery("(p)")); // parens without path → CSS
+    try std.testing.expect(!isXPathQuery(".x")); // leading dot without /
+
+    // CSS pseudo-elements: identifier before `::` is not an XPath axis name.
+    try std.testing.expect(!isXPathQuery("a::before"));
+    try std.testing.expect(!isXPathQuery("div::after"));
+    try std.testing.expect(!isXPathQuery("p::first-line"));
+    try std.testing.expect(!isXPathQuery("input::placeholder"));
+    // Attribute selector with `::` inside a literal — nothing axis-like before it.
+    try std.testing.expect(!isXPathQuery("[data-x=\"x::y\"]"));
+}
+
+test "cdp.dom: querySelector unknown search id" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 99, .selector = "" },
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
+
+    try ctx.processMessage(.{
+        .id = 9,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 99, .selector = "" },
+    });
+    try ctx.expectSentError(-32000, "Could not find node with given id", .{});
+}
+
+test "cdp.dom: querySelector Node not found" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom1.html" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
+        .id = 3,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "p" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 3 });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 1, .selector = "a" },
+    });
+    try ctx.expectSentError(-31998, "NodeNotFoundForGivenId", .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 1, .selector = "a" },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &[_]u32{} }, .{ .id = 5 });
+}
+
+test "cdp.dom: querySelector Nodes found" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom2.html" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
+        .id = 3,
+        .method = "DOM.performSearch",
+        .params = .{ .query = "div" },
+    });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 3 });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 1, .selector = "p" },
+    });
+    try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
+    try ctx.expectSentResult(.{ .nodeId = 7 }, .{ .id = 4 });
+
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.querySelectorAll",
+        .params = .{ .nodeId = 1, .selector = "p" },
+    });
+    try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
+    try ctx.expectSentResult(.{ .nodeIds = &.{7} }, .{ .id = 5 });
+}
+
+// Drivers find an element in a child frame's utility world, then adopt the
+// handle into that child's main world with DOM.resolveNode. Both the named
+// context and the default (the node's own frame) must be the child's, not the
+// root's.
+test "cdp.dom: resolveNode into a child frame's context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const child_main = try mainWorldContextId(bc, child);
+    try testing.expect(child_main != try mainWorldContextId(bc, root));
+
+    // Register the child's <html> the way DOM.describeNode(objectId) would.
+    const html = child.document.getDocumentElement() orelse unreachable;
+    const node = try bc.node_registry.register(html.asNode());
+
+    try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-X" });
+
+    // Into the context the client names.
+    try ctx.processMessage(.{ .id = 11, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+        .executionContextId = child_main,
+    } });
+    const named = try sentObjectId(&ctx, 11);
+    try ctx.processMessage(.{ .id = 12, .method = "Runtime.callFunctionOn", .sessionId = "SID-X", .params = .{
+        .objectId = named,
+        .functionDeclaration = "function() { return globalThis.document.title + '|' + (this.ownerDocument === globalThis.document); }",
+        .returnByValue = true,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one|true" } }, .{ .id = 12 });
+
+    // Into the node's own frame when no context is named.
+    try ctx.processMessage(.{ .id = 13, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+    } });
+    const default = try sentObjectId(&ctx, 13);
+    try ctx.processMessage(.{ .id = 14, .method = "Runtime.callFunctionOn", .sessionId = "SID-X", .params = .{
+        .objectId = default,
+        .functionDeclaration = "function() { return globalThis.document.title; }",
+        .returnByValue = true,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 14 });
+
+    try ctx.processMessage(.{ .id = 15, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+        .executionContextId = 9999,
+    } });
+    try ctx.expectSentError(-31998, "ContextNotFound", .{ .id = 15 });
+}
+
+fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    return bc.inspector_session.inspector.getContextId(&ls.local);
+}
+
+// The result.object.objectId of the response to command `msg_id`.
+fn sentObjectId(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = switch (msg) {
+            .object => |o| o,
+            else => continue,
+        };
+        const id_value = obj.get("id") orelse continue;
+        if (id_value != .integer or id_value.integer != msg_id) {
+            continue;
+        }
+        const result = obj.get("result") orelse return error.NoResult;
+        const object = result.object.get("object") orelse return error.NoObject;
+        const object_id = object.object.get("objectId") orelse return error.NoObjectId;
+        return object_id.string;
+    }
+    return error.MessageNotFound;
+}
+
+test "cdp.dom: getBoxModel" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/dom2.html" });
+
+    try ctx.processMessage(.{ // Hacky way to make sure nodeId 1 exists in the registry
+        .id = 3,
+        .method = "DOM.getDocument",
+    });
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "DOM.querySelector",
+        .params = .{ .nodeId = 1, .selector = "p" },
+    });
+    try ctx.expectSentResult(.{ .nodeId = 3 }, .{ .id = 4 });
+
+    // Box model on the <p> nodeId returned above.
+    // Note: nodeId 6 is <head>, which is `display: none` per HTML Rendering
+    // §15.3.1, so its box model is all-zeros — exercise a visible element.
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "DOM.getBoxModel",
+        .params = .{ .nodeId = 3 },
+    });
+    try ctx.expectSentResult(.{ .model = BoxModel{
+        .content = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .padding = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .border = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .margin = Quad{ 0.0, 25.0, 5.0, 25.0, 5.0, 30.0, 0.0, 30.0 },
+        .width = 5,
+        .height = 5,
+    } }, .{ .id = 5 });
+}

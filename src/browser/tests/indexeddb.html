@@ -329,9 +329,9 @@
         db.deleteObjectStore("temp");
     };
     open.onsuccess = (e) => {
-        const tx = e.target.result.transaction("temp", "readonly");
+        // The deleted store is not in the database: transaction() itself throws.
         let threw = null;
-        try { tx.objectStore("temp"); } catch (err) { threw = err; }
+        try { e.target.result.transaction("temp", "readonly"); } catch (err) { threw = err; }
         state.resolve(threw && threw.name);
     };
     await state.done((name) => {
@@ -1186,6 +1186,337 @@
         testing.expectEqual(true, got.upgrade.index);
         testing.expectEqual(true, got.store);
         testing.expectEqual(true, got.index);
+    });
+}
+</script>
+
+<!-- put()/add() structured-clone the value at call time: the record is the
+     clone as of the call (later mutation of the argument is not stored), a
+     generated key is injected into the clone rather than the caller's object,
+     and an unserializable value throws DataCloneError synchronously. -->
+<script id="write_clones_at_call_time" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("clone-at-call-db", 1);
+    open.onupgradeneeded = (e) => {
+        e.target.result.createObjectStore("s", { keyPath: "id", autoIncrement: true });
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction("s", "readwrite");
+        const store = tx.objectStore("s");
+        const record = { data: "before" };
+        store.put(record);
+        record.data = "after";
+        store.put(record); // same object again: still no key on it, so a 2nd record
+        let threw = null;
+        try {
+            store.put({ id: 3, fn: () => {} });
+        } catch (err) {
+            threw = err.name;
+        }
+        tx.oncomplete = () => {
+            const all = db.transaction("s").objectStore("s").getAll();
+            all.onsuccess = () => state.resolve({ all: all.result, record, threw });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual([{ data: "before", id: 1 }, { data: "after", id: 2 }], got.all);
+        testing.expectEqual({ data: "after" }, got.record);
+        testing.expectEqual("DataCloneError", got.threw);
+    });
+}
+</script>
+
+<!-- Open requests are IDBOpenDBRequests; result/error throw while pending and
+     error is null (not undefined) after success; databases() lists the
+     origin's databases. -->
+<script id="request_conformance" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("conformance-db", 2);
+    testing.expectEqual("IDBOpenDBRequest", Object.getPrototypeOf(open).constructor.name);
+    testing.expectEqual(true, open instanceof IDBRequest);
+    testing.expectEqual(true, "onblocked" in open);
+    testing.expectError("InvalidStateError", () => open.result);
+    testing.expectError("InvalidStateError", () => open.error);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = async () => {
+        const db = open.result;
+        const req = db.transaction("s").objectStore("s").get(1);
+        testing.expectError("InvalidStateError", () => req.result);
+        req.onsuccess = async () => {
+            const all = await indexedDB.databases();
+            state.resolve({
+                openError: open.error,
+                openTransaction: open.transaction,
+                reqError: req.error,
+                listed: all.filter((d) => d.name === "conformance-db"),
+            });
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(null, got.openError);
+        testing.expectEqual(null, got.openTransaction);
+        testing.expectEqual(null, got.reqError);
+        testing.expectEqual([{ name: "conformance-db", version: 2 }], got.listed);
+    });
+}
+</script>
+
+<!-- A version above 2^32 (Date.now() is a common choice) survives the round
+     trip as a Number; out-of-range versions are a TypeError. -->
+<script id="open_version_64bit" type=module>
+{
+    const state = await testing.async();
+    const version = 1788161539190;
+    const open = indexedDB.open("big-version-db", version);
+    let upgrade = null;
+    open.onupgradeneeded = (e) => {
+        upgrade = { oldVersion: e.oldVersion, newVersion: e.newVersion };
+    };
+    open.onsuccess = (e) => {
+        const db = e.target.result;
+        state.resolve({ upgrade, version: db.version, type: typeof db.version });
+    };
+    await state.done((got) => {
+        testing.expectEqual({ oldVersion: 0, newVersion: version }, got.upgrade);
+        testing.expectEqual(version, got.version);
+        testing.expectEqual("number", got.type);
+    });
+    for (const bad of [-1, 0.5, NaN, Infinity, "foo", 2 ** 53]) {
+        testing.expectError("TypeError", () => indexedDB.open("big-version-db", bad));
+    }
+}
+</script>
+
+<!-- abort() delivers the pending requests' error events and the abort event
+     from a task, so handlers attached right after the call still see them; the
+     abort event bubbles to the connection. -->
+<script id="abort_delivery_is_async" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("abort-async-db", 1);
+    open.onupgradeneeded = (e) => e.target.result.createObjectStore("s");
+    open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("s", "readonly");
+        const req = tx.objectStore("s").get(1);
+        tx.abort();
+        const events = [];
+        req.onerror = () => events.push("req:" + req.error.name + ":" + req.readyState);
+        req.onsuccess = () => events.push("req:success");
+        tx.onabort = () => events.push("tx:abort");
+        db.onabort = () => {
+            events.push("db:abort");
+            state.resolve(events);
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual(["req:AbortError:done", "tx:abort", "db:abort"], got);
+    });
+}
+</script>
+
+<!-- createIndex({unique}) over records that violate it: the index is created,
+     the requests already queued deliver, then the transaction aborts with
+     ConstraintError and the open request fails with AbortError. -->
+<script id="create_unique_index_over_duplicates" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("unique-dupes-db", 1);
+    const events = [];
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const tx = e.target.transaction;
+        const store = db.createObjectStore("s");
+        store.put({ v: "x" }, 1).onsuccess = () => events.push("put1");
+        store.put({ v: "x" }, 2).onsuccess = () => events.push("put2");
+        const index = store.createIndex("by_v", "v", { unique: true });
+        events.push("created:" + (index instanceof IDBIndex));
+        const late = store.put({ v: "y" }, 3);
+        late.onsuccess = () => events.push("put3:success");
+        late.onerror = () => events.push("put3:" + late.error.name);
+        tx.onabort = () => events.push("abort:" + tx.error.name);
+        tx.oncomplete = () => events.push("complete");
+    };
+    open.onsuccess = () => state.resolve({ events, success: true });
+    open.onerror = (e) => {
+        e.preventDefault();
+        state.resolve({ events, error: open.error.name });
+    };
+    await state.done((got) => {
+        testing.expectEqual("AbortError", got.error);
+        testing.expectEqual(["created:true", "put1", "put2", "put3:AbortError", "abort:ConstraintError"], got.events);
+    });
+}
+</script>
+
+<!-- nextunique/prevunique visit one record per distinct index key — the one
+     with the lowest primary key, in both directions — and advance() counts
+     keys, not records. continue(undefined) is continue(). -->
+<script id="index_cursor_unique_directions" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("unique-cursor-db", 1);
+    open.onupgradeneeded = (e) => {
+        const store = e.target.result.createObjectStore("s", { keyPath: "id" });
+        store.createIndex("by_v", "v");
+        for (const [id, v] of [[1, "a"], [2, "a"], [3, "b"], [4, "b"], [5, "c"], [6, "c"]]) {
+            store.put({ id, v });
+        }
+    };
+    const walk = (index, direction, step) => new Promise((resolve) => {
+        const seen = [];
+        const req = index.openCursor(null, direction);
+        req.onsuccess = () => {
+            const cursor = req.result;
+            if (!cursor) return resolve(seen);
+            seen.push(cursor.key + cursor.primaryKey);
+            step(cursor);
+        };
+    });
+    open.onsuccess = async () => {
+        const index = open.result.transaction("s").objectStore("s").index("by_v");
+        state.resolve({
+            next: await walk(index, "nextunique", (c) => c.continue()),
+            prev: await walk(index, "prevunique", (c) => c.continue(undefined)),
+            advance: await walk(index, "nextunique", (c) => c.advance(2)),
+            keyCursor: await new Promise((resolve) => {
+                const seen = [];
+                const req = index.openKeyCursor(null, "prevunique");
+                req.onsuccess = () => {
+                    const cursor = req.result;
+                    if (!cursor) return resolve(seen);
+                    seen.push(cursor.primaryKey);
+                    cursor.continue();
+                };
+            }),
+        });
+    };
+    await state.done((got) => {
+        testing.expectEqual(["a1", "b3", "c5"], got.next);
+        testing.expectEqual(["c5", "b3", "a1"], got.prev);
+        testing.expectEqual(["a1", "c5"], got.advance);
+        testing.expectEqual([5, 3, 1], got.keyCursor);
+    });
+}
+</script>
+</body>
+
+<!-- transaction() validates up front: closed connection, empty scope, unknown
+     store; a DOMStringList scope (db.objectStoreNames) is accepted; getAll's
+     count is [EnforceRange]; objectStore()/index() throw once the
+     transaction finished. -->
+<script id="transaction_argument_checks" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("txn-args-db", 1);
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        db.createObjectStore("a").createIndex("by_x", "x");
+        db.createObjectStore("b");
+    };
+    open.onsuccess = () => {
+        const db = open.result;
+        testing.expectError("InvalidAccessError", () => db.transaction([]));
+        testing.expectError("NotFoundError", () => db.transaction("nope"));
+        testing.expectError("NotFoundError", () => db.transaction(["a", "nope"]));
+        const tx = db.transaction(db.objectStoreNames, "readonly");
+        testing.expectEqual(["a", "b"], [...tx.objectStoreNames]);
+        const store = tx.objectStore("a");
+        testing.expectError("TypeError", () => store.getAll(null, -1));
+        testing.expectError("TypeError", () => store.getAll(null, NaN));
+        testing.expectError("TypeError", () => store.index("by_x").getAllKeys({ count: Infinity }));
+        tx.abort();
+        testing.expectError("InvalidStateError", () => tx.objectStore("a"));
+        testing.expectError("InvalidStateError", () => store.index("by_x"));
+        db.close();
+        testing.expectError("InvalidStateError", () => db.transaction("a"));
+        state.resolve(true);
+    };
+    await state.done((got) => testing.expectEqual(true, got));
+}
+</script>
+
+<!-- Object store and index renames during an upgrade: names, name lists and
+     data follow; same-name is a no-op; collisions are a ConstraintError;
+     outside an upgrade it's an InvalidStateError. -->
+<script id="rename_store_and_index" type=module>
+{
+    const state = await testing.async();
+    const open = indexedDB.open("rename-db", 1);
+    open.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        const books = db.createObjectStore("books", { keyPath: "isbn" });
+        books.createIndex("by_author", "author");
+        books.put({ isbn: 1, author: "Herbert" });
+        db.createObjectStore("other");
+
+        books.name = "renamed_books";
+        books.name = "renamed_books"; // same name: no-op
+        testing.expectError("ConstraintError", () => books.name = "other");
+        testing.expectEqual("renamed_books", books.name);
+        testing.expectEqual(["other", "renamed_books"], [...db.objectStoreNames]);
+        testing.expectEqual(books, e.target.transaction.objectStore("renamed_books"));
+
+        const index = books.index("by_author");
+        index.name = "by_writer";
+        testing.expectEqual("by_writer", index.name);
+        testing.expectEqual(["by_writer"], [...books.indexNames]);
+        testing.expectEqual(index, books.index("by_writer"));
+    };
+    open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("renamed_books", "readwrite");
+        const store = tx.objectStore("renamed_books");
+        testing.expectError("InvalidStateError", () => store.name = "nope");
+        testing.expectError("InvalidStateError", () => store.index("by_writer").name = "nope");
+        const req = store.index("by_writer").get("Herbert");
+        req.onsuccess = () => state.resolve(req.result);
+    };
+    await state.done((got) => testing.expectEqual({ isbn: 1, author: "Herbert" }, got));
+}
+</script>
+
+<!-- An aborted upgrade reverts renames on the handles the caller still holds. -->
+<script id="rename_reverts_on_abort" type=module>
+{
+    const state = await testing.async();
+    const setup = indexedDB.open("rename-abort-db", 1);
+    setup.onupgradeneeded = (e) => e.target.result.createObjectStore("books").createIndex("by_author", "author");
+    setup.onsuccess = () => {
+        setup.result.close();
+        const open = indexedDB.open("rename-abort-db", 2);
+        let store = null;
+        let index = null;
+        open.onupgradeneeded = (e) => {
+            const tx = e.target.transaction;
+            store = tx.objectStore("books");
+            index = store.index("by_author");
+            store.name = "renamed";
+            index.name = "renamed_index";
+            tx.abort();
+        };
+        open.onerror = (e) => {
+            e.preventDefault();
+            const reopen = indexedDB.open("rename-abort-db", 1);
+            reopen.onsuccess = () => {
+                const db = reopen.result;
+                state.resolve({
+                    store: store.name,
+                    index: index.name,
+                    stores: [...db.objectStoreNames],
+                    indexes: [...db.transaction("books").objectStore("books").indexNames],
+                });
+            };
+        };
+    };
+    await state.done((got) => {
+        testing.expectEqual("books", got.store);
+        testing.expectEqual("by_author", got.index);
+        testing.expectEqual(["books"], got.stores);
+        testing.expectEqual(["by_author"], got.indexes);
     });
 }
 </script>

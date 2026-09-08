@@ -36,7 +36,7 @@ const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 const Event = @import("Event.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
-const Navigator = @import("Navigator.zig");
+const WorkerNavigator = @import("WorkerNavigator.zig");
 const Timers = @import("Timers.zig");
 const Scheduler = @import("Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -105,7 +105,7 @@ _message_ports: std.DoublyLinkedList = .{},
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
-_navigator: Navigator = .init,
+_navigator: WorkerNavigator = .init,
 _performance: Performance,
 _idb_factory: ?*idb.IDBFactory = null,
 _on_error: ?JS.Function.Global = null,
@@ -166,7 +166,7 @@ pub fn init(
             ._event_manager = .init(arena),
             ._script_manager = undefined,
             ._location = .{ ._url = url },
-            ._performance = .init(),
+            ._performance = .init(factory, arena),
             ._http_owner = undefined,
         },
         leaf_value,
@@ -174,7 +174,18 @@ pub fn init(
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
 
-    self._http_owner = .init(&frame._page.blob_urls, &self.origin);
+    self._http_owner = .{
+        .blob_urls = &frame._page.blob_urls,
+        .origin = &self.origin,
+        .url = null,
+        .parent = &frame._http_owner,
+        .frame_id = frame_id,
+        .document_frame_id = frame._frame_id,
+        .loader_id = loader_id,
+        .cookie_jar = &session.cookie_jar,
+        .notification = session.notification,
+        .performance = &self._performance,
+    };
 
     self._script_manager = ScriptManagerBase.init(
         arena,
@@ -188,6 +199,7 @@ pub fn init(
         .identity_arena = arena,
         .identity = &self._identity,
     });
+    self._performance._scheduler = &self.js.scheduler;
 
     // A dedicated worker is in the same agent cluster and inherits its creator's
     // origin. Adopt the parent frame's origin (shared *Origin + v8 security
@@ -270,14 +282,12 @@ pub fn makeRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !void {
         errdefer transfer.deinit();
         try self.headersForRequest(transfer);
     }
-    return transfer.submit();
+    transfer.submit() catch {};
 }
 
 // Two-phase variant; see HttpClient.newRequest for the ownership contract.
 pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClient.Transfer {
-    var r = req;
-    r.document_frame_id = self._frame._frame_id;
-    return self._session.browser.http_client.newRequest(r, &self._http_owner);
+    return self._session.browser.http_client.newRequest(req, &self._http_owner);
 }
 
 pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
@@ -300,7 +310,7 @@ pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
 }
 
-pub fn getNavigator(self: *WorkerGlobalScope) *Navigator {
+pub fn getNavigator(self: *WorkerGlobalScope) *WorkerNavigator {
     return &self._navigator;
 }
 
@@ -419,13 +429,10 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     const transfer = http_client.newRequest(.{
         .url = resolved_url,
         .method = .GET,
-        .frame_id = self._frame_id,
-        .document_frame_id = self._frame._frame_id,
-        .loader_id = self._loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = self.url,
-        .resource_type = .script,
-        .notification = session.notification,
+        .resource_type = .worker,
+        .origin = self.origin,
+        .request_mode = .no_cors,
+        .credentials_mode = .same_origin,
         .shutdown_callback = HttpClient.noopShutdown, // syncRequest installs its own
     }, &self._http_owner) catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
@@ -436,7 +443,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         try self.headersForRequest(transfer);
     }
 
-    var response = http_client.syncRequest(transfer) catch |err| {
+    var response = transfer.submitSync() catch |err| {
         log.warn(.http, "importScript", .{ .url = resolved_url, .err = err });
         return error.NetworkError;
     };
@@ -500,6 +507,10 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     }
 
     const event = error_event.asEvent();
+    // Keep the event alive past dispatch so we can read _prevent_default.
+    event.acquireRef();
+    defer _ = event.releaseRef(self._page);
+
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
     // We still dispatch so that addEventListener('error', ...) listeners fire.

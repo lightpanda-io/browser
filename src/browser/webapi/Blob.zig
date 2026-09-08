@@ -405,7 +405,7 @@ fn clampLongLong(value: f64) i64 {
     if (@abs(value - @trunc(value)) == 0.5 and @mod(rounded, 2) != 0) {
         rounded -= std.math.sign(value);
     }
-    return @intFromFloat(rounded);
+    return @trunc(rounded);
 }
 
 /// Returns the size of the Blob in bytes.

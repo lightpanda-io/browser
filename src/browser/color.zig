@@ -201,7 +201,7 @@ pub const RGBA = packed struct(u32) {
 
     pub fn init(r: u8, g: u8, b: u8, a: f32) RGBA {
         const clamped = std.math.clamp(a, 0, 1);
-        return .{ .r = r, .g = g, .b = b, .a = @intFromFloat(clamped * 255) };
+        return .{ .r = r, .g = g, .b = b, .a = @trunc(clamped * 255) };
     }
 
     /// Finds a color by its name.

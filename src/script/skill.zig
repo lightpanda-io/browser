@@ -180,7 +180,9 @@ fn positionalOptional(s: *const Schema, p: []const u8) bool {
     if (s.findField(p)) |f| {
         if (f.default_true) return true;
     }
-    if (std.mem.eql(u8, p, "selector") and s.tool.needsLocator()) return false;
+    for (s.tool.replayRequires()) |r| {
+        if (std.mem.eql(u8, r, p)) return false;
+    }
     for (s.required) |r| {
         if (std.mem.eql(u8, r, p)) return false;
     }
@@ -198,6 +200,7 @@ fn note(tool: browser_tools.Tool) []const u8 {
         .waitForSelector => "`waitFor*` default timeout 5000 ms.",
         .waitForScript => "Re-evaluates page JS until truthy.",
         .waitForState => "",
+        .screenshot => "`path` is required: writes a PNG of the text layout.",
         .press => "Selector first! `page.press(\"Enter\")` binds \"Enter\" to `selector` and fails — use `page.press(null, \"Enter\")` or `page.press({ key: \"Enter\" })`.",
         .click, .fill, .scroll, .hover, .selectOption, .setChecked => "",
         .search, .markdown, .html, .links, .tree, .nodeDetails, .interactiveElements, .structuredData, .detectForms, .findElement, .consoleLogs, .getUrl, .getCookies, .getEnv => "",

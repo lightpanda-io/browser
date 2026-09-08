@@ -46,6 +46,7 @@ _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
 _redirect: Redirect,
+_mode: Mode,
 _signal: ?*AbortSignal,
 _body_used: bool = false,
 
@@ -60,6 +61,7 @@ pub const InitOpts = struct {
     credentials: Credentials = .@"same-origin",
     headers: ?Headers.InitOpts = null,
     method: ?[]const u8 = null,
+    mode: Mode = .cors,
     priority: ?[]const u8 = null,
     redirect: Redirect = .follow,
     signal: ?*AbortSignal = null,
@@ -88,6 +90,14 @@ const Cache = enum {
     @"no-cache",
     @"force-cache",
     @"only-if-cached",
+    pub const js_enum_from_string = true;
+};
+
+const Mode = enum {
+    cors,
+    @"no-cors",
+    @"same-origin",
+    navigate,
     pub const js_enum_from_string = true;
 };
 
@@ -148,6 +158,11 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
+    const mode = switch (input) {
+        .url => opts.mode,
+        .request => |r| if (opts_ != null) opts.mode else r._mode,
+    };
+
     const self = try arena.create(Request);
     self.* = .{
         ._url = url,
@@ -157,6 +172,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._cache = opts.cache,
         ._credentials = opts.credentials,
         ._redirect = opts.redirect,
+        ._mode = mode,
         ._body = body,
         ._signal = signal,
     };
@@ -216,6 +232,10 @@ pub fn getRedirect(self: *const Request) []const u8 {
     return @tagName(self._redirect);
 }
 
+pub fn getMode(self: *const Request) []const u8 {
+    return @tagName(self._mode);
+}
+
 pub fn getSignal(self: *const Request) ?*AbortSignal {
     return self._signal;
 }
@@ -237,24 +257,21 @@ pub fn getBodyUsed(self: *const Request) bool {
     return self._body_used;
 }
 
-// Marks a present body consumed; returns a rejected promise if it already was.
-fn consume(self: *Request, local: *const js.Local) ?js.Promise {
+// Marks a present body consumed; a TypeError if it already was.
+fn consume(self: *Request, local: *const js.Local) !void {
     if (self._body == null) {
-        return null;
+        return;
     }
 
     if (self._body_used) {
-        return local.rejectPromise(.{ .type_error = "Body has already been read" });
+        return local.typeError("Body has already been read");
     }
     self._body_used = true;
-    return null;
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     const body = self._body orelse "";
     const headers = try self.getHeaders(exec);
@@ -266,17 +283,13 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
     return local.resolvePromise(body_init.stripUtf8Bom(self._body orelse ""));
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     const value = local.parseJSON(body_init.stripUtf8Bom(self._body orelse "")) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
@@ -286,32 +299,26 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
     return local.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
     return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    if (self.consume(local)) |rejected| {
-        return rejected;
-    }
+    try self.consume(local);
 
     // Per Fetch, a null body acts as an empty byte sequence.
     const body = self._body orelse "";
 
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse {
-        return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+        return local.typeError("Failed to parse body as FormData");
     };
     var it = ContentTypeIterator.init(content_type);
     const essence = it.essence;
@@ -322,12 +329,12 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
         const boundary = it.findBoundary();
         if (boundary.len == 0) {
-            return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+            return local.typeError("Failed to parse body as FormData");
         }
 
         const form_data = FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+            else => return local.typeError("Failed to parse body as FormData"),
         };
         return local.resolvePromise(form_data);
     }
@@ -335,12 +342,12 @@ pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
         const form_data = FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" }),
+            else => return local.typeError("Failed to parse body as FormData"),
         };
         return local.resolvePromise(form_data);
     }
 
-    return local.rejectPromise(.{ .type_error = "Failed to parse body as FormData" });
+    return local.typeError("Failed to parse body as FormData");
 }
 
 pub fn clone(self: *const Request, exec: *const Execution) !*Request {
@@ -356,6 +363,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._cache = self._cache,
         ._credentials = self._credentials,
         ._redirect = self._redirect,
+        ._mode = self._mode,
         ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
     };
@@ -379,6 +387,7 @@ pub const JsApi = struct {
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
     pub const redirect = bridge.accessor(Request.getRedirect, null, .{});
+    pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});

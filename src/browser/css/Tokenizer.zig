@@ -612,7 +612,7 @@ fn consumeNumeric(self: *Tokenizer) Token {
             break :blk std.math.minInt(i32);
         }
 
-        break :blk @as(i32, @intFromFloat(value));
+        break :blk @as(i32, @trunc(value));
     } else null;
 
     if (!self.isEof() and self.nextByteUnchecked() == '%') {

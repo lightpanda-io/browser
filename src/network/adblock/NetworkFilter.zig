@@ -26,11 +26,14 @@ kind: PatternKind,
 /// for the bare-hostname and hosts-file forms. Empty when the pattern names
 /// no hostname (`/ads/banner.`, `|https://…`, `/regex/`).
 hostname: []const u8 = "",
+/// Normalized (lowercased) pattern with the anchor markers stripped, and
+/// with `hostname` removed when the filter is `||`-anchored — so
+/// `||ads.com/x*.js` keeps `/x*.js` here. Empty for `.hostname` and `.any`;
+/// the raw literal, slashes included, for `.regex`.
+pattern: []const u8 = "",
 types: ResourceTypes = .none,
-/// Whether a `$domain=` list constrains this filter. The entries themselves
-/// are not kept: any of them already makes the filter narrower than the
-/// whole-hostname verdict we can represent.
-has_domains: bool = false,
+/// The `$domain=` constraint; `.none` when the filter carries none.
+domains: domain.List = .none,
 exception: bool = false,
 important: bool = false,
 badfilter: bool = false,
@@ -71,7 +74,8 @@ pub const ResourceTypes = packed struct(u16) {
     websocket: bool = false,
     ping: bool = false,
     other: bool = false,
-    _padding: u4 = 0,
+    popup: bool = false,
+    _padding: u3 = 0,
 
     pub const none: ResourceTypes = .{};
 
@@ -114,6 +118,10 @@ pub const ParseError = error{
     UnsupportedOption,
     UnsupportedPattern,
     NoSupportedDomains,
+    UnsupportedModifier,
+    // Element hiding ("example.com##.ad"): a rule for another realm, not a
+    // network rule we failed to read.
+    CosmeticFilter,
     // Hosts-file noise ("127.0.0.1 localhost"), skip silently.
     Ignored,
 } || std.mem.Allocator.Error;
@@ -132,6 +140,8 @@ const Option = enum {
     websocket,
     ping,
     other,
+    popup,
+    popunder,
     all,
     // Party.
     first_party,
@@ -145,8 +155,6 @@ const Option = enum {
     specifichide,
     elemhide,
     // Recognized but unsupported (rule dropped)...
-    popup,
-    popunder,
     inline_script,
     inline_font,
     genericblock,
@@ -253,9 +261,13 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     if (rest.len == 0) return error.InvalidPattern;
 
     const split = splitOptions(rest);
+    // Cosmetic filters classify as network.
+    if (!isRegexLiteral(split.pattern) and hasCosmeticSeparator(split.pattern)) {
+        return error.CosmeticFilter;
+    }
     var explicit_types = false;
     if (split.options) |options| {
-        try filter.parseOptions(options, &explicit_types);
+        try filter.parseOptions(arena, options, &explicit_types);
     }
 
     if (std.mem.indexOfAny(u8, split.pattern, &std.ascii.whitespace) != null) {
@@ -280,6 +292,23 @@ pub fn parse(arena: std.mem.Allocator, line: []const u8) ParseError!NetworkFilte
     }
 
     return filter;
+}
+
+inline fn isRegexLiteral(text: []const u8) bool {
+    return text.len > 2 and text[0] == '/' and text[text.len - 1] == '/';
+}
+
+/// Whether `text` carries a cosmetic separator.
+/// "##", "#@#", "#?#", "#$#", "#%#" and their combinations, like "#@$?#".
+fn hasCosmeticSeparator(text: []const u8) bool {
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, start, '#')) |pos| {
+        var i = pos + 1;
+        while (i < text.len and std.mem.indexOfScalar(u8, "@$?%", text[i]) != null) i += 1;
+        if (i < text.len and text[i] == '#') return true;
+        start = pos + 1;
+    }
+    return false;
 }
 
 /// uBO allows a trailing "  # comment" on lines containing whitespace.
@@ -335,6 +364,7 @@ fn isNoop(name: []const u8) bool {
 
 fn parseOptions(
     self: *NetworkFilter,
+    arena: std.mem.Allocator,
     options: []const u8,
     explicit_types: *bool,
 ) ParseError!void {
@@ -383,6 +413,8 @@ fn parseOptions(
             .websocket,
             .ping,
             .other,
+            .popup,
+            .popunder,
             => {
                 if (negated and option == .document) return error.InvalidOption;
                 explicit_types.* = true;
@@ -405,11 +437,11 @@ fn parseOptions(
                 if (negated) return error.InvalidOption;
                 const v = value orelse return error.InvalidOption;
                 if (v.len == 0) return error.InvalidOption;
-                try domain.validate(v);
-                self.has_domains = true;
+                self.domains = try domain.parse(arena, v);
             },
             .important => {
-                if (negated) return error.InvalidOption;
+                // Importance is a property of blocks; uBO rejects `@@…$important`.
+                if (negated or self.exception) return error.InvalidOption;
                 self.important = true;
             },
             .badfilter => {
@@ -443,8 +475,8 @@ fn parseOptions(
                 explicit_types.* = true;
                 positive.media = true;
             },
-            .popup,
-            .popunder,
+            // Options that narrow or cancel blocking: an `@@` rule carrying
+            // one can unblock something we do block.
             .inline_script,
             .inline_font,
             .genericblock,
@@ -456,6 +488,9 @@ fn parseOptions(
             .strict1p,
             .strict3p,
             .ipaddress,
+            => return error.UnsupportedOption,
+            // Options that only rewrite a request that was going through
+            // regardless.
             .csp,
             .permissions,
             .removeparam,
@@ -463,7 +498,7 @@ fn parseOptions(
             .urlskip,
             .uritransform,
             .redirect_rule,
-            => return error.UnsupportedOption,
+            => return error.UnsupportedModifier,
             .webrtc => return error.InvalidOption,
         }
     }
@@ -494,6 +529,7 @@ fn setType(set: *ResourceTypes, option: Option) void {
         .websocket => set.websocket = true,
         .ping => set.ping = true,
         .other => set.other = true,
+        .popup, .popunder => set.popup = true,
         else => unreachable,
     }
 }
@@ -549,15 +585,12 @@ fn parsePattern(
     }
 
     // Whole-pattern regex literal: /.../ with anything between the slashes.
-    if (raw.len > 2 and raw[0] == '/' and raw[raw.len - 1] == '/') {
+    if (isRegexLiteral(raw)) {
         self.kind = .regex;
+        self.pattern = raw;
         return;
     }
 
-    // A literal '#' can never match: request URLs have their fragment
-    // stripped before matching. This is also what drops cosmetic filter
-    // lines (example.com##.ad-banner), which classify as network now that
-    // there is no cosmetic-separator scan.
     if (std.mem.indexOfScalar(u8, raw, '#') != null) return error.UnsupportedPattern;
 
     var pattern = raw;
@@ -576,12 +609,14 @@ fn parsePattern(
         pattern = pattern[0 .. pattern.len - 1];
     }
 
-    // Trim pointless wildcards touching the (now removed) ends.
-    while (std.mem.startsWith(u8, pattern, "*")) {
-        pattern = pattern[1..];
+    // Trim pointless wildcards touching the (now removed) ends. A wildcard bordering
+    // a short word stays; which is what keeps the word a substring rather than a hostname.
+    const stars = std.mem.indexOfNone(u8, pattern, "*") orelse pattern.len;
+    if (stars > 0 and (stars == pattern.len or !isPatternWordChar(pattern[stars]))) {
+        pattern = pattern[stars..];
         self.left_anchor = false;
     }
-    while (std.mem.endsWith(u8, pattern, "*")) {
+    while (pointlessTrailingWildcard(pattern)) {
         pattern = pattern[0 .. pattern.len - 1];
         self.right_anchor = false;
     }
@@ -603,6 +638,7 @@ fn parsePattern(
             // Wildcard inside the hostname region (`||example.*/ads`):
             // no hostname split, the whole thing is a generic pattern.
             self.kind = .wildcard;
+            self.pattern = pattern;
             return;
         }
         if (host_end == 0) return error.InvalidPattern;
@@ -610,23 +646,28 @@ fn parsePattern(
         const remainder = pattern[host_end..];
         if (remainder.len == 0) {
             self.kind = .hostname;
+            if (isHostnameShaped(self.hostname)) {
+                self.require_separator = true;
+                self.right_anchor = false;
+            }
         } else if (std.mem.eql(u8, remainder, "^")) {
             self.kind = .hostname;
             self.require_separator = true;
         } else {
             self.kind = if (std.mem.indexOfAny(u8, remainder, "*^") != null) .wildcard else .plain;
+            self.pattern = remainder;
         }
         return;
     }
 
-    // A pattern that reads as a bare hostname is a hostname filter
-    // (`ads.example.com` == `||ads.example.com^`)
-    if (!self.left_anchor and !self.right_anchor and isHostnameShaped(pattern)) {
+    if (isHostnameShaped(pattern)) {
         if (isRedirectHostName(pattern)) return error.Ignored;
         self.kind = .hostname;
         self.hostname = pattern;
         self.hostname_anchor = true;
         self.require_separator = true;
+        self.left_anchor = false;
+        self.right_anchor = false;
         return;
     }
 
@@ -635,6 +676,20 @@ fn parsePattern(
     }
 
     self.kind = if (std.mem.indexOfAny(u8, pattern, "*^") != null) .wildcard else .plain;
+    self.pattern = pattern;
+}
+
+/// Ditto uBO's `rePointlessTrailingWildcards`.
+fn pointlessTrailingWildcard(pattern: []const u8) bool {
+    if (pattern.len == 0 or pattern[pattern.len - 1] != '*') return false;
+    const before = std.mem.trimEnd(u8, pattern, "*");
+    var run: usize = 0;
+    while (run < before.len and isPatternWordChar(before[before.len - 1 - run])) run += 1;
+    return run == 0 or run >= 7;
+}
+
+inline fn isPatternWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '%';
 }
 
 /// Matches uBO's hostname flavor: dot-separated labels of [a-z0-9_-], each
@@ -690,18 +745,35 @@ test "adblock.NetworkFilter: pure hostname forms" {
     // Implicit "strict" blocking: documents included.
     try testing.expectEqual(ResourceTypes.all.bits(), f.types.bits());
 
-    // Without '^' there is no separator requirement and no implicit
-    // document blocking.
+    // `||host` and `||host|` are, in uBO, the same filter as `||host^`:
+    // the request hostname is `host` or a subdomain of it.
     f = try testParse(arena, "||ads.example.com");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expect(!f.require_separator);
-    try testing.expectEqual(ResourceTypes.all_network.bits(), f.types.bits());
+    try testing.expect(f.require_separator);
+    try testing.expectEqual(ResourceTypes.all.bits(), f.types.bits());
+
+    f = try testParse(arena, "||ads.example.com|");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expect(f.require_separator);
+    try testing.expect(!f.right_anchor);
 
     // Bare hostname line == ||host^ (uBO divergence from ABP).
     f = try testParse(arena, "tracker.example.net");
     try testing.expectEqual(.hostname, f.kind);
     try testing.expectString("tracker.example.net", f.hostname);
     try testing.expect(f.require_separator);
+
+    // An anchor on a bare hostname is part of the same reading.
+    f = try testParse(arena, "tracker.example.net|");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expectString("tracker.example.net", f.hostname);
+    try testing.expect(f.require_separator);
+    try testing.expect(!f.right_anchor);
+
+    f = try testParse(arena, "|tracker.example.net");
+    try testing.expectEqual(.hostname, f.kind);
+    try testing.expectString("tracker.example.net", f.hostname);
+    try testing.expect(!f.left_anchor);
 
     // Raw IPv4 lines (URLhaus style).
     f = try testParse(arena, "101.126.11.168");
@@ -763,11 +835,23 @@ test "adblock.NetworkFilter: anchors and pattern kinds" {
     try testing.expectEqual(.plain, f.kind);
     try testing.expect(!f.right_anchor);
 
-    // A pattern that trims down to a bare hostname shape gets promoted
-    // (uBO flavor rules), even a single label.
+    // A '*' bordering a short alphanumeric run is meaningful (uBO's
+    // pointless-wildcard rules), so no trimming and no hostname promotion.
     f = try testParse(arena, "*ads*|");
+    try testing.expectEqual(.wildcard, f.kind);
+    try testing.expectString("*ads*", f.pattern);
+
+    // A trailing '*' after 7+ chars drops, and a pattern that trims down
+    // to a bare hostname shape gets promoted (uBO flavor rules)...
+    f = try testParse(arena, "ads.example*");
     try testing.expectEqual(.hostname, f.kind);
-    try testing.expectString("ads", f.hostname);
+    try testing.expectString("ads.example", f.hostname);
+
+    // ...but a leading '*' before a word survives, and keeps the pattern a
+    // substring match rather than a hostname.
+    f = try testParse(arena, "*ads.example*");
+    try testing.expectEqual(.wildcard, f.kind);
+    try testing.expectString("*ads.example", f.pattern);
 
     // '||' hostname region containing '*' stays a generic pattern.
     f = try testParse(arena, "||example.*/ads");
@@ -845,6 +929,63 @@ test "adblock.NetworkFilter: type options, aliases and negation" {
     try testing.expectError(error.InvalidOption, testParse(arena, "||ads.com^$~document"));
 }
 
+test "adblock.NetworkFilter: $popup is a type no request carries" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // We issue no popup requests, so these load and never fire. Dropping them
+    // instead would leave their `@@` counterparts with nothing to except.
+    var f = try testParse(arena, "||doubleclick.net^$popup");
+    try testing.expect(f.types.popup);
+    try testing.expect(!f.types.script);
+    try testing.expect(!f.types.document);
+
+    f = try testParse(arena, "@@||ad.doubleclick.net/ddm/$popup,domain=nytimes.com");
+    try testing.expect(f.exception);
+    try testing.expect(f.types.popup);
+    try testing.expectString("/ddm/", f.pattern);
+
+    // $popunder is the same bit, and the implicit type sets exclude both.
+    f = try testParse(arena, "||ads.com^$popunder");
+    try testing.expect(f.types.popup);
+    f = try testParse(arena, "||ads.com^");
+    try testing.expect(!f.types.popup);
+    try testing.expect(!ResourceTypes.all.popup);
+}
+
+test "adblock.NetworkFilter: the pattern survives parsing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A `||`-anchored pattern keeps only what follows the hostname.
+    var f = try testParse(arena, "||youtube.com/pagead/");
+    try testing.expectString("youtube.com", f.hostname);
+    try testing.expectString("/pagead/", f.pattern);
+
+    f = try testParse(arena, "||g.doubleclick.net/gampad/ads*%20Web%20Player$domain=imasdk.googleapis.com");
+    try testing.expectEqual(.wildcard, f.kind);
+    try testing.expectString("g.doubleclick.net", f.hostname);
+    try testing.expectString("/gampad/ads*%20web%20player", f.pattern);
+
+    // Pure hostname filters carry no pattern at all.
+    f = try testParse(arena, "||ads.example.com^");
+    try testing.expectString("", f.pattern);
+
+    // Unanchored patterns keep the whole thing, anchors stripped.
+    f = try testParse(arena, "|https://ads.");
+    try testing.expectString("https://ads.", f.pattern);
+
+    f = try testParse(arena, "-Ad-300x250.gif|");
+    try testing.expectString("-ad-300x250.gif", f.pattern);
+
+    // A '*' in the hostname region leaves the hostname unsplit.
+    f = try testParse(arena, "||example.*/ads");
+    try testing.expectString("", f.hostname);
+    try testing.expectString("example.*/ads", f.pattern);
+}
+
 test "adblock.NetworkFilter: party options" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -871,7 +1012,12 @@ test "adblock.NetworkFilter: domain option" {
     const arena = arena_state.allocator();
 
     const f = try testParse(arena, "||ads.com^$script,domain=news.com|~sports.news.com|google.*");
-    try testing.expect(f.has_domains);
+    try testing.expectEqual(2, f.domains.included.len);
+    try testing.expectString("news.com", f.domains.included[0].name);
+    try testing.expectString("google", f.domains.included[1].name);
+    try testing.expect(f.domains.included[1].entity);
+    try testing.expectEqual(1, f.domains.excluded.len);
+    try testing.expectString("sports.news.com", f.domains.excluded[0].name);
 
     try testing.expectError(error.InvalidOption, testParse(arena, "||ads.com^$domain="));
     try testing.expectError(error.NoSupportedDomains, testParse(arena, "||ads.com^$domain=/re/"));
@@ -886,6 +1032,9 @@ test "adblock.NetworkFilter: important, badfilter, noop" {
 
     var f = try testParse(arena, "||ads.com^$important");
     try testing.expect(f.important);
+
+    // Importance is a property of blocks; uBO rejects it on an exception.
+    try testing.expectError(error.InvalidOption, testParse(arena, "@@||ads.com^$important"));
 
     f = try testParse(arena, "||ads.com^$badfilter");
     try testing.expect(f.badfilter);
@@ -902,10 +1051,15 @@ test "adblock.NetworkFilter: unsupported and modifier options" {
 
     // Modifier/rewrite rules are dropped: keeping them as plain blocks
     // would over-block (a $removeparam rule matches nearly everything).
-    try testing.expectError(error.UnsupportedOption, testParse(arena, "$removeparam=utm_source"));
-    try testing.expectError(error.UnsupportedOption, testParse(arena, "||ads.com^$csp=script-src 'none'"));
-    try testing.expectError(error.UnsupportedOption, testParse(arena, "||ads.com^$popup"));
-    try testing.expectError(error.UnsupportedOption, testParse(arena, "||ads.com^$redirect-rule=noopjs"));
+    // They report a distinct error because they never blocked anything, so
+    // their `@@` form has nothing to unblock either.
+    try testing.expectError(error.UnsupportedModifier, testParse(arena, "$removeparam=utm_source"));
+    try testing.expectError(error.UnsupportedModifier, testParse(arena, "||ads.com^$csp=script-src 'none'"));
+    try testing.expectError(error.UnsupportedModifier, testParse(arena, "||ads.com^$redirect-rule=noopjs"));
+
+    // Options that do narrow blocking keep the blunter error.
+    try testing.expectError(error.UnsupportedOption, testParse(arena, "||ads.com^$denyallow=cdn.com"));
+    try testing.expectError(error.UnsupportedOption, testParse(arena, "||ads.com^$method=get"));
 
     // $redirect keeps its blocking half; the directive itself is ignored.
     var f = try testParse(arena, "||ads.com/ad.js$script,redirect=noopjs");
@@ -936,10 +1090,15 @@ test "adblock.NetworkFilter: option-only and invalid patterns" {
     try testing.expectError(error.InvalidPattern, testParse(arena, "foo bar$script"));
     try testing.expectError(error.UnsupportedPattern, testParse(arena, "||exämple.com^"));
 
-    // Cosmetic lines reach this parser undetected (no separator scan) and
-    // drop here: a '#' never matches a fragment-stripped request URL.
-    try testing.expectError(error.UnsupportedPattern, testParse(arena, "example.com##.ad-banner"));
-    try testing.expectError(error.UnsupportedPattern, testParse(arena, "example.com#@#.sponsored"));
+    // Cosmetic lines reach this parser as network lines, there being no
+    // separator scan up front, and are told apart by their separator,
+    // whichever flavour...
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com##.ad-banner"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#@#.sponsored"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#?#.ad:has(> a)"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com#@$#body { background: none }"));
+    try testing.expectError(error.CosmeticFilter, testParse(arena, "example.com##+js(no-fetch-if, ads)"));
+    // ...while a lone '#' is a fragment, which never matches a request URL.
     try testing.expectError(error.UnsupportedPattern, testParse(arena, "|https://a.com/x#y|"));
     // ... but '#' inside a /regex/ body is untouched.
     const regex = try testParse(arena, "/ads#[0-9]+/");

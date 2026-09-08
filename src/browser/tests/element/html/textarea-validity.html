@@ -28,9 +28,10 @@
 <script id="too_long">
 {
   const t = $('#too-long');
+  // Only values last changed by a user edit count; script-set values don't.
   testing.expectEqual(false, t.validity.tooLong);
   t.value = 'abcdef';
-  testing.expectEqual(true, t.validity.tooLong);
+  testing.expectEqual(false, t.validity.tooLong);
   t.value = 'ab';
   testing.expectEqual(false, t.validity.tooLong);
 }
@@ -42,7 +43,7 @@
   // empty value never triggers tooShort
   testing.expectEqual(false, t.validity.tooShort);
   t.value = 'ab';
-  testing.expectEqual(true, t.validity.tooShort);
+  testing.expectEqual(false, t.validity.tooShort);
   t.value = 'abcde';
   testing.expectEqual(false, t.validity.tooShort);
 }

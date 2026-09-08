@@ -16,11 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../../js/js.zig");
-
 const Page = @import("../../../Page.zig");
+
 const idb = @import("idb.zig");
 const Key = @import("Key.zig");
 const Engine = @import("Engine.zig");
@@ -40,6 +41,7 @@ _store: *IDBObjectStore,
 _engine: *Engine,
 _index_id: i64,
 _name: []const u8,
+_original_name: ?[]const u8 = null, // needed for restore incase of abort
 _key_path: Key.KeyPath,
 _unique: bool,
 _multi_entry: bool,
@@ -123,11 +125,11 @@ pub fn runGetKey(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, e
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, b));
 }
 
-pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, exec: *Execution) !*IDBRequest {
+pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .key, exec);
 }
 
@@ -138,7 +140,7 @@ pub fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*ID
     return request.submit(.{ .index_get_all = .{ .index = self, .args = args, .mode = .record } }, exec);
 }
 
-fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?u32, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
+fn _getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, mode: IDBObjectStore.GetAllMode, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
     const args = try IDBKeyRange.resolveGetAll(t._arena.allocator(), query_or_options, count_, exec);
     const request = try t.newRequest();
@@ -199,19 +201,39 @@ pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, ex
 }
 
 pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
+    const t = try self.txn();
+    const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, false, exec);
 }
 
 pub fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
-    try self.assertLive();
-    const bounds = try IDBKeyRange.resolveQuery(self._store._txn._arena.allocator(), query, exec);
+    const t = try self.txn();
+    const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, true, exec);
 }
 
 pub fn getName(self: *const IDBIndex) []const u8 {
     return self._name;
+}
+
+pub fn setName(self: *IDBIndex, name: []const u8, _: *Execution) !void {
+    try self.assertLive();
+    const t = self._store._txn;
+    if (t._mode != .versionchange) {
+        return error.InvalidStateError;
+    }
+    try t.assertActive();
+    if (std.mem.eql(u8, name, self._name)) {
+        return;
+    }
+    self._engine.renameIndex(self._index_id, name) catch |err| switch (err) {
+        error.Constraint => return error.ConstraintError,
+        else => return err,
+    };
+    if (self._original_name == null) {
+        self._original_name = self._name;
+    }
+    self._name = try t.dupe(name);
 }
 
 pub fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
@@ -239,7 +261,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const name = bridge.accessor(IDBIndex.getName, null, .{});
+    pub const name = bridge.accessor(IDBIndex.getName, IDBIndex.setName, .{});
     pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
     pub const unique = bridge.accessor(IDBIndex.getUnique, null, .{});
     pub const multiEntry = bridge.accessor(IDBIndex.getMultiEntry, null, .{});

@@ -46,6 +46,8 @@ _name: []const u8,
 _version: i64,
 _txn: ?*IDBTransaction = null, // only set during upgradeneeded
 _on_error: ?js.Function.Global = null,
+_on_abort: ?js.Function.Global = null,
+_closed: bool = false,
 
 pub fn init(exec: *Execution, engine: *Engine, database_id: i64, name: []const u8, version: i64) !*IDBDatabase {
     return exec._factory.eventTarget(IDBDatabase{
@@ -81,12 +83,19 @@ pub fn createObjectStore(
 
     const opts = options orelse CreateObjectStoreOptions{};
 
-    // Validate + copy the key path onto the transaction arena so it outlives the
-    // call. autoIncrement is incompatible with an empty or compound key path.
-    const key_path: ?Key.KeyPath = if (opts.keyPath) |kp| blk: {
+    // Spec order: key path syntax, then the name, then autoIncrement vs. key path.
+    if (opts.keyPath) |kp| {
         if (Key.isValidKeyPathSpec(kp) == false) {
             return error.SyntaxError;
         }
+    }
+    if ((try self._engine.objectStoreId(self._database_id, name)) != null) {
+        return error.ConstraintError;
+    }
+
+    // Copy the key path onto the transaction arena so it outlives the call.
+    // autoIncrement is incompatible with an empty or compound key path.
+    const key_path: ?Key.KeyPath = if (opts.keyPath) |kp| blk: {
         if (opts.autoIncrement and keyPathBlocksAutoIncrement(kp)) {
             return error.InvalidAccessError;
         }
@@ -138,8 +147,17 @@ const TransactionMode = enum {
 };
 
 const StoreNames = union(enum) {
+    list: *DOMStringList,
     name: []const u8,
     names: []const []const u8,
+
+    fn slice(self: *const StoreNames) []const []const u8 {
+        return switch (self.*) {
+            .names => |names| names,
+            .list => |l| l._items,
+            .name => |*n| (n)[0..1],
+        };
+    }
 };
 
 const TransactionOptions = struct {
@@ -153,6 +171,25 @@ pub fn transaction(
     options: ?TransactionOptions,
     exec: *Execution,
 ) !*IDBTransaction {
+    if (self._closed) {
+        return error.InvalidStateError;
+    }
+    if (self._txn) |upgrade| {
+        // An upgrade still running owns the connection; once it settled, new
+        // transactions may start even before the open request's success fires.
+        if (!upgrade._settled) {
+            return error.InvalidStateError;
+        }
+    }
+
+    const names = store_names.slice();
+    if (names.len == 0) {
+        return error.InvalidAccessError;
+    }
+    for (names) |name| {
+        try self.assertStoreExists(name);
+    }
+
     const opts = options orelse TransactionOptions{};
     const txn = try IDBTransaction.init(self, switch (mode orelse .readonly) {
         .readonly => .readonly,
@@ -162,18 +199,19 @@ pub fn transaction(
     return txn;
 }
 
+fn assertStoreExists(self: *const IDBDatabase, name: []const u8) !void {
+    if ((try self._engine.objectStoreId(self._database_id, name)) == null) {
+        return error.NotFound;
+    }
+}
+
 // The transaction's scope: the requested store names, sorted with duplicates
 // removed (per the IndexedDB spec's "transaction scope" steps).
 fn normalizeStoreNames(arena: Allocator, store_names: StoreNames) ![]const []const u8 {
-    var list: std.ArrayList([]const u8) = .empty;
-    switch (store_names) {
-        .name => |name| try list.append(arena, try arena.dupe(u8, name)),
-        .names => |names| {
-            try list.ensureUnusedCapacity(arena, names.len);
-            for (names) |name| {
-                list.appendAssumeCapacity(try arena.dupe(u8, name));
-            }
-        },
+    const names = store_names.slice();
+    var list: std.ArrayList([]const u8) = try .initCapacity(arena, names.len);
+    for (names) |name| {
+        list.appendAssumeCapacity(try arena.dupe(u8, name));
     }
 
     std.mem.sort([]const u8, list.items, {}, struct {
@@ -198,9 +236,8 @@ fn normalizeStoreNames(arena: Allocator, store_names: StoreNames) ![]const []con
     return list.items[0..write];
 }
 
-pub fn close(_: *IDBDatabase) void {
-    // Connections are pooled on the Manager and shared across handles, so a
-    // single handle's close() is a no-op for the bare slice.
+pub fn close(self: *IDBDatabase) void {
+    self._closed = true;
 }
 
 pub fn getName(self: *const IDBDatabase) []const u8 {
@@ -232,6 +269,17 @@ pub fn setOnError(self: *IDBDatabase, setter: ?FunctionSetter) void {
     } else null;
 }
 
+pub fn getOnAbort(self: *const IDBDatabase) ?js.Function.Global {
+    return self._on_abort;
+}
+
+pub fn setOnAbort(self: *IDBDatabase, setter: ?FunctionSetter) void {
+    self._on_abort = if (setter) |s| switch (s) {
+        .func => |f| f,
+        .anything => null,
+    } else null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IDBDatabase);
 
@@ -249,4 +297,5 @@ pub const JsApi = struct {
     pub const transaction = bridge.function(IDBDatabase.transaction, .{});
     pub const close = bridge.function(IDBDatabase.close, .{});
     pub const onerror = bridge.accessor(IDBDatabase.getOnError, IDBDatabase.setOnError, .{});
+    pub const onabort = bridge.accessor(IDBDatabase.getOnAbort, IDBDatabase.setOnAbort, .{});
 };

@@ -341,8 +341,10 @@ const WEB_API_TEST_ROOT = "src/browser/tests/";
 const HtmlRunnerOpts = struct {
     timeout_ms: u32 = 2000,
     inject_script: ?[]const u8 = null,
-    load_external_stylesheets: bool = false,
-    load_resources: Config.LoadResources = .{},
+    load_resources: Config.LoadResources = .{
+        .worker = true,
+        .iframe = true,
+    },
 };
 
 // Create a fresh page on `test_session` and return its root frame — for tests
@@ -368,11 +370,12 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     }
     defer test_session.inject_scripts = &.{};
 
-    test_session.load_external_stylesheets = opts.load_external_stylesheets;
-    defer test_session.load_external_stylesheets = false;
-
     test_session.load_resources = opts.load_resources;
-    defer test_session.load_resources = .{};
+    defer test_session.load_resources = .{
+        // original defaults, tests expect these to be on
+        .worker = true,
+        .iframe = true,
+    };
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
@@ -504,11 +507,11 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     return page;
 }
 
-const TestHTTPServer = @import("TestHTTPServer.zig");
+const Server = @import("server/Server.zig");
 const TestWSServer = @import("TestWSServer.zig");
+const TestHTTPServer = @import("TestHTTPServer.zig");
 
-const Server = @import("Server.zig");
-var test_cdp_server: ?*Server = null;
+pub var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -521,7 +524,7 @@ var test_ws_server_thread: ?std.Thread = null;
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
-var test_config: Config = undefined;
+pub var test_config: Config = undefined;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
@@ -529,16 +532,20 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
-    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .insecure_disable_tls_host_verification = true,
-        .user_agent_suffix = "internal-tester",
-        .ws_max_concurrent = 50,
-    } });
+    test_config = try Config.init(test_allocator, "test", .{
+        .serve = .{
+            .insecure_disable_tls_host_verification = true,
+            .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
+            .load_resources = .{ .worker = true, .iframe = true },
+            .watchdog_ms = 0,
+        },
+    });
 
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    try test_browser.init(test_app, .{}, null);
+    try test_browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
     // Create notification for testing
@@ -609,6 +616,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
     test_cdp_server.?.run();
@@ -631,6 +639,16 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("1234567890" ** 10, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/slow")) {
+        // Long enough for a timer scheduled by the requester to fire first.
+        lp.io.sleep(.fromMilliseconds(100), .awake) catch {};
+        return req.respond("slow", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }
@@ -674,6 +692,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = "http://127.0.0.1:9582/xhr" },
+            },
+        });
+    }
+
+    // Scripts, so a cross-origin (localhost) load doesn't depend on CORS.
+    if (std.mem.eql(u8, path, "/resource-timing/tao")) {
+        return req.respond("window.__rt_tao = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+                .{ .name = "Timing-Allow-Origin", .value = "https://example.com, *" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/plain")) {
+        return req.respond("window.__rt_plain = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/resource-timing/plain" },
             },
         });
     }
@@ -827,6 +872,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/no_content_type")) {
+        return req.respond("untyped", .{});
+    }
+
     if (std.mem.eql(u8, path, "/xhr/binary")) {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
@@ -844,6 +893,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "text/event-stream" },
             },
         });
+    }
+
+    if (std.mem.eql(u8, path, "/stop_loading/streaming.html")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        });
+        try res.writer.writeAll("<html><body><p id=first>first</p>");
+        try res.writer.flush();
+        try res.flush();
+        lp.io.sleep(.fromMilliseconds(1500), .awake) catch {};
+        try res.writer.writeAll("<p id=second>second</p></body></html>");
+        try res.writer.flush();
+        return res.end();
     }
 
     if (std.mem.eql(u8, path, "/sse/streaming")) {
@@ -1117,6 +1184,36 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set_cookie")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_hidden=1; Path=/set_cookie_scope" },
+                .{ .name = "X-Visible", .value = "yes" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_same_echo_headers")) {
+        // Same-origin 302 to /echo_headers: Authorization must survive the hop.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/echo_headers" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/redirect_cross_echo_headers")) {
+        // 302 to /echo_headers on the localhost alias — a cross-origin hop, so
+        // Authorization must be stripped before the request is re-sent.
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://localhost:9582/echo_headers" },
             },
         });
     }

@@ -166,6 +166,12 @@ fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Dec
     try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
 }
 
+fn initOwnedString(allocator: Allocator, value: []const u8) !String {
+    if (value.len <= 12) return String.wrap(value);
+    if (value.len >= std.math.maxInt(i32)) return error.StringTooLarge;
+    return String.wrap(try allocator.dupe(u8, value));
+}
+
 fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
     if (value.len == 0) {
         _ = try self.removePropertyImpl(property_name, frame);
@@ -179,7 +185,10 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
-        existing._value = try String.init(frame.arena, normalized_value, .{});
+        const allocator = frame._factory.storageAllocator();
+        const new_value = try initOwnedString(allocator, normalized_value);
+        existing._value.deinit(allocator);
+        existing._value = new_value;
         existing._important = important;
         return;
     }
@@ -188,7 +197,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const prop = try frame._factory.create(Property{
         ._node = .{},
         ._name = try String.init(frame.arena, normalized, .{}),
-        ._value = try String.init(frame.arena, normalized_value, .{}),
+        ._value = try initOwnedString(frame._factory.storageAllocator(), normalized_value),
         ._important = important,
     });
     self._properties.append(&prop._node);
@@ -208,6 +217,7 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, fra
     // optimization), so we need to dupe it.
     const old_value = try frame.call_arena.dupe(u8, prop._value.str());
     self._properties.remove(&prop._node);
+    prop._value.deinit(frame._factory.storageAllocator());
     frame._factory.destroy(prop);
     return old_value;
 }
@@ -242,6 +252,7 @@ fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
         const next = n.next;
         const prop = Property.fromNodeLink(n);
         self._properties.remove(n);
+        prop._value.deinit(frame._factory.storageAllocator());
         frame._factory.destroy(prop);
         node = next;
     }
@@ -916,6 +927,23 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../../testing.zig");
+test "CSS property value storage is reused" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var style = CSSStyleDeclaration{};
+    defer style.clearProperties(frame);
+
+    try style.setPropertyImpl("transform", "translate3d(1px,0,0)", false, frame);
+    const first_ptr = style.findProperty(comptime .wrap("transform")).?._value.suffix.ptr;
+    try style.setPropertyImpl("transform", "translate3d(2px,0,0)", false, frame);
+    try style.setPropertyImpl("transform", "translate3d(3px,0,0)", false, frame);
+
+    const property = style.findProperty(comptime .wrap("transform")).?;
+    try testing.expectEqual(first_ptr, property._value.suffix.ptr);
+    try std.testing.expectEqualStrings("translate3d(3px,0,0)", property._value.str());
+}
+
 test "normalizePropertyValue: unitless zero to 0px" {
     const cases = .{
         .{ "width", "0", "0px" },

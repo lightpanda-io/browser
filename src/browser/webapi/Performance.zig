@@ -20,6 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../js/js.zig");
+const Factory = @import("../Factory.zig");
+const Scheduler = @import("../js/Scheduler.zig");
 
 const EventCounts = @import("EventCounts.zig");
 const PerformanceObserver = @import("PerformanceObserver.zig");
@@ -27,17 +29,34 @@ const PerformanceObserver = @import("PerformanceObserver.zig");
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
+// https://w3c.github.io/resource-timing/#dfn-resource-timing-buffer-size-limit
+const DEFAULT_RESOURCE_BUFFER_SIZE = 250;
+
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
+    return &.{ Performance, Entry, Mark, Measure, ResourceTiming, PerformanceTiming, PerformanceNavigation };
 }
 
 const Performance = @This();
 
 _time_origin: u64,
+_arena: Allocator,
+_factory: *Factory,
+// Marks and measures. Kept in startTime order (see insertOrdered), as the
+// getters must return them.
 _entries: std.ArrayList(*Entry) = .empty,
+// resources has its own cap, so it's split from entries (it's also potentially
+// polled more)
+_resources: std.ArrayList(*Entry) = .empty,
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
+_resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
+
+// The owner's task scheduler, set by the owner once its JS context exists
+// (Frame builds the Window, and thus this, before the context). Never taken
+// from a caller's Execution: an isolated-world or cross-frame caller's
+// context can be destroyed while we live on.
+_scheduler: *Scheduler = undefined,
 
 // PerformanceObserver infrastructure. Lives here (rather than on the owning
 // Frame/WorkerGlobalScope) so that both contexts get observers for free.
@@ -54,8 +73,10 @@ pub fn highResTimestamp() u64 {
     return rounded;
 }
 
-pub fn init() Performance {
+pub fn init(factory: *Factory, arena: Allocator) Performance {
     return .{
+        ._arena = arena,
+        ._factory = factory,
         ._time_origin = highResTimestamp(),
     };
 }
@@ -93,8 +114,8 @@ pub fn mark(
     const opts = _options orelse Mark.Options{};
     const start_time = opts.startTime orelse self.now();
     const m = try Mark.init(name, opts.detail, start_time, exec);
-    try self._entries.append(exec.arena, m._proto);
-    try self.notifyObservers(m._proto, exec);
+    try self.insertOrdered(&self._entries, m._proto);
+    try self.notifyObservers(m._proto);
     return m;
 }
 
@@ -144,8 +165,8 @@ pub fn measure(
                 options.duration,
                 exec,
             );
-            try self._entries.append(exec.arena, m._proto);
-            try self.notifyObservers(m._proto, exec);
+            try self.insertOrdered(&self._entries, m._proto);
+            try self.notifyObservers(m._proto);
             return m;
         },
         .start_mark => |start_mark| {
@@ -168,15 +189,15 @@ pub fn measure(
                 null,
                 exec,
             );
-            try self._entries.append(exec.arena, m._proto);
-            try self.notifyObservers(m._proto, exec);
+            try self.insertOrdered(&self._entries, m._proto);
+            try self.notifyObservers(m._proto);
             return m;
         },
     };
 
     const m = try Measure.init(name, null, 0.0, self.now(), null, exec);
-    try self._entries.append(exec.arena, m._proto);
-    try self.notifyObservers(m._proto, exec);
+    try self.insertOrdered(&self._entries, m._proto);
+    try self.notifyObservers(m._proto);
     return m;
 }
 
@@ -205,27 +226,239 @@ pub fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
 }
 
 pub fn setResourceTimingBufferSize(self: *Performance, max_size: u32) void {
-    _ = self;
-    _ = max_size;
+    self._resource_buffer_size = max_size;
 }
 
-pub fn getEntries(self: *const Performance) []*Entry {
-    return self._entries.items;
+pub fn clearResourceTimings(self: *Performance) void {
+    self._resources.clearRetainingCapacity();
+}
+
+// All times are microseconds
+pub const ResourceInfo = struct {
+    name: []const u8,
+    initiator: []const u8, // static string
+    protocol: []const u8, // static string
+    start: u64,
+    redirect_start: u64, // 0 when the fetch wasn't redirected.
+    redirect_end: u64,
+    fetch_start: u64,
+    dns_start: u64,
+    dns_end: u64,
+    connect_start: u64,
+    connect_end: u64,
+    secure_start: u64, // 0 unless the final hop was https.
+    request_start: u64,
+    response_start: u64,
+    response_end: u64,
+    transfer_size: u64,
+    encoded_body_size: u64,
+    decoded_body_size: u64,
+    status: u16,
+    content_type: []const u8, // unsafe to reference past the function call
+    content_encoding: []const u8, // unsafe to reference past the function call
+    from_cache: bool,
+    // Every response in the chain was same-origin or carried a matching
+    // Timing-Allow-Origin.
+    timing_allow: bool,
+};
+
+pub fn addResource(self: *Performance, info: ResourceInfo) !void {
+    // TODO: Perfomance should be an EventTarget and it should fire
+    // a resourcetimingbufferfull event
+    const buffer_full = self._resources.items.len >= self._resource_buffer_size;
+    if (buffer_full and !self.hasObserverFor(.resource)) {
+        return;
+    }
+
+    const arena = self._arena;
+    const allow = info.timing_allow;
+    const redirected = allow and info.redirect_start != 0; // redirects only show with a TAO
+
+    const start_time = self.relative(info.start);
+    const response_end = self.relative(info.response_end);
+
+    const rt = try self._factory.chained(.{
+        Entry{
+            ._start_time = start_time,
+            ._duration = @max(response_end - start_time, 0),
+            ._name = try arena.dupe(u8, info.name),
+            ._type = undefined,
+        },
+        ResourceTiming{
+            ._proto = undefined,
+            ._initiator_type = info.initiator,
+            ._next_hop_protocol = if (allow) info.protocol else "",
+            ._delivery_type = if (allow and info.from_cache) "cache" else "",
+            ._redirect_start = if (redirected) start_time else 0,
+            ._redirect_end = if (redirected) self.relative(info.redirect_end) else 0,
+            ._fetch_start = if (redirected) self.relative(info.fetch_start) else start_time,
+            ._domain_lookup_start = self.gated(allow, info.dns_start),
+            ._domain_lookup_end = self.gated(allow, info.dns_end),
+            ._connect_start = self.gated(allow, info.connect_start),
+            ._connect_end = self.gated(allow, info.connect_end),
+            ._secure_connection_start = self.gated(allow, info.secure_start),
+            ._request_start = self.gated(allow, info.request_start),
+            ._response_start = self.gated(allow, info.response_start),
+            ._response_end = response_end,
+            ._transfer_size = if (allow) info.transfer_size else 0,
+            ._encoded_body_size = if (allow) info.encoded_body_size else 0,
+            ._decoded_body_size = if (allow) info.decoded_body_size else 0,
+            ._response_status = if (allow) info.status else 0,
+            ._content_type = if (allow) minimizeMimeType(info.content_type) else "",
+            ._content_encoding = if (allow) contentEncoding(info.content_encoding) else "",
+        },
+    });
+    rt._proto._type = .{ .resource = rt };
+    // Observers see every entry; only the buffer has a cap.
+    try self.notifyObservers(rt._proto);
+    if (!buffer_full) {
+        try self.insertOrdered(&self._resources, rt._proto);
+    }
+}
+
+fn gated(self: *const Performance, allow: bool, micros: u64) f64 {
+    return if (allow) self.relative(micros) else 0;
+}
+
+// https://mimesniff.spec.whatwg.org/#minimize-a-supported-mime-type
+fn minimizeMimeType(header: []const u8) []const u8 {
+    var buf: [255]u8 = undefined;
+    const raw = std.mem.trim(u8, header[0 .. std.mem.indexOfScalar(u8, header, ';') orelse header.len], " \t");
+    if (raw.len > buf.len) {
+        return "";
+    }
+    const essence = std.ascii.lowerString(&buf, raw);
+    if (javascript_mime_types.has(essence)) {
+        return "text/javascript";
+    }
+    if (std.mem.eql(u8, essence, "application/json") or std.mem.eql(u8, essence, "text/json") or std.mem.endsWith(u8, essence, "+json")) {
+        return "application/json";
+    }
+    if (std.mem.eql(u8, essence, "image/svg+xml")) {
+        return "image/svg+xml";
+    }
+    if (std.mem.eql(u8, essence, "application/xml") or std.mem.eql(u8, essence, "text/xml") or std.mem.endsWith(u8, essence, "+xml")) {
+        return "application/xml";
+    }
+    if (supported_mime_types.getIndex(essence)) |i| {
+        return supported_mime_types.keys()[i];
+    }
+    return "";
+}
+
+// https://mimesniff.spec.whatwg.org/#javascript-mime-type
+const javascript_mime_types = std.StaticStringMap(void).initComptime(.{
+    .{ "application/ecmascript", {} },
+    .{ "application/javascript", {} },
+    .{ "application/x-ecmascript", {} },
+    .{ "application/x-javascript", {} },
+    .{ "text/ecmascript", {} },
+    .{ "text/javascript", {} },
+    .{ "text/javascript1.0", {} },
+    .{ "text/javascript1.1", {} },
+    .{ "text/javascript1.2", {} },
+    .{ "text/javascript1.3", {} },
+    .{ "text/javascript1.4", {} },
+    .{ "text/javascript1.5", {} },
+    .{ "text/jscript", {} },
+    .{ "text/livescript", {} },
+    .{ "text/x-ecmascript", {} },
+    .{ "text/x-javascript", {} },
+});
+
+// What a browser renders or decodes, beyond the JS/JSON/XML families
+// handled above.
+const supported_mime_types = std.StaticStringMap(void).initComptime(.{
+    .{ "text/html", {} },
+    .{ "text/plain", {} },
+    .{ "text/css", {} },
+    .{ "text/csv", {} },
+    .{ "text/vtt", {} },
+    .{ "application/pdf", {} },
+    .{ "application/octet-stream", {} },
+    .{ "image/png", {} },
+    .{ "image/apng", {} },
+    .{ "image/jpeg", {} },
+    .{ "image/jpg", {} },
+    .{ "image/pjpeg", {} },
+    .{ "image/gif", {} },
+    .{ "image/webp", {} },
+    .{ "image/avif", {} },
+    .{ "image/bmp", {} },
+    .{ "image/x-icon", {} },
+    .{ "image/vnd.microsoft.icon", {} },
+    .{ "font/woff", {} },
+    .{ "font/woff2", {} },
+    .{ "font/ttf", {} },
+    .{ "font/otf", {} },
+    .{ "audio/mpeg", {} },
+    .{ "audio/mp4", {} },
+    .{ "audio/ogg", {} },
+    .{ "audio/wav", {} },
+    .{ "audio/webm", {} },
+    .{ "video/mp4", {} },
+    .{ "video/webm", {} },
+    .{ "video/ogg", {} },
+});
+
+// https://w3c.github.io/resource-timing/#dom-performanceresourcetiming-contentencoding
+// A single registered coding is named; anything else is "@unknown", more
+// than one is "multiple", none is "".
+fn contentEncoding(header: []const u8) []const u8 {
+    if (header.len == 0) {
+        return "";
+    }
+    if (std.mem.indexOfScalar(u8, header, ',') != null) {
+        return "multiple";
+    }
+    var buf: [8]u8 = undefined;
+    const value = std.mem.trim(u8, header, " \t");
+    if (value.len > buf.len) {
+        return "@unknown";
+    }
+    return content_encodings.get(std.ascii.lowerString(&buf, value)) orelse "@unknown";
+}
+
+const content_encodings = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "br", "br" },
+    .{ "dcb", "dcb" },
+    .{ "dcz", "dcz" },
+    .{ "deflate", "deflate" },
+    .{ "gzip", "gzip" },
+    .{ "zstd", "zstd" },
+});
+
+pub fn getEntries(self: *const Performance, exec: *const Execution) ![]const *Entry {
+    return mergeOrdered(exec.local_arena, self._entries.items, self._resources.items);
 }
 
 pub fn getEntriesByType(self: *const Performance, entry_type: []const u8, exec: *const Execution) ![]const *Entry {
-    return filterEntriesByType(exec.local_arena, self._entries.items, entry_type);
+    const kind = Entry.Type.Enum.parse(entry_type) orelse return &.{};
+    if (kind == .resource) {
+        return self._resources.items;
+    }
+    return filterEntriesByType(exec.local_arena, self._entries.items, kind);
 }
 
 pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: ?[]const u8, exec: *const Execution) ![]const *Entry {
-    return filterEntriesByName(exec.local_arena, self._entries.items, name, entry_type);
+    const arena = exec.local_arena;
+    if (entry_type) |t| {
+        const kind = Entry.Type.Enum.parse(t) orelse return &.{};
+        const list = if (kind == .resource) self._resources.items else self._entries.items;
+        return filterEntriesByName(arena, list, name, kind);
+    }
+    return mergeOrdered(
+        arena,
+        try filterEntriesByName(arena, self._entries.items, name, null),
+        try filterEntriesByName(arena, self._resources.items, name, null),
+    );
 }
 
 // Also used by PerformanceObserver
-pub fn filterEntriesByType(arena: Allocator, list: []*Entry, entry_type: []const u8) ![]const *Entry {
+pub fn filterEntriesByType(arena: Allocator, list: []const *Entry, kind: Entry.Type.Enum) ![]const *Entry {
     var result: std.ArrayList(*Entry) = .empty;
     for (list) |entry| {
-        if (std.mem.eql(u8, entry.getEntryType(), entry_type)) {
+        if (entry._type == kind) {
             try result.append(arena, entry);
         }
     }
@@ -233,18 +466,16 @@ pub fn filterEntriesByType(arena: Allocator, list: []*Entry, entry_type: []const
 }
 
 // Also used by PerformanceObserver
-pub fn filterEntriesByName(arena: Allocator, list: []*Entry, name: []const u8, entry_type: ?[]const u8) ![]const *Entry {
+pub fn filterEntriesByName(arena: Allocator, list: []const *Entry, name: []const u8, kind: ?Entry.Type.Enum) ![]const *Entry {
     var result: std.ArrayList(*Entry) = .empty;
-
     for (list) |entry| {
         if (!std.mem.eql(u8, entry._name, name)) {
             continue;
         }
-        if (entry_type == null or std.mem.eql(u8, entry.getEntryType(), entry_type.?)) {
+        if (kind == null or entry._type == kind.?) {
             try result.append(arena, entry);
         }
     }
-
     return result.items;
 }
 
@@ -292,13 +523,13 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
     return error.SyntaxError; // Mark not found
 }
 
-pub fn registerObserver(self: *Performance, observer: *PerformanceObserver, exec: *const Execution) !void {
+pub fn registerObserver(self: *Performance, observer: *PerformanceObserver) !void {
     for (self._observers.items) |o| {
         if (o == observer) {
             return;
         }
     }
-    return self._observers.append(exec.arena, observer);
+    return self._observers.append(self._arena, observer);
 }
 
 pub fn unregisterObserver(self: *Performance, observer: *PerformanceObserver) void {
@@ -316,25 +547,37 @@ pub fn unregisterObserver(self: *Performance, observer: *PerformanceObserver) vo
 /// Append the entry to every interested observer's queue and schedule async
 /// delivery. Does NOT fire the callbacks synchronously — that happens later
 /// via the scheduled task.
-pub fn notifyObservers(self: *Performance, entry: *Entry, exec: *const Execution) !void {
+fn notifyObservers(self: *Performance, entry: *Entry) !void {
+    if (self._observers.items.len == 0) {
+        return;
+    }
     for (self._observers.items) |observer| {
         if (observer.interested(entry)) {
-            observer._entries.append(exec.arena, entry) catch |err| {
+            observer._entries.append(observer._arena, entry) catch |err| {
                 lp.log.err(.frame, "Performance.notifyObservers", .{ .err = err });
             };
         }
     }
 
-    try self.scheduleDelivery(exec);
+    try self.scheduleDelivery();
 }
 
-pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
+fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
+    for (self._observers.items) |observer| {
+        if (observer.interestedIn(kind)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn scheduleDelivery(self: *Performance) !void {
     if (self._delivery_scheduled) {
         return;
     }
     self._delivery_scheduled = true;
 
-    return exec._scheduler.add(
+    return self._scheduler.add(
         self,
         struct {
             fn run(_self: *anyopaque) anyerror!?u32 {
@@ -372,6 +615,52 @@ pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
     );
 }
 
+// Entries nearly always arrive in startTime order, so the slot is at (or near)
+// the end.
+fn insertOrdered(self: *Performance, list: *std.ArrayList(*Entry), entry: *Entry) !void {
+    var i = list.items.len;
+    while (i > 0 and list.items[i - 1]._start_time > entry._start_time) : (i -= 1) {}
+    try list.insert(self._arena, i, entry);
+}
+
+// Merge two startTime-ordered lists into one.
+fn mergeOrdered(arena: Allocator, a: []const *Entry, b: []const *Entry) ![]const *Entry {
+    if (a.len == 0) {
+        return b;
+    }
+    if (b.len == 0) {
+        return a;
+    }
+
+    var i: usize = 0;
+    var j: usize = 0;
+    var k: usize = 0;
+    const out = try arena.alloc(*Entry, a.len + b.len);
+    while (i < a.len and j < b.len) : (k += 1) {
+        if (b[j]._start_time < a[i]._start_time) {
+            out[k] = b[j];
+            j += 1;
+        } else {
+            out[k] = a[i];
+            i += 1;
+        }
+    }
+    @memcpy(out[k .. k + a.len - i], a[i..]);
+    k += a.len - i;
+    @memcpy(out[k..], b[j..]);
+    return out;
+}
+
+// Milliseconds since the time origin, rounded like highResTimestamp
+fn relative(self: *const Performance, micros: u64) f64 {
+    if (micros == 0) {
+        return 0;
+    }
+    const elapsed = micros -| self._time_origin;
+    const rounded = @divTrunc(elapsed + 2, 5) * 5;
+    return @as(f64, @floatFromInt(rounded)) / 1000.0;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Performance);
 
@@ -386,7 +675,8 @@ pub const JsApi = struct {
     pub const measure = bridge.function(Performance.measure, .{});
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
-    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{ .noop = true });
+    pub const setResourceTimingBufferSize = bridge.function(Performance.setResourceTimingBufferSize, .{});
+    pub const clearResourceTimings = bridge.function(Performance.clearResourceTimings, .{});
     pub const getEntries = bridge.function(Performance.getEntries, .{});
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
@@ -413,7 +703,7 @@ pub const Entry = struct {
         measure: *Measure,
         navigation,
         paint,
-        resource,
+        resource: *ResourceTiming,
         taskattribution,
         @"visibility-state",
         mark: *Mark,
@@ -435,6 +725,12 @@ pub const Entry = struct {
             mark = 14,
             // If we ever have types more than 16, we have to update entry
             // table of PerformanceObserver too.
+
+            // The JS entryType string, e.g. "resource"; null for a type we
+            // don't know (the getters then return nothing).
+            pub fn parse(entry_type: []const u8) ?Enum {
+                return std.meta.stringToEnum(Enum, entry_type);
+            }
         };
     };
 
@@ -456,6 +752,20 @@ pub const Entry = struct {
         return self._start_time;
     }
 
+    pub fn toJSON(self: *const Entry) struct {
+        name: []const u8,
+        entryType: []const u8,
+        startTime: f64,
+        duration: f64,
+    } {
+        return .{
+            .name = self._name,
+            .entryType = self.getEntryType(),
+            .startTime = self._start_time,
+            .duration = self._duration,
+        };
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Entry);
 
@@ -468,6 +778,7 @@ pub const Entry = struct {
         pub const duration = bridge.accessor(Entry.getDuration, null, .{});
         pub const entryType = bridge.accessor(Entry.getEntryType, null, .{});
         pub const startTime = bridge.accessor(Entry.getStartTime, null, .{});
+        pub const toJSON = bridge.function(Entry.toJSON, .{});
     };
 };
 
@@ -583,6 +894,224 @@ pub const Measure = struct {
     };
 };
 
+/// PerformanceResourceTiming — one per fetch the HTTP client completed for
+/// this document (or worker).
+pub const ResourceTiming = struct {
+    pub const Proto = Entry;
+
+    _proto: *Entry,
+    _initiator_type: []const u8,
+    _next_hop_protocol: []const u8,
+    _delivery_type: []const u8,
+    _redirect_start: f64,
+    _redirect_end: f64,
+    _fetch_start: f64,
+    _domain_lookup_start: f64,
+    _domain_lookup_end: f64,
+    _connect_start: f64,
+    _connect_end: f64,
+    _secure_connection_start: f64,
+    _request_start: f64,
+    _response_start: f64,
+    _response_end: f64,
+    _transfer_size: u64,
+    _encoded_body_size: u64,
+    _decoded_body_size: u64,
+    _response_status: u16,
+    _content_type: []const u8,
+    _content_encoding: []const u8,
+
+    pub fn getInitiatorType(self: *const ResourceTiming) []const u8 {
+        return self._initiator_type;
+    }
+
+    pub fn getNextHopProtocol(self: *const ResourceTiming) []const u8 {
+        return self._next_hop_protocol;
+    }
+
+    pub fn getDeliveryType(self: *const ResourceTiming) []const u8 {
+        return self._delivery_type;
+    }
+
+    pub fn getWorkerStart(_: *const ResourceTiming) f64 {
+        // @ServiceWorker
+        return 0;
+    }
+
+    pub fn getRedirectStart(self: *const ResourceTiming) f64 {
+        return self._redirect_start;
+    }
+
+    pub fn getRedirectEnd(self: *const ResourceTiming) f64 {
+        return self._redirect_end;
+    }
+
+    pub fn getFetchStart(self: *const ResourceTiming) f64 {
+        return self._fetch_start;
+    }
+
+    pub fn getDomainLookupStart(self: *const ResourceTiming) f64 {
+        return self._domain_lookup_start;
+    }
+
+    pub fn getDomainLookupEnd(self: *const ResourceTiming) f64 {
+        return self._domain_lookup_end;
+    }
+
+    pub fn getConnectStart(self: *const ResourceTiming) f64 {
+        return self._connect_start;
+    }
+
+    pub fn getConnectEnd(self: *const ResourceTiming) f64 {
+        return self._connect_end;
+    }
+
+    pub fn getSecureConnectionStart(self: *const ResourceTiming) f64 {
+        return self._secure_connection_start;
+    }
+
+    pub fn getRequestStart(self: *const ResourceTiming) f64 {
+        return self._request_start;
+    }
+
+    pub fn getResponseStart(self: *const ResourceTiming) f64 {
+        return self._response_start;
+    }
+
+    pub fn getResponseEnd(self: *const ResourceTiming) f64 {
+        return self._response_end;
+    }
+
+    pub fn getFirstInterimResponseStart(_: *const ResourceTiming) f64 {
+        // 1xx are consumed by libcurl
+        return 0;
+    }
+
+    pub fn getFinalResponseHeadersStart(self: *const ResourceTiming) f64 {
+        return self._response_start;
+    }
+
+    pub fn getTransferSize(self: *const ResourceTiming) u64 {
+        return self._transfer_size;
+    }
+
+    pub fn getEncodedBodySize(self: *const ResourceTiming) u64 {
+        return self._encoded_body_size;
+    }
+
+    pub fn getDecodedBodySize(self: *const ResourceTiming) u64 {
+        return self._decoded_body_size;
+    }
+
+    pub fn getResponseStatus(self: *const ResourceTiming) u16 {
+        return self._response_status;
+    }
+
+    pub fn getContentType(self: *const ResourceTiming) []const u8 {
+        return self._content_type;
+    }
+
+    pub fn getContentEncoding(self: *const ResourceTiming) []const u8 {
+        return self._content_encoding;
+    }
+
+    pub fn toJSON(self: *const ResourceTiming) struct {
+        name: []const u8,
+        entryType: []const u8,
+        startTime: f64,
+        duration: f64,
+        initiatorType: []const u8,
+        nextHopProtocol: []const u8,
+        deliveryType: []const u8,
+        workerStart: f64,
+        redirectStart: f64,
+        redirectEnd: f64,
+        fetchStart: f64,
+        domainLookupStart: f64,
+        domainLookupEnd: f64,
+        connectStart: f64,
+        connectEnd: f64,
+        secureConnectionStart: f64,
+        requestStart: f64,
+        responseStart: f64,
+        firstInterimResponseStart: f64,
+        finalResponseHeadersStart: f64,
+        responseEnd: f64,
+        transferSize: u64,
+        encodedBodySize: u64,
+        decodedBodySize: u64,
+        responseStatus: u16,
+        contentType: []const u8,
+        contentEncoding: []const u8,
+    } {
+        const entry = self._proto;
+        return .{
+            .name = entry._name,
+            .entryType = entry.getEntryType(),
+            .startTime = entry._start_time,
+            .duration = entry._duration,
+            .initiatorType = self._initiator_type,
+            .nextHopProtocol = self._next_hop_protocol,
+            .deliveryType = self._delivery_type,
+            .workerStart = 0,
+            .redirectStart = self._redirect_start,
+            .redirectEnd = self._redirect_end,
+            .fetchStart = self._fetch_start,
+            .domainLookupStart = self._domain_lookup_start,
+            .domainLookupEnd = self._domain_lookup_end,
+            .connectStart = self._connect_start,
+            .connectEnd = self._connect_end,
+            .secureConnectionStart = self._secure_connection_start,
+            .requestStart = self._request_start,
+            .responseStart = self._response_start,
+            .firstInterimResponseStart = 0,
+            .finalResponseHeadersStart = self._response_start,
+            .responseEnd = self._response_end,
+            .transferSize = self._transfer_size,
+            .encodedBodySize = self._encoded_body_size,
+            .decodedBodySize = self._decoded_body_size,
+            .responseStatus = self._response_status,
+            .contentType = self._content_type,
+            .contentEncoding = self._content_encoding,
+        };
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(ResourceTiming);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceResourceTiming";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const initiatorType = bridge.accessor(ResourceTiming.getInitiatorType, null, .{});
+        pub const nextHopProtocol = bridge.accessor(ResourceTiming.getNextHopProtocol, null, .{});
+        pub const deliveryType = bridge.accessor(ResourceTiming.getDeliveryType, null, .{});
+        pub const workerStart = bridge.accessor(ResourceTiming.getWorkerStart, null, .{});
+        pub const redirectStart = bridge.accessor(ResourceTiming.getRedirectStart, null, .{});
+        pub const redirectEnd = bridge.accessor(ResourceTiming.getRedirectEnd, null, .{});
+        pub const fetchStart = bridge.accessor(ResourceTiming.getFetchStart, null, .{});
+        pub const domainLookupStart = bridge.accessor(ResourceTiming.getDomainLookupStart, null, .{});
+        pub const domainLookupEnd = bridge.accessor(ResourceTiming.getDomainLookupEnd, null, .{});
+        pub const connectStart = bridge.accessor(ResourceTiming.getConnectStart, null, .{});
+        pub const connectEnd = bridge.accessor(ResourceTiming.getConnectEnd, null, .{});
+        pub const secureConnectionStart = bridge.accessor(ResourceTiming.getSecureConnectionStart, null, .{});
+        pub const requestStart = bridge.accessor(ResourceTiming.getRequestStart, null, .{});
+        pub const responseStart = bridge.accessor(ResourceTiming.getResponseStart, null, .{});
+        pub const firstInterimResponseStart = bridge.accessor(ResourceTiming.getFirstInterimResponseStart, null, .{});
+        pub const finalResponseHeadersStart = bridge.accessor(ResourceTiming.getFinalResponseHeadersStart, null, .{});
+        pub const responseEnd = bridge.accessor(ResourceTiming.getResponseEnd, null, .{});
+        pub const transferSize = bridge.accessor(ResourceTiming.getTransferSize, null, .{});
+        pub const encodedBodySize = bridge.accessor(ResourceTiming.getEncodedBodySize, null, .{});
+        pub const decodedBodySize = bridge.accessor(ResourceTiming.getDecodedBodySize, null, .{});
+        pub const responseStatus = bridge.accessor(ResourceTiming.getResponseStatus, null, .{});
+        pub const contentType = bridge.accessor(ResourceTiming.getContentType, null, .{});
+        pub const contentEncoding = bridge.accessor(ResourceTiming.getContentEncoding, null, .{});
+        pub const toJSON = bridge.function(ResourceTiming.toJSON, .{});
+    };
+};
+
 /// PerformanceTiming — Navigation Timing Level 1 (legacy, but widely used).
 /// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceTiming
 /// All properties return 0 as stub values; the object must not be undefined
@@ -650,4 +1179,45 @@ pub const PerformanceNavigation = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Performance" {
     try testing.htmlRunner("performance.html", .{});
+}
+
+test "WebApi: Performance.resource_timing" {
+    try testing.htmlRunner("performance_resource_timing.html", .{});
+    try testing.htmlRunner("performance_resource_timing_buffer.html", .{});
+}
+
+test "Performance: minimizeMimeType" {
+    // The WPT table: /mimesniff/mime-types/resources/mime-types-minimized.json
+    const cases = [_][2][]const u8{
+        .{ "application/ecmascript", "text/javascript" },
+        .{ "text/javascript1.5", "text/javascript" },
+        .{ "text/jscript", "text/javascript" },
+        .{ "text/json", "application/json" },
+        .{ "application/ld+json", "application/json" },
+        .{ "image/svg+xml", "image/svg+xml" },
+        .{ " Text/HTML; charset=utf-8", "text/html" },
+        .{ "APPLICATION/X-JAVASCRIPT;x=1", "text/javascript" },
+        .{ "text/xml", "application/xml" },
+        .{ "application/xhtml+xml", "application/xml" },
+        .{ "image/png", "image/png" },
+        .{ "text/html", "text/html" },
+        .{ "font/woff2", "font/woff2" },
+        .{ "image/jpe", "" },
+        .{ "application/png", "" },
+        .{ "random/png", "" },
+        .{ "", "" },
+    };
+    for (cases) |case| {
+        try testing.expectEqual(case[1], minimizeMimeType(case[0]));
+    }
+}
+
+test "Performance: contentEncoding" {
+    try testing.expectEqual("", contentEncoding(""));
+    try testing.expectEqual("gzip", contentEncoding("gzip"));
+    try testing.expectEqual("br", contentEncoding(" BR "));
+    try testing.expectEqual("zstd", contentEncoding("zstd"));
+    try testing.expectEqual("@unknown", contentEncoding("identity"));
+    try testing.expectEqual("@unknown", contentEncoding("unrecognizedname"));
+    try testing.expectEqual("multiple", contentEncoding("gzip, deflate,Apple"));
 }

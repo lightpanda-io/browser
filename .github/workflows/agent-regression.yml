@@ -65,6 +65,7 @@ jobs:
         shell: bash
         env:
           LPD_PATH: ${{ github.workspace }}/bin/lightpanda
+          LPD_ARGS: --load-resources iframe --load-resources worker
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LP_MODEL: ${{ github.event.inputs.model }}
           # Optional: news.ycombinator.com often blocks datacenter IPs. Reuse

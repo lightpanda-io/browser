@@ -206,6 +206,12 @@ pub fn deinit(self: *Context) void {
     const env = self.env;
     defer self.arena.release();
 
+    // Disposal GCs below can trip the near-heap-limit callback. There's no JS
+    // left in this context to stop, so it must not arm a termination.
+    const was_tearing_down = env.tearing_down;
+    env.tearing_down = true;
+    defer env.tearing_down = was_tearing_down;
+
     // Unlink any IndexedDB gate participants first: the session-scoped engine
     // must never wake a waiter into this scheduler once it's torn down.
     self.page.session.idb.detachContext(self);
@@ -406,7 +412,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 }
 
 fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
-    const evaluated = mod.evaluate() catch {
+    const evaluated = mod.evaluate() catch |err| {
+        if (err == error.InvalidModuleStatus) {
+            log.err(.js, "evaluate module status", .{
+                .specifier = url,
+                .status = @tagName(mod.getStatus()),
+                .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+            });
+            return err;
+        }
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
         }
@@ -883,8 +897,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 }
             }
 
-            const evaluated = mod.evaluate() catch {
-                if (comptime lp.IS_DEBUG) {
+            const evaluated = mod.evaluate() catch |err| {
+                if (err == error.InvalidModuleStatus) {
+                    log.err(.js, "dynamic module status", .{
+                        .specifier = specifier,
+                        .status = @tagName(mod.getStatus()),
+                        .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+                    });
+                } else if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
@@ -927,7 +947,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var ms = module_source_ catch |err| {
         const resolver = local.toLocal(state.resolver);
         switch (err) {
-            error.UrlMalformat, error.Abort => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
+            error.UrlMalformat, error.Abort, error.TransferCanceled => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
             else => _ = resolver.reject("dynamic module source", local.newString(@errorName(err))),
         }
         return;

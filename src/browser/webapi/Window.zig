@@ -655,10 +655,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 }
 
 pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
-    return frame._factory.eventTarget(MediaQueryList{
-        ._proto = undefined,
-        ._media = try frame.dupeString(query),
-    });
+    return MediaQueryList.init(query, frame);
 }
 
 pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
@@ -704,7 +701,10 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
         std.ascii.eqlIgnoreCase(target, "_parent") or
         std.ascii.eqlIgnoreCase(target, "_top"))
     {
-        const nav_target = frame.resolveTargetFrame(target) orelse frame;
+        const nav_target = switch (frame.resolveTargetFrame(target)) {
+            .frame => |f| f,
+            .blank => unreachable,
+        };
         const nav_url = if (raw_url.len == 0) "about:blank" else raw_url;
         try frame.scheduleNavigation(nav_url, .{
             .reason = .script,
@@ -809,6 +809,10 @@ pub fn close(self: *Window) void {
 
 pub fn focus(_: *Window) void {}
 pub fn blur(_: *Window) void {}
+
+pub fn stop(self: *Window) void {
+    self._frame.stopLoading();
+}
 
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
@@ -1257,6 +1261,7 @@ pub const JsApi = struct {
     pub const close = bridge.function(Window.close, .{});
     pub const focus = bridge.function(Window.focus, .{});
     pub const blur = bridge.function(Window.blur, .{});
+    pub const stop = bridge.function(Window.stop, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
@@ -1374,6 +1379,7 @@ const CrossOriginWindow = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
+    testing.expectLog(&.{.http}); // stop aborts
     try testing.htmlRunner("window", .{});
 }
 

@@ -149,3 +149,12 @@
     testing.expectEqual(1, constructorCalled);
 }
 </script>
+
+<script id=getName>
+{
+    class NamedElement extends HTMLElement {}
+    customElements.define('named-element', NamedElement);
+    testing.expectEqual('named-element', customElements.getName(NamedElement));
+    testing.expectEqual(null, customElements.getName(class extends HTMLElement {}));
+}
+</script>
