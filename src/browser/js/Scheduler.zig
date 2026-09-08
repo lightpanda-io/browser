@@ -20,6 +20,8 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const Attribution = @import("Attribution.zig");
 
+const VirtualTime = @import("../VirtualTime.zig");
+
 const log = lp.log;
 const Allocator = std.mem.Allocator;
 
@@ -107,7 +109,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         std.debug.assert(opts.front == false or run_in_ms == 0);
     }
 
-    const run_at = lp.datetime.milliTimestamp(.boot) + run_in_ms;
+    const run_at = VirtualTime.milli() + run_in_ms;
     const tag, const hold = self.attribute(run_in_ms, opts);
     const task: Task = .{
         .ctx = ctx,
@@ -151,7 +153,8 @@ fn runTask(self: *Scheduler, task: *Task) !?u32 {
 }
 
 pub fn run(self: *Scheduler) !void {
-    const start = lp.datetime.milliTimestamp(.boot);
+    // The virtual offset only moves between ticks, so this is real elapsed too.
+    const start = VirtualTime.milli();
     var now = start;
 
     // Only run what was queued before this run started.
@@ -196,7 +199,7 @@ pub fn run(self: *Scheduler) !void {
             }
         }
 
-        now = lp.datetime.milliTimestamp(.boot);
+        now = VirtualTime.milli();
         if (now - start > 500) {
             return;
         }
@@ -218,7 +221,7 @@ pub fn msToNext(self: *Scheduler) ?u64 {
     }
     const task = self.timed.peek() orelse return null;
     const run_at = task.runAt();
-    const now = lp.datetime.milliTimestamp(.boot);
+    const now = VirtualTime.milli();
     return if (run_at <= now) 0 else run_at - now;
 }
 
