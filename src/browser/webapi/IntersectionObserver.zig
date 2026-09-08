@@ -266,6 +266,21 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
         return;
     }
 
+    // See observers.INTERSECTION_TARGET_REPORT_LIMIT.
+    const reported = try frame._intersection.reported.getOrPut(frame.arena, target);
+    if (!reported.found_existing) {
+        reported.value_ptr.* = 0;
+    }
+    if (reported.value_ptr.* >= Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT) {
+        if (!frame._intersection.sentinel_logged) {
+            frame._intersection.sentinel_logged = true;
+            log.warn(.frame, "IntsctObserver.sentinel", .{ .url = frame.url });
+        }
+        _ = self._tracked.removeByPtr(tracked.key_ptr);
+        return;
+    }
+    reported.value_ptr.* += 1;
+
     // Building the entry is the expensive part — getBoundingClientRect walks the
     // document to fake a position (O(node count)) — so it only runs here.
     const data = try self.calculateIntersection(target, has_parent, frame);

@@ -64,7 +64,18 @@ pub const Intersection = struct {
     last_delivery_ms: u64 = 0,
     burst_deliveries: u32 = 0,
     runaway: bool = false,
+
+    // Times each target was reported intersecting this navigation.
+    reported: std.AutoHashMapUnmanaged(*Element, u8) = .{},
+    sentinel_logged: bool = false,
 };
+
+// Without layout every attached element intersects, so an infinite-scroll
+// sentinel fires each time the page re-observes it after loading a batch, and
+// the burst guard above only catches that after 10 s. A target reported this
+// many times in one navigation is treated as below the fold from then on.
+// Three leaves room for several observers watching one element.
+pub const INTERSECTION_TARGET_REPORT_LIMIT = 3;
 
 // ResizeObserver bookkeeping for a frame.
 pub const Resize = struct {
