@@ -283,6 +283,7 @@ fn isIdentStart(self: *Tokenizer) bool {
 
     var b = self.nextByteUnchecked();
     if (b == '-') {
+        if (self.hasAtLeast(1) and self.byteAt(1) == '-') return true;
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
     }
 

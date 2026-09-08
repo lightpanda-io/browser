@@ -77,6 +77,15 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     const normalized = normalizePropertyName(property_name, &frame.buf);
     const wrapped = String.wrap(normalized);
 
+    if (self._is_computed and std.mem.startsWith(u8, normalized, "--")) {
+        if (self._element) |element| {
+            if (element.ownerFrame(frame)._style_manager.customPropertyValue(element, wrapped)) |value| {
+                return value;
+            }
+        }
+        return "";
+    }
+
     // Computed styles must reflect stylesheet rules, not just the element's
     // inline `style=` attribute. Limited to display/visibility — what aria
     // tree builders (Playwright ariaSnapshot) consult on every element.

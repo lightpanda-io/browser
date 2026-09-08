@@ -49,6 +49,11 @@ const Tag = Element.Tag;
 const Input = Element.Html.Input;
 const RuleList = std.MultiArrayList(VisibilityRule);
 
+const CustomProperty = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 frame: *Frame,
 
 arena: *lp.Arena,
@@ -454,11 +459,24 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     if (selector_text.len == 0) return;
 
     var props = VisibilityProperties{};
+    var custom_properties: std.ArrayList(CustomProperty) = .empty;
     var it = CssParser.parseDeclarationsList(block_text);
     while (it.next()) |decl| {
         const name = decl.name;
         const val = decl.value;
-        if (std.ascii.eqlIgnoreCase(name, "display")) {
+        if (std.mem.startsWith(u8, name, "--")) {
+            var replaced = false;
+            for (custom_properties.items) |*custom| {
+                if (std.mem.eql(u8, custom.name, name)) {
+                    custom.value = val;
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) {
+                try custom_properties.append(self.arena.allocator(), .{ .name = name, .value = val });
+            }
+        } else if (std.ascii.eqlIgnoreCase(name, "display")) {
             props.display = Display.parse(val);
         } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
             props.visibility_hidden = std.ascii.eqlIgnoreCase(val, "hidden") or std.ascii.eqlIgnoreCase(val, "collapse");
@@ -469,7 +487,8 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
         }
     }
 
-    if (!props.isRelevant()) return;
+    const custom_property_slice = try custom_properties.toOwnedSlice(self.arena.allocator());
+    if (!props.isRelevant() and custom_property_slice.len == 0) return;
 
     const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
     for (selectors) |selector| {
@@ -477,6 +496,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
         const bucket_key = getBucketKey(rightmost) orelse continue;
         const rule = VisibilityRule{
             .props = props,
+            .custom_properties = custom_property_slice,
             .selector = selector,
             .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
         };
@@ -952,7 +972,8 @@ fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRul
     // Check if the rule has visibility-relevant properties
     const style = style_rule._style orelse return;
     const props = extractVisibilityProperties(style);
-    if (!props.isRelevant()) {
+    const custom_property_slice = try self.extractCustomProperties(style);
+    if (!props.isRelevant() and custom_property_slice.len == 0) {
         return;
     }
 
@@ -976,6 +997,7 @@ fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRul
 
         const rule = VisibilityRule{
             .props = props,
+            .custom_properties = custom_property_slice,
             .selector = selector,
             .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
         };
@@ -1052,6 +1074,21 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     }
 
     return best_key;
+}
+
+fn extractCustomProperties(self: *StyleManager, style: *CSSStyleProperties) ![]const CustomProperty {
+    const decl = style.asCSSStyleDeclaration();
+    var properties: std.ArrayList(CustomProperty) = .empty;
+    var index: u32 = 0;
+    while (index < decl.length()) : (index += 1) {
+        const name = decl.item(index);
+        if (!std.mem.startsWith(u8, name, "--")) continue;
+        try properties.append(self.arena.allocator(), .{
+            .name = name,
+            .value = decl.getPropertyValue(name, self.frame),
+        });
+    }
+    return properties.toOwnedSlice(self.arena.allocator());
 }
 
 /// Extracts visibility-relevant properties from a style declaration.
@@ -1168,6 +1205,7 @@ const VisibilityProperties = struct {
 const VisibilityRule = struct {
     selector: Selector.Selector, // Single selector, not a list
     props: VisibilityProperties,
+    custom_properties: []const CustomProperty = &.{},
 
     // Packed priority: layer_rank:12 | specificity:30 | doc_order:22.
     // The rank bits are 0 until finalizeLayerRanks stamps them (the rank
@@ -1289,6 +1327,79 @@ fn scanInlineValue(attr: []const u8, property_name: []const u8) ?[]const u8 {
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
     return inlineValue(el, property_name, .materialize, self.frame);
+}
+
+/// Returns the winning custom property on `el`, or inherits it from ancestors.
+/// This intentionally resolves only custom property declarations; var() expansion
+/// and general computed-value resolution remain outside this narrow path.
+pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    self.rebuildIfDirty() catch return null;
+
+    var current: ?*Element = el;
+    var depth: usize = 0;
+    while (current) |element| : (depth += 1) {
+        if (depth >= 128) return null;
+
+        if (inlineValue(element, property_name, .materialize, self.frame)) |value| {
+            return value;
+        }
+        if (self.customPropertyValueOnElement(element, property_name)) |value| {
+            return value;
+        }
+        current = element.parentElement();
+    }
+    return null;
+}
+
+fn customPropertyValueOnElement(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    var value: ?[]const u8 = null;
+    var priority: u64 = 0;
+
+    const Lookup = struct {
+        el: *Element,
+        frame: *Frame,
+        property_name: []const u8,
+        value: *?[]const u8,
+        priority: *u64,
+
+        fn checkRules(ctx: @This(), rules: *const RuleList) void {
+            for (rules.items(.priority), rules.items(.custom_properties), rules.items(.selector)) |p, custom_properties, selector| {
+                if (p <= ctx.priority.*) continue;
+                if (!matchesSelector(ctx.el, selector, ctx.frame)) continue;
+
+                for (custom_properties) |custom| {
+                    if (std.mem.eql(u8, custom.name, ctx.property_name)) {
+                        ctx.value.* = custom.value;
+                        ctx.priority.* = p;
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    const lookup = Lookup{
+        .el = el,
+        .frame = self.frame,
+        .property_name = property_name.str(),
+        .value = &value,
+        .priority = &priority,
+    };
+
+    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+        if (self.id_rules.get(id)) |rules| lookup.checkRules(&rules);
+    }
+
+    if (el.getAttributeSafe(comptime .wrap("class"))) |class_attr| {
+        var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
+        while (it.next()) |class| {
+            if (self.class_rules.get(class)) |rules| lookup.checkRules(&rules);
+        }
+    }
+
+    if (self.tag_rules.get(el.getTag())) |rules| lookup.checkRules(&rules);
+    lookup.checkRules(&self.other_rules);
+    return value;
 }
 
 /// Bounds computedFontSize's ancestor recursion (the parent walk and

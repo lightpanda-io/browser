@@ -1,6 +1,15 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
+<style>
+  html { --brand-color: #336699; }
+  .custom-property-target {
+    --class-value: 16px;
+    display: none;
+  }
+  #cascade-target { --cascade-value: id; }
+</style>
+
 <div id="container">
     <!-- comment -->
     <p id="p1">Paragraph 1</p>
@@ -176,6 +185,31 @@
   el.style = 'color:blue';
   testing.expectEqual('blue', el.style.color);
   testing.expectEqual(true, s1 === el.style);
+}
+</script>
+
+<script id="computedStyleCustomProperties">
+{
+  const parent = document.createElement('div');
+  parent.style.setProperty('--inherited-value', '4px');
+
+  const target = document.createElement('div');
+  target.className = 'custom-property-target';
+  target.id = 'cascade-target';
+  target.style.setProperty('--inline-value', '8px');
+  parent.appendChild(target);
+  document.body.appendChild(parent);
+
+  const rootStyle = window.getComputedStyle(document.documentElement);
+  const targetStyle = window.getComputedStyle(target);
+  testing.expectEqual('8px', targetStyle.getPropertyValue('--inline-value'));
+  testing.expectEqual('16px', targetStyle.getPropertyValue('--class-value'));
+  testing.expectEqual('id', targetStyle.getPropertyValue('--cascade-value'));
+  testing.expectEqual('4px', targetStyle.getPropertyValue('--inherited-value'));
+  testing.expectEqual('#336699', rootStyle.getPropertyValue('--brand-color'));
+
+  // Known properties continue to use the existing computed-style path.
+  testing.expectEqual('none', targetStyle.getPropertyValue('display'));
 }
 </script>
 
