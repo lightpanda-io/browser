@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<div id=out></div>
+<script>
+  const out = document.getElementById('out');
+  const mark = (s) => { out.textContent += s + ','; };
+  setTimeout(() => mark('c'), 300);
+  setTimeout(() => {
+    mark('a');
+    setTimeout(() => mark('a2'), 50);
+  }, 100);
+  setTimeout(() => mark('b'), 200);
+</script>

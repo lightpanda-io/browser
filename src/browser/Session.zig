@@ -33,6 +33,7 @@ const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
+const VirtualTime = @import("VirtualTime.zig");
 pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
@@ -113,6 +114,9 @@ _console_capture: bool = false,
 // configured external resources (images, stylesheet, worker, iframe) to load
 load_resources: Config.LoadResources,
 
+// Virtual time the current navigation may still skip; null keeps real time.
+virtual_time: ?VirtualTime.Budget = null,
+
 // opt-in unstable features (--experimental-features)
 experimental_features: Config.ExperimentalFeatures,
 
@@ -176,6 +180,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
         ._console_messages = .init(allocator),
         .load_resources = browser.app.config.loadResources(),
+        .virtual_time = if (browser.app.config.virtualTimeBudgetMs()) |ms| .init(ms) else null,
         .experimental_features = browser.app.config.experimentalFeatures(),
     };
     errdefer self._console_messages.deinit();
@@ -377,10 +382,15 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     errdefer _ = self.pages.pop();
 
     const frame = &page.frame;
-    // Inform CDP the main frame has been created so it can point its page
-    // handle at the new frame.
-    self.notification.dispatch(.frame_created, frame);
+    self.publishActivePage(frame);
     return frame;
+}
+
+// Inform CDP the main frame has been created so it can point its page handle
+// at the new frame, and start the navigation's virtual time budget afresh.
+fn publishActivePage(self: *Session, frame: *Frame) void {
+    if (self.virtual_time) |*vt| vt.reset();
+    self.notification.dispatch(.frame_created, frame);
 }
 
 pub fn createPage(self: *Session) !PageHandle {
@@ -1035,7 +1045,7 @@ pub fn commitPendingPage(self: *Session, replacement: *Page) !void {
     // set, so the session still reports an in-flight nav and CDP's frameCreated
     // skips the captured_responses / frame_arena reset that would wipe the
     // response we just received.
-    self.notification.dispatch(.frame_created, &replacement.frame);
+    self.publishActivePage(&replacement.frame);
 
     // Step 3: promote — clear `replaces` and unlink OLD so  `livePage()`
     // resolve to `replacement` (both share OLD's frame_id). OLD stays allocated

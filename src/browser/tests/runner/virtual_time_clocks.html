@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<div id=perf></div>
+<div id=evt></div>
+<script>
+  const t0 = performance.now();
+  const e0 = new Event('x').timeStamp;
+  setTimeout(() => {
+    document.getElementById('perf').textContent = String(Math.round(performance.now() - t0));
+    document.getElementById('evt').textContent = String(Math.round(new Event('x').timeStamp - e0));
+  }, 3000);
+</script>
