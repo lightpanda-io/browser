@@ -16,15 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! The page's clock. Timers, performance.now and event timestamps read it;
-//! the watchdog, HTTP client, rate limiter and server read the boot clock
-//! directly. Virtual time advances it past idle stretches so a pending timer
-//! becomes due without sleeping. Process-wide because the V8 platform clock
-//! is process-wide; only the browser thread reads or writes it, and it never
+//! The page's clock: timers, performance.now, event and resource timestamps.
+//! Infrastructure (watchdog, HTTP, rate limiter, server) stays on the boot
+//! clock. Process-wide like V8's platform clock; browser thread only; never
 //! rewinds.
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
+const Platform = @import("js/Platform.zig");
 
 var offset_us: u64 = 0;
 
@@ -36,11 +36,11 @@ pub fn micro() u64 {
     return lp.datetime.microTimestamp(.boot) + offset_us;
 }
 
-pub fn advance(ms: u32) void {
+pub fn advance(platform: Platform, ms: u32) void {
     offset_us += @as(u64, ms) * std.time.us_per_ms;
+    platform.setClockOffsetMillis(@floatFromInt(offset_us / std.time.us_per_ms));
 }
 
-/// How much virtual time a navigation may skip. Consulted by Runner.
 pub const Budget = struct {
     per_navigation_ms: u32,
     remaining_ms: u32,

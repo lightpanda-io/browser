@@ -458,8 +458,8 @@ fn hasRunnablePage(session: *Session) bool {
     return false;
 }
 
-/// One tick of a polling wait, then the sleep it recommends. When the page is
-/// idle, poll anyway so `remaining_ms` means "wait up to N ms", not "fail now".
+/// Idle pages still poll, so `remaining_ms` means "wait up to N ms", not
+/// "fail now".
 fn pollFrame(self: *Runner, frame_id: u32, remaining_ms: u32) !void {
     const sleep_ms = switch (try self.tickForFrame(frame_id, remaining_ms, .{ .until = .done })) {
         .done => @min(remaining_ms, 50),
@@ -468,8 +468,7 @@ fn pollFrame(self: *Runner, frame_id: u32, remaining_ms: u32) !void {
     self.idleSleep(sleep_ms);
 }
 
-/// Sleep `ms` of real time, or whatever the virtual clock leaves of it. Only
-/// reached when the last tick made no progress, so jumping the clock here
+/// Only reached when the last tick made no progress, so a clock jump here
 /// cannot reorder a timer ahead of work that tick completed.
 fn idleSleep(self: *Runner, ms: u32) void {
     if (ms == 0) {
@@ -481,9 +480,8 @@ fn idleSleep(self: *Runner, ms: u32) void {
     }
 }
 
-/// Idle except for a timer: jump the page's clock to it instead of sleeping.
-/// Returns the real ms still to sleep. The grant is against the next task,
-/// not `real_wait_ms`, which is clamped to the caller's polling slice.
+/// Returns the real ms still to sleep. Grants against the next task, not
+/// `real_wait_ms`, which is clamped to the caller's polling slice.
 fn advanceVirtualTime(self: *Runner, real_wait_ms: u32) u32 {
     const budget = &(self.session.virtual_time orelse return real_wait_ms);
     if (self.browser.hasBackgroundTasks() or self.http_client.activity().idle() == false) {
@@ -494,7 +492,7 @@ fn advanceVirtualTime(self: *Runner, real_wait_ms: u32) u32 {
     if (granted == 0) {
         return real_wait_ms;
     }
-    VirtualTime.advance(granted);
+    VirtualTime.advance(self.browser.app.platform, granted);
     log.debug(.browser, "virtual time", .{ .advanced_ms = granted, .remaining_ms = budget.remaining_ms });
     return @intCast(@min(real_wait_ms, next_ms - granted));
 }
@@ -685,7 +683,7 @@ test "Runner: virtual time falls back to real time past the budget" {
     try testing.expectEqual(true, elapsed >= 100);
 }
 
-test "Runner: virtual time advances performance.now and event timestamps" {
+test "Runner: virtual time advances performance.now, event timestamps and Date.now" {
     const page = try testing.pageTest("runner/virtual_time_clocks.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
     defer page.close();
 
@@ -694,8 +692,10 @@ test "Runner: virtual time advances performance.now and event timestamps" {
 
     const perf = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#perf"), 10);
     const evt = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#evt"), 10);
+    const date = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#date"), 10);
     try testing.expectEqual(true, perf >= 2990);
     try testing.expectEqual(true, evt >= 2990);
+    try testing.expectEqual(true, date >= 2990);
 }
 
 test "Runner: virtual time satisfies the network idle hold" {
