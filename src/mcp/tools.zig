@@ -1085,6 +1085,24 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     }
 
     {
+        const msg =
+            \\{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"click","arguments":{"selector":"#focusTarget"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        const msg =
+            \\{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"click","arguments":{"selector":"#plain"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
         const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.active_session.registry.register(inp)).id;
         var inp_id_buf: [12]u8 = undefined;
@@ -1189,6 +1207,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ ]) &&
         \\ JSON.stringify(window.seqPrevented) === JSON.stringify(['pointerdown', 'pointerup', 'click']) &&
         \\ window.disabledMousedowned === false &&
+        \\ window.focusTargetFocused === true && window.focusAfterPlain === 'focusTarget' &&
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
         \\ window.scrolled === true &&

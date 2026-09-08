@@ -21,6 +21,8 @@
     <input id="rad" type="radio" name="group1">
     <button id="btnPreventDefault">Prevent Default</button>
     <button id="btnDisabled" disabled>Disabled</button>
+    <div id="focusTarget" tabindex="0" onclick="window.focusTargetFocused = document.activeElement === this;">Focus me</div>
+    <div id="plain" onclick="window.focusAfterPlain = document.activeElement.id;">Not focusable</div>
     <script>
         window.seq = [];
         const btn = document.getElementById('btn');

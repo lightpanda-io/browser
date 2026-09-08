@@ -98,8 +98,8 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
     const suppress_mouse = try dispatchPointer(el, "pointerdown", 1, 0, frame);
     if (!suppress_mouse) {
         try dispatchMouse(el, "mousedown", 1, frame);
-        Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
-            lp.log.warn(.app, "click editable focus", .{ .err = err });
+        Frame.user_input.focusForMouseDown(frame, el) catch |err| {
+            lp.log.warn(.app, "click mousedown focus", .{ .err = err });
         };
     }
 

@@ -299,8 +299,8 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 dispatchTouch(el, "touchstart", frame);
             } else {
                 dispatchMouse(el, "mousedown", button, buttonsMask(button), click_count, frame);
-                Frame.user_input.focusEditingHostForMouseDown(frame, el) catch |err| {
-                    log.warn(.app, "webdriver editable focus", .{ .err = err });
+                Frame.user_input.focusForMouseDown(frame, el) catch |err| {
+                    log.warn(.app, "webdriver mousedown focus", .{ .err = err });
                 };
             }
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {

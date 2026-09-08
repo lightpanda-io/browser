@@ -209,7 +209,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
         });
     }
     try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
-    try focusEditingHostForMouseDown(frame, target);
+    try focusForMouseDown(frame, target);
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
@@ -353,9 +353,9 @@ fn isEditingHost(node: *Node) bool {
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
-// A mousedown on editable content focuses its editing host: the outermost
-// element of the contiguous editable chain containing the target.
-pub fn focusEditingHostForMouseDown(frame: *Frame, target: *Element) !void {
+// Find the outermost element of the contiguous editable chain containing the
+// target.
+fn outermostEditingHost(target: *Element) ?*Element {
     var node: ?*Node = target.asNode();
     var editable: ?*Node = null;
     while (node) |n| : (node = n._parent) {
@@ -364,15 +364,55 @@ pub fn focusEditingHostForMouseDown(frame: *Frame, target: *Element) !void {
             break;
         }
     }
-    var host = editable orelse return;
+    var host = editable orelse return null;
     while (host._parent) |p| {
         if (!isEditingHost(p)) {
             break;
         }
         host = p;
     }
-    const host_element = host.is(Element) orelse return;
-    try host_element.focus(frame);
+    return host.is(Element);
+}
+
+/// `null` means the element is not mouse-focusable. Unlike sequential focus,
+/// any explicit tabindex value, including a negative one, is mouse-focusable.
+fn mouseFocusTabIndex(el: *Element) ?i32 {
+    if (el.isDisabled()) return null;
+    if (el.is(Element.Html) == null) return null;
+
+    if (el.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+        return Element.Html.parseInteger(attr) orelse 0;
+    }
+
+    const native = switch (el.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => el.as(Element.Html.Input)._input_type != .hidden,
+        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
+    return if (native) 0 else null;
+}
+
+fn isMouseFocusable(el: *Element) bool {
+    return mouseFocusTabIndex(el) != null;
+}
+
+/// Mousedown default action: focus the editing host if the click is inside
+/// one, otherwise the nearest mouse-focusable element (self or ancestor).
+pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
+    if (outermostEditingHost(target)) |host| {
+        try host.focus(frame);
+        return;
+    }
+
+    var node: ?*Node = target.asNode();
+    while (node) |n| : (node = n._parent) {
+        const el = n.is(Element) orelse continue;
+        if (isMouseFocusable(el)) {
+            try el.focus(frame);
+            return;
+        }
+    }
 }
 
 // Per the DOM dispatch algorithm, a click's activation target is the event

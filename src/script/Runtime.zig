@@ -1441,6 +1441,56 @@ test "agent script runtime: tool errors throw and stop execution" {
     );
 }
 
+test "agent script runtime: selector click preserves pointer mouse semantics" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.click("#btn");
+        \\const full = page.evaluate("JSON.stringify(window.seq)");
+        \\if (full !== '["pointerdown:0:1:mouse:true","mousedown:0:1::true","pointerup:0:0:mouse:true","mouseup:0:0::true","click:0:0:mouse:true"]') throw new Error("wrong full click sequence: " + full);
+        \\page.click("#btnPreventDefault");
+        \\const suppressed = page.evaluate("JSON.stringify(window.seqPrevented)");
+        \\if (suppressed !== '["pointerdown","pointerup","click"]') throw new Error("wrong suppressed sequence: " + suppressed);
+        \\page.click("#btnDisabled");
+        \\if (page.evaluate("String(window.disabledMousedowned)") !== "false") throw new Error("disabled button received mousedown");
+        \\page.click("#focusTarget");
+        \\if (page.evaluate("document.activeElement.id") !== "focusTarget") throw new Error("mousedown focus default action was lost");
+    );
+}
+
+// Different workflow from the fixture above: the tabindex node is created at
+// runtime, the click lands on a child (ancestor walk), a following click on a
+// non-focusable node must not steal focus, and tabindex=-1 is still mouse-focusable.
+test "agent script runtime: dynamic tabindex child click focuses ancestor" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = CDPNode.Registry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\page.evaluate("const p=document.createElement('div');p.id='dynFocus';p.setAttribute('tabindex','0');const s=document.createElement('span');s.id='dynChild';s.textContent='x';p.appendChild(s);document.body.appendChild(p);const n=document.createElement('div');n.id='dynNeg';n.setAttribute('tabindex','-1');n.textContent='neg';document.body.appendChild(n)");
+        \\page.click("#dynChild");
+        \\if (page.evaluate("document.activeElement.id") !== "dynFocus") throw new Error("child click did not focus tabindex ancestor: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\page.click("#plain");
+        \\if (page.evaluate("document.activeElement.id") !== "dynFocus") throw new Error("plain click stole focus: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\page.click("#dynNeg");
+        \\if (page.evaluate("document.activeElement.id") !== "dynNeg") throw new Error("tabindex=-1 was not mouse-focusable: " + page.evaluate("document.activeElement && document.activeElement.id"));
+    );
+}
+
 test "agent script runtime: builtin argument marshalling (positional + options)" {
     defer testing.test_session.closeAllPages();
 
