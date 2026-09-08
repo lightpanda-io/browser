@@ -270,8 +270,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
     const reported = try frame._intersection.reported.getOrPut(frame.arena, target);
     if (!reported.found_existing) {
         reported.value_ptr.* = 0;
-    }
-    if (reported.value_ptr.* >= Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT) {
+    } else if (reported.value_ptr.* >= Frame.observers.INTERSECTION_TARGET_REPORT_LIMIT) {
         if (!frame._intersection.sentinel_logged) {
             frame._intersection.sentinel_logged = true;
             log.warn(.frame, "IntsctObserver.sentinel", .{ .url = frame.url });
