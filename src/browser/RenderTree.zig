@@ -152,7 +152,7 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (tag.isMetadata() or tag == .svg) {
         return null;
     }
-    const d = frame._style_manager.display(el, .scan);
+    const d = frame._style_manager.display(el);
     if (d == .none) {
         return null;
     }

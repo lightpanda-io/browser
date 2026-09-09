@@ -130,9 +130,9 @@ fn walk(
         // Hidden subtrees are never entered, so below the root only the
         // element's own display matters.
         const hidden = if (current_depth == 0)
-            !el.isVisible(self.frame, .scan)
+            !el.isVisible(self.frame)
         else
-            self.frame._style_manager.hasDisplayNone(el, .scan);
+            self.frame._style_manager.hasDisplayNone(el);
         if (hidden) {
             return;
         }

@@ -160,7 +160,7 @@ pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
         obs.connected = connected;
 
         const width, const height = blk: {
-            if (!connected or !target.isVisible(frame, .materialize)) {
+            if (!connected or !target.isVisible(frame)) {
                 break :blk .{ 0, 0 };
             }
             break :blk .{

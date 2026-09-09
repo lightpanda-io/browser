@@ -3121,7 +3121,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
 }
 
 fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
-    const style = element.getStyle(self) orelse return;
+    const style = element.existingStyle(self) orelse return;
     style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
         log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
     };
