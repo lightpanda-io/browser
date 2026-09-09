@@ -7,6 +7,11 @@
   <option value="val3">Option 3</option>
 </select>
 
+<select id="select_named" autocomplete="off">
+  <option id="opt_first" value="1">First</option>
+  <option name="second" value="2">Second</option>
+</select>
+
 <select id="select2" autocomplete="off">
   <option value="a">A</option>
   <option value="b">B</option>
@@ -520,5 +525,22 @@
   const orphan = document.createElement('option');
   orphan.selected = true;
   testing.expectEqual(true, orphan.selected);
+}
+</script>
+
+<script id="options_named_presence">
+{
+  const opts = $('#select_named').options;
+
+  testing.expectEqual(true, 'opt_first' in opts);
+  testing.expectEqual(true, 'second' in opts);
+  testing.expectEqual(true, Object.hasOwn(opts, 'opt_first'));
+
+  testing.expectEqual(false, 'nonExistent' in opts);
+  testing.expectEqual(false, Object.hasOwn(opts, 'nonExistent'));
+
+  // [LegacyUnenumerableNamedProperties]
+  testing.expectEqual(false, Object.keys(opts).includes('opt_first'));
+  testing.expectEqual(false, Object.getOwnPropertyDescriptor(opts, 'opt_first').enumerable);
 }
 </script>
