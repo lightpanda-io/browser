@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 const RateLimiter = @This();
 
 // In adaptive mode the interval grows with the host's pressure and comes
-// back down when the host is left alone. In fixed mode the interval never
+// back down as that pressure drains. In fixed mode the interval never
 // changes: the user asked for an exact spacing with --http-nav-delay.
 pub const Mode = enum { fixed, adaptive };
 
@@ -39,9 +39,11 @@ pub const ADAPTIVE_INTERVAL_MS: u64 = 20;
 // space our requests.
 pub const RAMP_BURSTS: u64 = 10;
 
-// Each `COOLDOWN_INTERVALS` base intervals a host is left alone forgives one
-// navigation of pressure.
-pub const COOLDOWN_INTERVALS: u64 = 10;
+// One navigation of pressure is forgiven every `COOLDOWN_INTERVALS` base
+// intervals of elapsed time. This constant alone sets the sustained rate: a
+// host stops gaining pressure once its spacing reaches `cooldown_ms`, so it
+// settles at one navigation per `COOLDOWN_INTERVALS` base intervals.
+pub const COOLDOWN_INTERVALS: u64 = 5;
 
 // The interval never grows beyond `MAX_INTERVALS` base intervals.
 pub const MAX_INTERVALS: u64 = 60;
@@ -74,7 +76,7 @@ tau: u64,
 // Pressure units per extra base interval (see RAMP_BURSTS).
 ramp_step: u64,
 
-// Idle time forgiving one unit of pressure (see COOLDOWN_INTERVALS).
+// Elapsed time forgiving one unit of pressure (see COOLDOWN_INTERVALS).
 cooldown_ms: u64,
 
 // Cap on the effective interval (see MAX_INTERVALS).
@@ -106,13 +108,13 @@ const Host = struct {
     // idle once its TAT is in the past.
     tat: u64,
 
-    // Leaky bucket of recent navigations. Each one adds 1, each `cooldown_ms` of
-    // idle time removes 1.
+    // Leaky bucket of recent navigations. Each one adds 1, each `cooldown_ms`
+    // of elapsed time removes 1.
     pressure: u64,
 
-    // Cooldown clock: the time up to which idle time has already been credited
-    // to `pressure`. Advanced by whole `cooldown_ms` steps so no idle time is
-    // lost to rounding.
+    // Cooldown clock: the time up to which elapsed time has already been
+    // credited to `pressure`. Advanced by whole `cooldown_ms` steps so no time
+    // is lost to rounding.
     clock: u64,
 
     // log_msg indicates if a rate limited host has already been notified to
@@ -281,7 +283,10 @@ fn intervalFor(self: *const RateLimiter, pressure: u64) u64 {
     return @min(self.interval_ms * (1 + pressure / self.ramp_step), self.max_ms);
 }
 
-// Credit the idle time since the host's cooldown clock to its pressure.
+// Credit the time elapsed since the host's cooldown clock to its pressure.
+// This is wall clock, not idle time: a host under constant load drains too.
+// That is what makes the spacing settle at `cooldown_ms` instead of climbing
+// to the cap.
 fn cooldown(self: *const RateLimiter, h: *Host, now: u64) void {
     const steps = (now -| h.clock) / self.cooldown_ms;
     if (steps == 0) {
@@ -297,7 +302,7 @@ fn cooldown(self: *const RateLimiter, h: *Host, now: u64) void {
 }
 
 // Drop every host whose TAT is already in the past and whose pressure has
-// fully cooled down.
+// fully drained.
 // Caller holds the mutex.
 fn sweep(self: *RateLimiter, now: u64) void {
     var it = self.hosts.iterator();
@@ -407,25 +412,26 @@ test "RateLimiter: pressure cooldown" {
     for (0..10) |_| {
         _ = try rl.reserve("a.test", 1000);
     }
-    // 10 units of pressure cool down in 10 * cooldown_ms (1000ms each)
+    // 10 units of pressure drain in 10 * cooldown_ms (500ms each)
     try testing.expectEqual(10, rl.hosts.get("a.test").?.pressure);
     try testing.expectEqual(1000, rl.hosts.get("a.test").?.clock);
 
-    // half-way: 5 units forgiven, the spacing is back below the ramp step
-    try testing.expectEqual(6000, try rl.reserve("a.test", 6000));
+    // half-way (2500ms later): 5 units forgiven, the spacing is back below
+    // the ramp step
+    try testing.expectEqual(3500, try rl.reserve("a.test", 3500));
     try testing.expectEqual(6, rl.hosts.get("a.test").?.pressure);
-    try testing.expectEqual(6000, rl.hosts.get("a.test").?.clock);
-    try testing.expectEqual(6100, try rl.reserve("a.test", 6000));
+    try testing.expectEqual(3500, rl.hosts.get("a.test").?.clock);
+    try testing.expectEqual(3600, try rl.reserve("a.test", 3500));
 
-    // partial idle time is not lost: 999ms short of a step forgives nothing,
+    // a partial step is not lost: 499ms short of a step forgives nothing,
     // 1ms more forgives one and only moves the clock by a whole step
-    try testing.expectEqual(6999, try rl.reserve("a.test", 6999));
+    try testing.expectEqual(3999, try rl.reserve("a.test", 3999));
     try testing.expectEqual(8, rl.hosts.get("a.test").?.pressure);
-    try testing.expectEqual(7099, try rl.reserve("a.test", 7000));
+    try testing.expectEqual(4099, try rl.reserve("a.test", 4000));
     try testing.expectEqual(8, rl.hosts.get("a.test").?.pressure);
-    try testing.expectEqual(7000, rl.hosts.get("a.test").?.clock);
+    try testing.expectEqual(4000, rl.hosts.get("a.test").?.clock);
 
-    // fully idle: pressure is gone and the clock catches up
+    // long enough with no traffic: pressure is gone and the clock catches up
     try testing.expectEqual(100_000, try rl.reserve("a.test", 100_000));
     try testing.expectEqual(1, rl.hosts.get("a.test").?.pressure);
     try testing.expectEqual(100_000, rl.hosts.get("a.test").?.clock);
@@ -596,7 +602,7 @@ test "RateLimiter: sweep keeps pressured hosts" {
     defer rl.deinit();
     rl.sweep_at = 2;
 
-    // 5 units of pressure on a.test: it needs 5000ms of idle time to be
+    // 5 units of pressure on a.test: it needs 2500ms of elapsed time to be
     // forgotten, well after its TAT (1500) is in the past
     var at: u64 = 1000;
     for (0..5) |_| {
@@ -608,7 +614,7 @@ test "RateLimiter: sweep keeps pressured hosts" {
     try testing.expectEqual(2, rl.hosts.count());
     try testing.expectEqual(4, rl.sweep_at);
 
-    // a sweep once the pressure has cooled down drops it
+    // a sweep once the pressure has drained drops it
     rl.sweep_at = 2;
     _ = try rl.reserve("c.test", 10_000);
     try testing.expect(rl.hosts.get("a.test") == null);
