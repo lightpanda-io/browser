@@ -52,7 +52,7 @@ pub fn asNode(self: *Button) *Node {
 }
 
 pub fn getType(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "submit";
+    return self.asConstElement().getAttributeInterned("type") orelse "submit";
 }
 
 pub fn getForm(self: *Button, frame: *Frame) ?*Form {
@@ -208,11 +208,11 @@ pub fn setPopoverTargetAction(self: *Button, value: []const u8, frame: *Frame) !
 }
 
 pub fn getDisabled(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+    return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
 pub fn getValue(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
+    return self.asConstElement().getAttributeInterned("value") orelse "";
 }
 
 pub const JsApi = struct {

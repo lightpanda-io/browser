@@ -38,7 +38,7 @@ pub fn asNode(self: *OL) *Node {
 }
 
 pub fn getType(self: *OL) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "1";
+    return self.asElement().getAttributeInterned("type") orelse "1";
 }
 
 pub fn setType(self: *OL, value: []const u8, frame: *Frame) !void {

@@ -48,7 +48,7 @@ pub fn asNode(self: *Meta) *Node {
 }
 
 pub fn getName(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse return "";
+    return self.asElement().getName() orelse "";
 }
 
 pub fn setName(self: *Meta, value: []const u8, frame: *Frame) !void {
@@ -64,7 +64,7 @@ pub fn setHttpEquiv(self: *Meta, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getContent(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("content")) orelse return "";
+    return self.asElement().getAttributeInterned("content") orelse return "";
 }
 
 pub fn setContent(self: *Meta, value: []const u8, frame: *Frame) !void {
@@ -72,7 +72,7 @@ pub fn setContent(self: *Meta, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getMedia(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
+    return self.asElement().getAttributeInterned("media") orelse return "";
 }
 
 pub fn setMedia(self: *Meta, value: []const u8, frame: *Frame) !void {
@@ -165,9 +165,9 @@ pub const Build = struct {
         const el = self.asElement();
 
         // <meta name=referrer> sets the document's referrer policy.
-        if (el.getAttributeSafe(comptime .wrap("name"))) |name| {
+        if (el.getName()) |name| {
             if (std.ascii.eqlIgnoreCase(name, "referrer")) {
-                if (el.getAttributeSafe(comptime .wrap("content"))) |content| {
+                if (el.getAttributeInterned("content")) |content| {
                     if (referrer.parseMeta(content)) |rp| {
                         frame.referrer_policy = rp;
                     }

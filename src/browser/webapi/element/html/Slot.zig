@@ -150,7 +150,7 @@ pub fn assign(self: *Slot, values: []const js.Value, frame: *Frame) !void {
 }
 
 pub fn getName(self: *const Slot) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+    return self.asConstElement().getName() orelse "";
 }
 
 pub const JsApi = struct {

@@ -201,7 +201,7 @@ fn walk(
     var name = try axn.getName(self.frame, self.arena, ctx.label_index);
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
+        el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
     else
         false;
 
@@ -681,12 +681,12 @@ pub fn getNodeDetails(
     if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
         is_disabled = el.isDisabled();
-        id_attr = el.getAttributeSafe(comptime .wrap("id"));
-        class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        id_attr = el.getId();
+        class_attr = el.getClassName();
         selector = try SelectorPath.init(arena, frame).build(el);
-        placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
+        placeholder = el.getAttributeInterned("placeholder");
 
-        if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
+        if (el.getAttributeInterned("href")) |h| {
             const URL = lp.URL;
             href = URL.resolve(arena, frame.base(), h, .{ .encoding = frame.charset }) catch h;
         }

@@ -373,15 +373,15 @@ pub fn suffersValueMissing(self: *const Select) bool {
 }
 
 pub fn getDisabled(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+    return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
 pub fn getMultiple(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
+    return self.asConstElement().getAttributeInterned("multiple") != null;
 }
 
 pub fn getRequired(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+    return self.asConstElement().getAttributeInterned("required") != null;
 }
 
 pub const JsApi = struct {

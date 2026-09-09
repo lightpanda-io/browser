@@ -51,7 +51,7 @@ pub fn asNode(self: *Link) *Node {
 
 pub fn getHref(self: *Link, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = element.getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -68,7 +68,7 @@ pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getRel(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("rel")) orelse return "";
+    return self.asElement().getAttributeInterned("rel") orelse return "";
 }
 
 pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
@@ -76,7 +76,7 @@ pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getMedia(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
+    return self.asElement().getAttributeInterned("media") orelse return "";
 }
 
 pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
@@ -108,12 +108,12 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
 
     const element = self.asElement();
 
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+    const href = element.getAttributeInterned("href") orelse return;
     if (href.len == 0) {
         return;
     }
 
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
+    const rel = element.getAttributeInterned("rel") orelse return;
 
     // Opt-in fetch for `rel="stylesheet"` — drives `frame.loadExternalStylesheet`,
     // which fires the load/error event itself.

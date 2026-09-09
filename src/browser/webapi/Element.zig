@@ -630,32 +630,43 @@ pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
     return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
 }
 
-pub fn getId(self: *const Element) []const u8 {
-    return self.getAttributeInterned("id") orelse "";
+pub fn getId(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("id");
 }
 
 pub fn setId(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("id"), .wrap(value), frame);
 }
 
-pub fn getSlot(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("slot")) orelse "";
+// ** INTERN ONL **. Unlike other getters, e.g. getClassName, getSlot, this
+// isn't a WebApi (some individual types DO have a name getter, but not Element).
+// BUT, enough code internally needs this, that the helper exists.
+pub fn getName(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("name");
+}
+
+pub fn hasName(self: *const Element) bool {
+    return self.hasAttributeInterned("name");
+}
+
+pub fn getSlot(self: *const Element) ?[]const u8 {
+    return self.getAttributeSafe(comptime .wrap("slot"));
 }
 
 pub fn setSlot(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("slot"), .wrap(value), frame);
 }
 
-pub fn getDir(self: *const Element) []const u8 {
-    return self.getAttributeInterned("dir") orelse "";
+pub fn getDir(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("dir");
 }
 
 pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-pub fn getClassName(self: *const Element) []const u8 {
-    return self.getAttributeInterned("class") orelse "";
+pub fn getClassName(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("class");
 }
 
 pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -752,7 +763,7 @@ pub fn isDisabled(self: *const Element) bool {
         return false;
     }
 
-    if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
+    if (self.getAttributeInterned("disabled") != null) {
         return true;
     }
 
@@ -764,7 +775,7 @@ pub fn isDisabled(self: *const Element) bool {
         if (self.asConstNode()._parent) |parent_node| {
             if (parent_node.is(Element)) |parent_el| {
                 if (parent_el.getTag() == .optgroup and
-                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                    parent_el.getAttributeInterned("disabled") != null)
                 {
                     return true;
                 }
@@ -779,7 +790,7 @@ pub fn isDisabled(self: *const Element) bool {
         current = node._parent;
         const ancestor = node.is(Element) orelse continue;
 
-        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+        if (ancestor.getTag() == .fieldset and ancestor.getAttributeInterned("disabled") != null) {
             var child = ancestor.firstElementChild();
             while (child) |c| {
                 if (c.getTag() == .legend) {
@@ -2405,8 +2416,16 @@ pub const JsApi = struct {
     }
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
-    pub const id = bridge.accessor(Element.getId, Element.setId, .{ .ce_reactions = true });
-    pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{ .ce_reactions = true });
+    pub const id = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getId() orelse "";
+        }
+    }.wrap, Element.setId, .{ .ce_reactions = true });
+    pub const slot = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getSlot() orelse "";
+        }
+    }.wrap, Element.setSlot, .{ .ce_reactions = true });
     pub const role = ariaAccessor("role");
     pub const ariaAtomic = ariaAccessor("aria-atomic");
     pub const ariaAutoComplete = ariaAccessor("aria-autocomplete");
@@ -2451,8 +2470,16 @@ pub const JsApi = struct {
     pub const ariaValueMin = ariaAccessor("aria-valuemin");
     pub const ariaValueNow = ariaAccessor("aria-valuenow");
     pub const ariaValueText = ariaAccessor("aria-valuetext");
-    pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
-    pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
+    pub const dir = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getDir() orelse "";
+        }
+    }.wrap, Element.setDir, .{ .ce_reactions = true });
+    pub const className = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getClassName() orelse "";
+        }
+    }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const part = bridge.accessor(Element.getPartList, null, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});

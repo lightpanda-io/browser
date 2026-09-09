@@ -44,7 +44,7 @@ pub fn asNode(self: *Anchor) *Node {
 }
 
 pub fn getHref(self: *Anchor, frame: *Frame) ![]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = self.asElement().getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -197,7 +197,7 @@ pub fn setText(self: *Anchor, value: []const u8, frame: *Frame) !void {
 }
 
 fn getResolvedHref(self: *Anchor, frame: *Frame) !?[:0]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
+    const href = self.asElement().getAttributeInterned("href") orelse return null;
     if (href.len == 0) {
         return null;
     }
@@ -210,7 +210,7 @@ fn getResolvedHref(self: *Anchor, frame: *Frame) !?[:0]const u8 {
 }
 
 pub fn getTarget(self: *Anchor) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
+    return self.asElement().getAttributeInterned("target") orelse "";
 }
 
 pub const JsApi = struct {

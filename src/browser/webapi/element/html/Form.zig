@@ -83,7 +83,7 @@ pub fn normalizeEnctype(attr: ?[]const u8, missing_default: []const u8) []const 
 }
 
 pub fn getMethod(self: *const Form) []const u8 {
-    return normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("method")), "get");
+    return normalizeMethod(self.asConstElement().getAttributeInterned("method"), "get");
 }
 
 pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
@@ -101,7 +101,7 @@ pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCol
 }
 
 pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
-    const form_id = self.asElement().getAttributeSafe(comptime .wrap("id"));
+    const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
@@ -113,7 +113,7 @@ pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
 pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const owner_url = element.ownerFrame(frame).url;
-    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
+    const action = element.getAttributeInterned("action") orelse return owner_url;
     if (action.len == 0) {
         return owner_url;
     }
@@ -218,7 +218,7 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
 }
 
 pub fn getNoValidate(self: *const Form) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
+    return self.asConstElement().getAttributeInterned("novalidate") != null;
 }
 
 pub const JsApi = struct {

@@ -886,7 +886,7 @@ const Builder = struct {
                 return;
             },
             .img => {
-                const alt = el.getAttributeSafe(comptime .wrap("alt")) orelse return;
+                const alt = el.getAttributeInterned("alt") orelse return;
                 if (isAllWhitespace(alt)) return;
                 self.italic += 1;
                 self.muted += 1;
@@ -896,17 +896,17 @@ const Builder = struct {
                 return;
             },
             .input => {
-                const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
+                const type_attr = el.getAttributeInterned("type") orelse return;
                 if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
-                    const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
+                    const checked = el.getAttributeInterned("checked") != null;
                     try self.appendWord(if (checked) "☑" else "☐");
                     self.pending_space = true;
                 }
                 return;
             },
             .anchor => {
-                const href = el.getAttributeSafe(comptime .wrap("href"));
-                const label = el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
+                const href = el.getAttributeInterned("href");
+                const label = el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
                 const info = RenderTree.analyzeContent(el.asNode(), self.frame);
                 if (!info.has_visible and label == null) return;
 

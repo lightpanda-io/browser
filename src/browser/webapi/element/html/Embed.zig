@@ -42,7 +42,7 @@ pub fn asNode(self: *Embed) *Node {
 
 pub fn getSrc(self: *const Embed, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }

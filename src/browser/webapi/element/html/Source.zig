@@ -25,7 +25,7 @@ pub fn asNode(self: *Source) *Node {
 
 pub fn getSrc(self: *const Source, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }

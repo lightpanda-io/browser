@@ -141,7 +141,7 @@ fn display(self: *const RenderTree, el: *Element, is_slotted: bool) ?StyleManage
         return .other;
     };
     if (dump_html.shouldStripElement(el, self.strip, self.frame)) return null;
-    if (!is_slotted and el.getAttributeSafe(comptime .wrap("slot")) != null) return null;
+    if (!is_slotted and el.getSlot() != null) return null;
     return d;
 }
 
@@ -156,7 +156,7 @@ fn visibleDisplay(el: *Element, frame: *Frame) ?StyleManager.Display {
     if (d == .none) {
         return null;
     }
-    if (el.getAttributeSafe(comptime .wrap("aria-hidden"))) |v| {
+    if (el.getAttributeInterned("aria-hidden")) |v| {
         if (std.ascii.eqlIgnoreCase(v, "true")) return null;
     }
     return d;

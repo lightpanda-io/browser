@@ -265,11 +265,11 @@ pub fn suffersTooShort(self: *const TextArea) bool {
 }
 
 pub fn getDisabled(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+    return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
 pub fn getRequired(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+    return self.asConstElement().getAttributeInterned("required") != null;
 }
 
 pub const JsApi = struct {

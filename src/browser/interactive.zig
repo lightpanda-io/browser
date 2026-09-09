@@ -242,16 +242,16 @@ fn walkInteractive(
             .listener_types = listener_types,
             .disabled = el.isDisabled(),
             .tab_index = html_el.getTabIndex(),
-            .id = el.getAttributeSafe(comptime .wrap("id")),
-            .class = el.getAttributeSafe(comptime .wrap("class")),
-            .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
+            .id = el.getId(),
+            .class = el.getClassName(),
+            .href = if (el.getAttributeInterned("href")) |href|
                 URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch href
             else
                 null,
             .input_type = getInputType(el),
             .value = getInputValue(el),
-            .element_name = el.getAttributeSafe(comptime .wrap("name")),
-            .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+            .element_name = el.getName(),
+            .placeholder = el.getAttributeInterned("placeholder"),
         });
 
         if (filter.max) |m| {
@@ -306,7 +306,7 @@ pub fn classifyInteractivity(
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
         .anchor, .area => {
-            if (el.getAttributeSafe(comptime .wrap("href")) != null) return .native;
+            if (el.getAttributeInterned("href") != null) return .native;
         },
         .input => {
             if (el.is(Element.Html.Input)) |input| {
@@ -334,7 +334,7 @@ pub fn classifyInteractivity(
     // Only count elements with an EXPLICIT tabindex attribute,
     // since getTabIndex() returns 0 for all interactive tags by default
     // (including anchors without href and hidden inputs).
-    if (el.getAttributeSafe(comptime .wrap("tabindex"))) |_| {
+    if (el.getAttributeInterned("tabindex")) |_| {
         if (html_el.getTabIndex() >= 0) return .focusable;
     }
 
@@ -391,7 +391,7 @@ pub fn isContentRole(role: []const u8) bool {
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
 pub fn explicitRole(el: *Element) ?[]const u8 {
-    const attr = el.getAttributeSafe(comptime .wrap("role")) orelse return null;
+    const attr = el.getAttributeInterned("role") orelse return null;
     var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
     return it.next();
 }

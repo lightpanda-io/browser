@@ -58,7 +58,7 @@ pub fn getElementById(self: *Svg, id: []const u8) ?*Element {
 
     var tw = TreeWalker.Full.Elements.init(self.asNode(), .{});
     while (tw.next()) |el| {
-        const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
+        const element_id = el.getId() orelse continue;
         if (std.mem.eql(u8, element_id, id)) {
             return el;
         }

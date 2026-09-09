@@ -411,7 +411,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                         // If frames's base url is not already set, fill it with
                         // the base tag.
                         if (frame.base_url == null) {
-                            if (n.as(Element).getAttributeSafe(comptime .wrap("href"))) |href| {
+                            if (n.as(Element).getAttributeInterned("href")) |href| {
                                 frame.base_url = try URL.resolve(frame.arena, frame.url, href, .{});
                             }
                         }

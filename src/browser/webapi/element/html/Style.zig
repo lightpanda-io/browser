@@ -86,7 +86,7 @@ pub fn styleAddedCallback(self: *Style, frame: *Frame) !void {
 }
 
 pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+    return self.asConstElement().getAttributeInterned("type") orelse "";
 }
 
 pub const JsApi = struct {

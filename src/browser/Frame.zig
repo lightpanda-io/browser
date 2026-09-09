@@ -1951,7 +1951,7 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
         log.err(.frame, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
-            .src = script.asElement().getAttributeSafe(comptime .wrap("src")),
+            .src = script.asElement().getAttributeInterned("src"),
             .type = self._type,
         });
     };
@@ -1977,7 +1977,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
             break :blk "about:srcdoc";
         }
 
-        var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
+        var src = iframe.asElement().getAttributeInterned("src") orelse "";
         if (src.len == 0) {
             src = "about:blank";
         }
@@ -2277,7 +2277,7 @@ pub fn getElementByIdFromNode(self: *Frame, node: *Node, id: []const u8) ?*Eleme
     // exists, so scan it.
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
-        const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
+        const element_id = el.getId() orelse continue;
         if (std.mem.eql(u8, element_id, id)) {
             return el;
         }
@@ -2747,7 +2747,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // the ID map and invoking disconnectedCallback for custom elements
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+        if (el.getId()) |id| {
             self.removeElementIdWithMaps(old_id_maps.?, id);
         }
 
@@ -2790,7 +2790,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 fn unregisterSubtreeIds(self: *Frame, node: *Node, id_maps: ElementIdMaps) void {
     var tw = TreeWalker.Full.Elements.init(node, .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+        if (el.getId()) |id| {
             self.removeElementIdWithMaps(id_maps, id);
         }
     }
@@ -2961,7 +2961,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
             // For main document parsing we know nodes are connected (fast path);
             // for fragment parsing (innerHTML) we check connectivity.
             if (child.isConnected() or child.isInShadowTree()) {
-                if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+                if (el.getId()) |id| {
                     try self.addElementId(parent, el, id);
                 }
                 try Element.Html.Custom.enqueueConnectedCallbackOnElement(true, el, self);
@@ -3015,7 +3015,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
                 // id to the new parent...
                 var tw = TreeWalker.Full.Elements.init(child, .{});
                 while (tw.next()) |el| {
-                    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+                    if (el.getId()) |id| {
                         try self.addElementIdWithMaps(new_id_maps, el, id);
                     }
                 }
@@ -3035,7 +3035,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
 
     var tw = TreeWalker.Full.Elements.init(child, .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+        if (el.getId()) |id| {
             try self.addElementIdWithMaps(new_id_maps, el, id);
         }
 
@@ -3533,7 +3533,7 @@ pub fn openBlankTarget(self: *Frame, element: *Element, url: []const u8) !*Frame
 }
 
 fn hasRelToken(element: *Element, token: []const u8) bool {
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return false;
+    const rel = element.getAttributeInterned("rel") orelse return false;
     var it = std.mem.tokenizeAny(u8, rel, &std.ascii.whitespace);
     while (it.next()) |t| {
         if (std.ascii.eqlIgnoreCase(t, token)) {
@@ -3547,7 +3547,7 @@ fn findFrameByName(frame: *Frame, name: []const u8) ?*Frame {
     for (frame.child_frames.items) |f| {
         if (f.iframe) |iframe| {
             if (iframe.asNode().isConnected()) {
-                const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+                const frame_name = iframe.asElement().getName() orelse "";
                 if (std.mem.eql(u8, frame_name, name)) {
                     return f;
                 }
@@ -3578,7 +3578,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     }
 
     if (submitter_) |submitter| {
-        if (submitter.getAttributeSafe(comptime .wrap("disabled")) != null) {
+        if (submitter.getAttributeInterned("disabled") != null) {
             return;
         }
     }
@@ -3600,7 +3600,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
                 break :blk ft;
             }
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("target"));
+        break :blk form_element.getAttributeInterned("target");
     };
 
     const target: TargetFrame = blk: {
@@ -3691,7 +3691,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formmethod"))) |fm| break :blk fm;
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("method"));
+        break :blk form_element.getAttributeInterned("method");
     };
     const method = Element.Html.Form.normalizeMethod(method_attr, "get");
 
@@ -3747,7 +3747,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
         if (submit_button) |s| {
             if (s.getAttributeSafe(comptime .wrap("formaction"))) |fa| break :blk fa;
         }
-        break :blk form_element.getAttributeSafe(comptime .wrap("action")) orelse self.url;
+        break :blk form_element.getAttributeInterned("action") orelse self.url;
     };
 
     var opts = NavigateOpts{
