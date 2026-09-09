@@ -631,7 +631,7 @@ pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
 }
 
 pub fn getId(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("id")) orelse "";
+    return self.getAttributeInterned("id") orelse "";
 }
 
 pub fn setId(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -647,7 +647,7 @@ pub fn setSlot(self: *Element, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("dir")) orelse "";
+    return self.getAttributeInterned("dir") orelse "";
 }
 
 pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -655,7 +655,7 @@ pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getClassName(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("class")) orelse "";
+    return self.getAttributeInterned("class") orelse "";
 }
 
 pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -725,6 +725,16 @@ pub fn hasAttributeNS(
 
 pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return self._attributes.hasSafe(name);
+}
+
+// Like getAttributeSafe, but faster! Only usable for values that are String.intern
+// so that the comparison becomes a single pointer equality.
+pub fn getAttributeInterned(self: *const Element, comptime name: []const u8) ?[]const u8 {
+    return self._attributes.getInterned(name);
+}
+
+pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) bool {
+    return self._attributes.hasInterned(name);
 }
 
 // Per HTML "concept-fe-disabled", only listed elements participate in the

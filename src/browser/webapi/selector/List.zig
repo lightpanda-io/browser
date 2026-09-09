@@ -399,11 +399,11 @@ fn matchesCompound(el: *Node.Element, compound: Selector.Compound, scope: *Node,
 fn matchesPart(el: *Node.Element, part: Part, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     switch (part) {
         .id => |id| {
-            const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
+            const element_id = el.getAttributeInterned("id") orelse return false;
             return std.mem.eql(u8, element_id, id);
         },
         .class => |cls| {
-            const class_attr = el.getAttributeSafe(comptime .wrap("class")) orelse return false;
+            const class_attr = el.getAttributeInterned("class") orelse return false;
             return Selector.classAttributeContains(class_attr, cls);
         },
         .tag => |tag| {
@@ -563,19 +563,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return false;
         },
         .required => {
-            return el.getAttributeSafe(comptime .wrap("required")) != null;
+            return el.hasAttributeInterned("required");
         },
         .optional => {
-            return el.getAttributeSafe(comptime .wrap("required")) == null;
+            return el.hasAttributeInterned("required") == false;
         },
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,
         .read_only => {
-            return el.getAttributeSafe(comptime .wrap("readonly")) != null;
+            return el.hasAttributeInterned("readonly");
         },
         .read_write => {
-            return el.getAttributeSafe(comptime .wrap("readonly")) == null;
+            return el.hasAttributeInterned("readonly") == false;
         },
         .default => return false,
 
@@ -600,11 +600,11 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .link, .any_link => {
             const tag = el.getTag();
             if (tag != .anchor and tag != .area) return false;
-            return el.getAttributeSafe(comptime .wrap("href")) != null;
+            return el.hasAttributeInterned("href");
         },
         .visited => return false,
         .target => {
-            const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
+            const element_id = el.getAttributeInterned("id") orelse return false;
             const doc = node.ownerDocument(frame) orelse return false;
             const location = doc.getLocation() orelse return false;
             const hash = location.getHash();
@@ -670,7 +670,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
                 while (current) |cur| : (current = cur.parentNode()) {
                     switch (cur._type) {
                         .element => {
-                            if (cur.subtype(Node.Element).getAttributeSafe(comptime .wrap("lang"))) |value| {
+                            if (cur.subtype(Node.Element).getAttributeInterned("lang")) |value| {
                                 break :blk value;
                             }
                         },

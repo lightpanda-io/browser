@@ -193,6 +193,17 @@ pub const List = struct {
         return self.getEntryWithNormalizedName(name) != null;
     }
 
+    // Like getSafe, but faster! Only usable for values that are String.intern
+    // so that the comparison becomes a single pointer equality.
+    pub fn getInterned(self: *const List, comptime name: []const u8) ?[]const u8 {
+        const entry = self.getEntryWithInternedName(name) orelse return null;
+        return entry.value();
+    }
+
+    pub fn hasInterned(self: *const List, comptime name: []const u8) bool {
+        return self.getEntryWithInternedName(name) != null;
+    }
+
     pub fn getAttribute(self: *const List, name: String, element: ?*Element, frame: *Frame) !?*Attribute {
         const entry = (try self.getEntry(name, frame)) orelse return null;
         return self.getOrCreateAttribute(entry, element, frame);
@@ -416,6 +427,25 @@ pub const List = struct {
         for (self._entries[0..self._len]) |*e| {
             if (std.mem.eql(u8, e.name(), name_str)) {
                 return e;
+            }
+        }
+        return null;
+    }
+
+    fn getEntryWithInternedName(self: *const List, comptime name: []const u8) ?*Entry {
+        const static = comptime String.intern(name) orelse
+            @compileError("not an interned attribute name: " ++ name);
+
+        for (self._entries[0..self._len]) |*e| {
+            if (e._name_ptr == static.ptr) {
+                return e;
+            }
+            // The invariant above rests on identical string literals sharing
+            // one address, which is a compiler detail rather than a language
+            // guarantee. If it ever stops holding the compare just misses, so
+            // trip here instead of returning a silent null.
+            if (comptime lp.IS_DEBUG) {
+                std.debug.assert(std.mem.eql(u8, e.name(), name) == false);
             }
         }
         return null;
