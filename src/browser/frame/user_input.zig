@@ -331,7 +331,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
     };
 
     return switch (html_element._type) {
-        .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
+        .anchor => element.getAttributeInterned("href") != null,
         .input, .button, .select, .textarea, .label => true,
         .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
@@ -340,7 +340,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
 
 // SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
 fn svgAnchorHref(element: *Element) ?[]const u8 {
-    return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
+    return element.getAttributeInterned("href") orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
 }
 
 // Clicks on editable content are for editing: they don't activate the
@@ -462,7 +462,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
 
     if (element.is(Element.Svg.Graphics.A) != null) {
         const href = svgAnchorHref(element) orelse return;
-        const target_name = element.getAttributeSafe(comptime .wrap("target")) orelse "";
+        const target_name = element.getAttributeInterned("target") orelse "";
         return followLink(frame, target, element, href, target_name);
     }
 
@@ -471,7 +471,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     switch (html_element._type) {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
-            const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+            const href = element.getAttributeInterned("href") orelse return;
             return followLink(frame, target, element, href, anchor.getTarget());
         },
         .input => {
@@ -794,7 +794,7 @@ fn enterActivates(element: *Element) bool {
         return true;
     }
     if (html_element._type == .anchor) {
-        return element.getAttributeSafe(comptime .wrap("href")) != null;
+        return element.getAttributeInterned("href") != null;
     }
     if (element.is(Element.Html.Input)) |input| {
         return switch (input._input_type) {
@@ -861,7 +861,7 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
         }
 
         const candidate_tab_index = blk: {
-            if (candidate.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+            if (candidate.getAttributeInterned("tabindex")) |attr| {
                 if (Element.Html.parseInteger(attr)) |tab_index| {
                     if (tab_index < 0) {
                         continue;
@@ -875,7 +875,7 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
             const focusable = switch (candidate.getTag()) {
                 .button, .select, .textarea, .iframe => true,
                 .input => candidate.as(Element.Html.Input)._input_type != .hidden,
-                .anchor, .area => candidate.getAttributeSafe(comptime .wrap("href")) != null,
+                .anchor, .area => candidate.getAttributeInterned("href") != null,
                 else => false,
             };
             if (focusable == false) {

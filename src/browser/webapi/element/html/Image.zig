@@ -47,7 +47,7 @@ pub fn asNode(self: *Image) *Node {
 
 pub fn getSrc(self: *const Image, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }
@@ -59,7 +59,7 @@ pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("loading")) orelse "eager";
+    return self.asConstElement().getAttributeInterned("loading") orelse "eager";
 }
 
 pub fn setLoading(self: *Image, value: []const u8, frame: *Frame) !void {
@@ -102,7 +102,7 @@ pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     const element = self.asElement();
     // Exit if src not set.
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
+    const src = element.getAttributeInterned("src") orelse return;
     if (src.len == 0) return;
 
     // If image loading not desired, we just do fake "load" event.

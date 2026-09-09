@@ -107,7 +107,7 @@ const CorsSettings = struct {
 // in order to properly set the request_mode and credentials_mode.
 fn corsSettings(element: ?*Element, is_module: bool) CorsSettings {
     const mode: enum { no_cors, anonymous, use_credentials } = blk: {
-        const co = if (element) |e| e.getAttributeSafe(comptime .wrap("crossorigin")) else null;
+        const co = if (element) |e| e.getAttributeInterned("crossorigin") else null;
 
         const value = co orelse {
             // Missing-value default: No CORS for classic scripts, Anonymous for modules.
@@ -229,7 +229,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     const kind: Script.Extra.FrameExtra.Kind = blk: {
-        const script_type = element.getAttributeSafe(comptime .wrap("type")) orelse break :blk .javascript;
+        const script_type = element.getAttributeInterned("type") orelse break :blk .javascript;
         if (script_type.len == 0) {
             break :blk .javascript;
         }
@@ -255,7 +255,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const frame = self.frame;
     const base_url = frame.base();
 
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse {
+    const src = element.getAttributeInterned("src") orelse {
         return self.addInlineScript(script_element, kind);
     };
 
@@ -274,12 +274,12 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     script_element._executed = true;
 
     const mode: Script.Extra.FrameExtra.Mode = blk: {
-        if (element.getAttributeSafe(comptime .wrap("async")) != null) {
+        if (element.getAttributeInterned("async") != null) {
             break :blk .async;
         }
 
         // Check for defer or module (before checking dynamic script default)
-        if (kind == .module or element.getAttributeSafe(comptime .wrap("defer")) != null) {
+        if (kind == .module or element.getAttributeInterned("defer") != null) {
             break :blk .@"defer";
         }
 

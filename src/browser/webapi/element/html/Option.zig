@@ -104,7 +104,7 @@ fn ownerSelect(self: *Option) ?*Select {
 }
 
 pub fn getDefaultSelected(self: *const Option) bool {
-    return self.asConstElement().hasAttributeSafe(comptime .wrap("selected"));
+    return self.asConstElement().hasAttributeInterned("selected");
 }
 
 pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
@@ -153,10 +153,10 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Check for value attribute
-        self._value = element.getAttributeSafe(comptime .wrap("value"));
+        self._value = element.getAttributeInterned("value");
 
         // Check for selected attribute
-        self._default_selected = element.getAttributeSafe(comptime .wrap("selected")) != null;
+        self._default_selected = element.getAttributeInterned("selected") != null;
         self._selected = self._default_selected;
     }
 
@@ -166,7 +166,7 @@ pub const Build = struct {
         switch (attribute) {
             // `value` is passed by value; for <= 12 bytes, str() points into our
             // own parameter copy, so we have to re-read the owned bytes.
-            .value => self._value = element.getAttributeSafe(comptime .wrap("value")),
+            .value => self._value = element.getAttributeInterned("value"),
             .selected => {
                 self._default_selected = true;
                 self._selected = true;

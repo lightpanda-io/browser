@@ -62,7 +62,7 @@ fn shouldAddSpacing(tag: Element.Tag) bool {
 }
 
 fn getAnchorLabel(el: *Element) ?[]const u8 {
-    return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
+    return el.getAttributeInterned("aria-label") orelse el.getAttributeInterned("title");
 }
 
 const Context = struct {
@@ -230,11 +230,11 @@ const Context = struct {
             },
             .img => {
                 try self.writer.writeAll("![");
-                if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
+                if (el.getAttributeInterned("alt")) |alt| {
                     try self.escape(alt);
                 }
                 try self.writer.writeAll("](");
-                if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
+                if (el.getAttributeInterned("src")) |src| {
                     const frame = self.frame;
                     const absolute_src = URL.resolve(frame.call_arena, frame.base(), src, .{ .encoding = frame.charset }) catch src;
                     try self.writer.writeAll(absolute_src);
@@ -247,7 +247,7 @@ const Context = struct {
                 const frame = self.frame;
                 const info = RenderTree.analyzeContent(el.asNode(), frame);
                 const label = getAnchorLabel(el);
-                const href_raw = el.getAttributeSafe(comptime .wrap("href"));
+                const href_raw = el.getAttributeInterned("href");
 
                 if (!info.has_visible and label == null and href_raw == null) return;
 
@@ -291,9 +291,9 @@ const Context = struct {
                 return;
             },
             .input => {
-                const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
+                const type_attr = el.getAttributeInterned("type") orelse return;
                 if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
-                    const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
+                    const checked = el.getAttributeInterned("checked") != null;
                     try self.writer.writeAll(if (checked) "[x] " else "[ ] ");
                     self.state.last_char_was_newline = false;
                 }

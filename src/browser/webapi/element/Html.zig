@@ -441,7 +441,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
 // TODO: Per spec, hidden is a tristate: true | false | "until-found".
 // We only support boolean for now; "until-found" would need bridge union support.
 pub fn getHidden(self: *HtmlElement) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("hidden")) != null;
+    return self.asElement().getAttributeInterned("hidden") != null;
 }
 
 pub fn setHidden(self: *HtmlElement, hidden: bool, frame: *Frame) !void {
@@ -479,7 +479,7 @@ pub fn setTranslate(self: *HtmlElement, translate: bool, frame: *Frame) !void {
 // auto state, which defaults to true only for <img> and <a> with an href.
 // https://html.spec.whatwg.org/multipage/dnd.html#the-draggable-attribute
 pub fn getDraggable(self: *HtmlElement) bool {
-    if (self.asElement().getAttributeSafe(comptime .wrap("draggable"))) |value| {
+    if (self.asElement().getAttributeInterned("draggable")) |value| {
         if (std.ascii.eqlIgnoreCase(value, "true")) {
             return true;
         }
@@ -489,7 +489,7 @@ pub fn getDraggable(self: *HtmlElement) bool {
     }
     return switch (self._type) {
         .img => true,
-        .anchor => self.asElement().getAttributeSafe(comptime .wrap("href")) != null,
+        .anchor => self.asElement().getAttributeInterned("href") != null,
         else => false,
     };
 }
@@ -536,7 +536,7 @@ pub fn togglePopover(self: *HtmlElement, force: ?bool, frame: *Frame) !bool {
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
-    if (self.asElement().getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+    if (self.asElement().getAttributeInterned("tabindex")) |attr| {
         if (parseInteger(attr)) |tab_index| {
             return tab_index;
         }
@@ -555,7 +555,7 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, frame: *Frame) !void {
 }
 
 pub fn getDir(self: *HtmlElement) []const u8 {
-    return reflection.enumeratedValue(self.asElement().getAttributeSafe(comptime .wrap("dir")), &.{ "ltr", "rtl", "auto" }, "", "").?;
+    return reflection.enumeratedValue(self.asElement().getDir(), &.{ "ltr", "rtl", "auto" }, "", "").?;
 }
 
 pub fn getAccessKey(self: *HtmlElement) []const u8 {
@@ -567,7 +567,7 @@ pub fn setAccessKey(self: *HtmlElement, value: []const u8, frame: *Frame) !void 
 }
 
 pub fn getAutofocus(self: *HtmlElement) bool {
-    return self.asElement().getAttributeSafe(comptime .wrap("autofocus")) != null;
+    return self.asElement().getAttributeInterned("autofocus") != null;
 }
 
 pub fn setAutofocus(self: *HtmlElement, autofocus: bool, frame: *Frame) !void {
@@ -587,7 +587,7 @@ pub fn setNonce(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getLang(self: *HtmlElement) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("lang")) orelse "";
+    return self.asElement().getAttributeInterned("lang") orelse "";
 }
 
 pub fn setLang(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
@@ -595,7 +595,7 @@ pub fn setLang(self: *HtmlElement, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getTitle(self: *HtmlElement) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("title")) orelse "";
+    return self.asElement().getAttributeInterned("title") orelse "";
 }
 
 pub fn setTitle(self: *HtmlElement, value: []const u8, frame: *Frame) !void {

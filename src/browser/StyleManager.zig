@@ -638,7 +638,7 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
     const tag = el.getTag();
     if (tag.isHiddenByUaStylesheet()) return true;
 
-    if (el.hasAttributeSafe(comptime .wrap("hidden"))) return true;
+    if (el.hasAttributeInterned("hidden")) return true;
 
     // input[type="hidden" i] { display: none !important }
     // _input_type is parsed case-insensitively at attribute-set time.
@@ -810,13 +810,13 @@ fn resolve(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, c
         .frame = self.frame,
     };
 
-    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+    if (el.getId()) |id| {
         if (self.id_rules.get(id)) |rules| {
             ctx.checkRules(&rules);
         }
     }
 
-    if (el.getAttributeSafe(comptime .wrap("class"))) |class_attr| {
+    if (el.getClassName()) |class_attr| {
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
@@ -916,13 +916,13 @@ fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
         }
     }.check;
 
-    if (el.getAttributeSafe(comptime .wrap("id"))) |id| {
+    if (el.getId()) |id| {
         if (self.id_rules.get(id)) |rules| {
             checkRules(&rules, &result, &best_priority, el, frame);
         }
     }
 
-    if (el.getAttributeSafe(comptime .wrap("class"))) |class_attr| {
+    if (el.getClassName()) |class_attr| {
         var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
         while (it.next()) |class| {
             if (self.class_rules.get(class)) |rules| {
@@ -1246,7 +1246,7 @@ fn inlineValue(el: *Element, property_name: String, comptime access: InlineAcces
         return styleValue(style, property_name);
     }
     // No JS-set style object and no style attribute -> nothing inline to read.
-    const attr = el.getAttributeSafe(comptime .wrap("style")) orelse return null;
+    const attr = el.getAttributeInterned("style") orelse return null;
     switch (access) {
         .materialize => {
             const style = el.getOrCreateStyle(frame) catch |err| {

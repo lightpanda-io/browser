@@ -392,8 +392,8 @@ pub const Writer = struct {
                                     try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
                                 try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
-                                try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
-                                try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
+                                try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeInterned("readonly") } }, w);
+                                try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                             },
                             .button, .submit, .reset, .image => {
                                 try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
@@ -406,7 +406,7 @@ pub const Writer = struct {
                                 if (!is_disabled) {
                                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                                 }
-                                const is_checked = el.hasAttributeSafe(comptime .wrap("checked"));
+                                const is_checked = el.hasAttributeInterned("checked");
                                 try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
                             },
                             else => {},
@@ -424,8 +424,8 @@ pub const Writer = struct {
                             try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                         }
                         try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = true } }, w);
-                        try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("readonly")) } }, w);
-                        try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe(comptime .wrap("required")) } }, w);
+                        try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeInterned("readonly") } }, w);
+                        try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeInterned("required") } }, w);
                     },
                     .select => {
                         const is_disabled = el.isDisabled();
@@ -827,7 +827,7 @@ pub const AXRole = enum(u8) {
                     },
                     .textarea => .textbox,
                     .select => {
-                        if (el.getAttributeSafe(comptime .wrap("multiple")) != null) {
+                        if (el.getAttributeInterned("multiple") != null) {
                             return .listbox;
                         }
                         if (el.getAttributeSafe(comptime .wrap("size"))) |size| {
@@ -847,7 +847,7 @@ pub const AXRole = enum(u8) {
 
                     // Interactive Elements
                     .anchor, .area => {
-                        if (el.getAttributeSafe(comptime .wrap("href")) == null) {
+                        if (el.getAttributeInterned("href") == null) {
                             return .none;
                         }
 
@@ -1030,7 +1030,7 @@ fn writeName(
                 }
             }
 
-            if (el.getAttributeSafe(comptime .wrap("aria-label"))) |aria_label| {
+            if (el.getAttributeInterned("aria-label")) |aria_label| {
                 try w.write(aria_label);
                 return .aria_label;
             }
@@ -1041,7 +1041,7 @@ fn writeName(
                 }
             }
 
-            if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
+            if (el.getAttributeInterned("alt")) |alt| {
                 try w.write(alt);
                 return .alt;
             }
@@ -1090,12 +1090,12 @@ fn writeName(
                 }
             }
 
-            if (el.getAttributeSafe(comptime .wrap("title"))) |title| {
+            if (el.getAttributeInterned("title")) |title| {
                 try w.write(title);
                 return .title;
             }
 
-            if (el.getAttributeSafe(comptime .wrap("placeholder"))) |placeholder| {
+            if (el.getAttributeInterned("placeholder")) |placeholder| {
                 try w.write(placeholder);
                 return .placeholder;
             }
@@ -1154,7 +1154,7 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, frame: *F
 }
 
 fn hasAriaHiddenTrue(elt: *DOMNode.Element) bool {
-    if (elt.getAttributeSafe(comptime .wrap("aria-hidden"))) |value| {
+    if (elt.getAttributeInterned("aria-hidden")) |value| {
         return std.mem.eql(u8, value, "true");
     }
     return false;
@@ -1242,7 +1242,7 @@ fn writeLabelName(
     label_index: *Label.LabelByForIndex,
     w: anytype,
 ) !?AXSource {
-    if (el.getAttributeSafe(comptime .wrap("id"))) |id_value| {
+    if (el.getId()) |id_value| {
         if (id_value.len > 0) {
             if (node.ownerDocument(frame)) |doc| {
                 if (try label_index.lookup(doc.asNode(), id_value, frame.call_arena)) |label_el| {
@@ -1281,13 +1281,13 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
 }
 
 fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.VisibilityCache) bool {
-    if (elt.getAttributeSafe(comptime .wrap("aria-hidden"))) |value| {
+    if (elt.getAttributeInterned("aria-hidden")) |value| {
         if (std.mem.eql(u8, value, "true")) {
             return true;
         }
     }
 
-    if (elt.hasAttributeSafe(comptime .wrap("hidden"))) {
+    if (elt.hasAttributeInterned("hidden")) {
         return true;
     }
 
@@ -1367,7 +1367,7 @@ fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache
         // zig fmt: on
         .img => {
             // Check for empty decorative images
-            const alt_ = elt.getAttributeSafe(comptime .wrap("alt"));
+            const alt_ = elt.getAttributeInterned("alt");
             if (alt_ == null or alt_.?.len == 0) {
                 return true;
             }
@@ -1398,8 +1398,8 @@ fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache
 
     // Generic containers with no semantic value
     if (tag == .div or tag == .span) {
-        const has_role = elt.hasAttributeSafe(comptime .wrap("role"));
-        const has_aria_label = elt.hasAttributeSafe(comptime .wrap("aria-label"));
+        const has_role = elt.hasAttributeInterned("role");
+        const has_aria_label = elt.hasAttributeInterned("aria-label");
         const has_aria_labelledby = elt.hasAttributeSafe(.wrap("aria-labelledby"));
 
         if (!has_role and !has_aria_label and !has_aria_labelledby) {

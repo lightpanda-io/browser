@@ -57,7 +57,7 @@ pub fn getByName(self: *HTMLAllCollection, name: []const u8, frame: *Frame) ?*El
             if (!isAllNamed(el)) {
                 continue;
             }
-            if (el.getAttributeSafe(comptime .wrap("name"))) |attr_name| {
+            if (el.getName()) |attr_name| {
                 if (std.mem.eql(u8, attr_name, name)) {
                     return el;
                 }

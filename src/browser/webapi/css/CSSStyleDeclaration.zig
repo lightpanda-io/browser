@@ -44,7 +44,7 @@ pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
         return;
     }
     const el = self._element orelse return;
-    const attr_value = el.getAttributeSafe(comptime .wrap("style")) orelse return;
+    const attr_value = el.getAttributeInterned("style") orelse return;
     try self.applyDeclarations(attr_value, frame);
 }
 

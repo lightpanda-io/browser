@@ -281,3 +281,41 @@
     testing.expectEqual('', nsa.getAttribute('arr'));
   }
 </script>
+
+<script id=reflect-absent>
+  {
+    // id/class/dir/slot reflect as '' when the content attribute is ABSENT.
+    // Internally these getters return an optional, so absent and
+    // present-but-empty are distinct there; through the IDL they are not.
+    const el = document.createElement('div');
+    testing.expectEqual('', el.id);
+    testing.expectEqual('', el.className);
+    testing.expectEqual('', el.dir);
+    testing.expectEqual('', el.slot);
+    testing.expectEqual(false, el.hasAttribute('id'));
+    testing.expectEqual(false, el.hasAttribute('class'));
+    testing.expectEqual(false, el.hasAttribute('slot'));
+
+    // present-but-empty reflects identically, but the attribute now exists
+    el.setAttribute('id', '');
+    el.setAttribute('class', '');
+    el.setAttribute('slot', '');
+    testing.expectEqual('', el.id);
+    testing.expectEqual('', el.className);
+    testing.expectEqual('', el.slot);
+    testing.expectEqual(true, el.hasAttribute('id'));
+    testing.expectEqual(true, el.hasAttribute('class'));
+    testing.expectEqual(true, el.hasAttribute('slot'));
+
+    // setters round-trip through the content attribute
+    el.id = 'x';
+    el.className = 'a b';
+    el.slot = 's';
+    testing.expectEqual('x', el.id);
+    testing.expectEqual('a b', el.className);
+    testing.expectEqual('s', el.slot);
+    testing.expectEqual('x', el.getAttribute('id'));
+    testing.expectEqual('a b', el.getAttribute('class'));
+    testing.expectEqual('s', el.getAttribute('slot'));
+  }
+</script>

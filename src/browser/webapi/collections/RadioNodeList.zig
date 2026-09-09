@@ -73,7 +73,7 @@ pub fn getValue(self: *RadioNodeList) ![]const u8 {
         if (!input.getChecked()) {
             continue;
         }
-        return element.getAttributeSafe(comptime .wrap("value")) orelse "on";
+        return element.getAttributeInterned("value") orelse "on";
     }
     return "";
 }
@@ -86,7 +86,7 @@ pub fn setValue(self: *RadioNodeList, value: []const u8, frame: *Frame) !void {
             continue;
         }
 
-        const input_value = element.getAttributeSafe(comptime .wrap("value"));
+        const input_value = element.getAttributeInterned("value");
         const matches_value = blk: {
             if (std.mem.eql(u8, value, "on")) {
                 break :blk input_value == null or (input_value != null and std.mem.eql(u8, input_value.?, "on"));
@@ -103,12 +103,12 @@ pub fn setValue(self: *RadioNodeList, value: []const u8, frame: *Frame) !void {
 }
 
 fn matches(self: *const RadioNodeList, element: *Element) bool {
-    if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
+    if (element.getId()) |id| {
         if (std.mem.eql(u8, id, self._name)) {
             return true;
         }
     }
-    if (element.getAttributeSafe(comptime .wrap("name"))) |elem_name| {
+    if (element.getName()) |elem_name| {
         if (std.mem.eql(u8, elem_name, self._name)) {
             return true;
         }

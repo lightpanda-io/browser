@@ -141,7 +141,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             // to render that "active" content, so when we're trying to render
             // it, we don't want to skip it.
             if ((comptime force_slot == false) and opts.shadow == .rendered) {
-                if (el.getAttributeSafe(comptime .wrap("slot"))) |_| {
+                if (el.getSlot()) |_| {
                     // Skip - will be rendered by the Slot if it's the active container
                     return;
                 }
@@ -378,7 +378,7 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) b
             if (el.getAttributeSafe(comptime .wrap("as"))) |as| {
                 if (std.mem.eql(u8, as, "script")) return true;
             }
-            if (el.getAttributeSafe(comptime .wrap("rel"))) |rel| {
+            if (el.getAttributeInterned("rel")) |rel| {
                 if (std.mem.eql(u8, rel, "modulepreload") or std.mem.eql(u8, rel, "preload")) {
                     if (el.getAttributeSafe(comptime .wrap("as"))) |as| {
                         if (std.mem.eql(u8, as, "script")) return true;
@@ -392,7 +392,7 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) b
         if (std.mem.eql(u8, tag_name, "style")) return true;
 
         if (std.mem.eql(u8, tag_name, "link")) {
-            if (el.getAttributeSafe(comptime .wrap("rel"))) |rel| {
+            if (el.getAttributeInterned("rel")) |rel| {
                 if (std.mem.eql(u8, rel, "stylesheet")) return true;
             }
         }
