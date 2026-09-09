@@ -29,6 +29,7 @@ const Parser = @import("Parser.zig");
 const Engine = @import("Engine.zig");
 const HostnameTrie = @import("HostnameTrie.zig");
 const NetworkFilter = @import("NetworkFilter.zig");
+const Regex = @import("Regex.zig");
 
 const log = lp.log;
 
@@ -47,6 +48,11 @@ arena: std.heap.ArenaAllocator,
 filters: std.ArrayList(NetworkFilter),
 /// Filled while parsing, consumed by `build`.
 badfilters: std.AutoHashMapUnmanaged(u64, void),
+/// Every regex compiled for a filter, whether or not `build` kept the
+/// filter; they are freed here, not through `filters`.
+regexes: std.ArrayList(Regex),
+/// What the regexes are compiled and run with; PCRE2 allocates through it.
+regex_context: *Regex.Context,
 built: bool,
 trie: HostnameTrie,
 blocked: u32,
@@ -64,7 +70,7 @@ exceptions: Engine,
 /// Rules that reached a trie or an index, across every list parsed so far.
 rules_loaded: usize,
 /// Rules the lists carry and we do not apply, across those same lists: the
-/// ones the parser could not read, plus the ones no matcher can express.
+/// ones the parser could not read, regex literals PCRE2 rejects included.
 rules_skipped: usize,
 /// Domain-scoped element-hiding rules and cosmetic-realm exceptions, across
 /// those same lists. Not ours to apply, but not rules we failed at either, so
@@ -77,6 +83,8 @@ rules_cosmetic: usize,
 const LINE_MAX = 8 * 1024;
 
 pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
+    const regex_context: *Regex.Context = try .init(allocator);
+    errdefer regex_context.deinit();
     var trie: HostnameTrie = try .init(allocator);
     errdefer trie.deinit(allocator);
     const blocked = try trie.createTrie(allocator);
@@ -89,6 +97,8 @@ pub fn init(allocator: Allocator) Allocator.Error!AdBlocker {
         .arena = std.heap.ArenaAllocator.init(allocator),
         .filters = .empty,
         .badfilters = .empty,
+        .regexes = .empty,
+        .regex_context = regex_context,
         .built = false,
         .trie = trie,
         .blocked = blocked,
@@ -109,6 +119,9 @@ pub fn deinit(self: *AdBlocker) void {
     self.blocking_important.deinit(self.allocator);
     self.exceptions.deinit(self.allocator);
     self.badfilters.deinit(self.allocator);
+    for (self.regexes.items) |regex| regex.deinit();
+    self.regexes.deinit(self.allocator);
+    self.regex_context.deinit();
     self.filters.deinit(self.allocator);
     self.trie.deinit(self.allocator);
     self.arena.deinit();
@@ -180,7 +193,7 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
         // both of which the next call reuses, so what we keep is copied out.
         defer _ = scratch_instance.reset(.retain_capacity);
 
-        const filter = switch (item) {
+        var filter = switch (item) {
             // The parser already counted it; all we want is whether it was an
             // exception, in which case its hostname stops being blockable.
             .dropped => |dropped| {
@@ -201,11 +214,6 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
             self.rules_cosmetic += 1;
             continue;
         }
-        if (!isSupported(&filter)) {
-            self.rules_skipped += 1;
-            continue;
-        }
-
         if (filter.badfilter) {
             // It cancels a rule that may not have been read yet, so it can
             // only be resolved once every list is in. It is not a rule we
@@ -213,6 +221,20 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
             self.rules_skipped += 1;
             try self.badfilters.put(self.allocator, identity(&filter), {});
             continue;
+        }
+
+        if (filter.kind == .regex) {
+            const body = filter.pattern[1 .. filter.pattern.len - 1];
+            const regex = Regex.compile(self.regex_context, body, !filter.match_case) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidRegex => {
+                    self.rules_skipped += 1;
+                    continue;
+                },
+            };
+            errdefer regex.deinit();
+            try self.regexes.append(self.allocator, regex);
+            filter.regex = regex;
         }
 
         try self.filters.append(self.allocator, try dupe(arena, &filter));
@@ -361,12 +383,6 @@ pub fn match(self: *const AdBlocker, request: *const Request) Verdict {
     return .blocked;
 }
 
-/// Whether we can evaluate this filter at all.
-fn isSupported(filter: *const NetworkFilter) bool {
-    // No regex engine to run them with.
-    return filter.kind != .regex;
-}
-
 /// Whether the filter's whole effect is "every request to this hostname and
 /// its subdomains", which is all a trie can express.
 fn isWholeHostname(filter: *const NetworkFilter) bool {
@@ -451,11 +467,12 @@ fn expectVerdict(
     source: []const u8,
     kind: ResourceTypes,
 ) !void {
-    // `match` takes a lowercased URL, as the real caller hands it; patterns
-    // are lowercased too, so a rule spelled "/embed/C-iDzdvIg1Y" still lands.
+    // `match` takes the URL both raw and lowercased, as the real caller hands
+    // it; patterns are lowercased too, so a rule spelled "/embed/C-iDzdvIg1Y"
+    // still lands.
     var buf: [512]u8 = undefined;
     const lowered = std.ascii.lowerString(buf[0..url.len], url);
-    const request: Request = .init(lowered, source, kind);
+    const request: Request = .init(url, lowered, source, kind);
     try testing.expectEqual(expected, blocker.match(&request));
 }
 
@@ -591,7 +608,7 @@ test "adblock.AdBlocker: tokens past the request buffer still match" {
     // 140 tokens of query noise push the filter's token ("utm", its rarest)
     // past what the request holds; the engine walks the rest of the URL.
     const noise = "https://example.com/?" ++ "a=1&" ** 70;
-    const overflowing: Request = .init(noise ++ "utm_tracker=1", "a.com", script);
+    const overflowing: Request = .init(noise ++ "utm_tracker=1", noise ++ "utm_tracker=1", "a.com", script);
     try testing.expect(overflowing.tail.len != 0);
     try testing.expectEqual(.blocked, blocker.match(&overflowing));
     // A token past the buffer finds its bucket, but the pattern does not fit.
@@ -608,12 +625,55 @@ test "adblock.AdBlocker: cosmetic-realm rules are not skipped rules" {
         \\@@||example.com^$generichide
         \\@@||example.com^$elemhide
         \\example.com##.ad-banner
-        \\/regex-we-cannot-run/
+        \\/regex-we-cannot-run(/
     );
 
     try testing.expectEqual(1, blocker.rules_loaded);
     try testing.expectEqual(1, blocker.rules_skipped);
     try testing.expectEqual(3, blocker.rules_cosmetic);
+}
+
+test "adblock.AdBlocker: the regex rules from EasyList" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\/\/[0-9a-f]{32}\/invoke\.js/$script,third-party
+        \\/^https?:\/\/[0-9a-z]{5,}\.com\/.*/$script,third-party,xmlhttprequest,domain=dood.to
+        \\@@/\/invoke\.js/$domain=trusted.com
+        \\/\/[a-z]{4}\.js$/$match-case,script
+    );
+    try testing.expectEqual(4, blocker.rules_loaded);
+    try testing.expectEqual(0, blocker.rules_skipped);
+
+    const invoke = "https://host.com/0123456789abcdef0123456789abcdef/invoke.js";
+    try expectVerdict(&blocker, .blocked, invoke, "site.com", script);
+    try expectVerdict(&blocker, .blocked, "https://HOST.com/0123456789ABCDEF0123456789abcdef/invoke.js", "site.com", script);
+    try expectVerdict(&blocker, .none, invoke, "host.com", script);
+    try expectVerdict(&blocker, .none, invoke, "site.com", image);
+    try expectVerdict(&blocker, .none, "https://host.com/0123456789abcdef0123456789abcde/invoke.js", "site.com", script);
+    try expectVerdict(&blocker, .allowed, invoke, "trusted.com", script);
+
+    try expectVerdict(&blocker, .blocked, "https://abcde.com/x", "dood.to", xhr);
+    try expectVerdict(&blocker, .none, "https://abcde.com/x", "other.to", xhr);
+    try expectVerdict(&blocker, .none, "https://abcd.com/x", "dood.to", xhr);
+
+    // `$match-case` reads the URL as requested, not the lowercased copy.
+    try expectVerdict(&blocker, .blocked, "https://x.com/abcd.js", "x.com", script);
+    try expectVerdict(&blocker, .none, "https://x.com/ABCD.js", "x.com", script);
+}
+
+test "adblock.AdBlocker: $badfilter removes a regex rule" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\/\/invoke\.js/$script
+        \\/\/invoke\.js/$script,badfilter
+    );
+    try testing.expectEqual(0, blocker.rules_loaded);
+    try testing.expectEqual(2, blocker.rules_skipped);
+    try expectVerdict(&blocker, .none, "https://host.com/invoke.js", "site.com", script);
 }
 
 test "adblock.AdBlocker: verdict precedence" {

@@ -125,6 +125,7 @@ pub fn build(b: *Build) !void {
     linkZenai(b, lightpanda_module);
     linkIsocline(b, lightpanda_module);
     linkSqlite(b, lightpanda_module, enable_csan, enable_tsan, orderfile != null);
+    linkPcre2(b, lightpanda_module, enable_csan, enable_tsan, orderfile != null);
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -484,6 +485,27 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
         .optimize = mod.optimize.?,
     });
     mod.addImport("sqlite3", translate_c.createModule());
+}
+
+fn linkPcre2(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, section: bool) void {
+    const dep = b.dependency("pcre2", .{
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+        .linkage = .static,
+    });
+
+    const lib = sectionize(dep.artifact("pcre2-8"), section);
+    lib.root_module.sanitize_c = enable_csan;
+    lib.root_module.sanitize_thread = is_tsan;
+    mod.linkLibrary(lib);
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = lib.getEmittedIncludeTree().path(b, "pcre2.h"),
+        .target = mod.resolved_target.?,
+        .optimize = mod.optimize.?,
+    });
+    translate_c.defineCMacro("PCRE2_CODE_UNIT_WIDTH", "8");
+    mod.addImport("pcre2", translate_c.createModule());
 }
 
 fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, section: bool) void {

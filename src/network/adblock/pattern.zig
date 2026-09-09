@@ -86,8 +86,8 @@ pub fn matches(filter: *const NetworkFilter, url: Url) bool {
     switch (filter.kind) {
         // Option-only filters ("$script,domain=x") match any URL.
         .any => return true,
-        // Never indexed: there is no regex engine to run them with.
-        .regex => return false,
+        // The engine runs these against the raw URL before it gets here.
+        .regex => unreachable,
         .hostname, .plain, .wildcard => {},
     }
 

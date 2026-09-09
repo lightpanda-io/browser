@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const domain = @import("domain.zig");
+const Regex = @import("Regex.zig");
 
 const NetworkFilter = @This();
 
@@ -38,6 +39,9 @@ exception: bool = false,
 important: bool = false,
 badfilter: bool = false,
 match_case: bool = false,
+/// The compiled `.regex` pattern, set by the blocker once it has read the
+/// literal; the parser never runs one.
+regex: ?Regex = null,
 first_party: bool = true,
 third_party: bool = true,
 hostname_anchor: bool = false,

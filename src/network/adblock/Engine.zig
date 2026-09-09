@@ -66,6 +66,9 @@ pub fn deinit(self: *Engine, allocator: Allocator) void {
 /// request and shared by all three engines.
 pub const Request = struct {
     url: pattern.Url,
+    /// The URL as requested, fragment stripped but case kept: what a regex
+    /// filter reads, since `$match-case` is only meaningful on the original.
+    raw: []const u8,
     /// The hostname of the document the request belongs to. Falls back to the
     /// request's own hostname, which is what uBO does for top-level loads.
     source_hostname: []const u8,
@@ -95,9 +98,11 @@ pub const Request = struct {
         source: [SOURCE_MAX]u8,
     };
 
-    /// `url` must already be lowercased and fragment-free; `source_hostname`
-    /// may be empty when there is no document context.
+    /// `raw` and `url` are the same fragment-free URL, the second one
+    /// lowercased; `source_hostname` may be empty when there is no document
+    /// context.
     pub fn init(
+        raw: []const u8,
         url: []const u8,
         source_hostname: []const u8,
         kind: NetworkFilter.ResourceTypes,
@@ -106,6 +111,7 @@ pub const Request = struct {
         const source = if (source_hostname.len == 0) parsed.hostname() else source_hostname;
         var request: Request = .{
             .url = parsed,
+            .raw = raw,
             .source_hostname = source,
             .kind = kind,
             .third_party = domain.isThirdParty(parsed.hostname(), source),
@@ -125,7 +131,10 @@ pub const Request = struct {
 
     pub fn fromHttp(transfer: *const HttpClient.Transfer, buffers: *Buffers) ?Request {
         const req = &transfer.req;
-        const url = normalizeUrl(req.url, &buffers.url) orelse return null;
+        // No request URL carries a fragment onto the wire.
+        const fragment = std.mem.indexOfScalar(u8, req.url, '#') orelse req.url.len;
+        const raw = req.url[0..fragment];
+        const url = normalizeUrl(raw, &buffers.url) orelse return null;
 
         var owner: ?*const HttpClient.Owner = transfer.owner;
         var subframe = false;
@@ -148,27 +157,23 @@ pub const Request = struct {
             .worker => .{ .script = true },
         };
 
-        return .init(url, source, resource_type);
+        return .init(raw, url, source, resource_type);
     }
 
     inline fn tokens(self: *const Request) []const u32 {
         return self.tokens_buf[0..self.tokens_len];
     }
 
-    /// Lowercases `url` into `buf` with its fragment stripped; patterns are
-    /// stored lowercased, and no request URL carries a fragment onto the wire.
+    /// Lowercases `url` into `buf`, as patterns are stored lowercased.
     fn normalizeUrl(url: []const u8, buf: []u8) ?[]const u8 {
-        const end = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
-        const trimmed = url[0..end];
-
-        const upper = for (trimmed, 0..) |c, i| {
+        const upper = for (url, 0..) |c, i| {
             if (std.ascii.isUpper(c)) break i;
-        } else return trimmed;
+        } else return url;
 
-        if (trimmed.len > buf.len) return null;
-        const out = buf[0..trimmed.len];
-        @memcpy(out[0..upper], trimmed[0..upper]);
-        _ = std.ascii.lowerString(out[upper..], trimmed[upper..]);
+        if (url.len > buf.len) return null;
+        const out = buf[0..url.len];
+        @memcpy(out[0..upper], url[0..upper]);
+        _ = std.ascii.lowerString(out[upper..], url[upper..]);
         return out;
     }
 };
@@ -219,6 +224,8 @@ fn matchesFilter(filter: *const NetworkFilter, request: *const Request) bool {
         return false;
     }
     if (!filter.domains.matches(request.source_hostname)) return false;
+    // uBO tests the raw URL; the case-insensitive flag is on the pattern.
+    if (filter.kind == .regex) return filter.regex.?.matches(request.raw);
     return pattern.matches(filter, request.url);
 }
 
@@ -326,8 +333,8 @@ fn collectTokens(filter: *const NetworkFilter, buf: []u32) []u32 {
         }
     }
 
-    // A /regex/ literal is never indexed (nothing can run it), and `.any`
-    // has no pattern at all.
+    // A /regex/ literal is never indexed (no token is pulled out of one),
+    // and `.any` has no pattern at all.
     if (filter.kind == .regex or filter.pattern.len == 0) return buf[0..n];
 
     const text = filter.pattern;
@@ -376,12 +383,12 @@ test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
 
     // Exactly as many tokens as the buffer holds: nothing is left to walk...
     const full = "x/" ** (max - 1) ++ "x";
-    var request: Request = .init(full, "", kind);
+    var request: Request = .init(full, full, "", kind);
     try testing.expectEqual(max, request.tokens_len);
     try testing.expectEqual(0, request.tail.len);
 
     // ...one more, and only that one is in the tail.
-    request = .init(full ++ "/y", "", kind);
+    request = .init(full ++ "/y", full ++ "/y", "", kind);
     try testing.expectEqual(max, request.tokens_len);
     try testing.expectString("/y", request.tail);
     var it: Tokens = .{ .text = request.tail };
@@ -389,7 +396,7 @@ test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
     try testing.expect(it.next() == null);
 
     // Fewer than the buffer holds: the tail is empty.
-    request = .init("https://example.com/a", "", kind);
+    request = .init("https://example.com/a", "https://example.com/a", "", kind);
     try testing.expectEqual(4, request.tokens_len);
     try testing.expectEqual(0, request.tail.len);
 }
