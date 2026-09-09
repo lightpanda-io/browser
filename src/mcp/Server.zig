@@ -38,6 +38,12 @@ allocator: std.mem.Allocator,
 app: *App,
 
 sessions: std.StringHashMapUnmanaged(*lp.ToolSession) = .empty,
+/// The cure target `heal_commit` validates against, per session: the finding
+/// of the last failed/suspicious file `replay`, minus the detail the cure
+/// check never reads. Server-held so a client cannot widen or retarget it —
+/// an echoed `threw` would let a fix-by-deletion commit; `heal_commit`'s
+/// `fields` may only narrow it.
+heal_targets: std.AutoHashMapUnmanaged(*lp.ToolSession, HealTarget) = .empty,
 /// Monotonic counter backing auto-generated session ids (`s1`, `s2`, …).
 session_seq: u32 = 0,
 /// Whether the transport can route a request to a named session. HTTP does
@@ -50,6 +56,14 @@ multi_session: bool = false,
 /// resources read it rather than threading a session through every call.
 active_session: *lp.ToolSession = undefined,
 transport: Transport,
+
+const HealTarget = struct {
+    /// Owns `path` and `failure.dry_fields`.
+    arena: std.heap.ArenaAllocator,
+    path: []const u8,
+    /// `detail` left blank — the cure check never reads it.
+    failure: lp.replay.Failure,
+};
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.Io.Writer) !*Self {
     const self = try allocator.create(Self);
@@ -70,6 +84,7 @@ pub fn deinit(self: *Self) void {
     var it = self.sessions.iterator();
     while (it.next()) |kv| self.destroySession(kv.key_ptr.*, kv.value_ptr.*);
     self.sessions.deinit(self.allocator);
+    self.heal_targets.deinit(self.allocator);
 
     self.transport.deinit();
     self.allocator.destroy(self);
@@ -89,18 +104,27 @@ pub fn createSession(self: *Self, id: []const u8) !*lp.ToolSession {
 
     try entry.init(self.app);
     errdefer entry.deinit();
-
-    // Only the default session is backed by the on-disk cookie file; named
-    // sessions start clean so agents stay isolated by default.
-    if (isDefault(id)) {
-        if (self.app.config.cookieFile()) |cookie_path| {
-            lp.cookies.loadFromFile(entry.session, cookie_path);
-        }
-    }
+    if (isDefault(id)) self.loadCookieFile(entry.session);
 
     try self.sessions.put(self.allocator, owned_id, entry);
     entry.exitIsolate();
     return entry;
+}
+
+/// Point `entry` at a fresh browsing session — pages, cookies and node ids
+/// dropped. Heal validation restarts so failure-state cookies and pages can't
+/// mask a still-broken script; the default session gets its on-disk cookie
+/// file back for that clean baseline identity.
+pub fn restartSession(self: *Self, entry: *lp.ToolSession) !void {
+    try entry.restartSession();
+    entry.registry.reset();
+    if (entry == self.defaultSession()) self.loadCookieFile(entry.session);
+}
+
+/// Only the default session is backed by the on-disk cookie file; named
+/// sessions start clean so agents stay isolated by default.
+fn loadCookieFile(self: *Self, session: *lp.Session) void {
+    if (self.app.config.cookieFile()) |cookie_path| lp.cookies.loadFromFile(session, cookie_path);
 }
 
 fn isDefault(id: []const u8) bool {
@@ -124,10 +148,50 @@ fn destroySession(self: *Self, id: []const u8, entry: *lp.ToolSession) void {
         }
     }
 
+    self.dropHealTarget(entry);
     entry.enterIsolate();
     entry.deinit();
     self.allocator.free(id);
     self.allocator.destroy(entry);
+}
+
+/// A file replay speaks for its file: failed or suspicious arms `entry`'s cure
+/// target, clean retires it. A `script` trial is neither — don't note it.
+pub fn noteFileReplay(self: *Self, entry: *lp.ToolSession, report: lp.replay.RunReport) error{OutOfMemory}!void {
+    switch (report.status) {
+        .ok => return self.retireHealTarget(entry, report.path),
+        .failed, .suspicious => {},
+    }
+    const failure = report.failure.?;
+    self.dropHealTarget(entry);
+    var arena: std.heap.ArenaAllocator = .init(self.allocator);
+    errdefer arena.deinit();
+    const aa = arena.allocator();
+    const dry_fields = try aa.alloc([]const u8, failure.dry_fields.len);
+    for (failure.dry_fields, dry_fields) |field, *owned| owned.* = try aa.dupe(u8, field);
+    const path = try aa.dupe(u8, report.path);
+    try self.heal_targets.put(self.allocator, entry, .{
+        .arena = arena,
+        .path = path,
+        .failure = .{ .kind = failure.kind, .dry_fields = dry_fields },
+    });
+}
+
+/// Forget `path`'s target — a clean replay or a committed cure. No-op for any
+/// other path.
+pub fn retireHealTarget(self: *Self, entry: *lp.ToolSession, path: []const u8) void {
+    const target = self.heal_targets.get(entry) orelse return;
+    if (std.mem.eql(u8, target.path, path)) self.dropHealTarget(entry);
+}
+
+pub fn cureTarget(self: *const Self, entry: *lp.ToolSession, path: []const u8) ?lp.replay.Failure {
+    const target = self.heal_targets.get(entry) orelse return null;
+    return if (std.mem.eql(u8, target.path, path)) target.failure else null;
+}
+
+fn dropHealTarget(self: *Self, entry: *lp.ToolSession) void {
+    var kv = self.heal_targets.fetchRemove(entry) orelse return;
+    kv.value.arena.deinit();
 }
 
 /// The session an un-scoped (stdio, or header-less HTTP) request targets.
@@ -184,7 +248,7 @@ pub fn handleInitialize(self: *Self, req: protocol.Request) !void {
             .tools = .{},
         },
         .serverInfo = .{ .name = "lightpanda", .version = "0.1.0" },
-        .instructions = lp.tools.driver_guidance,
+        .instructions = lp.tools.driver_guidance ++ tools.script_lifecycle_note,
     });
 }
 
