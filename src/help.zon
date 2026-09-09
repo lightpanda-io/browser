@@ -443,6 +443,10 @@
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.
+    \\  --locale <TAG>
+    \\          BCP 47 language tag driving navigator.language, the
+    \\          Accept-Language header and the default locale of Intl and
+    \\          toLocaleString. Defaults to en-US.
     \\  --log-filter <SCOPE>
     \\          Filter logs per scope, applied first-to-last. Can be passed multiple times.
     \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
@@ -459,10 +463,6 @@
     \\          The log level.
     \\          Defaults to {1s}.
     \\          Allowed values: "debug", "info", "warn", "error", "fatal".
-    \\  --locale <TAG>
-    \\          BCP 47 language tag driving navigator.language, the
-    \\          Accept-Language header and the default locale of Intl and
-    \\          toLocaleString. Defaults to en-US.
     \\  --obey-robots
     \\          Fetches and obeys robots.txt of the target page.
     \\          Defaults to false.

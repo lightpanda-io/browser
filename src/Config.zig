@@ -1070,7 +1070,7 @@ pub const HttpHeaders = struct {
     /// Chrome's shape: the tag, then its language alone, then English as a
     /// last resort, with descending q values. `buf` must hold the longest
     /// output for a tag that passed validateLocale (35 + 24 bytes).
-    pub fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
+    fn acceptLanguageFor(buf: *[64]u8, tag: []const u8) []const u8 {
         const primary = tag[0 .. std.mem.indexOfScalar(u8, tag, '-') orelse tag.len];
         var w: std.Io.Writer = .fixed(buf);
         w.writeAll(tag) catch unreachable;
