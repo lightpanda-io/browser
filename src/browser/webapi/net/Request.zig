@@ -123,12 +123,17 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._method,
     };
 
-    var headers = if (opts.headers) |headers_init| switch (headers_init) {
-        .obj => |h| h,
-        else => try Headers.init(headers_init, exec),
-    } else switch (input) {
+    const mode = switch (input) {
+        .url => opts.mode,
+        .request => |r| if (opts_ != null) opts.mode else r._mode,
+    };
+
+    const guard = headerGuard(mode);
+    var headers = if (opts.headers) |headers_init|
+        try Headers.initGuarded(headers_init, guard, exec)
+    else switch (input) {
         .url => null,
-        .request => |r| r._headers,
+        .request => |r| if (r._headers) |h| try Headers.initGuarded(.{ .obj = h }, guard, exec) else null,
     };
 
     const body = if (opts.body) |b| blk: {
@@ -136,7 +141,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         // Per Fetch §6.5 step 11, the default Content-Type only applies if
         // the user has not already set one via the headers init dict.
         if (extracted.content_type) |ct| {
-            const hs = headers orelse try Headers.init(null, exec);
+            const hs = headers orelse try Headers.initGuarded(null, guard, exec);
             if (try hs.has("content-type", exec) == false) {
                 try hs.append("content-type", ct, exec);
             }
@@ -155,11 +160,6 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     else switch (input) {
         .url => null,
         .request => |r| r._signal,
-    };
-
-    const mode = switch (input) {
-        .url => opts.mode,
-        .request => |r| if (opts_ != null) opts.mode else r._mode,
     };
 
     const self = try arena.create(Request);
@@ -244,9 +244,13 @@ pub fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
         return headers;
     }
 
-    const headers = try Headers.init(null, exec);
+    const headers = try Headers.initGuarded(null, headerGuard(self._mode), exec);
     self._headers = headers;
     return headers;
+}
+
+fn headerGuard(mode: Mode) Headers.Guard {
+    return if (mode == .@"no-cors") .request_no_cors else .request;
 }
 
 pub fn getBodyUsed(self: *const Request) bool {
