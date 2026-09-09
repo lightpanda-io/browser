@@ -266,6 +266,41 @@
   }
 </script>
 
+<div id=clone-src class=c data-x=1></div>
+<div id=clone-dst></div>
+<script id=attributeNodeClone>
+  {
+    const src = $('#clone-src');
+    const dst = $('#clone-dst');
+
+    const original = src.getAttributeNode('data-x');
+    const clone = original.cloneNode();
+    testing.expectEqual('data-x', clone.name);
+    testing.expectEqual('1', clone.value);
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(src, original.ownerElement);
+
+    testing.expectEqual(null, dst.setAttributeNode(clone));
+    testing.expectEqual(dst, clone.ownerElement);
+    testing.expectEqual('1', dst.getAttribute('data-x'));
+    testing.expectEqual('1', src.getAttribute('data-x'));
+
+    testing.withError((err) => {
+      testing.expectEqual(10, err.code);
+      testing.expectEqual('InUseAttributeError', err.name);
+    }, () => dst.setAttributeNode(src.getAttributeNode('class')));
+    testing.expectEqual(src, src.getAttributeNode('class').ownerElement);
+    testing.expectEqual(false, dst.hasAttribute('class'));
+
+    const replacement = original.cloneNode();
+    replacement.value = '2';
+    testing.expectEqual(clone, dst.setAttributeNode(replacement));
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(dst, replacement.ownerElement);
+    testing.expectEqual('2', dst.getAttribute('data-x'));
+  }
+</script>
+
 <div id="nsa"></div>
 <script id=non-string-attr>
   {

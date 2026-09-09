@@ -90,7 +90,7 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
 
 pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
     return frame._factory.node(Attribute{
-        ._element = self._element,
+        ._element = null,
         ._name = self._name,
         ._value = self._value,
     });
