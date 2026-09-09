@@ -154,15 +154,13 @@ pub fn observesWithin(self: *const ResizeObserver, ancestor: *Element) bool {
 // any, invoke the callback.
 pub fn deliverEntries(self: *ResizeObserver, frame: *Frame) !void {
     var entries: std.ArrayList(*ResizeObserverEntry) = .empty;
-    // Observed elements share ancestors, so one cache serves the whole pass.
-    var visibility_cache: Element.VisibilityCache = .empty;
     for (self._observations.items) |*obs| {
         const target = obs.target;
         const connected = target.asNode().isConnected();
         obs.connected = connected;
 
         const width, const height = blk: {
-            if (!connected or !target.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
+            if (!connected or !target.isVisible(frame, .materialize)) {
                 break :blk .{ 0, 0 };
             }
             break :blk .{

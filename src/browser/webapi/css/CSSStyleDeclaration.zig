@@ -122,7 +122,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame, .materialize)) {
+    if (!element.isVisible(frame, .materialize)) {
         return "auto";
     }
     const value = switch (dimension) {
