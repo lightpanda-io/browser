@@ -2,6 +2,7 @@
 <script src="../testing.js"></script>
 
 <div id=attr1 ClasS="sHow"></div>
+<div id=nnm class=box data-role=widget></div>
 
 <script id=attributes>
   const el1 = $('#attr1');
@@ -318,4 +319,45 @@
     testing.expectEqual('a b', el.getAttribute('class'));
     testing.expectEqual('s', el.getAttribute('slot'));
   }
+</script>
+
+<script id=named_node_map_presence>
+{
+  const attrs = $('#nnm').attributes;
+
+  testing.expectEqual(true, 'id' in attrs);
+  testing.expectEqual(true, 'data-role' in attrs);
+  testing.expectEqual(true, Object.hasOwn(attrs, 'class'));
+
+  testing.expectEqual(false, 'nonExistent' in attrs);
+  testing.expectEqual(false, Object.hasOwn(attrs, 'nonExistent'));
+
+  // presence tracks the attribute list
+  $('#nnm').setAttribute('title', 'hi');
+  testing.expectEqual(true, 'title' in attrs);
+  $('#nnm').removeAttribute('title');
+  testing.expectEqual(false, 'title' in attrs);
+
+  // inherited members are found by `in`, but are not own properties
+  testing.expectEqual(true, 'length' in attrs);
+  testing.expectEqual(false, Object.hasOwn(attrs, 'length'));
+}
+</script>
+
+<script id=named_node_map_enumeration>
+{
+  const attrs = $('#nnm').attributes;
+
+  // [LegacyUnenumerableNamedProperties]: only the indices enumerate...
+  testing.expectEqual('0,1,2', Object.keys(attrs).join(','));
+
+  // ...but the names are still own properties
+  const own = Object.getOwnPropertyNames(attrs);
+  testing.expectEqual(true, own.includes('id'));
+  testing.expectEqual(true, own.includes('class'));
+  testing.expectEqual(true, own.includes('data-role'));
+
+  testing.expectEqual(false, Object.getOwnPropertyDescriptor(attrs, 'id').enumerable);
+  testing.expectEqual('id', Object.getOwnPropertyDescriptor(attrs, 'id').value.name);
+}
 </script>
