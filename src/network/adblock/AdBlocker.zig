@@ -645,6 +645,9 @@ test "adblock.AdBlocker: the regex rules from EasyList" {
     );
     try testing.expectEqual(4, blocker.rules_loaded);
     try testing.expectEqual(0, blocker.rules_skipped);
+    // Each carries a literal every match has, so none rides the fallback.
+    try testing.expectEqual(0, blocker.blocking.fallback.len);
+    try testing.expectEqual(0, blocker.exceptions.fallback.len);
 
     const invoke = "https://host.com/0123456789abcdef0123456789abcdef/invoke.js";
     try expectVerdict(&blocker, .blocked, invoke, "site.com", script);

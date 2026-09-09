@@ -333,9 +333,10 @@ fn collectTokens(filter: *const NetworkFilter, buf: []u32) []u32 {
         }
     }
 
-    // A /regex/ literal is never indexed (no token is pulled out of one),
-    // and `.any` has no pattern at all.
-    if (filter.kind == .regex or filter.pattern.len == 0) return buf[0..n];
+    // A /regex/ literal has no hostname, so `n` is still 0 here.
+    if (filter.kind == .regex) return regexTokens(filter.pattern[1 .. filter.pattern.len - 1], buf);
+    // `.any` has no pattern at all.
+    if (filter.pattern.len == 0) return buf[0..n];
 
     const text = filter.pattern;
     var i: usize = 0;
@@ -363,6 +364,312 @@ fn collectTokens(filter: *const NetworkFilter, buf: []u32) []u32 {
     return buf[0..n];
 }
 
+/// The tokens a regex is sure to have wherever it matches, uBO's
+/// `tokenizableStrFromRegex`: the pattern is flattened into a string where
+/// literal characters stay and everything else becomes a marker saying only
+/// whether it could be a token character, then read like a plain pattern.
+/// Anything the flattening does not follow yields no token at all, which is
+/// never wrong: the filter then rides the fallback bucket.
+fn regexTokens(source: []const u8, buf: []u32) []u32 {
+    // A pattern's shape is never longer than the pattern.
+    var shape_buf: [8 * 1024]u8 = undefined;
+    if (source.len > shape_buf.len) return buf[0..0];
+    var shape: RegexShape = .{ .source = source, .out = &shape_buf };
+    const text = shape.flatten() catch return buf[0..0];
+
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (!isTokenChar(text[i])) {
+            i += 1;
+            continue;
+        }
+        const start = i;
+        while (i < text.len and isTokenChar(text[i])) i += 1;
+
+        // The pattern's ends are open unless anchored, and a marker that may
+        // be a token character would extend the run.
+        const left_bounded = start != 0 and text[start - 1] != RegexShape.maybe_token;
+        const right_bounded = i != text.len and text[i] != RegexShape.maybe_token;
+        if (left_bounded and right_bounded) {
+            if (n == buf.len) return buf[0..n];
+            buf[n] = hash(text[start..i]);
+            n += 1;
+        }
+    }
+    return buf[0..n];
+}
+
+const RegexShape = struct {
+    source: []const u8,
+    out: []u8,
+    i: usize = 0,
+    n: usize = 0,
+
+    /// Whatever matches here is not a token character: an anchor, `\b`, a
+    /// quantified non-token literal.
+    const not_token = 0x00;
+    /// Whatever matches here may be a token character: `.`, `[a-z]`, `\d`, a
+    /// quantified literal.
+    const maybe_token = 0x01;
+    // The same two for a stretch that may match nothing at all; resolved
+    // once both neighbours are known.
+    const not_token_optional = 0x02;
+    const maybe_token_optional = 0x03;
+
+    const Error = error{Unsupported};
+
+    fn flatten(self: *RegexShape) Error![]const u8 {
+        try self.alternation(false);
+        if (self.i != self.source.len) return error.Unsupported;
+        self.resolveOptional();
+        return self.out[0..self.n];
+    }
+
+    /// Parses alternatives up to the closing parenthesis (or the end). More
+    /// than one collapses to two markers: all that is sure about `a|bc` is
+    /// how it starts and ends.
+    fn alternation(self: *RegexShape, nested: bool) Error!void {
+        const start = self.n;
+        var branches: usize = 1;
+        var branch_start = start;
+        var first = false;
+        var last = false;
+        while (true) {
+            try self.sequence(nested);
+            const branch = self.out[branch_start..self.n];
+            first = first or startsTokenish(branch);
+            last = last or endsTokenish(branch);
+            if (self.i == self.source.len or self.source[self.i] != '|') break;
+            self.i += 1;
+            branches += 1;
+            branch_start = self.n;
+        }
+        if (branches == 1) return;
+        self.n = start;
+        self.emit(if (first) maybe_token else not_token);
+        self.emit(if (last) maybe_token else not_token);
+    }
+
+    fn sequence(self: *RegexShape, nested: bool) Error!void {
+        while (self.i < self.source.len) {
+            const atom_start = self.n;
+            const c = self.source[self.i];
+            switch (c) {
+                '|' => return,
+                ')' => {
+                    if (!nested) return error.Unsupported;
+                    return;
+                },
+                '(' => try self.group(),
+                '[' => try self.class(),
+                '\\' => try self.escape(),
+                '.' => {
+                    self.i += 1;
+                    self.emit(maybe_token);
+                },
+                '^', '$' => {
+                    self.i += 1;
+                    self.emit(not_token);
+                },
+                '*', '+', '?' => return error.Unsupported,
+                else => {
+                    self.i += 1;
+                    self.emit(std.ascii.toLower(c));
+                },
+            }
+            try self.quantifier(atom_start);
+        }
+    }
+
+    fn group(self: *RegexShape) Error!void {
+        const start = self.n;
+        self.i += 1;
+        var lookaround: enum { none, positive, negative } = .none;
+        if (self.i < self.source.len and self.source[self.i] == '?') {
+            self.i += 1;
+            const kind = self.take() orelse return error.Unsupported;
+            switch (kind) {
+                ':' => {},
+                '=' => lookaround = .positive,
+                '!' => lookaround = .negative,
+                '<' => {
+                    const next = self.take() orelse return error.Unsupported;
+                    switch (next) {
+                        '=' => lookaround = .positive,
+                        '!' => lookaround = .negative,
+                        else => {
+                            // A named group is a plain group with a label.
+                            const close = std.mem.indexOfScalarPos(u8, self.source, self.i, '>') orelse return error.Unsupported;
+                            self.i = close + 1;
+                        },
+                    }
+                },
+                else => return error.Unsupported,
+            }
+        }
+        try self.alternation(true);
+        if (self.take() != ')') return error.Unsupported;
+        switch (lookaround) {
+            .none => {},
+            // Consumes nothing, so the neighbours touch; what it asserts
+            // could still be anything, and that is all a token may rely on.
+            .positive => {
+                self.n = start;
+                self.emit(maybe_token);
+            },
+            // Consumes nothing and rules text out: the neighbours touch.
+            .negative => self.n = start,
+        }
+    }
+
+    /// `[...]` is one character; a token character can come out of it if any
+    /// member is one, or if it is negated.
+    fn class(self: *RegexShape) Error!void {
+        self.i += 1;
+        var maybe = false;
+        if (self.i < self.source.len and self.source[self.i] == '^') {
+            self.i += 1;
+            maybe = true;
+        }
+        var first = true;
+        while (true) {
+            const c = self.take() orelse return error.Unsupported;
+            if (c == ']' and !first) break;
+            first = false;
+            if (c == '\\') {
+                const e = self.take() orelse return error.Unsupported;
+                switch (e) {
+                    'd', 'D', 'w', 'W', 's', 'S' => maybe = true,
+                    'b', 'n', 'r', 't', 'f', 'v' => {},
+                    else => if (std.ascii.isAlphanumeric(e)) return error.Unsupported,
+                }
+                continue;
+            }
+            // A range is assumed to reach token characters.
+            if (c == '-' or std.ascii.isAlphanumeric(c)) maybe = true;
+        }
+        self.emit(if (maybe) maybe_token else not_token);
+    }
+
+    fn escape(self: *RegexShape) Error!void {
+        self.i += 1;
+        const e = self.take() orelse return error.Unsupported;
+        switch (e) {
+            'd', 'D', 'w', 'W', 's', 'S', 'B' => self.emit(maybe_token),
+            'b', 'n', 'r', 't', 'f', 'v' => self.emit(not_token),
+            // Code points, backreferences, properties: not worth following.
+            'x', 'u', 'c', 'k', 'p', 'P', '0'...'9' => return error.Unsupported,
+            // Anything else escaped is itself, as JavaScript reads it.
+            else => self.emit(std.ascii.toLower(e)),
+        }
+    }
+
+    /// Applies a quantifier, if one follows, to what was just emitted. Only
+    /// the first and last character classes survive a repeat: `ab+` may match
+    /// "abbb", and its token is not "ab".
+    fn quantifier(self: *RegexShape, atom_start: usize) Error!void {
+        if (self.i == self.source.len) return;
+        var min: usize = 0;
+        var max: ?usize = null;
+        switch (self.source[self.i]) {
+            '*' => self.i += 1,
+            '+' => {
+                self.i += 1;
+                min = 1;
+            },
+            '?' => {
+                self.i += 1;
+                max = 1;
+            },
+            '{' => {
+                const close = std.mem.indexOfScalarPos(u8, self.source, self.i, '}') orelse return;
+                const body = self.source[self.i + 1 .. close];
+                const comma = std.mem.indexOfScalar(u8, body, ',');
+                const min_text = if (comma) |at| body[0..at] else body;
+                // Not a quantifier at all: JavaScript reads the `{` literally.
+                min = std.fmt.parseUnsigned(usize, min_text, 10) catch return;
+                max = if (comma) |at|
+                    (if (at + 1 == body.len) null else std.fmt.parseUnsigned(usize, body[at + 1 ..], 10) catch return)
+                else
+                    min;
+                self.i = close + 1;
+            },
+            else => return,
+        }
+        // A lazy `?` changes nothing about what can match.
+        if (self.i < self.source.len and self.source[self.i] == '?') self.i += 1;
+
+        const atom = self.out[atom_start..self.n];
+        const first = startsTokenish(atom);
+        const last = endsTokenish(atom);
+        self.n = atom_start;
+        if (max == 0) return;
+        if (min != 0) {
+            self.emit(if (first) maybe_token else not_token);
+            self.emit(if (last) maybe_token else not_token);
+        } else {
+            self.emit(if (first) maybe_token_optional else not_token_optional);
+            self.emit(if (last) maybe_token_optional else not_token_optional);
+        }
+    }
+
+    /// An optional stretch may vanish, letting its neighbours touch: it
+    /// resolves to markers that carry whichever side could be a token
+    /// character, so no run is read as bounded by something that may be
+    /// gone.
+    fn resolveOptional(self: *RegexShape) void {
+        var i: usize = 0;
+        while (i < self.n) {
+            if (!isOptional(self.out[i])) {
+                i += 1;
+                continue;
+            }
+            var end = i;
+            while (end < self.n and isOptional(self.out[end])) end += 1;
+            const left = self.out[0..i];
+            const middle = self.out[i..end];
+            const right = self.out[end..self.n];
+            const head: u8 = if (startsTokenish(right) or startsTokenish(middle)) maybe_token else not_token;
+            const tail: u8 = if (endsTokenish(left) or endsTokenish(middle)) maybe_token else not_token;
+            // Quantifiers emit markers in pairs, so a stretch is never shorter
+            // than what replaces it.
+            std.mem.copyForwards(u8, self.out[i + 2 .. self.n - (middle.len - 2)], right);
+            self.out[i] = head;
+            self.out[i + 1] = tail;
+            self.n -= middle.len - 2;
+            i += 2;
+        }
+    }
+
+    fn take(self: *RegexShape) ?u8 {
+        if (self.i == self.source.len) return null;
+        defer self.i += 1;
+        return self.source[self.i];
+    }
+
+    fn emit(self: *RegexShape, c: u8) void {
+        self.out[self.n] = c;
+        self.n += 1;
+    }
+
+    fn isOptional(c: u8) bool {
+        return c == not_token_optional or c == maybe_token_optional;
+    }
+
+    fn isTokenish(c: u8) bool {
+        return c == maybe_token or c == maybe_token_optional or isTokenChar(c);
+    }
+
+    fn startsTokenish(s: []const u8) bool {
+        return s.len != 0 and isTokenish(s[0]);
+    }
+
+    fn endsTokenish(s: []const u8) bool {
+        return s.len != 0 and isTokenish(s[s.len - 1]);
+    }
+};
+
 const testing = @import("../../testing.zig");
 
 fn tokensOf(arena: Allocator, line: []const u8, buf: []u32) ![]u32 {
@@ -375,6 +682,66 @@ fn contains(tokens: []const u32, token: []const u8) bool {
         if (t == hash(token)) return true;
     }
     return false;
+}
+
+test "adblock.Engine: regex filters yield the tokens every match carries" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var buf: [TOKENS_MAX]u32 = undefined;
+
+    // Literal runs between literal non-token characters; the open end of an
+    // unanchored pattern bounds nothing.
+    var tokens = try tokensOf(arena, "/\\/[0-9a-f]{32}\\/invoke\\.js/", &buf);
+    try testing.expectEqual(1, tokens.len);
+    try testing.expect(contains(tokens, "invoke"));
+
+    // Anchors bound; `https?` may be either, so "http" is no token.
+    tokens = try tokensOf(arena, "/^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*/", &buf);
+    try testing.expectEqual(1, tokens.len);
+    try testing.expect(contains(tokens, "com"));
+    tokens = try tokensOf(arena, "/[a-z]{2,}\\.gif$/", &buf);
+    try testing.expectEqual(1, tokens.len);
+    try testing.expect(contains(tokens, "gif"));
+
+    // `\b` bounds, as uBO reads it: `/\bads\b/` is "ads", not "bads".
+    tokens = try tokensOf(arena, "/\\bads\\b/", &buf);
+    try testing.expect(contains(tokens, "ads"));
+
+    // Hashed lowercased, like the URL it is looked up in.
+    tokens = try tokensOf(arena, "/\\/Ads\\//$match-case", &buf);
+    try testing.expect(contains(tokens, "ads"));
+
+    // An optional stretch may vanish and glue its neighbours: "adsbanner".
+    tokens = try tokensOf(arena, "/\\/ads\\/?banner\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+    // A repeat is not the literal it repeats.
+    tokens = try tokensOf(arena, "/\\/ab+c\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+
+    // Alternation and the text under a quantified group are uncertain.
+    tokens = try tokensOf(arena, "/^https?:\\/\\/(35|104)\\.(\\d){1,3}\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+    tokens = try tokensOf(arena, "/ads|banner/", &buf);
+    try testing.expectEqual(0, tokens.len);
+    // ... but a group with one branch is transparent.
+    tokens = try tokensOf(arena, "/\\/(?:ads)\\//", &buf);
+    try testing.expect(contains(tokens, "ads"));
+
+    // A negative lookaround consumes nothing; a positive one is not
+    // trusted to spell anything.
+    tokens = try tokensOf(arena, "/\\/(?!ads)banner\\//", &buf);
+    try testing.expect(contains(tokens, "banner"));
+    tokens = try tokensOf(arena, "/\\/(?=ads)ads\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+
+    // What is not followed yields nothing rather than something wrong.
+    tokens = try tokensOf(arena, "/\\/\\x41ds\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+    tokens = try tokensOf(arena, "/\\/(ads\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+    tokens = try tokensOf(arena, "/about:blank.*/", &buf);
+    try testing.expectEqual(0, tokens.len);
 }
 
 test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
