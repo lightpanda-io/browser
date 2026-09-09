@@ -166,54 +166,19 @@
 }
 </script>
 
-<script id=invalidAttributeNames>
+<script id=validAttributeNames>
 {
+  // Neither Chrome nor Firefox checks the XML Name production here, so names
+  // it rejects still go through. '\v' is deliberate: it is not HTML
+  // whitespace, and both browsers take it. Kept in its own script block: a
+  // setAttribute that wrongly throws kills the block, and the runner only
+  // catches that while the block has recorded no assertion of its own.
   const div = document.createElement('div');
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('0abc', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('123', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('-invalid', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('.foo', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('my attr', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('my@attr', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('attr!', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('~', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('', 'value'));
+  for (const name of ['0abc', '123', '-invalid', '.foo', 'my@attr', 'attr!', '~', '<x', '::x', 'a\vb', 'é']) {
+    div.setAttribute(name, 'value');
+    testing.expectEqual('value', div.getAttribute(name));
+    testing.expectEqual(name, document.createAttribute(name).name);
+  }
 
   div.setAttribute('valid-name', 'value1');
   testing.expectEqual('value1', div.getAttribute('valid-name'));
@@ -229,21 +194,30 @@
 
   div.setAttribute('data-test-123', 'value5');
   testing.expectEqual('value5', div.getAttribute('data-test-123'));
+}
+</script>
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('.invalid'));
+<script id=invalidAttributeNames>
+{
+  // What both browsers do reject: an empty name, and the characters that
+  // would break attribute serialization.
+  const div = document.createElement('div');
+  for (const name of ['', 'my attr', 'a\tb', 'a\nb', 'a\fb', 'a\rb', 'a\0b', 'a=b', 'a/b', 'a>b']) {
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => div.setAttribute(name, 'value'));
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('0invalid'));
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => div.toggleAttribute(name));
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('-invalid'));
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute(name));
+  }
 }
 </script>
 
@@ -298,6 +272,65 @@
     testing.expectEqual(null, clone.ownerElement);
     testing.expectEqual(dst, replacement.ownerElement);
     testing.expectEqual('2', dst.getAttribute('data-x'));
+  }
+</script>
+
+<div id=set-named-src class=c data-y=1></div>
+<div id=set-named-dst></div>
+<script id=setNamedItemInUse>
+  {
+    const src = $('#set-named-src');
+    const dst = $('#set-named-dst');
+
+    // setNamedItem runs the same "set an attribute" steps as setAttributeNode
+    testing.withError((err) => {
+      testing.expectEqual(10, err.code);
+      testing.expectEqual('InUseAttributeError', err.name);
+    }, () => dst.attributes.setNamedItem(src.getAttributeNode('data-y')));
+    testing.expectEqual(src, src.getAttributeNode('data-y').ownerElement);
+    testing.expectEqual('1', src.getAttribute('data-y'));
+    testing.expectEqual(false, dst.hasAttribute('data-y'));
+
+    const moved = src.attributes.removeNamedItem('data-y');
+    testing.expectEqual(null, moved.ownerElement);
+    testing.expectEqual(null, dst.attributes.setNamedItem(moved));
+    testing.expectEqual(dst, moved.ownerElement);
+    testing.expectEqual('1', dst.getAttribute('data-y'));
+  }
+</script>
+
+<div id=detach-owner data-z=1></div>
+<script id=removeAttributeDetaches>
+  {
+    const el = $('#detach-owner');
+    const other = document.createElement('div');
+
+    const attr = el.getAttributeNode('data-z');
+    el.removeAttribute('data-z');
+    testing.expectEqual(null, attr.ownerElement);
+
+    // free to move now, and to come back to the element it left
+    testing.expectEqual(null, other.setAttributeNode(attr));
+    testing.expectEqual(other, attr.ownerElement);
+    testing.expectEqual('1', other.getAttribute('data-z'));
+
+    other.removeAttribute('data-z');
+    testing.expectEqual(null, el.setAttributeNode(attr));
+    testing.expectEqual(el, attr.ownerElement);
+    testing.expectEqual('1', el.getAttribute('data-z'));
+  }
+</script>
+
+<script id=attributeNodeCloneOwnerDocument>
+  {
+    const doc = new DOMParser().parseFromString('<p id=x data-q=7>hi</p>', 'text/html');
+    const attr = doc.getElementById('x').getAttributeNode('data-q');
+    testing.expectEqual(doc, attr.ownerDocument);
+
+    // the copy has no owner element, but keeps the node document
+    const clone = attr.cloneNode();
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(doc, clone.ownerDocument);
   }
 </script>
 
