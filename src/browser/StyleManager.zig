@@ -506,13 +506,9 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     }
 }
 
-pub fn sheetRemoved(self: *StyleManager) void {
-    self.dirty = true;
-    Frame.observers.scheduleResizeDelivery(self.frame);
-}
-
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
+    self.frame.styleChanged();
     Frame.observers.scheduleResizeDelivery(self.frame);
 }
 

@@ -168,6 +168,9 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
     }
     self._value = try frame.dupeString(sanitized);
     self._user_edited = false;
+    if (changed) {
+        frame.styleChanged();
+    }
 
     // move the text entry cursor position to the end of the text control
     if (changed and self.selectionAvailable()) {
@@ -202,14 +205,16 @@ pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
     self._checked_dirty = true;
+    frame.styleChanged();
 }
 
 pub fn getIndeterminate(self: *const Input) bool {
     return self._indeterminate;
 }
 
-pub fn setIndeterminate(self: *Input, value: bool) !void {
+pub fn setIndeterminate(self: *Input, value: bool, frame: *Frame) !void {
     self._indeterminate = value;
+    frame.styleChanged();
 }
 
 pub fn getDefaultChecked(self: *const Input) bool {

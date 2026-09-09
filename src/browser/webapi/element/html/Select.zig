@@ -176,6 +176,7 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
     while (it.next()) |option| {
         option._selected = std.mem.eql(u8, option.getValue(frame), value);
     }
+    frame.domChanged();
 }
 
 pub fn getSelectedIndex(self: *Select) i32 {
@@ -197,7 +198,7 @@ pub fn getSelectedIndex(self: *Select) i32 {
     return if (has_options) 0 else -1;
 }
 
-pub fn setSelectedIndex(self: *Select, index: i32) !void {
+pub fn setSelectedIndex(self: *Select, index: i32, frame: *Frame) !void {
     // Mark that selectedIndex has been explicitly set
     self._selected_index_set = true;
 
@@ -215,6 +216,7 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
         }
         current_index += 1;
     }
+    frame.domChanged();
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type

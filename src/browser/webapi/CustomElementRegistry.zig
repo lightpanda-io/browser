@@ -104,6 +104,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
+    frame.styleChanged();
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
