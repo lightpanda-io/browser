@@ -307,22 +307,16 @@ pub fn toString(self: *const URL, _: *const Execution) ![]const u8 {
 pub const canParse = @import("../URL.zig").canParse;
 
 pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
-    switch (exec.js.global) {
-        inline else => |g| return g._page.createBlobUrl(blob, g.origin, g._frame_id),
-    }
+    return exec.page.createBlobUrl(blob, exec.origin(), exec.frameId());
 }
 
 pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
-    switch (exec.js.global) {
-        inline else => |g| {
-            if (!Blob.urlBelongsToOrigin(url, g.origin)) {
-                // different origin cannot revoke an object URL. Failure should
-                // be silent
-                return;
-            }
-            g._page.revokeBlobUrl(url);
-        },
+    if (Blob.urlBelongsToOrigin(url, exec.origin()) == false) {
+        // different origin cannot revoke an object URL. Failure should
+        // be silent
+        return;
     }
+    exec.page.revokeBlobUrl(url);
 }
 
 pub const JsApi = struct {

@@ -115,8 +115,14 @@ pub const Cache = struct {
 
 fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+
+    // One cache for the whole list: every selector walks the same root, and it
+    // fills lazily, so a subtree that no selector reaches costs nothing.
+    var nth: List.NthCache = .{ .allocator = frame.local_arena };
+    defer nth.deinit();
+
     for (selectors) |selector| {
-        try List.collect(arena.allocator(), root, selector, &nodes, frame);
+        try List.collect(arena.allocator(), root, selector, &nodes, &nth, frame);
     }
 
     const list = try arena.create(List);
@@ -129,7 +135,7 @@ fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame:
 
 fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, frame: *Frame) bool {
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, scope, frame)) {
+        if (List.matches(el.asNode(), selector, scope, null, frame)) {
             return true;
         }
     }
@@ -373,6 +379,9 @@ pub const Selector = struct {
 };
 
 pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.Element {
+    var nth: List.NthCache = .{ .allocator = frame.local_arena };
+    defer nth.deinit();
+
     for (selectors) |selector| {
         // Fast path: single compound with only an ID selector
         if (selector.segments.len == 0 and selector.first.parts.len == 1) {
@@ -388,7 +397,7 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
             }
         }
 
-        if (List.initOne(root, selector, frame)) |node| {
+        if (List.initOne(root, selector, &nth, frame)) |node| {
             if (node.is(Node.Element)) |el| {
                 return el;
             }

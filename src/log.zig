@@ -346,6 +346,30 @@ pub const KV = struct {
     }
 };
 
+/// A string the pretty format paints; logfmt writes it plainly.
+pub const Colored = struct {
+    code: []const u8,
+    text: []const u8,
+
+    pub fn logFmt(self: Colored, key: []const u8, writer: LogFormatWriter) !void {
+        return writer.write(key, self.text);
+    }
+
+    pub fn format(self: Colored, writer: *std.Io.Writer) !void {
+        try writer.writeAll(self.code);
+        try writer.writeAll(self.text);
+        return writer.writeAll("\x1b[0m");
+    }
+};
+
+pub fn red(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;31m", .text = text };
+}
+
+pub fn green(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;32m", .text = text };
+}
+
 const Value = union(enum) {
     null,
     string: []const u8,
@@ -577,6 +601,21 @@ fn timestamp(comptime clock: std.Io.Clock) u64 {
 }
 
 const testing = @import("testing.zig");
+test "log: colored" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try logTo(.app, .err, "test", .{ .arg = red("--wait mss") }, &aw.writer);
+    try testing.expectEqual("$time=1739795092929 $scope=app $level=error $msg=\"test\" arg=\"--wait mss\"\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try writeValue(.pretty, green("--wait-ms"), &aw.writer);
+    try testing.expectEqual("\x1b[0;32m--wait-ms\x1b[0m", aw.written());
+}
+
 test "log: data" {
     opts.format = .logfmt;
     defer opts.format = .pretty;

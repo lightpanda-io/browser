@@ -1132,7 +1132,7 @@ fn countCompoundSpecificity(compound: Selector.Compound, ids: *u32, classes: *u3
 
 fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) bool {
     const node = el.asNode();
-    return SelectorList.matches(node, selector, node, frame);
+    return SelectorList.matches(node, selector, node, null, frame);
 }
 
 /// Only the values the dumpers act on; everything else is `other`.

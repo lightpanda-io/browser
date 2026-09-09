@@ -32,13 +32,15 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
+const ContentTypeIterator = @import("../../Mime.zig").ContentTypeIterator;
 
 const Blob = @import("../Blob.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const FormData = @import("FormData.zig");
 const URLSearchParams = @import("URLSearchParams.zig");
-const ReadableStream = @import("../streams/ReadableStream.zig");
 
+const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
 
 pub const BodyInit = union(enum) {
@@ -46,14 +48,14 @@ pub const BodyInit = union(enum) {
     form_data: *FormData,
     url_search_params: *URLSearchParams,
     stream: *ReadableStream,
-    buffer: js.TypedArray(u8),
+    buffer: js.BufferSource,
     bytes: []const u8, // must be last, js.Bridge will map anything to a string
 
     // How much a call to `extract` will dupe. Used for ArenaPool size selection.
     pub fn sizeHint(self: BodyInit) ?usize {
         return switch (self) {
             .bytes => |b| b.len,
-            .buffer => |b| b.values.len,
+            .buffer => |b| b.bytes.len,
             .blob => |b| b._slice.len + b._mime.len,
             .form_data, .url_search_params, .stream => null,
         };
@@ -105,10 +107,9 @@ pub const BodyInit = union(enum) {
                 };
             },
             .buffer => |b| {
-                // Buffer sources carry no default Content-Type (Fetch §6.5).
                 return .{
-                    .bytes = try arena.dupe(u8, b.values),
-                    .content_type = null,
+                    .bytes = try arena.dupe(u8, b.bytes),
+                    .content_type = null, // Buffer sources carry no default Content-Type
                 };
             },
             .stream => |stream| {
@@ -131,6 +132,33 @@ pub const Extracted = struct {
     bytes: []const u8,
     content_type: ?[]const u8,
 };
+
+pub fn parseFormData(body: []const u8, content_type_: ?[]const u8, exec: *const Execution) error{ OutOfMemory, TypeError }!*FormData {
+    const content_type = content_type_ orelse return error.TypeError;
+    var it = ContentTypeIterator.init(content_type);
+    const essence = it.essence;
+
+    if (std.ascii.eqlIgnoreCase(essence, "multipart/form-data")) {
+        // Parse bytes, using the value of the `boundary` parameter from mimeType
+        const boundary = it.findBoundary();
+        if (boundary.len == 0) {
+            return error.TypeError;
+        }
+        return FormData.initFromMultipart(body, boundary, exec) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.TypeError,
+        };
+    }
+
+    if (std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded")) {
+        return FormData.initFromUrlEncoded(body, exec) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.TypeError,
+        };
+    }
+
+    return error.TypeError;
+}
 
 // "UTF-8 decode" (Encoding §4.2) strips a leading BOM; consuming a body as
 // text/json must use it, while arrayBuffer/blob/bytes keep the raw bytes.
@@ -188,7 +216,7 @@ test "BodyInit: FormData emits multipart with random boundary" {
 }
 
 test "BodyInit: buffer source has no default Content-Type" {
-    const r = try (BodyInit{ .buffer = .{ .values = "hello" } }).extract(testing.arena_allocator);
+    const r = try (BodyInit{ .buffer = .{ .bytes = "hello" } }).extract(testing.arena_allocator);
     try testing.expectString("hello", r.bytes);
     try testing.expectEqual(true, r.content_type == null);
 }

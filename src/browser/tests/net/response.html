@@ -283,6 +283,42 @@
   });
 </script>
 
+<script id=stream_consumers type=module>
+  const state = await testing.async();
+
+  const streamOf = (...parts) => new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(part);
+      controller.close();
+    }
+  });
+
+  const text = await new Response(streamOf(new Uint8Array([104, 105]), new Uint8Array([33]))).text();
+  const json = await new Response(streamOf(new TextEncoder().encode('{"a":[1,2]}'))).json();
+  const bytes = await new Response(streamOf(new Uint8Array([1, 2]))).bytes();
+  const blob = await new Response(streamOf(new Uint8Array([120])), { headers: { 'content-type': 'text/x-y' } }).blob();
+  const blobText = await blob.text();
+  const fd = await new Response(streamOf(new TextEncoder().encode('a=1&b=2')), { headers: { 'content-type': 'application/x-www-form-urlencoded' } }).formData();
+
+  let badJson = null;
+  try { await new Response(streamOf(new Uint8Array([123]))).json(); } catch (e) { badJson = e; }
+  let noFormData = null;
+  try { await new Response(streamOf(new Uint8Array([120]))).formData(); } catch (e) { noFormData = e; }
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('hi!', text);
+    testing.expectEqual(2, json.a[1]);
+    testing.expectEqual(true, bytes instanceof Uint8Array);
+    testing.expectEqual(2, bytes[1]);
+    testing.expectEqual('text/x-y', blob.type);
+    testing.expectEqual('x', blobText);
+    testing.expectEqual('2', fd.get('b'));
+    testing.expectEqual(true, badJson instanceof SyntaxError);
+    testing.expectEqual(true, noFormData instanceof TypeError);
+  });
+</script>
+
 <script id=body_used type=module>
   const state = await testing.async();
 

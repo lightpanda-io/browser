@@ -18,8 +18,8 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const js = @import("../js/js.zig");
 
+const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Factory = @import("../Factory.zig");
 const EventManager = @import("../EventManager.zig");
@@ -29,24 +29,29 @@ const Event = @import("Event.zig");
 const Screen = @import("Screen.zig");
 const Worker = @import("Worker.zig");
 const Window = @import("Window.zig");
+const FileReader = @import("FileReader.zig");
 const AbortSignal = @import("AbortSignal.zig");
 const MessagePort = @import("MessagePort.zig");
-const FileReader = @import("FileReader.zig");
-const WebSocket = @import("net/WebSocket.zig");
-const Navigation = @import("navigation/Navigation.zig");
+const Performance = @import("Performance.zig");
 const Notification = @import("Notification.zig");
+const SharedWorker = @import("SharedWorker.zig");
+const VisualViewport = @import("VisualViewport.zig");
+const BroadcastChannel = @import("BroadcastChannel.zig");
+const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
+
+const WebSocket = @import("net/WebSocket.zig");
 const EventSource = @import("net/EventSource.zig");
 const CookieStore = @import("storage/CookieStore.zig");
 const IDBRequest = @import("storage/idb/IDBRequest.zig");
-const SharedWorker = @import("SharedWorker.zig");
-const FontFaceSet = @import("css/FontFaceSet.zig");
 const IDBDatabase = @import("storage/idb/IDBDatabase.zig");
-const TextTrackCue = @import("media/TextTrackCue.zig");
-const VisualViewport = @import("VisualViewport.zig");
-const MediaQueryList = @import("css/MediaQueryList.zig");
 const IDBTransaction = @import("storage/idb/IDBTransaction.zig");
-const BroadcastChannel = @import("BroadcastChannel.zig");
-const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
+
+const FontFaceSet = @import("css/FontFaceSet.zig");
+const MediaQueryList = @import("css/MediaQueryList.zig");
+
+const TextTrackCue = @import("media/TextTrackCue.zig");
+
+const Navigation = @import("navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
 const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
 
@@ -63,64 +68,66 @@ pub const _prototype_root = true;
 _type: Type align(8),
 
 pub const Type = enum(u8) {
-    generic,
-    node,
-    window,
-    worker,
-    shared_worker,
-    worker_global_scope,
-    xhr,
     abort_signal,
-    media_query_list,
-    message_port,
     broadcast_channel,
-    text_track_cue,
-    navigation,
-    navigation_history_entry,
-    screen,
-    screen_orientation,
-    visual_viewport,
+    cookie_store,
+    event_source,
     file_reader,
     font_face_set,
-    websocket,
-    event_source,
-    cookie_store,
-    idb_request,
+    generic,
     idb_database,
+    idb_request,
     idb_transaction,
+    media_query_list,
+    message_port,
+    navigation,
+    navigation_history_entry,
+    node,
     notification,
+    performance,
+    screen,
+    screen_orientation,
+    shared_worker,
+    text_track_cue,
+    visual_viewport,
+    websocket,
+    window,
+    worker,
+    worker_global_scope,
+    xhr,
 };
 
 // `.generic` maps to EventTarget itself: a standalone `new EventTarget()` has
 // no chain member of its own.
 pub fn Subtype(comptime tag: Type) type {
     return switch (tag) {
-        .generic => EventTarget,
-        .node => Node,
-        .window => Window,
-        .worker => Worker,
-        .shared_worker => SharedWorker,
-        .worker_global_scope => WorkerGlobalScope,
-        .xhr => XMLHttpRequestEventTarget,
         .abort_signal => AbortSignal,
-        .media_query_list => MediaQueryList,
-        .message_port => MessagePort,
         .broadcast_channel => BroadcastChannel,
-        .text_track_cue => TextTrackCue,
-        .navigation => Navigation,
-        .navigation_history_entry => NavigationHistoryEntry,
-        .screen => Screen,
-        .screen_orientation => Screen.Orientation,
-        .visual_viewport => VisualViewport,
+        .cookie_store => CookieStore,
+        .event_source => EventSource,
         .file_reader => FileReader,
         .font_face_set => FontFaceSet,
-        .websocket => WebSocket,
-        .event_source => EventSource,
-        .cookie_store => CookieStore,
-        .idb_request => IDBRequest,
+        .generic => EventTarget,
         .idb_database => IDBDatabase,
+        .idb_request => IDBRequest,
         .idb_transaction => IDBTransaction,
+        .media_query_list => MediaQueryList,
+        .message_port => MessagePort,
+        .navigation => Navigation,
+        .navigation_history_entry => NavigationHistoryEntry,
+        .node => Node,
         .notification => Notification,
+        .performance => Performance,
+        .screen => Screen,
+        .screen_orientation => Screen.Orientation,
+        .shared_worker => SharedWorker,
+        .text_track_cue => TextTrackCue,
+        .visual_viewport => VisualViewport,
+        .websocket => WebSocket,
+        .window => Window,
+        .worker => Worker,
+        .worker_global_scope => WorkerGlobalScope,
+        .xhr => XMLHttpRequestEventTarget,
     };
 }
 
@@ -262,9 +269,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nulla
         .function => |func| .{ .function = func },
     };
 
-    switch (exec.js.global) {
-        inline else => |g| _ = try g._event_manager.register(self, typ, em_callback, options),
-    }
+    return exec.registerListener(self, typ, em_callback, options);
 }
 
 const RemoveEventListenerOptions = union(enum) {
@@ -298,9 +303,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: js.Nu
         };
     };
 
-    switch (exec.js.global) {
-        inline else => |g| g._event_manager.remove(self, typ, em_callback, use_capture),
-    }
+    exec.removeListener(self, typ, em_callback, use_capture);
 }
 
 pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
@@ -336,32 +339,33 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
 
 pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
-        .node => return "[object Node]",
-        .generic => return "[object EventTarget]",
-        .window => return "[object Window]",
-        .worker => return "[object Worker]",
-        .shared_worker => return "[object SharedWorker]",
-        .worker_global_scope => return "[object WorkerGlobalScope]",
-        .xhr => return "[object XMLHttpRequestEventTarget]",
         .abort_signal => return "[object AbortSignal]",
-        .media_query_list => return "[object MediaQueryList]",
-        .message_port => return "[object MessagePort]",
         .broadcast_channel => return "[object BroadcastChannel]",
-        .text_track_cue => return "[object TextTrackCue]",
-        .navigation => return "[object Navigation]",
-        .screen => return "[object Screen]",
-        .screen_orientation => return "[object ScreenOrientation]",
-        .visual_viewport => return "[object VisualViewport]",
+        .cookie_store => return "[object CookieStore]",
+        .event_source => return "[object EventSource]",
         .file_reader => return "[object FileReader]",
         .font_face_set => return "[object FontFaceSet]",
-        .websocket => return "[object WebSocket]",
-        .event_source => return "[object EventSource]",
-        .cookie_store => return "[object CookieStore]",
-        .idb_request => return "[object IDBRequest]",
+        .generic => return "[object EventTarget]",
         .idb_database => return "[object IDBDatabase]",
+        .idb_request => return "[object IDBRequest]",
         .idb_transaction => return "[object IDBTransaction]",
-        .notification => return "[object Notification]",
+        .media_query_list => return "[object MediaQueryList]",
+        .message_port => return "[object MessagePort]",
+        .navigation => return "[object Navigation]",
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
+        .node => return "[object Node]",
+        .notification => return "[object Notification]",
+        .performance => return "[object Performance]",
+        .screen => return "[object Screen]",
+        .screen_orientation => return "[object ScreenOrientation]",
+        .shared_worker => return "[object SharedWorker]",
+        .text_track_cue => return "[object TextTrackCue]",
+        .visual_viewport => return "[object VisualViewport]",
+        .websocket => return "[object WebSocket]",
+        .window => return "[object Window]",
+        .worker => return "[object Worker]",
+        .worker_global_scope => return "[object WorkerGlobalScope]",
+        .xhr => return "[object XMLHttpRequestEventTarget]",
     };
 }
 

@@ -74,7 +74,7 @@ _navigator: Navigator = .init,
 _model_context: ModelContext = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
-_performance: Performance,
+_performance: *Performance,
 _cookie_store: ?*CookieStore = null,
 _idb_factory: ?*idb.IDBFactory = null,
 _on_load: ?js.Function.Global = null,
@@ -279,7 +279,7 @@ pub fn getCSS(self: *Window) *CSS {
 }
 
 pub fn getPerformance(self: *Window) *Performance {
-    return &self._performance;
+    return self._performance;
 }
 
 pub fn setPerformance(self: *Window, value: js.Value) void {

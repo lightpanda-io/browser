@@ -21,6 +21,7 @@ const zenai = @import("zenai");
 const lp = @import("lightpanda");
 
 const cli = @import("cli.zig");
+const string = @import("string.zig");
 const dump = @import("browser/dump.zig");
 const Mime = @import("browser/Mime.zig");
 
@@ -316,6 +317,11 @@ fn dumpValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?DumpF
     var peek_args = args.*;
     if (peek_args.next()) |next_arg| {
         const mode = std.meta.stringToEnum(DumpFormat, next_arg) orelse {
+            // Anything else is the positional url, unless it is a misspelt format.
+            if (string.closest(next_arg, tagNames(DumpFormat), 2)) |near| {
+                log.fatal(.app, "invalid option choice", .{ .arg = "--dump", .value = log.red(next_arg), .did_you_mean = log.green(near) });
+                return error.InvalidArgument;
+            }
             target.* = .html;
             return;
         };
@@ -1372,13 +1378,7 @@ pub fn validateUserAgent(ua: []const u8) !void {
 
 /// Tag names of a Zig enum, so a command's allowed values can't drift from the
 /// enum it sets.
-pub fn tagNames(comptime E: type) []const []const u8 {
-    const fields = @typeInfo(E).@"enum".fields;
-    var names: [fields.len][]const u8 = undefined;
-    for (fields, &names) |f, *n| n.* = f.name;
-    const frozen = names;
-    return &frozen;
-}
+pub const tagNames = cli.tagNames;
 
 /// `<a|b|c>` ghost-text hint built from the same enum's tag names.
 pub fn tagHint(comptime E: type) []const u8 {

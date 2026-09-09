@@ -107,6 +107,20 @@
 }
 </script>
 
+<script id=propertyPresence>
+{
+  const el = document.getElementById('test');
+
+  testing.expectEqual(true, 'foo' in el.dataset);
+  testing.expectEqual(true, Object.hasOwn(el.dataset, 'foo'));
+  testing.expectEqual(true, 'helloWorld' in el.dataset);
+
+  testing.expectEqual(false, 'nonExistent' in el.dataset);
+  testing.expectEqual(false, Object.hasOwn(el.dataset, 'nonExistent'));
+  testing.expectEqual(false, Object.hasOwn(el.dataset, 'fooBar'));
+}
+</script>
+
 <script id=identityCheck>
 {
   const el = document.getElementById('test');

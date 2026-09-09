@@ -204,6 +204,30 @@ pub fn parse(input: []const u8) !Mime {
     return mime;
 }
 
+/// Try to parse a header which may contain several comma-joined values
+/// (happens when a server and proxy both set the Content-Type).
+pub fn parseLenient(input: []const u8) !Mime {
+    var in_quotes = false;
+    var last_comma: ?usize = null;
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        switch (input[i]) {
+            '"' => in_quotes = !in_quotes,
+            '\\' => if (in_quotes) {
+                i += 1;
+            },
+            ',' => if (in_quotes == false) {
+                last_comma = i;
+            },
+            else => {},
+        }
+    }
+
+    // last value wins
+    const comma = last_comma orelse return parse(input);
+    return parse(input[comma + 1 ..]) catch parse(input);
+}
+
 /// Prescan the first 1024 bytes of an HTML document for a charset declaration.
 /// Looks for `<meta charset="X">` and `<meta http-equiv="Content-Type" content="...;charset=X">`.
 /// Returns the charset value or null if none found.
@@ -849,6 +873,26 @@ test "Mime: invalid" {
         const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
         try testing.expectError(error.Invalid, Mime.parse(mutable_input));
     }
+}
+
+test "Mime: parseLenient takes the last comma-joined value" {
+    {
+        const m = try parseLenient("text/plain; charset=gbk, text/html; charset=windows-1254");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+        try testing.expectString("windows-1254", m.charset[0..m.charset_len]);
+    }
+    {
+        const m = try parseLenient("text/html, text/html");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+    }
+    {
+        // A comma inside a quoted parameter value is not a separator.
+        const m = try parseLenient("text/html;x=\",text/plain\";charset=gbk");
+        try testing.expectEqual(.text_html, std.meta.activeTag(m.content_type));
+        try testing.expectString("gbk", m.charset[0..m.charset_len]);
+    }
+    try testing.expectError(error.Invalid, parseLenient("text, html"));
+    try testing.expectError(error.Invalid, parseLenient("garbage"));
 }
 
 test "Mime: malformed parameters are ignored" {

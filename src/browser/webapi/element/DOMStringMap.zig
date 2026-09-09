@@ -41,6 +41,11 @@ fn setProperty(self: *DOMStringMap, name: String, value: String, frame: *Frame) 
     return self._element.setAttributeSafe(attr_name, value, frame);
 }
 
+fn hasProperty(self: *DOMStringMap, name: String, frame: *Frame) !bool {
+    const attr_name = try camelToKebab(frame.local_arena, name);
+    return self._element.hasAttribute(attr_name, frame);
+}
+
 fn deleteProperty(self: *DOMStringMap, name: String, frame: *Frame) !void {
     const attr_name = try camelToKebab(frame.local_arena, name);
     try self._element.removeAttribute(attr_name, frame);
@@ -135,7 +140,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, null, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, hasProperty, .{ .null_as_undefined = true, .ce_reactions = true });
 
     // The supported property names are the camel-cased names of the
     // element's data-* attributes, in attribute order.

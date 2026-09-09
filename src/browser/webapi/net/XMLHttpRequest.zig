@@ -254,7 +254,29 @@ pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const 
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
-    return self._request_headers.append(name, value, exec);
+
+    if (isByteString(name) == false or isByteString(value) == false) {
+        // A code point above U+00FF is a TypeError, ...
+        return error.TypeError;
+    }
+    return self._request_headers.append(name, value, exec) catch |err| switch (err) {
+        error.TypeError => {
+            // ... but a valid "string" is a SyntaxError if it isn't a valid
+            // header name or value
+            return error.SyntaxError;
+        },
+        else => err,
+    };
+}
+
+fn isByteString(s: []const u8) bool {
+    var it = std.unicode.Utf8View.initUnchecked(s).iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (cp > 0xFF) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // https://xhr.spec.whatwg.org/#the-overridemimetype()-method
@@ -294,7 +316,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
             // applies if the author hasn't already set one via
             // setRequestHeader.
             if (extracted.content_type) |ct| {
-                if (!self._request_headers.has("content-type", exec_)) {
+                if (try self._request_headers.has("content-type", exec_) == false) {
                     try self._request_headers.append("content-type", ct, exec_);
                 }
             }

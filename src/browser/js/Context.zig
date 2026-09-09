@@ -38,35 +38,9 @@ const Allocator = std.mem.Allocator;
 // Loosely maps to a Browser Page or Worker.
 const Context = @This();
 
-pub const GlobalScope = union(enum) {
-    frame: *Frame,
-    worker: *WorkerGlobalScope,
-
-    pub fn base(self: GlobalScope) [:0]const u8 {
-        return switch (self) {
-            .frame => |frame| frame.base(),
-            .worker => |worker| worker.base(),
-        };
-    }
-
-    pub fn getJs(self: GlobalScope) *Context {
-        return switch (self) {
-            .frame => |frame| frame.js,
-            .worker => |worker| worker.js,
-        };
-    }
-
-    pub fn setJs(self: GlobalScope, ctx: *Context) void {
-        switch (self) {
-            .frame => |frame| frame.js = ctx,
-            .worker => |worker| worker.js = ctx,
-        }
-    }
-};
-
 id: usize,
 env: *Env,
-global: GlobalScope,
+global: lp.GlobalScope,
 
 // The Page this Context belongs to. For main-world frame contexts, this is
 // the Page of the frame. For worker contexts, this is the Page of the
@@ -1109,7 +1083,7 @@ const Entered = struct {
 
     handle_scope: *js.HandleScope,
 
-    global: GlobalScope,
+    global: lp.GlobalScope,
 
     pub fn exit(self: Entered) void {
         self.global.setJs(self.original);
@@ -1292,3 +1266,9 @@ const UnknownPropertyStat = struct {
     count: usize,
     first_stack: []const u8,
 };
+
+// see Local.typeError
+pub fn typeError(self: *const Context, message: []const u8) error{TypeError} {
+    self.env.error_message = message;
+    return error.TypeError;
+}

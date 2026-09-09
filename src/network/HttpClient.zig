@@ -3214,7 +3214,9 @@ pub const Transfer = struct {
             .redirect_count = self._redirect_count,
         };
 
-        if (conn.getResponseHeader("content-type", 0)) |ct| {
+        if (conn.getResponseHeader("content-type", 0)) |first| {
+            // last one wins
+            const ct = if (first.amount < 2) first else conn.getResponseHeader("content-type", first.amount - 1) orelse first;
             var hdr = &self.res.header.?;
             const value = ct.value;
             const len = @min(value.len, http.ResponseHead.MAX_CONTENT_TYPE_LEN);

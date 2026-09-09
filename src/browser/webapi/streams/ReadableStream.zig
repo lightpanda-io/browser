@@ -53,6 +53,7 @@ _pulling: bool = false,
 _pull_again: bool = false,
 _cancel: ?Cancel = null,
 _collected: bool = false,
+_disturbed: bool = false, // once cancelled, cannot be consumed again
 
 const UnderlyingSource = struct {
     cancel: ?js.Function.Global = null,
@@ -122,7 +123,7 @@ pub fn initWithText(text: []const u8, exec: *const Execution) !*ReadableStream {
 
 pub fn getReader(self: *ReadableStream, exec: *const Execution) !*ReadableStreamDefaultReader {
     if (self.getLocked()) {
-        return error.ReaderLocked;
+        return exec.js.typeError("ReadableStream is locked");
     }
 
     const reader = try ReadableStreamDefaultReader.init(self, exec);
@@ -244,6 +245,7 @@ fn shouldCallPull(self: *const ReadableStream) bool {
 
 pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
+    self._disturbed = true;
 
     if (self._state != .readable) {
         if (self._cancel) |c| {
@@ -301,7 +303,7 @@ const PipeTransform = struct {
 
 pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
-        return error.ReaderLocked;
+        return exec.js.typeError("ReadableStream is locked");
     }
 
     // Start async piping from this stream to the writable side

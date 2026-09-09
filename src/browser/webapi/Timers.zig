@@ -36,12 +36,14 @@ const CLAMP_NESTING = 5;
 // from considering the page "done" forever (more commonly seen with requestAnimationFrame)
 const BLOCKING_NESTING = 10;
 
-// airbnb has 600+ timers
-const MAX_CALLBACKS = 2048;
+// Every pending timeout, interval, animation frame and setImmediate. Past
+// the cap setTimeout throws, which no browser does; keep it a backstop for
+// runaway pages, not a budget (a paginated storefront listing holds ~2.7k).
+const MAX_CALLBACKS = 8192;
 
 // lower limit for repeating timers since they never clean up
 // (unless clearInterval is called)
-const MAX_REPEATING = 512;
+const MAX_REPEATING = 2048;
 
 const Timers = @This();
 

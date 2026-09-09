@@ -23,6 +23,8 @@ const js = @import("../js/js.zig");
 const Factory = @import("../Factory.zig");
 const Scheduler = @import("../js/Scheduler.zig");
 
+const Event = @import("Event.zig");
+const EventTarget = @import("EventTarget.zig");
 const EventCounts = @import("EventCounts.zig");
 const PerformanceObserver = @import("PerformanceObserver.zig");
 
@@ -32,12 +34,17 @@ const Allocator = std.mem.Allocator;
 // https://w3c.github.io/resource-timing/#dfn-resource-timing-buffer-size-limit
 const DEFAULT_RESOURCE_BUFFER_SIZE = 250;
 
+const BUFFER_FULL = "resourcetimingbufferfull";
+
 pub fn registerTypes() []const type {
     return &.{ Performance, Entry, Mark, Measure, ResourceTiming, PerformanceTiming, PerformanceNavigation };
 }
 
 const Performance = @This();
 
+pub const Proto = EventTarget;
+
+_proto: *EventTarget,
 _time_origin: u64,
 _arena: Allocator,
 _factory: *Factory,
@@ -51,11 +58,15 @@ _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 _event_counts: EventCounts = .{},
 _resource_buffer_size: u32 = DEFAULT_RESOURCE_BUFFER_SIZE,
+_buffer_full_pending: bool = false,
+_on_buffer_full: ?js.Function.Global = null,
 
-// The owner's task scheduler, set by the owner once its JS context exists
-// (Frame builds the Window, and thus this, before the context). Never taken
-// from a caller's Execution: an isolated-world or cross-frame caller's
-// context can be destroyed while we live on.
+// The owner's task scheduler and its main-world Execution, both set by the
+// owner once its JS context exists (Frame builds the Window, and thus this,
+// before the context) - see attach. Never taken from a caller's Execution: an
+// isolated-world or cross-frame caller's context can be destroyed while we
+// live on.
+_exec: *Execution = undefined,
 _scheduler: *Scheduler = undefined,
 
 // PerformanceObserver infrastructure. Lives here (rather than on the owning
@@ -73,12 +84,22 @@ pub fn highResTimestamp() u64 {
     return rounded;
 }
 
-pub fn init(factory: *Factory, arena: Allocator) Performance {
-    return .{
+pub fn init(factory: *Factory, arena: Allocator) !*Performance {
+    return factory.eventTarget(Performance{
+        ._proto = undefined,
         ._arena = arena,
         ._factory = factory,
         ._time_origin = highResTimestamp(),
-    };
+    });
+}
+
+pub fn attach(self: *Performance, ctx: *js.Context) void {
+    self._exec = &ctx.execution;
+    self._scheduler = &ctx.scheduler;
+}
+
+pub fn asEventTarget(self: *Performance) *EventTarget {
+    return self._proto;
 }
 
 pub fn getTiming(self: *Performance) *PerformanceTiming {
@@ -263,11 +284,12 @@ pub const ResourceInfo = struct {
 };
 
 pub fn addResource(self: *Performance, info: ResourceInfo) !void {
-    // TODO: Perfomance should be an EventTarget and it should fire
-    // a resourcetimingbufferfull event
     const buffer_full = self._resources.items.len >= self._resource_buffer_size;
-    if (buffer_full and !self.hasObserverFor(.resource)) {
-        return;
+    if (buffer_full) {
+        try self.scheduleBufferFull();
+        if (self.hasObserverFor(.resource) == false) {
+            return;
+        }
     }
 
     const arena = self._arena;
@@ -571,6 +593,54 @@ fn hasObserverFor(self: *const Performance, kind: Entry.Type.Enum) bool {
     return false;
 }
 
+// https://w3c.github.io/resource-timing/#dfn-fire-a-buffer-full-event
+// The event is queued rather than fired inline: addResource runs from the
+// HTTP layer, with no JS on the stack. We have no secondary buffer, so an
+// entry that overflows is dropped instead of being copied back in by a
+// handler that calls clearResourceTimings.
+fn scheduleBufferFull(self: *Performance) !void {
+    if (self._buffer_full_pending) {
+        return;
+    }
+    if (self._exec.hasDirectListeners(self.asEventTarget(), BUFFER_FULL, self._on_buffer_full) == false) {
+        return;
+    }
+    self._buffer_full_pending = true;
+
+    return self._scheduler.add(
+        self,
+        struct {
+            fn run(_self: *anyopaque) anyerror!?u32 {
+                const perf: *Performance = @ptrCast(@alignCast(_self));
+                perf._buffer_full_pending = false;
+
+                const exec = perf._exec;
+                const event = try Event.initTrusted(.wrap(BUFFER_FULL), .{}, exec.page);
+                try exec.dispatch(perf.asEventTarget(), event, perf._on_buffer_full, .{
+                    .context = "Performance.resourcetimingbufferfull",
+                });
+                return null;
+            }
+        }.run,
+        0,
+        .{ .name = "Performance.bufferFull" },
+    );
+}
+
+// The property handler for a JS-side dispatchEvent (see EventManager.dispatch).
+pub fn inlineHandler(self: *const Performance, typ: lp.String) ?js.Function.Global {
+    if (typ.eql(.wrap(BUFFER_FULL))) return self._on_buffer_full;
+    return null;
+}
+
+pub fn getOnResourceTimingBufferFull(self: *const Performance) ?js.Function.Global {
+    return self._on_buffer_full;
+}
+
+pub fn setOnResourceTimingBufferFull(self: *Performance, cb: ?js.Function.Global) void {
+    self._on_buffer_full = cb;
+}
+
 pub fn scheduleDelivery(self: *Performance) !void {
     if (self._delivery_scheduled) {
         return;
@@ -684,6 +754,7 @@ pub const JsApi = struct {
     pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
     pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
+    pub const onresourcetimingbufferfull = bridge.accessor(Performance.getOnResourceTimingBufferFull, Performance.setOnResourceTimingBufferFull, .{});
 };
 
 pub const Entry = struct {
@@ -1184,6 +1255,7 @@ test "WebApi: Performance" {
 test "WebApi: Performance.resource_timing" {
     try testing.htmlRunner("performance_resource_timing.html", .{});
     try testing.htmlRunner("performance_resource_timing_buffer.html", .{});
+    try testing.htmlRunner("performance_resource_timing_buffer_full.html", .{});
 }
 
 test "Performance: minimizeMimeType" {

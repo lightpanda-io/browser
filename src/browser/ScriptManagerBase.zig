@@ -22,58 +22,20 @@ const lp = @import("lightpanda");
 const HttpClient = @import("../network/HttpClient.zig");
 
 const js = @import("js/js.zig");
-const Session = @import("Session.zig");
 const Frame = @import("Frame.zig");
 const ImportMap = @import("ImportMap.zig");
-const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const Element = @import("webapi/Element.zig");
+const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const log = lp.log;
 const String = lp.String;
+const GlobalScope = lp.GlobalScope;
 const Allocator = std.mem.Allocator;
 
 const ScriptManagerBase = @This();
 
-// Either a *Frame (for page ScriptManagers) or *WorkerGlobalScope (for workers).
-// Used from HTTP callbacks that only have a *Script in hand; the Script reaches
-// the owner through its manager pointer.
-pub const Owner = union(enum) {
-    frame: *Frame,
-    worker: *WorkerGlobalScope,
-
-    pub fn url(self: Owner) [:0]const u8 {
-        return switch (self) {
-            inline else => |g| g.url,
-        };
-    }
-
-    pub fn session(self: Owner) *Session {
-        return switch (self) {
-            inline else => |g| g._session,
-        };
-    }
-
-    pub fn origin(self: Owner) ?[]const u8 {
-        return switch (self) {
-            inline else => |g| g.origin,
-        };
-    }
-
-    pub fn jsContext(self: Owner) *js.Context {
-        return switch (self) {
-            inline else => |g| g.js,
-        };
-    }
-
-    pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
-        return switch (self) {
-            inline else => |g| g.makeRequest(req),
-        };
-    }
-};
-
-owner: Owner,
+owner: GlobalScope,
 
 // used to prevent recursive evaluation
 is_evaluating: bool,
@@ -113,7 +75,7 @@ importmap: ImportMap,
 // scriptsCompletedLoading. Null for workers.
 tail_hook: ?*const fn (*ScriptManagerBase) void,
 
-pub fn init(allocator: Allocator, http_client: *HttpClient, owner: Owner) ScriptManagerBase {
+pub fn init(allocator: Allocator, http_client: *HttpClient, owner: GlobalScope) ScriptManagerBase {
     return .{
         .owner = owner,
         .async_scripts = .{},
@@ -232,7 +194,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 
     if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.owner.jsContext().localScope(&ls);
+        self.owner.getJs().localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -420,7 +382,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
 
     if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.owner.jsContext().localScope(&ls);
+        self.owner.getJs().localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{

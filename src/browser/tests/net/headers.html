@@ -49,12 +49,10 @@
   headers.append('ACCEPT', 'text/html');
   headers.append('accept', 'text/plain');
 
-  // Verify all values are present using iteration
+  // Iteration combines a name's values into one entry.
   const values = Array.from(headers.values());
-  testing.expectEqual(3, values.length);
-  testing.expectEqual('application/json', values[0]);
-  testing.expectEqual('text/html', values[1]);
-  testing.expectEqual('text/plain', values[2]);
+  testing.expectEqual(1, values.length);
+  testing.expectEqual('application/json, text/html, text/plain', values[0]);
 }
 
 {
@@ -132,11 +130,11 @@
   testing.expectEqual("Bearer abc", headers.get("Authorization"));
   testing.expectEqual("value123", headers.get("X-CUSTOM-HEADER"));
 
-  // Verify keys are normalized
+  // Verify keys are normalized (and iterated in sorted order)
   const keys = Array.from(headers.keys());
   testing.expectEqual(3, keys.length);
-  testing.expectEqual("content-type", keys[0]);
-  testing.expectEqual("authorization", keys[1]);
+  testing.expectEqual("authorization", keys[0]);
+  testing.expectEqual("content-type", keys[1]);
   testing.expectEqual("x-custom-header", keys[2]);
 }
 
@@ -148,14 +146,12 @@
     ["Content-Type", "text/plain"]
   ]);
 
+  // Iteration combines a name's values; get() sees the same thing.
   const entries = Array.from(headers.entries());
-  testing.expectEqual(3, entries.length);
-
-  // All Accept headers should be present
-  const acceptValues = entries.filter(e => e[0] === 'accept').map(e => e[1]);
-  testing.expectEqual(2, acceptValues.length);
-  testing.expectEqual("application/json", acceptValues[0]);
-  testing.expectEqual("text/html", acceptValues[1]);
+  testing.expectEqual(2, entries.length);
+  testing.expectEqual("accept", entries[0][0]);
+  testing.expectEqual("application/json, text/html", entries[0][1]);
+  testing.expectEqual("application/json, text/html", headers.get("accept"));
 }
 </script>
 
@@ -230,8 +226,8 @@
 
   const keys = Array.from(copy.keys());
   testing.expectEqual(2, keys.length);
-  testing.expectEqual("content-type", keys[0]);
-  testing.expectEqual("authorization", keys[1]);
+  testing.expectEqual("authorization", keys[0]);
+  testing.expectEqual("content-type", keys[1]);
 }
 </script>
 
@@ -243,29 +239,66 @@
   headers.set('Authorization', 'Bearer token123');
   headers.set('X-Custom', 'test-value');
 
-  // Test keys()
+  // Iteration is in sorted name order, not insertion order.
   const keys = Array.from(headers.keys());
   testing.expectEqual(3, keys.length);
-  testing.expectEqual('content-type', keys[0]);
-  testing.expectEqual('authorization', keys[1]);
+  testing.expectEqual('authorization', keys[0]);
+  testing.expectEqual('content-type', keys[1]);
   testing.expectEqual('x-custom', keys[2]);
 
   // Test values()
   const values = Array.from(headers.values());
   testing.expectEqual(3, values.length);
-  testing.expectEqual('application/json', values[0]);
-  testing.expectEqual('Bearer token123', values[1]);
+  testing.expectEqual('Bearer token123', values[0]);
+  testing.expectEqual('application/json', values[1]);
   testing.expectEqual('test-value', values[2]);
 
   // Test entries()
   const entries = Array.from(headers.entries());
   testing.expectEqual(3, entries.length);
-  testing.expectEqual('content-type', entries[0][0]);
-  testing.expectEqual('application/json', entries[0][1]);
-  testing.expectEqual('authorization', entries[1][0]);
-  testing.expectEqual('Bearer token123', entries[1][1]);
+  testing.expectEqual('authorization', entries[0][0]);
+  testing.expectEqual('Bearer token123', entries[0][1]);
+  testing.expectEqual('content-type', entries[1][0]);
+  testing.expectEqual('application/json', entries[1][1]);
   testing.expectEqual('x-custom', entries[2][0]);
   testing.expectEqual('test-value', entries[2][1]);
+}
+
+// Headers is iterable: for..of, spread and Object.fromEntries all go
+// through Symbol.iterator, not entries().
+{
+  const headers = new Headers({ 'X-B': '2', 'X-A': '1' });
+  testing.expectEqual('function', typeof headers[Symbol.iterator]);
+
+  const spread = [...headers];
+  testing.expectEqual(2, spread.length);
+  testing.expectEqual('x-a', spread[0][0]);
+  testing.expectEqual('1', spread[0][1]);
+
+  const collected = [];
+  for (const [name, value] of headers) {
+    collected.push(name + '=' + value);
+  }
+  testing.expectEqual('x-a=1,x-b=2', collected.join(','));
+
+  // set-cookie is never combined and keeps its order; a name's other values are.
+  headers.append('Set-Cookie', 'a=1');
+  headers.append('set-cookie', 'b=2');
+  headers.append('x-a', '3');
+  testing.expectEqual('set-cookie=a=1,set-cookie=b=2,x-a=1, 3,x-b=2', [...headers].map(e => e.join('=')).join(','));
+
+  // append/set validate names and normalize values like the constructor.
+  headers.set('X-Trim', '  v  ');
+  testing.expectEqual('v', headers.get('x-trim'));
+  let threw = 0;
+  try { headers.append('Bad Name', 'x'); } catch (e) { threw += e instanceof TypeError; }
+  try { headers.set('X-Ok', 'a\nb'); } catch (e) { threw += e instanceof TypeError; }
+  try { headers.get(''); } catch (e) { threw += e instanceof TypeError; }
+  testing.expectEqual(3, threw);
+
+  const obj = Object.fromEntries(headers);
+  testing.expectEqual('1, 3', obj['x-a']);
+  testing.expectEqual('2', new Map(headers).get('x-b'));
 }
 
 // Test forEach()
@@ -281,10 +314,10 @@
   });
 
   testing.expectEqual(2, collected.length);
-  testing.expectEqual('content-type', collected[0][0]);
-  testing.expectEqual('application/json', collected[0][1]);
-  testing.expectEqual('authorization', collected[1][0]);
-  testing.expectEqual('Bearer token123', collected[1][1]);
+  testing.expectEqual('authorization', collected[0][0]);
+  testing.expectEqual('Bearer token123', collected[0][1]);
+  testing.expectEqual('content-type', collected[1][0]);
+  testing.expectEqual('application/json', collected[1][1]);
 }
 
 // Test forEach with thisArg
@@ -314,10 +347,9 @@
     }
   });
 
-  testing.expectEqual(3, values.length);
-  testing.expectEqual('application/json', values[0]);
-  testing.expectEqual('text/html', values[1]);
-  testing.expectEqual('text/plain', values[2]);
+  // forEach sees the combined value, like iteration.
+  testing.expectEqual(1, values.length);
+  testing.expectEqual('application/json, text/html, text/plain', values[0]);
 }
 </script>
 

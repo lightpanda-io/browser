@@ -27,6 +27,7 @@ pub const Network = @import("network/Network.zig");
 pub const Config = @import("Config.zig");
 pub const String = @import("string.zig").String;
 pub const Notification = @import("Notification.zig");
+pub const ToolSession = @import("ToolSession.zig");
 pub const Server = @import("server/Server.zig");
 
 pub const URL = @import("browser/URL.zig");
@@ -34,7 +35,7 @@ pub const Page = @import("browser/Page.zig");
 pub const Frame = @import("browser/Frame.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
-pub const ToolSession = @import("ToolSession.zig");
+pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
 
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");

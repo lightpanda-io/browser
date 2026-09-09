@@ -313,11 +313,19 @@ fn ReaderM(comptime EXPECT_MASK: bool) type {
                 return null;
             }
 
-            const message_len = switch (length_of_len) {
-                2 => @as(u16, @intCast(buf[3])) | @as(u16, @intCast(buf[2])) << 8,
-                8 => @as(u64, @intCast(buf[9])) | @as(u64, @intCast(buf[8])) << 8 | @as(u64, @intCast(buf[7])) << 16 | @as(u64, @intCast(buf[6])) << 24 | @as(u64, @intCast(buf[5])) << 32 | @as(u64, @intCast(buf[4])) << 40 | @as(u64, @intCast(buf[3])) << 48 | @as(u64, @intCast(buf[2])) << 56,
+            const payload_len: usize = switch (length_of_len) {
+                2 => std.mem.readInt(u16, buf[2..4], .big),
+                8 => std.mem.readInt(u64, buf[2..10], .big),
                 else => buf[1] & 127,
-            } + length_of_len + 2 + if (comptime EXPECT_MASK) 4 else 0; // +2 for header prefix, +4 for mask;
+            };
+
+            // +2 for the header prefix,
+            // +length_of_len for the extended length,
+            // +4 for the mask.
+            const overhead: usize = length_of_len + 2 + if (comptime EXPECT_MASK) 4 else 0;
+            // Prefer saturating addition to clamp to largest usize.
+            // `max_message_size` check in next() rejects it as `TooLarge`.
+            const message_len = payload_len +| overhead;
 
             return .{ length_of_len, message_len };
         }
