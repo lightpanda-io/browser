@@ -178,6 +178,19 @@ pub fn deinit(self: *Session) void {
 
     self.closeAllPages();
 
+    // CorsGate/RobotsGate fetches are ownerless, so page/frame teardown above
+    // never reaches them.
+    //
+    // They still carry this notification and can outlive it, so clear the pointer here or
+    // Transfer.kill's later notify() dispatches through a freed Notification
+    // once the caller runs notification.deinit() after this returns.
+    var transfer_it = self.browser.http_client.transfers.valueIterator();
+    while (transfer_it.next()) |t| {
+        if (t.*.req.notification == self.notification) {
+            t.*.req.notification = null;
+        }
+    }
+
     self.cookie_jar.deinit();
 
     {

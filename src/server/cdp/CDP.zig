@@ -616,17 +616,8 @@ pub const BrowserContext = struct {
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
 
-        // CorsGate/RobotsGate fetches are ownerless, so closeSession's owner-based teardown never reaches them.
-        //
-        // They still carry this notification (copied for CDP correlation) and can outlive it, so clear
-        // the pointer here or Transfer.kill's later notify() dispatches through a freed Notification when
-        // the http_client itself is torn down.
-        var transfer_it = http_client.transfers.valueIterator();
-        while (transfer_it.next()) |t| {
-            if (t.*.req.notification == self.notification) {
-                t.*.req.notification = null;
-            }
-        }
+        // Session.deinit (called via closeSession above) already cleared this
+        // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
