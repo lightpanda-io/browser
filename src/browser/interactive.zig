@@ -186,7 +186,7 @@ fn walkInteractive(
 
     if (root.is(Element)) |root_el| {
         // root is outside of the tree walk, so check its visibility upfront.
-        if (!root_el.isVisible(frame, .scan)) {
+        if (!root_el.isVisible(frame)) {
             return &.{};
         }
     }
@@ -205,7 +205,7 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+        if (frame._style_manager.hasDisplayNone(el)) {
             tw.skipChildren();
             continue;
         }
@@ -298,7 +298,7 @@ pub fn classifyInteractivity(
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(frame, .scan)) return null;
+    if (el.hasPointerEventsNone(frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {

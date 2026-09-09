@@ -70,7 +70,7 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
         for (list._nodes) |node| {
             const anchor = node.is(Element.Html.Anchor) orelse continue;
             const el = anchor.asElement();
-            if (!el.isVisible(frame, .scan)) continue;
+            if (!el.isVisible(frame)) continue;
 
             const href = anchor.getHref(frame) catch |err| {
                 log.err(.app, "resolve href failed", .{ .err = err });

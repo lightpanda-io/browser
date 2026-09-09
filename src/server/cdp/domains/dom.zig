@@ -696,7 +696,7 @@ fn focus(cmd: *CDP.Command) !void {
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
-    if (element.isFocusable(frame, .scan) == false) {
+    if (element.isFocusable(frame) == false) {
         return cmd.sendError(-32000, "Element is not focusable", .{});
     }
     try element.focus(frame);

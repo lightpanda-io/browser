@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
-const StyleManager = @import("../StyleManager.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
@@ -1011,11 +1010,29 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     return gop.value_ptr.*;
 }
 
-pub fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+pub fn existingStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     if (!self._flags.has_inline_style) {
         return null;
     }
     return self.ownerFrame(frame)._element_styles.get(self);
+}
+
+/// The inline style object, parsed from the style attribute on first use;
+/// null when the element has neither.
+pub fn inlineStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+    if (!self._flags.has_inline_style) {
+        return null;
+    }
+    if (self.existingStyle(frame)) |style| {
+        return style;
+    }
+    if (self.getAttributeInterned("style") == null) {
+        return null;
+    }
+    return self.getOrCreateStyle(frame) catch |err| {
+        log.err(.browser, "inline style parse", .{ .err = err });
+        return null;
+    };
 }
 
 // Marks the element as possibly having inline style once a `style` attribute
@@ -1178,14 +1195,14 @@ pub fn focusTabIndex(self: *Element) ?i32 {
 }
 
 // A focusable area that can take focus right now: connected and being rendered.
-pub fn isFocusable(self: *Element, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
+pub fn isFocusable(self: *Element, frame: *Frame) bool {
     if (self.focusTabIndex() == null) {
         return false;
     }
     if (self.asNode().isConnected() == false) {
         return false;
     }
-    return self.isVisible(frame, access);
+    return self.isVisible(frame);
 }
 
 pub fn focus(self: *Element, frame: *Frame) !void {
@@ -1196,7 +1213,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
 
     // Per HTML spec §6.4.4, an element must be "being rendered" (not
     // display:none on self or any ancestor) to be focusable.
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return;
     }
 
@@ -1387,12 +1404,12 @@ pub fn parentElement(self: *Element) ?*Element {
 // Style checks go through the StyleManager of the element's own frame, not
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
-pub fn hasPointerEventsNone(self: *Element, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, access);
+pub fn hasPointerEventsNone(self: *Element, frame: *Frame) bool {
+    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self);
 }
 
-pub fn isVisible(self: *Element, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{}, access);
+pub fn isVisible(self: *Element, frame: *Frame) bool {
+    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1406,7 +1423,7 @@ pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Fram
     return !self.ownerFrame(frame)._style_manager.isHidden(self, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
-    }, .materialize);
+    });
 }
 
 pub const Axis = enum {
@@ -1421,7 +1438,7 @@ pub const Axis = enum {
 };
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
-    if (self.getStyle(frame)) |style| {
+    if (self.inlineStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
         if (CSS.parseDimensionViewport(decl.getPropertyValue(@tagName(axis), frame), frame)) |v| {
             return .{ .value = v, .explicit = true };
@@ -1460,7 +1477,7 @@ pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
 }
 
 fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
@@ -1508,7 +1525,7 @@ pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
 // getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
 // only materialized at the JS boundary.
 pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return .{};
     }
     return self.boundingClientRectValuesForVisible(frame);
@@ -1525,7 +1542,7 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return &.{};
     }
     const rects = try frame.local_arena.alloc(*DOMRect, 1);
@@ -1577,7 +1594,7 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
 
@@ -1594,7 +1611,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
 
@@ -1617,7 +1634,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // The dummy layout engine has no line-breaking, and an element only overflows
 // horizontally when its children don't wrap (white-space:nowrap, a flex row, an
 // inline-block strip), so the single-row assumption covers the case that
-// matters. We can't detect the layout mode to do better: getStyle() sees only
+// matters. We can't detect the layout mode to do better: existingStyle() sees only
 // the inline `style=` attribute, and the computed cascade resolves stylesheet
 // rules for `display:none` and `visibility` alone.
 //
@@ -1644,7 +1661,7 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         if (node.is(Element)) |el| {
-            if (!style_manager.hasDisplayNone(el, .materialize)) {
+            if (!style_manager.hasDisplayNone(el)) {
                 total += el.getElementAxis(frame, axis).value;
             }
         }
@@ -1656,35 +1673,35 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
 // Unlike clientHeight, the root's offsetHeight is its box (the document
 // extent), so it stays on the synthetic root default.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.boxAxis(frame, .height);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.boxAxis(frame, .width);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
-    if (!self.isVisible(frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.horizontalPosition(frame);
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
-    if (!self.asNode().isConnected() or !self.isVisible(frame, .materialize)) {
+    if (!self.asNode().isConnected() or !self.isVisible(frame)) {
         return null;
     }
 
@@ -1725,7 +1742,7 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
 }
 
 fn positionStyle(self: *Element, frame: *Frame) []const u8 {
-    const style = self.getStyle(frame) orelse return "";
+    const style = self.inlineStyle(frame) orelse return "";
     return style.asCSSStyleDeclaration().getPropertyValue("position", frame);
 }
 
@@ -1809,13 +1826,13 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var current = self.asNode();
     const style_manager = &self.ownerFrame(frame)._style_manager;
 
-    if (self.getStyle(frame)) |style| {
+    if (self.inlineStyle(frame)) |style| {
         x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
     }
 
     while (current.parentNode()) |parent| {
         if (parent.is(Element)) |el| {
-            if (el.getStyle(frame)) |style| {
+            if (el.inlineStyle(frame)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
             }
         }
@@ -1823,7 +1840,7 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         while (sibling) |s| : (sibling = s.nextSibling()) {
             if (s == current) break;
             if (s.is(Element)) |el| {
-                if (!style_manager.hasDisplayNone(el, .materialize)) {
+                if (!style_manager.hasDisplayNone(el)) {
                     x += el.getElementAxis(frame, .width).value;
                 }
             }

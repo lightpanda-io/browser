@@ -426,7 +426,7 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const 
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
     }
 
-    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
+    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el)) {
         return true;
     }
 
