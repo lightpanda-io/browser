@@ -317,7 +317,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
-    testing.expectLog(&.{ .http, .http });
+    testing.expectLog(&.{.http});
     try testing.htmlRunner("net/fetch.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
 }
