@@ -662,3 +662,66 @@
     shown.remove();
   }
 </script>
+
+<style id="style-insert-rule-layers">
+  @layer base {
+    .layered-hide { display: none; }
+  }
+</style>
+<script id="insert_rule_fast_path_matches_rebuild">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const first = document.createElement("style");
+    document.head.appendChild(first);
+    const last = document.createElement("style");
+    document.head.appendChild(last);
+
+    // Appends to the last sheet
+    el.className = "ins-a";
+    last.sheet.insertRule(".ins-a { display: none }", last.sheet.cssRules.length);
+    testing.expectEqual(false, el.checkVisibility());
+    last.sheet.insertRule(".ins-a { display: block }", last.sheet.cssRules.length);
+    testing.expectEqual(true, el.checkVisibility());
+    last.sheet.insertRule("div.ins-a { display: none }", last.sheet.cssRules.length);
+    testing.expectEqual(false, el.checkVisibility());
+
+    // An append to an earlier sheet and an insert at index 0 rebuild, and
+    // still lose to the later rule at equal specificity
+    first.sheet.insertRule("div.ins-a { display: block }", first.sheet.cssRules.length);
+    testing.expectEqual(false, el.checkVisibility());
+    last.sheet.insertRule("div.ins-a { display: inline }", 0);
+    testing.expectEqual(false, el.checkVisibility());
+
+    // An unlayered append outranks a layered rule from an earlier sheet
+    el.className = "layered-hide";
+    testing.expectEqual(false, el.checkVisibility());
+    last.sheet.insertRule(".layered-hide { display: block }", last.sheet.cssRules.length);
+    testing.expectEqual(true, el.checkVisibility());
+
+    // Deleting rebuilds
+    last.sheet.deleteRule(last.sheet.cssRules.length - 1);
+    testing.expectEqual(false, el.checkVisibility());
+
+    first.remove();
+    last.remove();
+    el.remove();
+  }
+</script>
+
+<style id="style-important-text">
+  .imp-text { display: none !important; display: block; }
+</style>
+<script id="important_survives_cssrules_materialization">
+  {
+    const el = document.createElement("div");
+    el.className = "imp-text";
+    document.body.appendChild(el);
+    testing.expectEqual(false, el.checkVisibility());
+    // Reading cssRules re-parses the text into rule objects; same cascade.
+    const sheet = document.getElementById("style-important-text").sheet;
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual(false, el.checkVisibility());
+    el.remove();
+  }
+</script>

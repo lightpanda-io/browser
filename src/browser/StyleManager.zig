@@ -30,6 +30,7 @@ const Selector = @import("webapi/selector/Selector.zig");
 const SelectorParser = @import("webapi/selector/Parser.zig");
 const SelectorList = @import("webapi/selector/List.zig");
 
+const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
@@ -84,6 +85,10 @@ next_doc_order: u32 = 1,
 // When true, rules need to be rebuilt
 dirty: bool = false,
 
+// The sheet that emitted the highest document order. A rule appended to it,
+// or to a later sheet, stays last in cascade order.
+last_rule_sheet: ?*CSSStyleSheet = null,
+
 pub fn init(frame: *Frame) !StyleManager {
     return .{
         .frame = frame,
@@ -105,7 +110,7 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
     if (sheet._css_rules) |css_rules| {
         for (css_rules._rules.items) |rule| {
             switch (rule._type) {
-                .style => |sr| try self.addRule(build_arena, sr),
+                .style => |sr| _ = try self.addRule(sr),
                 // Re-parse the stored source so an `@media` rule inserted via
                 // `insertRule` / `replaceSync` participates in the cascade
                 // when its query matches the viewport.
@@ -123,7 +128,7 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
-                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, NO_LAYER),
+                .style => |s| try self.addRawRule(s.selector, s.block, NO_LAYER),
                 .at_rule => |a| {
                     // Only `@media` and `@layer` participate in the cascade
                     // here. Other at-rules (`@keyframes`, `@supports`,
@@ -223,7 +228,7 @@ fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
-            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, layer),
+            .style => |s| try self.addRawRule(s.selector, s.block, layer),
             .at_rule => |nested| {
                 if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
                     try self.applyMediaAtRule(build_arena, nested.text, depth, layer);
@@ -450,59 +455,31 @@ fn stampRuleList(self: *StyleManager, rules: *RuleList) void {
     for (rules.items(.priority)) |*priority| {
         const doc_order: u32 = @as(u22, @truncate(priority.*));
         const layer = rule_layers[doc_order - 1];
-        const rank = if (layer == NO_LAYER) UNLAYERED_RANK else layers[layer].rank;
-        priority.* |= @as(u64, rank) << RANK_SHIFT;
+        if (layer == NO_LAYER) {
+            continue;
+        }
+        priority.* |= @as(u64, layers[layer].rank) << RANK_SHIFT;
     }
 }
 
-fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
+fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
     if (selector_text.len == 0) return;
 
-    var props = VisibilityProperties{};
-    var it = CssParser.parseDeclarationsList(block_text);
-    while (it.next()) |decl| {
-        props.apply(decl.name, decl.value);
-    }
-
+    const props = foldVisibilityDeclarations(block_text);
     if (!props.isRelevant()) return;
 
     const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
     for (selectors) |selector| {
-        const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
-        const bucket_key = getBucketKey(rightmost) orelse continue;
-        const rule = VisibilityRule{
-            .props = props,
-            .selector = selector,
-            .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
-        };
-        self.next_doc_order += 1;
-        try self.rule_layers.append(build_arena, layer);
-
-        switch (bucket_key) {
-            .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .other => {
-                try self.other_rules.append(self.arena.allocator(), rule);
-            },
-        }
+        try self.addVisibilityRule(selector, props, layer);
     }
 }
 
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
+    self.cascadeChanged();
+}
+
+fn cascadeChanged(self: *StyleManager) void {
     self.frame.styleChanged();
     Frame.observers.scheduleResizeDelivery(self.frame);
 }
@@ -522,7 +499,6 @@ fn rebuildIfDirty(self: *StyleManager) !void {
         self.layers = .empty;
         self.layer_ids = .empty;
         self.next_anon_layer = 0;
-        self.rule_layers = .empty;
         build_arena.release();
     }
 
@@ -540,6 +516,8 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     try self.memo.ensureTotalCapacity(self.arena.allocator(), memo_count);
 
     self.next_doc_order = 1;
+    self.rule_layers = .empty;
+    self.last_rule_sheet = null;
 
     self.id_rules = .empty;
     try self.id_rules.ensureTotalCapacity(self.arena.allocator(), id_rules_count);
@@ -555,10 +533,14 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
+        const before = self.next_doc_order;
         self.parseSheet(build_arena.allocator(), sheet) catch |err| {
             log.err(.browser, "StyleManager parseSheet", .{ .err = err });
             return err;
         };
+        if (self.next_doc_order != before) {
+            self.last_rule_sheet = sheet;
+        }
     }
 
     try self.finalizeLayerRanks(build_arena.allocator());
@@ -809,70 +791,98 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
     return false;
 }
 
-// Extracts visibility-relevant rules from a CSS rule.
-// Creates one VisibilityRule per selector (not per selector list) so each has correct specificity.
-// Buckets rules by their rightmost selector part for fast lookup.
-fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRule) !void {
+/// Buckets a CSSOM style rule; returns whether it set any tracked property.
+fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     const selector_text = style_rule._selector_text;
     if (selector_text.len == 0) {
-        return;
+        return false;
     }
-
-    // Check if the rule has visibility-relevant properties
-    const style = style_rule._style orelse return;
+    const style = style_rule._style orelse return false;
     const props = extractVisibilityProperties(style);
     if (!props.isRelevant()) {
-        return;
+        return false;
     }
+    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return false;
 
-    // Parse the selector list
-    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
-    if (selectors.len == 0) {
-        return;
-    }
-
-    // Create one rule per selector - each has its own specificity
-    // e.g., "#id, .class { display: none }" becomes two rules with different specificities
+    const before = self.next_doc_order;
     for (selectors) |selector| {
-        // Get the rightmost compound (last segment, or first if no segments)
-        const rightmost = if (selector.segments.len > 0)
-            selector.segments[selector.segments.len - 1].compound
-        else
-            selector.first;
+        try self.addVisibilityRule(selector, props, NO_LAYER);
+    }
+    return self.next_doc_order != before;
+}
 
-        // Find the bucketing key from rightmost compound
-        const bucket_key = getBucketKey(rightmost) orelse continue; // skip if dynamic pseudo-class
+/// A style rule appended at or after the sheet that emitted the last rule is
+/// last in cascade order, so it joins the buckets directly. Anything else
+/// takes the rebuild path.
+pub fn ruleInserted(self: *StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) void {
+    if (self.dirty) {
+        // The pending rebuild reads the sheet's rules and picks it up.
+        return;
+    }
+    const style_rule = switch (rule._type) {
+        .style => |s| s,
+        else => return self.sheetModified(),
+    };
+    if (!self.appendable(sheet, rule)) {
+        return self.sheetModified();
+    }
+    const added = self.addRule(style_rule) catch return self.sheetModified();
+    if (!added) {
+        // Nothing tracked changed, so every memoized answer still holds.
+        return;
+    }
+    self.last_rule_sheet = sheet;
+    self.cascadeChanged();
+}
 
-        const rule = VisibilityRule{
-            .props = props,
-            .selector = selector,
-            .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
-        };
-        self.next_doc_order += 1;
-        try self.rule_layers.append(build_arena, NO_LAYER);
-
-        // Add to appropriate bucket
-        switch (bucket_key) {
-            .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .other => {
-                try self.other_rules.append(self.arena.allocator(), rule);
-            },
+fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) bool {
+    const rules = sheet._css_rules orelse return false;
+    if (rules._rules.getLastOrNull() != rule) {
+        return false;
+    }
+    const sheets = self.frame.document._style_sheets orelse return false;
+    var past_last = self.last_rule_sheet == null;
+    for (sheets._sheets.items) |s| {
+        if (s == self.last_rule_sheet) {
+            past_last = true;
+        }
+        if (s == sheet) {
+            return past_last;
         }
     }
+    return false;
+}
+
+/// A rule outside any layer carries UNLAYERED_RANK from the start;
+/// finalizeLayerRanks stamps the layered ones once every layer is known.
+fn addVisibilityRule(self: *StyleManager, selector: Selector.Selector, props: VisibilityProperties, layer: u16) !void {
+    const key = getBucketKey(selector.rightmost()) orelse return;
+    try self.rule_layers.append(self.arena.allocator(), layer);
+    try self.bucket(key, .{
+        .props = props,
+        .selector = selector,
+        .priority = self.rulePriority(selector, layer),
+    });
+}
+
+fn rulePriority(self: *StyleManager, selector: Selector.Selector, layer: u16) u64 {
+    const rank: u64 = if (layer == NO_LAYER) UNLAYERED_RANK else 0;
+    const priority = (rank << RANK_SHIFT) |
+        (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) |
+        @min(self.next_doc_order, MAX_DOC_ORDER);
+    self.next_doc_order += 1;
+    return priority;
+}
+
+fn bucket(self: *StyleManager, key: BucketKey, rule: VisibilityRule) !void {
+    const allocator = self.arena.allocator();
+    const list: *RuleList = switch (key) {
+        .id => |id| (try self.id_rules.getOrPutValue(allocator, id, .empty)).value_ptr,
+        .class => |class| (try self.class_rules.getOrPutValue(allocator, class, .empty)).value_ptr,
+        .tag => |tag| (try self.tag_rules.getOrPutValue(allocator, tag, .empty)).value_ptr,
+        .other => &self.other_rules,
+    };
+    try list.append(allocator, rule);
 }
 
 const BucketKey = union(enum) {
@@ -1042,10 +1052,9 @@ const VisibilityRule = struct {
     selector: Selector.Selector, // Single selector, not a list
     props: VisibilityProperties,
 
-    // Packed priority: layer_rank:12 | specificity:30 | doc_order:22.
-    // The rank bits are 0 until finalizeLayerRanks stamps them (the rank
-    // isn't known until all sheets are parsed); the rule's layer lives in
-    // the build-only rule_layers side array, indexed by doc_order - 1.
+    // Packed priority: layer_rank:12 | specificity:30 | doc_order:22. A layered
+    // rule's rank bits stay 0 until finalizeLayerRanks knows every layer and
+    // stamps them from rule_layers[doc_order - 1].
     priority: u64,
 };
 
@@ -1118,7 +1127,7 @@ fn inlineProps(el: *Element, comptime access: InlineAccess, frame: *Frame) Visib
     // text instead of parsing it into the page arena.
     if (access == .scan) {
         if (el.getAttributeInterned("style")) |attr| {
-            return scanInlineProps(attr);
+            return foldVisibilityDeclarations(attr);
         }
     }
     return .{};
@@ -1147,7 +1156,7 @@ fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
 // materialized object was built from: a normal declaration never overrides an
 // earlier !important one, and an empty value removes the property.
-fn scanInlineProps(attr: []const u8) VisibilityProperties {
+fn foldVisibilityDeclarations(attr: []const u8) VisibilityProperties {
     const Slot = struct {
         value: ?[]const u8 = null,
         important: bool = false,
@@ -1511,4 +1520,48 @@ test "StyleManager: memo: reuse and invalidation" {
     sm.sheetModified();
     try testing.expectEqual(false, sm.isHidden(p, null, .{}, .scan));
     try testing.expectEqual(2, sm.memo.count());
+}
+
+test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const doc = frame.document;
+    const html = (try doc.createElement("html", null, frame)).asNode();
+    _ = try doc.asNode().appendChild(html, frame);
+    const body = (try doc.createElement("body", null, frame)).asNode();
+    _ = try html.appendChild(body, frame);
+    // No whitespace between the elements: they must be adjacent siblings
+    try Frame.parse.htmlAsChildren(frame, body, "<style>.a { display: none }</style><div class=\"a\"></div><div class=\"b\"></div><div class=\"c\"></div>");
+    const style_el = body.firstChild().?.as(Element).as(Element.Html.Style);
+    const b = style_el.asNode().nextSibling().?.nextSibling().?.as(Element);
+    const c = b.asNode().nextSibling().?.as(Element);
+    const sheet = (try style_el.getSheet(frame)) orelse return error.NoSheet;
+
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.dirty);
+
+    // Appended to the last sheet: no rebuild, but the memo is stale
+    _ = try sheet.insertRule(".b { display: none }", 1, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expectEqual(true, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(c, null, .{}, .scan));
+
+    // A later append wins over the earlier one at equal specificity
+    _ = try sheet.insertRule(".b { display: block }", 2, frame);
+    try testing.expectEqual(false, sm.dirty);
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+
+    // Inserting in the middle rebuilds; the cascade must agree either way
+    _ = try sheet.insertRule(".c { display: none }", 0, frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(true, sm.isHidden(c, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.dirty);
+
+    // At-rules always rebuild
+    _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
+    try testing.expectEqual(true, sm.dirty);
+    try testing.expectEqual(false, sm.isHidden(c, null, .{}, .scan));
 }
