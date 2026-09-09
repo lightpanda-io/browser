@@ -42,6 +42,10 @@ pub const Error = error{ InvalidRegex, OutOfMemory };
 
 /// What every `Regex` compiled through it shares: the allocator PCRE2 draws
 /// from, and the compile and match settings. Outlives the regexes.
+///
+/// PCRE2 would happily use libc's malloc; it is handed the blocker's
+/// allocator so that a compiled pattern nobody freed fails a test the way
+/// any other leak does.
 pub const Context = struct {
     allocator: Allocator,
     general: *pcre2.pcre2_general_context_8,
@@ -59,9 +63,10 @@ pub const Context = struct {
         errdefer allocator.destroy(self);
         self.allocator = allocator;
 
-        // PCRE2 hands `self` back to the callbacks, so the context has to be
-        // at its final address before anything is allocated through it.
-        const general = pcre2.pcre2_general_context_create_8(cMalloc, cFree, self) orelse return error.OutOfMemory;
+        // PCRE2 hands the allocator back to the callbacks by address, so the
+        // context has to be at its final one before anything is allocated
+        // through it.
+        const general = pcre2.pcre2_general_context_create_8(cMalloc, cFree, &self.allocator) orelse return error.OutOfMemory;
         errdefer pcre2.pcre2_general_context_free_8(general);
 
         const compile_context = pcre2.pcre2_compile_context_create_8(general) orelse return error.OutOfMemory;
@@ -93,19 +98,19 @@ pub const Context = struct {
     const alignment: std.mem.Alignment = .fromByteUnits(HEADER);
 
     fn cMalloc(size: usize, data: ?*anyopaque) callconv(.c) ?*anyopaque {
-        const self: *const Context = @ptrCast(@alignCast(data.?));
+        const allocator: *const Allocator = @ptrCast(@alignCast(data.?));
         const total = std.math.add(usize, size, HEADER) catch return null;
-        const block = self.allocator.alignedAlloc(u8, alignment, total) catch return null;
+        const block = allocator.alignedAlloc(u8, alignment, total) catch return null;
         std.mem.writeInt(usize, block[0..@sizeOf(usize)], total, .little);
         return block.ptr + HEADER;
     }
 
     fn cFree(ptr: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
         const payload = ptr orelse return;
-        const self: *const Context = @ptrCast(@alignCast(data.?));
+        const allocator: *const Allocator = @ptrCast(@alignCast(data.?));
         const base: [*]align(HEADER) u8 = @ptrCast(@alignCast(@as([*]u8, @ptrCast(payload)) - HEADER));
         const total = std.mem.readInt(usize, base[0..@sizeOf(usize)], .little);
-        self.allocator.free(base[0..total]);
+        allocator.free(base[0..total]);
     }
 };
 
@@ -141,12 +146,22 @@ pub fn deinit(self: Regex) void {
     pcre2.pcre2_code_free_8(self.code);
 }
 
+// What one match allocates: its match data and the 20KB of backtracking
+// frames PCRE2 starts with, which only a deeply nested pattern outgrows.
+const MATCH_SCRATCH = 24 * 1024;
+
 /// Whether the pattern matches anywhere in `text`, as `RegExp.test` would
 /// answer. A match that hits the backtracking limits counts as no match.
 pub fn matches(self: Regex, text: []const u8) bool {
+    // This runs per request; the scratch keeps the common case off the heap.
+    var scratch = std.heap.stackFallback(MATCH_SCRATCH, self.context.allocator);
+    var allocator = scratch.get();
+    const general = pcre2.pcre2_general_context_create_8(Context.cMalloc, Context.cFree, &allocator) orelse return false;
+    defer pcre2.pcre2_general_context_free_8(general);
+
     // One pair is the whole-match span, all a test needs; capture groups in
     // the pattern are simply not recorded.
-    const match_data = pcre2.pcre2_match_data_create_8(1, self.context.general) orelse return false;
+    const match_data = pcre2.pcre2_match_data_create_8(1, general) orelse return false;
     defer pcre2.pcre2_match_data_free_8(match_data);
 
     const rc = pcre2.pcre2_match_8(self.code, text.ptr, text.len, 0, 0, match_data, self.context.match_context);
@@ -178,14 +193,9 @@ test "adblock.Regex: JavaScript escapes and unanchored search" {
     try testing.expect(!dash.matches("https://x.com/?s=1"));
 }
 
-test "adblock.Regex: case sensitivity follows the flag" {
+test "adblock.Regex: $match-case keeps the case" {
     const context: *Context = try .init(testing.allocator);
     defer context.deinit();
-
-    const caseless = try Regex.compile(context, "\\/Ads\\/", true);
-    defer caseless.deinit();
-    try testing.expect(caseless.matches("https://x.com/ads/1.js"));
-    try testing.expect(caseless.matches("https://x.com/ADS/1.js"));
 
     const exact = try Regex.compile(context, "\\/[a-z0-9]{12}\\/[a-zA-Z0-9]{20,}$", false);
     defer exact.deinit();

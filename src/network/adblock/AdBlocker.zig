@@ -50,7 +50,7 @@ filters: std.ArrayList(NetworkFilter),
 badfilters: std.AutoHashMapUnmanaged(u64, void),
 /// Every regex compiled for a filter, whether or not `build` kept the
 /// filter; they are freed here, not through `filters`.
-regexes: std.ArrayList(Regex),
+regexes: std.ArrayList(*const Regex),
 /// What the regexes are compiled and run with; PCRE2 allocates through it.
 regex_context: *Regex.Context,
 built: bool,
@@ -225,14 +225,16 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
 
         if (filter.kind == .regex) {
             const body = filter.pattern[1 .. filter.pattern.len - 1];
-            const regex = Regex.compile(self.regex_context, body, !filter.match_case) catch |err| switch (err) {
+            const compiled = Regex.compile(self.regex_context, body, !filter.match_case) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidRegex => {
                     self.rules_skipped += 1;
                     continue;
                 },
             };
-            errdefer regex.deinit();
+            errdefer compiled.deinit();
+            const regex = try arena.create(Regex);
+            regex.* = compiled;
             try self.regexes.append(self.allocator, regex);
             filter.regex = regex;
         }
@@ -467,12 +469,8 @@ fn expectVerdict(
     source: []const u8,
     kind: ResourceTypes,
 ) !void {
-    // `match` takes the URL both raw and lowercased, as the real caller hands
-    // it; patterns are lowercased too, so a rule spelled "/embed/C-iDzdvIg1Y"
-    // still lands.
     var buf: [512]u8 = undefined;
-    const lowered = std.ascii.lowerString(buf[0..url.len], url);
-    const request: Request = .init(url, lowered, source, kind);
+    const request: Request = Request.init(url, &buf, source, kind).?;
     try testing.expectEqual(expected, blocker.match(&request));
 }
 
@@ -608,7 +606,8 @@ test "adblock.AdBlocker: tokens past the request buffer still match" {
     // 140 tokens of query noise push the filter's token ("utm", its rarest)
     // past what the request holds; the engine walks the rest of the URL.
     const noise = "https://example.com/?" ++ "a=1&" ** 70;
-    const overflowing: Request = .init(noise ++ "utm_tracker=1", noise ++ "utm_tracker=1", "a.com", script);
+    var buf: [512]u8 = undefined;
+    const overflowing: Request = Request.init(noise ++ "utm_tracker=1", &buf, "a.com", script).?;
     try testing.expect(overflowing.tail.len != 0);
     try testing.expectEqual(.blocked, blocker.match(&overflowing));
     // A token past the buffer finds its bucket, but the pattern does not fit.

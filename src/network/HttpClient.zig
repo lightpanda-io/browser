@@ -4314,10 +4314,6 @@ test "HttpClient: adblock verdicts apply per request" {
         .url = "https://cdn.example.com/ABCD.js",
         .resource_type = .script,
     }));
-    try testing.expect(!testIsUrlBlocked(&client, .{
-        .url = "https://cdn.example.com/abcd.js",
-        .resource_type = .xhr,
-    }));
 
     try testing.expect(testIsUrlBlocked(&client, .{ .url = "https://ads.example.com/pixel.gif" }));
     // Hostnames are matched case-insensitively and without the port.

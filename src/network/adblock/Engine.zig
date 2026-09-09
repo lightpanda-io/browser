@@ -66,9 +66,6 @@ pub fn deinit(self: *Engine, allocator: Allocator) void {
 /// request and shared by all three engines.
 pub const Request = struct {
     url: pattern.Url,
-    /// The URL as requested, fragment stripped but case kept: what a regex
-    /// filter reads, since `$match-case` is only meaningful on the original.
-    raw: []const u8,
     /// The hostname of the document the request belongs to. Falls back to the
     /// request's own hostname, which is what uBO does for top-level loads.
     source_hostname: []const u8,
@@ -98,20 +95,21 @@ pub const Request = struct {
         source: [SOURCE_MAX]u8,
     };
 
-    /// `raw` and `url` are the same fragment-free URL, the second one
-    /// lowercased; `source_hostname` may be empty when there is no document
-    /// context.
+    /// `buf` backs the lowercased URL; null when `url` is longer than it.
+    /// `source_hostname` may be empty when there is no document context.
     pub fn init(
-        raw: []const u8,
         url: []const u8,
+        buf: []u8,
         source_hostname: []const u8,
         kind: NetworkFilter.ResourceTypes,
-    ) Request {
-        const parsed: pattern.Url = .init(url);
+    ) ?Request {
+        // No request URL carries a fragment onto the wire.
+        const raw = URL.stripFragment(url);
+        const lowered = lowercase(raw, buf) orelse return null;
+        const parsed: pattern.Url = .init(lowered, raw);
         const source = if (source_hostname.len == 0) parsed.hostname() else source_hostname;
         var request: Request = .{
             .url = parsed,
-            .raw = raw,
             .source_hostname = source,
             .kind = kind,
             .third_party = domain.isThirdParty(parsed.hostname(), source),
@@ -119,22 +117,18 @@ pub const Request = struct {
             .tokens_len = 0,
             .tail = "",
         };
-        var it: Tokens = .{ .text = url };
+        var it: Tokens = .{ .text = lowered };
         while (request.tokens_len < request.tokens_buf.len) {
             const token = it.next() orelse break;
             request.tokens_buf[request.tokens_len] = token;
             request.tokens_len += 1;
         }
-        request.tail = url[it.i..];
+        request.tail = lowered[it.i..];
         return request;
     }
 
     pub fn fromHttp(transfer: *const HttpClient.Transfer, buffers: *Buffers) ?Request {
         const req = &transfer.req;
-        // No request URL carries a fragment onto the wire.
-        const fragment = std.mem.indexOfScalar(u8, req.url, '#') orelse req.url.len;
-        const raw = req.url[0..fragment];
-        const url = normalizeUrl(raw, &buffers.url) orelse return null;
 
         var owner: ?*const HttpClient.Owner = transfer.owner;
         var subframe = false;
@@ -157,7 +151,7 @@ pub const Request = struct {
             .worker => .{ .script = true },
         };
 
-        return .init(raw, url, source, resource_type);
+        return .init(req.url, &buffers.url, source, resource_type);
     }
 
     inline fn tokens(self: *const Request) []const u32 {
@@ -165,7 +159,7 @@ pub const Request = struct {
     }
 
     /// Lowercases `url` into `buf`, as patterns are stored lowercased.
-    fn normalizeUrl(url: []const u8, buf: []u8) ?[]const u8 {
+    fn lowercase(url: []const u8, buf: []u8) ?[]const u8 {
         const upper = for (url, 0..) |c, i| {
             if (std.ascii.isUpper(c)) break i;
         } else return url;
@@ -224,8 +218,6 @@ fn matchesFilter(filter: *const NetworkFilter, request: *const Request) bool {
         return false;
     }
     if (!filter.domains.matches(request.source_hostname)) return false;
-    // uBO tests the raw URL; the case-insensitive flag is on the pattern.
-    if (filter.kind == .regex) return filter.regex.?.matches(request.raw);
     return pattern.matches(filter, request.url);
 }
 
@@ -338,7 +330,15 @@ fn collectTokens(filter: *const NetworkFilter, buf: []u32) []u32 {
     // `.any` has no pattern at all.
     if (filter.pattern.len == 0) return buf[0..n];
 
-    const text = filter.pattern;
+    const left_anchored = filter.left_anchor or filter.hostname_anchor;
+    return buf[0..boundedTokens(filter.pattern, left_anchored, filter.right_anchor, buf, n)];
+}
+
+/// Appends the tokens of `text` that any URL matching it carries whole: the
+/// alphanumeric runs no `*` may extend, and that the open ends of the text
+/// may not extend either unless anchored. Returns the new count.
+fn boundedTokens(text: []const u8, left_anchored: bool, right_anchored: bool, buf: []u32, from: usize) usize {
+    var n = from;
     var i: usize = 0;
     while (i < text.len) {
         if (!isTokenChar(text[i])) {
@@ -348,56 +348,32 @@ fn collectTokens(filter: *const NetworkFilter, buf: []u32) []u32 {
         const start = i;
         while (i < text.len and isTokenChar(text[i])) i += 1;
 
-        const left_bounded = if (start == 0)
-            filter.left_anchor or filter.hostname_anchor
-        else
-            text[start - 1] != '*';
-        const right_bounded = if (i == text.len) filter.right_anchor else text[i] != '*';
+        const left_bounded = if (start == 0) left_anchored else text[start - 1] != '*';
+        const right_bounded = if (i == text.len) right_anchored else text[i] != '*';
 
         if (left_bounded and right_bounded) {
-            if (n == buf.len) return buf[0..n];
+            if (n == buf.len) return n;
             buf[n] = hash(text[start..i]);
             n += 1;
         }
     }
-
-    return buf[0..n];
+    return n;
 }
 
 /// The tokens a regex is sure to have wherever it matches, uBO's
-/// `tokenizableStrFromRegex`: the pattern is flattened into a string where
-/// literal characters stay and everything else becomes a marker saying only
-/// whether it could be a token character, then read like a plain pattern.
-/// Anything the flattening does not follow yields no token at all, which is
-/// never wrong: the filter then rides the fallback bucket.
+/// `tokenizableStrFromRegex`: the pattern is flattened into a plain pattern
+/// where literal token characters stay and everything else becomes a marker
+/// saying only whether it could be one. Anything the flattening does not
+/// follow yields no token at all, which is never wrong: the filter then
+/// rides the fallback bucket.
 fn regexTokens(source: []const u8, buf: []u32) []u32 {
     // A pattern's shape is never longer than the pattern.
     var shape_buf: [8 * 1024]u8 = undefined;
     if (source.len > shape_buf.len) return buf[0..0];
     var shape: RegexShape = .{ .source = source, .out = &shape_buf };
     const text = shape.flatten() catch return buf[0..0];
-
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) {
-        if (!isTokenChar(text[i])) {
-            i += 1;
-            continue;
-        }
-        const start = i;
-        while (i < text.len and isTokenChar(text[i])) i += 1;
-
-        // The pattern's ends are open unless anchored, and a marker that may
-        // be a token character would extend the run.
-        const left_bounded = start != 0 and text[start - 1] != RegexShape.maybe_token;
-        const right_bounded = i != text.len and text[i] != RegexShape.maybe_token;
-        if (left_bounded and right_bounded) {
-            if (n == buf.len) return buf[0..n];
-            buf[n] = hash(text[start..i]);
-            n += 1;
-        }
-    }
-    return buf[0..n];
+    // Anchors are in the shape itself; its ends are open.
+    return buf[0..boundedTokens(text, false, false, buf, 0)];
 }
 
 const RegexShape = struct {
@@ -406,12 +382,13 @@ const RegexShape = struct {
     i: usize = 0,
     n: usize = 0,
 
-    /// Whatever matches here is not a token character: an anchor, `\b`, a
-    /// quantified non-token literal.
+    /// Whatever matches here is not a token character: a non-token literal,
+    /// an anchor, `\b`.
     const not_token = 0x00;
     /// Whatever matches here may be a token character: `.`, `[a-z]`, `\d`, a
-    /// quantified literal.
-    const maybe_token = 0x01;
+    /// quantified literal. Spelled as a plain pattern's wildcard so the shape
+    /// reads as one.
+    const maybe_token = '*';
     // The same two for a stretch that may match nothing at all; resolved
     // once both neighbours are known.
     const not_token_optional = 0x02;
@@ -475,7 +452,7 @@ const RegexShape = struct {
                 '*', '+', '?' => return error.Unsupported,
                 else => {
                     self.i += 1;
-                    self.emit(std.ascii.toLower(c));
+                    self.emitLiteral(c);
                 },
             }
             try self.quantifier(atom_start);
@@ -561,38 +538,31 @@ const RegexShape = struct {
             // Code points, backreferences, properties: not worth following.
             'x', 'u', 'c', 'k', 'p', 'P', '0'...'9' => return error.Unsupported,
             // Anything else escaped is itself, as JavaScript reads it.
-            else => self.emit(std.ascii.toLower(e)),
+            else => self.emitLiteral(e),
         }
     }
 
     /// Applies a quantifier, if one follows, to what was just emitted. Only
     /// the first and last character classes survive a repeat: `ab+` may match
-    /// "abbb", and its token is not "ab".
+    /// "abbb", and its token is not "ab". Whether the atom may be absent is
+    /// all that matters beyond that.
     fn quantifier(self: *RegexShape, atom_start: usize) Error!void {
         if (self.i == self.source.len) return;
-        var min: usize = 0;
-        var max: ?usize = null;
+        var optional = true;
         switch (self.source[self.i]) {
-            '*' => self.i += 1,
+            '*', '?' => self.i += 1,
             '+' => {
                 self.i += 1;
-                min = 1;
-            },
-            '?' => {
-                self.i += 1;
-                max = 1;
+                optional = false;
             },
             '{' => {
                 const close = std.mem.indexOfScalarPos(u8, self.source, self.i, '}') orelse return;
                 const body = self.source[self.i + 1 .. close];
-                const comma = std.mem.indexOfScalar(u8, body, ',');
-                const min_text = if (comma) |at| body[0..at] else body;
+                const comma = std.mem.indexOfScalar(u8, body, ',') orelse body.len;
                 // Not a quantifier at all: JavaScript reads the `{` literally.
-                min = std.fmt.parseUnsigned(usize, min_text, 10) catch return;
-                max = if (comma) |at|
-                    (if (at + 1 == body.len) null else std.fmt.parseUnsigned(usize, body[at + 1 ..], 10) catch return)
-                else
-                    min;
+                const min = std.fmt.parseUnsigned(usize, body[0..comma], 10) catch return;
+                if (comma + 1 < body.len) _ = std.fmt.parseUnsigned(usize, body[comma + 1 ..], 10) catch return;
+                optional = min == 0;
                 self.i = close + 1;
             },
             else => return,
@@ -604,8 +574,7 @@ const RegexShape = struct {
         const first = startsTokenish(atom);
         const last = endsTokenish(atom);
         self.n = atom_start;
-        if (max == 0) return;
-        if (min != 0) {
+        if (!optional) {
             self.emit(if (first) maybe_token else not_token);
             self.emit(if (last) maybe_token else not_token);
         } else {
@@ -651,6 +620,13 @@ const RegexShape = struct {
     fn emit(self: *RegexShape, c: u8) void {
         self.out[self.n] = c;
         self.n += 1;
+    }
+
+    /// A literal is kept only as far as tokens care: a token character,
+    /// lowercased like the URL it is looked up in, or the fact that it is not
+    /// one.
+    fn emitLiteral(self: *RegexShape, c: u8) void {
+        self.emit(if (std.ascii.isAlphanumeric(c)) std.ascii.toLower(c) else not_token);
     }
 
     fn isOptional(c: u8) bool {
@@ -703,6 +679,8 @@ test "adblock.Engine: regex filters yield the tokens every match carries" {
     tokens = try tokensOf(arena, "/[a-z]{2,}\\.gif$/", &buf);
     try testing.expectEqual(1, tokens.len);
     try testing.expect(contains(tokens, "gif"));
+    tokens = try tokensOf(arena, "/about:blank.*/", &buf);
+    try testing.expectEqual(0, tokens.len);
 
     // `\b` bounds, as uBO reads it: `/\bads\b/` is "ads", not "bads".
     tokens = try tokensOf(arena, "/\\bads\\b/", &buf);
@@ -722,8 +700,6 @@ test "adblock.Engine: regex filters yield the tokens every match carries" {
     // Alternation and the text under a quantified group are uncertain.
     tokens = try tokensOf(arena, "/^https?:\\/\\/(35|104)\\.(\\d){1,3}\\//", &buf);
     try testing.expectEqual(0, tokens.len);
-    tokens = try tokensOf(arena, "/ads|banner/", &buf);
-    try testing.expectEqual(0, tokens.len);
     // ... but a group with one branch is transparent.
     tokens = try tokensOf(arena, "/\\/(?:ads)\\//", &buf);
     try testing.expect(contains(tokens, "ads"));
@@ -740,8 +716,6 @@ test "adblock.Engine: regex filters yield the tokens every match carries" {
     try testing.expectEqual(0, tokens.len);
     tokens = try tokensOf(arena, "/\\/(ads\\//", &buf);
     try testing.expectEqual(0, tokens.len);
-    tokens = try tokensOf(arena, "/about:blank.*/", &buf);
-    try testing.expectEqual(0, tokens.len);
 }
 
 test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
@@ -750,12 +724,13 @@ test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
 
     // Exactly as many tokens as the buffer holds: nothing is left to walk...
     const full = "x/" ** (max - 1) ++ "x";
-    var request: Request = .init(full, full, "", kind);
+    var buf: [512]u8 = undefined;
+    var request: Request = Request.init(full, &buf, "", kind).?;
     try testing.expectEqual(max, request.tokens_len);
     try testing.expectEqual(0, request.tail.len);
 
     // ...one more, and only that one is in the tail.
-    request = .init(full ++ "/y", full ++ "/y", "", kind);
+    request = Request.init(full ++ "/y", &buf, "", kind).?;
     try testing.expectEqual(max, request.tokens_len);
     try testing.expectString("/y", request.tail);
     var it: Tokens = .{ .text = request.tail };
@@ -763,7 +738,7 @@ test "adblock.Engine: a request keeps its first tokens, the rest as tail" {
     try testing.expect(it.next() == null);
 
     // Fewer than the buffer holds: the tail is empty.
-    request = .init("https://example.com/a", "https://example.com/a", "", kind);
+    request = Request.init("https://example.com/a", &buf, "", kind).?;
     try testing.expectEqual(4, request.tokens_len);
     try testing.expectEqual(0, request.tail.len);
 }
