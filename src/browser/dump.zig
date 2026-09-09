@@ -114,6 +114,14 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) erro
     };
 }
 
+pub fn render(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    var o = opts;
+    o.strip = state.strip;
+    o.pruned = state.pruned;
+    if (state.root.is(Node.Document)) |doc| return root(doc, o, writer, frame);
+    return deep(state.root, o, writer, frame);
+}
+
 fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => {
@@ -439,7 +447,8 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const 
 /// level: inside an article, section, main, nav or aside they belong to that
 /// content, which is also how the banner/contentinfo roles are assigned.
 pub fn isShellElement(el: *Node.Element) bool {
-    switch (el.getTag()) {
+    const tag = el.getTag();
+    switch (tag) {
         .nav, .aside, .dialog => return true,
         .header, .footer => return !hasSectioningAncestor(el),
         else => {},
@@ -447,10 +456,22 @@ pub fn isShellElement(el: *Node.Element) bool {
     if (hasRole(el, &.{ "banner", "complementary", "contentinfo", "navigation", "search", "dialog", "alertdialog", "menu", "menubar" })) {
         return true;
     }
-    if (hasShellToken(el.getClassName()) or hasShellToken(el.getId())) {
-        return !hasSectioningAncestor(el);
+    if (canHoldChrome(tag)) {
+        if (hasShellToken(el.getClassName()) or hasShellToken(el.getId())) {
+            return !hasSectioningAncestor(el);
+        }
     }
     return false;
+}
+
+// `td` stays in because table-based layout will do things like
+// <td class=sidebar>, but `tr`, `thead` and `li` because "header" is often used
+// to mean something other than the header of the site
+fn canHoldChrome(tag: Node.Element.Tag) bool {
+    return switch (tag) {
+        .div, .section, .ul, .ol, .form, .table, .td, .p => true,
+        else => false,
+    };
 }
 
 // Words that name page chrome and nothing else. "menu" is left out: it also
@@ -467,8 +488,8 @@ fn hasShellToken(value: ?[]const u8) bool {
     return false;
 }
 fn hasSectioningAncestor(el: *Node.Element) bool {
-    var node = el.asNode().parentNode();
-    while (node) |n| : (node = n.parentNode()) {
+    var node = renderParent(el.asNode());
+    while (node) |n| : (node = renderParent(n)) {
         if (n.is(Node.Element)) |ancestor| {
             switch (ancestor.getTag()) {
                 .article, .aside, .main, .nav, .section => return true,
@@ -480,6 +501,16 @@ fn hasSectioningAncestor(el: *Node.Element) bool {
         }
     }
     return false;
+}
+
+// A shadow tree renders in place of its host, so the host continues the
+// ancestor chain that a shadow root's null parent would otherwise end.
+fn renderParent(node: *Node) ?*Node {
+    if (node.parentNode()) |parent| {
+        return parent;
+    }
+    const shadow = node.is(Node.ShadowRoot) orelse return null;
+    return shadow.getHost().asNode();
 }
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
@@ -686,6 +717,14 @@ test "dump: strip.shell honours landmark roles" {
         \\<div role="navigation">N</div><div role="BANNER search">B</div><section><div role="contentinfo">C</div></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div>
     ,
         \\<div><section></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div></div>
+    );
+}
+
+test "dump: strip.shell's token rule only applies to chrome containers" {
+    try expectShellDump(
+        \\<table><thead><tr class="header"><td>Plan</td></tr></thead><tbody><tr><td>Basic</td><td class="sidebar">Legacy</td></tr></tbody></table><ul><li class="header">Item</li></ul>
+    ,
+        \\<div><table><thead><tr class="header"><td>Plan</td></tr></thead><tbody><tr><td>Basic</td></tr></tbody></table><ul><li class="header">Item</li></ul></div>
     );
 }
 

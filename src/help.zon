@@ -122,7 +122,7 @@
     \\          Allowed values:
     \\              clutter   Heuristic to keep only the main content, in the
     \\                        manner of reader modes. May fallback to `shell`
-    \\                        (which my itself fallback to a full dump).
+    \\                        (which may itself fall back to a full dump).
     \\              css       Includes style and link[rel=stylesheet].
     \\              js        Script and link[as=script, rel=preload].
     \\              invisible Best-effort (e.g. display:none) hidden elements

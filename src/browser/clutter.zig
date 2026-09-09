@@ -126,7 +126,9 @@ const Stats = struct {
     cells: u32 = 0,
     th: u32 = 0,
     tables: u32 = 0,
-    table_head: bool = false,
+    // A <caption>/<col>/<colgroup>/<thead>/<tfoot> descendant: markup only a
+    // real data table carries.
+    table_parts: bool = false,
     has_data_table: bool = false,
 
     // A direct child that keeps a <div> from reading as a paragraph.
@@ -152,7 +154,7 @@ const Stats = struct {
         self.cells += other.cells;
         self.th += other.th;
         self.tables += other.tables;
-        self.table_head = self.table_head or other.table_head;
+        self.table_parts = self.table_parts or other.table_parts;
         self.has_data_table = self.has_data_table or other.has_data_table;
     }
 
@@ -242,7 +244,8 @@ const Pass = struct {
 
         const top = self.topCandidate() orelse return null;
         const candidate = self.refine(top);
-        log.debug(.browser, "clutter candidate", .{ .top = describe(top.asNode()), .score = self.score(top), .refined = describe(candidate.asNode()) });
+        log.debug(.browser, "clutter candidate", .{ .top = describe(top.asNode()), .score = self.score(top) });
+        log.debug(.browser, "clutter refined", .{ .el = describe(candidate.asNode()) });
         const tag = candidate.getTag();
         if (tag == .body or tag == .html) {
             // readability wraps the whole body here; that is no selection.
@@ -293,6 +296,9 @@ const Pass = struct {
                     .code, .pre => inner.in_code = true,
                     .table => inner.in_table = true,
                     .figure => inner.in_figure = true,
+                    // readability's _markDataTables descendants: a header row
+                    // built from <td> is still a header row.
+                    .caption, .col, .colgroup, .tfoot, .thead => st.table_parts = true,
                     else => {},
                 }
 
@@ -448,16 +454,22 @@ const Pass = struct {
         const class = candidate.getClassName() orelse "";
 
         var kept: usize = 0;
-        var it = self.tree.children(parent.asNode(), false);
-        while (it.next()) |child| {
-            if (child.what != .element) {
+        // Raw children, as in pruneBeside: a node RenderTree never yields has
+        // to enter the set too, or only the HTML dump keeps it.
+        var kid = parent.asNode().firstChild();
+        while (kid) |k| : (kid = k.nextSibling()) {
+            const sibling = k.is(Element) orelse {
                 // Loose text between siblings is not part of any of them.
-                self.pruned.put(self.arena, child.node, {}) catch {};
+                self.pruned.put(self.arena, k, {}) catch {};
                 continue;
-            }
-            const sibling = child.node.subtype(Element);
+            };
             if (sibling == candidate) continue;
-            const st = self.stats.get(sibling) orelse continue;
+            // No stats: it never rendered, or the walk already pruned it as
+            // unlikely. Neither is content.
+            const st = self.stats.get(sibling) orelse {
+                self.pruned.put(self.arena, k, {}) catch {};
+                continue;
+            };
 
             var keep = false;
             var bonus: f32 = 0;
@@ -485,19 +497,30 @@ const Pass = struct {
     }
 
     /// Everything beside the path from the dump root down to `selected`:
-    /// each ancestor keeps only the child on the path. Shadow trees render
-    /// in place of their host, so a shadow root's parent is its host.
+    /// each ancestor keeps only the child on the path.
+    ///
+    /// Raw siblings, not rendering ones: the HTML dump walks the DOM and
+    /// leaves out only what this set holds, so a <script> or a [hidden]
+    /// banner beside the path has to be in it to be left out of that dump
+    /// too. The renderers that go through RenderTree never see those.
     fn pruneBeside(self: *Pass, selected: *Node) !void {
         var current = selected;
         while (current != self.root) {
-            const parent = current.parentNode() orelse blk: {
-                const shadow = current.is(Node.ShadowRoot) orelse return;
-                break :blk shadow.getHost().asNode();
-            };
-            var it = self.tree.children(parent, false);
-            while (it.next()) |child| {
-                if (child.node == current) continue;
-                try self.pruned.put(self.arena, child.node, {});
+            if (current.is(Node.ShadowRoot)) |shadow| {
+                // A shadow tree renders in place of its host, and the host's
+                // light children are not beside it: they render through its
+                // slots, inside the selection.
+                current = shadow.getHost().asNode();
+                continue;
+            }
+            const parent = current.parentNode() orelse return;
+            var child = parent.firstChild();
+            while (child) |c| : (child = c.nextSibling()) {
+                if (c == current) continue;
+                // <head> sits beside <body> but holds no content of its own,
+                // and the HTML dump still needs its title and base.
+                if (c.is(Element)) |el| if (el.getTag() == .head) continue;
+                try self.pruned.put(self.arena, c, {});
             }
             current = parent;
         }
@@ -716,7 +739,10 @@ const Pass = struct {
         var it = self.tree.children(node, false);
         while (it.next()) |child| {
             switch (child.what) {
-                .text => |text| n += measureText(text).len,
+                .text => |text| {
+                    if (self.pruned.contains(child.node)) continue;
+                    n += measureText(text).len;
+                },
                 .element => {
                     const el = child.node.subtype(Element);
                     if (self.pruned.contains(child.node)) continue;
@@ -778,7 +804,7 @@ fn isDataTable(el: *Element, st: *const Stats) bool {
         if (std.mem.eql(u8, v, "0")) return false;
     }
     if (el.getAttributeSafe(comptime .wrap("summary")) != null) return true;
-    if (st.th > 0 or st.table_head) return true;
+    if (st.th > 0 or st.table_parts) return true;
     if (st.tables > 0) return false;
     const cols = if (st.rows == 0) st.cells else st.cells / st.rows;
     if (st.rows >= 10 or cols > 4) return true;
@@ -861,6 +887,7 @@ fn hasRole(el: *Element, roles: []const []const u8) bool {
 
 const testing = @import("../testing.zig");
 const markdown = @import("markdown.zig");
+const dump = @import("dump.zig");
 
 const prose = "Sourdough is a bread made by the fermentation of dough using wild lactobacillaceae and yeast, which give it a mildly sour taste. The lactic acid produced by the bacteria gives it a longer shelf life than breads made with baker's yeast. ";
 
@@ -917,6 +944,30 @@ test "clutter: the prune set lives in the caller's allocator" {
     const second = try RenderTree.resolve(arena.allocator(), div.lastElementChild().?.asNode(), .{ .clutter = true }, frame);
     try testing.expectEqual(false, second.strip.clutter);
     try testing.expectEqual(null, second.pruned);
+}
+
+test "clutter: the HTML dump leaves out what the markdown dump does" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), "<script>window.__DATA__ = 1;</script>" ++
+        "<div hidden>Accept our cookies</div>" ++
+        "<div class=\"teasers\"><div><a href=\"/1\">Ten things to know</a></div><div><a href=\"/2\">Trending now</a></div></div>" ++
+        "<div class=\"article\"><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p><p>" ++ prose ++ "</p></div>");
+
+    const state = try RenderTree.resolve(testing.arena_allocator, div.asNode(), .{ .clutter = true }, frame);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
+    try dump.render(state, .{}, &aw.writer, frame);
+    const out = aw.written();
+
+    try testing.expectEqual(true, std.mem.indexOf(u8, out, "wild lactobacillaceae") != null);
+    // Neither node renders, so RenderTree never yields either one; the set
+    // still has to hold them, because the HTML dump walks the DOM itself.
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "__DATA__"));
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Accept our cookies"));
+    try testing.expectEqual(null, std.mem.indexOf(u8, out, "Trending now"));
 }
 
 fn extract(html: []const u8) ![]const u8 {

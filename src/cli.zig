@@ -104,7 +104,7 @@ const string = @import("string.zig");
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
 ///     `error.InvalidArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
-///     (e.g. `--strip-mode js,css`). The literal `"full"` sets every field.
+///     (e.g. `--strip-mode js,css`).
 ///     Unknown names return `error.InvalidArgument`. Requires `default`.
 ///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
@@ -661,32 +661,25 @@ pub fn Builder(comptime commands: anytype) type {
 
                     const str = args.next() orelse return error.MissingArgument;
 
-                    if (std.mem.eql(u8, str, "full")) {
-                        // "full" sets all the fields of packed struct.
-                        const Int = _struct.backing_integer orelse @compileError("packed struct must provide a backing integer");
-                        target.* = @bitCast(@as(Int, std.math.maxInt(Int)));
-                    } else {
-                        // Parse given args.
-                        var it = std.mem.tokenizeScalar(u8, str, ',');
-                        outer: while (it.next()) |part| {
-                            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+                    var it = std.mem.tokenizeScalar(u8, str, ',');
+                    outer: while (it.next()) |part| {
+                        const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
 
-                            inline for (_struct.fields) |f| {
-                                lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
-                                    .option = option.name,
-                                    .field = f.name,
-                                });
+                        inline for (_struct.fields) |f| {
+                            lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
+                                .option = option.name,
+                                .field = f.name,
+                            });
 
-                                if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
-                                    @field(target, f.name) = true;
-                                    continue :outer;
-                                }
+                            if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
+                                @field(target, f.name) = true;
+                                continue :outer;
                             }
-
-                            // Invalid option choice.
-                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
-                            return error.InvalidArgument;
                         }
+
+                        // Invalid option choice.
+                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
+                        return error.InvalidArgument;
                     }
                 },
                 .@"enum" => {

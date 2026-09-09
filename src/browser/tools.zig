@@ -385,6 +385,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. Render markdown for just that element's subtree." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. Render markdown for just that node's subtree. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output; same groups as the html tool's strip. `shell` (page chrome by markup) and `clutter` (keep only the main content, in the manner of reader modes) are the ones that matter for reading; `ui` also drops images.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -401,7 +402,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, dump only that element's outerHTML." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, dump only that node's outerHTML. 0 is treated as omitted." },
                     \\    "maxBytes": { "type": "integer", "description": "Optional soft cap on output size in bytes. Content is truncated at a UTF-8 boundary and a short '[truncated]' marker is appended past the cap." },
-                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" } } },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the output: `js` (script, noscript, script preloads), `css` (style, stylesheet links), `ui` (css plus img, picture, video, audio, svg, canvas, iframe), `invisible` (elements an author rule or inline style sets to display:none), `shell` (nav, aside, dialog, page-level header/footer and the matching landmark roles; skipped when that would drop most of the text), `clutter` (keep only the main content, in the manner of reader modes; includes `shell` and `invisible`, and falls back to `shell` when it finds too little). {\"js\":true,\"css\":true} keeps a page dump small.", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before dumping." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -419,7 +420,7 @@ pub const Tool = enum {
                     \\    "selector": { "type": "string", "description": "Optional CSS selector. When set, render only that element." },
                     \\    "backendNodeId": { "type": "integer", "description": "Optional backend node ID. When set, render only that node. 0 is treated as omitted." },
                     \\    "fullPage": { "type": "boolean", "description": "Render the whole content height instead of one viewport. Defaults to false." },
-                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" } } },
+                    \\    "strip": { "type": "object", "description": "Optional. Omit element groups from the render; same groups as the html tool's strip (`js`, `css`, `ui`, `invisible`, `shell`, `clutter`).", "properties": { "js": { "type": "boolean" }, "css": { "type": "boolean" }, "ui": { "type": "boolean" }, "invisible": { "type": "boolean" }, "shell": { "type": "boolean" }, "clutter": { "type": "boolean" } } },
                     \\    "url": { "type": "string", "description": "Optional URL to navigate to before rendering." },
                     \\    "timeout": { "type": "integer", "description": "Optional timeout in milliseconds. Defaults to 10000." }
                     \\  }
@@ -1306,6 +1307,7 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
         selector: ?[]const u8 = null,
         backendNodeId: ?NodeRegistry.Id = null,
         maxBytes: ?u32 = null,
+        strip: lp.dump.Opts.Strip = .{},
         url: ?[:0]const u8 = null,
         timeout: ?u32 = null,
     };
@@ -1313,9 +1315,10 @@ fn execMarkdown(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeR
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const node = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
+    const state = lp.RenderTree.resolve(arena, node, args.strip, page) catch return ToolError.OutOfMemory;
 
     var aw: std.Io.Writer.Allocating = .init(arena);
-    lp.markdown.dump(.{ .root = node }, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
+    lp.markdown.dump(state, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
     return aw.written();
 }
 
@@ -1339,20 +1342,10 @@ fn execHtml(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const args = try parseArgsOrDefault(HtmlParams, arena, arguments);
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
-    const whole = args.selector == null and args.backendNodeId == null;
-    const target = if (whole) page.document.asNode() else (try resolveTarget(session, registry, args.selector, args.backendNodeId)).node;
+    const target = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, target, args.strip, page) catch return ToolError.OutOfMemory;
-    const opts: lp.dump.Opts = .{
-        .strip = state.strip,
-        .pruned = state.pruned,
-        .max_bytes = args.maxBytes,
-    };
     var aw: std.Io.Writer.Allocating = .init(arena);
-    if (state.root.is(DOMNode.Document)) |document| {
-        lp.dump.root(document, opts, &aw.writer, page) catch return ToolError.InternalError;
-    } else {
-        lp.dump.deep(state.root, opts, &aw.writer, page) catch return ToolError.InternalError;
-    }
+    lp.dump.render(state, .{ .max_bytes = args.maxBytes }, &aw.writer, page) catch return ToolError.InternalError;
     return aw.written();
 }
 

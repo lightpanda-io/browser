@@ -186,19 +186,15 @@ fn dump(cmd: anytype) !void {
     };
 
     const state = try lp.RenderTree.resolve(cmd.arena, target, params.strip, frame);
-    const root = state.root;
 
     switch (params.format) {
         .html, .markdown => {
             var aw: std.Io.Writer.Allocating = .init(cmd.arena);
             defer aw.deinit();
-            const opts: lp.dump.Opts = .{ .strip = state.strip, .pruned = state.pruned, .max_bytes = params.maxBytes };
             if (params.format == .markdown) {
                 try markdown.dump(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
-            } else if (root.is(DOMNode.Document)) |doc| {
-                try lp.dump.root(doc, opts, &aw.writer, frame);
             } else {
-                try lp.dump.deep(root, opts, &aw.writer, frame);
+                try lp.dump.render(state, .{ .max_bytes = params.maxBytes }, &aw.writer, frame);
             }
             return cmd.sendResult(.{ .format = params.format, .content = aw.written() }, .{});
         },

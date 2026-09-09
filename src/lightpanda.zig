@@ -481,15 +481,9 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
     var arena: std.heap.ArenaAllocator = .init(app.allocator);
     defer arena.deinit();
     const state = try RenderTree.resolve(arena.allocator(), try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
-    var dump_opts = opts.dump;
-    dump_opts.strip = state.strip;
-    dump_opts.pruned = state.pruned;
     switch (mode) {
-        .html => if (opts.selector == null)
-            try dump.root(frame.window._document, dump_opts, writer, frame)
-        else
-            try dump.deep(state.root, dump_opts, writer, frame),
-        .markdown => try markdown.dump(state, .{ .max_bytes = dump_opts.max_bytes }, writer, frame),
+        .html => try dump.render(state, opts.dump, writer, frame),
+        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
         .png => {
             _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
         },
