@@ -1808,14 +1808,18 @@ fn processOneMessage(self: *Client, msg: http.Handles.MultiMessage, transfer: *T
     // navigations to it.
     if (transfer.req.throttle) {
         if (self.network.rate_limiter) |*rl| {
-            const status = try msg.conn.getResponseCode();
-            rl.observe(URL.getHostname(transfer.req.url), .{
-                .status = status,
-                .retry_after_ms = getRetryAfterMs(msg.conn, status),
-            }, lp.datetime.milliTimestamp(.boot)) catch |err| {
-                // rate limit is best effort.
-                log.warn(.http, "rate limit observe", .{ .err = err });
-            };
+            // rate limit is best effort: a status we can't read is not worth
+            // failing an otherwise good response over.
+            if (msg.conn.getResponseCode()) |status| {
+                rl.observe(URL.getHostname(transfer.req.url), .{
+                    .status = status,
+                    .retry_after_ms = getRetryAfterMs(msg.conn, status),
+                }, lp.datetime.milliTimestamp(.boot)) catch |err| {
+                    log.warn(.http, "rate limit observe", .{ .err = err });
+                };
+            } else |err| {
+                log.warn(.http, "rate limit status", .{ .err = err });
+            }
         }
     }
 
