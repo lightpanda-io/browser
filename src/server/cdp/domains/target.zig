@@ -221,13 +221,18 @@ fn createTarget(cmd: *CDP.Command) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    if (!std.mem.eql(u8, "about:blank", params.url)) {
-        const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
-        try frame.navigate(
-            encoded_url,
-            .{ .reason = .address_bar, .kind = .{ .push = null } },
-        );
-    }
+    // https://html.spec.whatwg.org/multipage/document-sequences.html,
+    // Create a new browsing context always produces an initial about:blank
+    // Document with its own session history entry
+    const encoded_url: [:0]const u8 = if (std.mem.eql(u8, "about:blank", params.url))
+        "about:blank"
+    else
+        try URL.resolveNavigation(frame.call_arena, params.url, .{});
+
+    try frame.navigate(
+        encoded_url,
+        .{ .reason = .address_bar, .kind = .{ .push = null } },
+    );
 
     try cmd.sendResult(.{
         .targetId = target_id,
