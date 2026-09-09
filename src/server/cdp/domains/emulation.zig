@@ -163,9 +163,9 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     }
 
     const ua = params.userAgent;
-    Config.validateUserAgent(ua) catch |err| switch (err) {
+    const reserved = if (Config.validateUserAgent(ua)) false else |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
-        error.Reserved => {},
+        error.Reserved => true,
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -178,10 +178,9 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
             return cmd.sendError(-32602, "Accept-Language contains CR, LF or NUL", .{});
         }
         try http_client.setAcceptLanguageOverride(accept_language);
-        bc.accept_language_changed = true;
     }
 
-    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+    if (reserved) {
         log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
         return cmd.sendResult(null, .{});
     }
@@ -414,7 +413,6 @@ test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.langua
     try ctx.expectSentResult(null, .{ .id = 1 });
     try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
     try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
-    try testing.expect(bc.accept_language_changed);
 
     // A Mozilla user agent is refused, the language still applies.
     try ctx.processMessage(.{

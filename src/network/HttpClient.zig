@@ -155,7 +155,7 @@ user_agent_override: ?[:0]const u8 = null,
 
 // Accept-Language override set via CDP Emulation.setUserAgentOverride.
 // Drives both the request header and navigator.languages.
-accept_language_override: ?AcceptLanguageOverride = null,
+accept_language_override: ?lp.Config.HttpHeaders.AcceptLanguage = null,
 
 // The driver (CDP / BiDi) attached to us. If there's a driver, then there's
 // an inbox for us to process (and there's someone to wake us up from a poll)
@@ -308,48 +308,15 @@ pub fn clearUserAgentOverride(self: *Client) void {
     }
 }
 
-const AcceptLanguageOverride = struct {
-    // The header as given; `languages` are sub-slices of it.
-    header: [:0]const u8,
-    languages: []const []const u8,
-
-    const max_languages = 8;
-};
-
-/// Set an Accept-Language override, allocated from self.allocator. The
-/// navigator.languages list is the header's tags with weights dropped.
+// Set an Accept-Language override, allocated from self.allocator.
 pub fn setAcceptLanguageOverride(self: *Client, value: []const u8) !void {
     self.clearAcceptLanguageOverride();
-
-    const header = try self.allocator.dupeZ(u8, value);
-    errdefer self.allocator.free(header);
-
-    var languages: std.ArrayList([]const u8) = .empty;
-    errdefer languages.deinit(self.allocator);
-
-    var it = std.mem.splitScalar(u8, header, ',');
-    while (it.next()) |item| {
-        if (languages.items.len == AcceptLanguageOverride.max_languages) {
-            break;
-        }
-        const end = std.mem.indexOfScalar(u8, item, ';') orelse item.len;
-        const tag = std.mem.trim(u8, item[0..end], " \t");
-        if (tag.len == 0) {
-            continue;
-        }
-        try languages.append(self.allocator, tag);
-    }
-
-    self.accept_language_override = .{
-        .header = header,
-        .languages = try languages.toOwnedSlice(self.allocator),
-    };
+    self.accept_language_override = try .init(self.allocator, value);
 }
 
 pub fn clearAcceptLanguageOverride(self: *Client) void {
     if (self.accept_language_override) |override| {
-        self.allocator.free(override.languages);
-        self.allocator.free(override.header);
+        override.deinit(self.allocator);
         self.accept_language_override = null;
     }
 }
@@ -480,20 +447,11 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
 }
 
 pub fn getAcceptLanguage(self: *const Client) [:0]const u8 {
-    if (self.accept_language_override) |override| {
-        return override.header;
-    }
-    return self.network.config.http_headers.accept_language;
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).header;
 }
 
-/// What navigator.languages reports: the override's tags when set, else the
-/// list derived from --locale.
 pub fn getLanguages(self: *const Client) []const []const u8 {
-    if (self.accept_language_override) |override| {
-        return override.languages;
-    }
-    const headers = &self.network.config.http_headers;
-    return headers.languages[0..headers.languages_len];
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).languages;
 }
 
 // Headers _all_ requests include.
@@ -4300,7 +4258,7 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
     try testing.expectEqual(null, client.url_blocklist);
 }
 
-test "HttpClient: setAcceptLanguageOverride owns, parses, replaces, and clears" {
+test "HttpClient: setAcceptLanguageOverride owns, replaces, and clears" {
     var pool = ArenaPool.init(testing.allocator, .{});
     defer pool.deinit();
 
@@ -4308,23 +4266,14 @@ test "HttpClient: setAcceptLanguageOverride owns, parses, replaces, and clears" 
     initTestClient(&client, &pool);
     defer client.clearAcceptLanguageOverride();
 
-    var first = "de-DE,de;q=0.9, en;q=0.8".*;
+    var first = "de-DE,de;q=0.9".*;
     try client.setAcceptLanguageOverride(&first);
     @memset(&first, 'x');
-
-    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", client.getAcceptLanguage());
-    try testing.expectEqual(3, client.getLanguages().len);
-    try std.testing.expectEqualStrings("de-DE", client.getLanguages()[0]);
-    try std.testing.expectEqualStrings("de", client.getLanguages()[1]);
-    try std.testing.expectEqualStrings("en", client.getLanguages()[2]);
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9", client.getAcceptLanguage());
+    try testing.expectEqual(2, client.getLanguages().len);
 
     try client.setAcceptLanguageOverride("fr-FR");
-    try testing.expectEqual(1, client.getLanguages().len);
     try std.testing.expectEqualStrings("fr-FR", client.getLanguages()[0]);
-
-    try client.setAcceptLanguageOverride("");
-    try std.testing.expectEqualStrings("", client.getAcceptLanguage());
-    try testing.expectEqual(0, client.getLanguages().len);
 
     client.clearAcceptLanguageOverride();
     try testing.expectEqual(null, client.accept_language_override);
