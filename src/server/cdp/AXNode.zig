@@ -84,7 +84,8 @@ pub const Writer = struct {
             try self.walkQuery(self.root.dom, false, w);
         } else {
             const root = AXNode.fromNode(self.root.dom);
-            if (try self.writeNode(self.root.id, root, false, w)) {
+            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
+            if (try self.writeNode(self.root.id, root, false, root_hidden, w)) {
                 try self.writeNodeChildren(root, false, w);
             }
         }
@@ -146,7 +147,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const child_el = dom_node.as(DOMNode.Element);
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
+                    if (child_in_aria_hidden or isHiddenSelf(child_el, self.frame)) {
                         continue;
                     }
                 },
@@ -155,7 +156,7 @@ pub const Writer = struct {
 
             const node = try self.registry.register(dom_node);
             const axn = AXNode.fromNode(node.dom);
-            if (try self.writeNode(node.id, axn, child_in_aria_hidden, w)) {
+            if (try self.writeNode(node.id, axn, child_in_aria_hidden, false, w)) {
                 try self.writeNodeChildren(axn, child_in_aria_hidden, w);
             }
         }
@@ -519,7 +520,7 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be written.
-    fn writeNode(self: *const Writer, id: u32, axn: AXNode, in_aria_hidden: bool, w: anytype) !bool {
+    fn writeNode(self: *const Writer, id: u32, axn: AXNode, in_aria_hidden: bool, hidden: bool, w: anytype) !bool {
         // ignore empty texts
         try w.beginObject();
 
@@ -535,7 +536,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .role = resolved.role }, w);
 
-        const ignore = axn.isIgnore(self.frame, in_aria_hidden);
+        const ignore = axn.isIgnore(self.frame, in_aria_hidden, hidden);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -617,7 +618,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeNodeChildren.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
+                    if (child_in_aria_hidden or isHiddenSelf(child_el, self.frame)) {
                         continue;
                     }
                 }
@@ -712,7 +713,8 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const ignored = axn.isIgnore(self.frame, in_aria_hidden);
+        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
+        const ignored = axn.isIgnore(self.frame, in_aria_hidden, hidden);
 
         try w.beginObject();
 
@@ -1278,28 +1280,25 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
+// Hidden by its own attributes, or by display:none / visibility:hidden on
+// it or an ancestor. Matches Chromium's AX tree which prunes both.
 fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
+    return hasHidingAttribute(elt) or frame._style_manager.isHidden(elt, .{ .check_visibility = true });
+}
+
+// Own attributes and cascade only: for walks that already pruned hidden
+// subtrees, so every ancestor is known visible.
+fn isHiddenSelf(elt: *DOMNode.Element, frame: *Frame) bool {
+    return hasHidingAttribute(elt) or frame._style_manager.isHiddenSelf(elt, .{ .check_visibility = true });
+}
+
+fn hasHidingAttribute(elt: *DOMNode.Element) bool {
     if (elt.getAttributeInterned("aria-hidden")) |value| {
         if (std.mem.eql(u8, value, "true")) {
             return true;
         }
     }
-
-    if (elt.hasAttributeInterned("hidden")) {
-        return true;
-    }
-
-    if (elt.hasAttributeSafe(comptime .wrap("inert"))) {
-        return true;
-    }
-
-    // CSS display:none and visibility:hidden (both inherited from ancestors via
-    // style computation). Matches Chromium's AX tree which prunes both.
-    if (frame._style_manager.isHidden(elt, .{ .check_visibility = true })) {
-        return true;
-    }
-
-    return false;
+    return elt.hasAttributeInterned("hidden") or elt.hasAttributeSafe(comptime .wrap("inert"));
 }
 
 fn ignoreText(node: *DOMNode) bool {
@@ -1344,7 +1343,9 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool) bool {
+// `hidden` comes from the caller: the tree walk prunes, so its children never
+// are; the root and the query walk probe the whole chain.
+fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool, hidden: bool) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
@@ -1390,7 +1391,7 @@ fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool) bool {
         return true;
     }
 
-    if (isHidden(elt, frame)) {
+    if (hidden) {
         return true;
     }
 
@@ -1405,7 +1406,8 @@ fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool) bool {
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                if (!axn.isIgnore(frame, in_aria_hidden)) {
+                const child_hidden = if (child.is(DOMNode.Element)) |child_el| isHiddenSelf(child_el, frame) else false;
+                if (!axn.isIgnore(frame, in_aria_hidden, child_hidden)) {
                     return false;
                 }
             }

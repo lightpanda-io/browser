@@ -687,6 +687,13 @@ pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptio
     return self.anyInChain(el, .hidden, options);
 }
 
+/// The element's own properties only, for walks that never enter a hidden
+/// subtree and so already know every ancestor is visible.
+pub fn isHiddenSelf(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
+    self.rebuildIfDirty() catch return false;
+    return self.ownProps(el).probe(.hidden, options);
+}
+
 /// Computed display:none for a single element (own property, no ancestor walk).
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
 pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
