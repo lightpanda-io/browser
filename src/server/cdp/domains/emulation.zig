@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../../Config.zig");
+const Mime = @import("../../../browser/Mime.zig");
 const js = @import("../../../browser/js/js.zig");
 
 const log = lp.log;
@@ -157,9 +158,6 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         platform: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    if (params.acceptLanguage) |v| {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "acceptLanguage", .value = v });
-    }
     if (params.platform) |v| {
         log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
     }
@@ -167,14 +165,27 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
     const ua = params.userAgent;
     Config.validateUserAgent(ua) catch |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
-        error.Reserved => {
-            log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
-            return cmd.sendResult(null, .{});
-        },
+        error.Reserved => {},
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = &cmd.cdp.browser.http_client;
+
+    // Applied even when the user agent is refused below: Playwright always
+    // sends a Mozilla user agent alongside the locale it was asked for.
+    if (params.acceptLanguage) |accept_language| {
+        if (!Mime.isHttpHeaderValue(accept_language)) {
+            return cmd.sendError(-32602, "Accept-Language contains CR, LF or NUL", .{});
+        }
+        try http_client.setAcceptLanguageOverride(accept_language);
+        bc.accept_language_changed = true;
+    }
+
+    if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        return cmd.sendResult(null, .{});
+    }
+
     try http_client.setUserAgentOverride(ua);
     bc.user_agent_changed = true;
 
@@ -211,8 +222,10 @@ fn clearGeolocationOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// Accepted so drivers can finish context setup; Intl/Date keep the host's
-// locale and timezone.
+// Accepted so drivers can finish context setup; Intl/Date keep the process
+// locale and timezone (--locale, --timezone). Changing them at runtime needs
+// zig-v8-fork bindings for Isolate::DateTimeConfigurationChangeNotification
+// and the ICU default locale.
 fn setLocaleOverride(cmd: *CDP.Command) !void {
     const Params = struct { locale: ?[]const u8 = null };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -379,6 +392,62 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 5 });
+}
+
+test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.languages" {
+    testing.silenceLog(&.{.not_implemented});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    // The default locale reaches both navigator and ICU.
+    try expectJs(frame, "navigator.language === 'en-US' && navigator.languages.join() === 'en-US,en'");
+    try expectJs(frame, "Intl.DateTimeFormat().resolvedOptions().locale === navigator.language");
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "de-DE,de;q=0.9, en;q=0.8" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
+    try testing.expect(bc.accept_language_changed);
+
+    // A Mozilla user agent is refused, the language still applies.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "Mozilla/5.0", .acceptLanguage = "fr-FR" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try expectJs(frame, "navigator.language === 'fr-FR' && navigator.languages.length === 1");
+    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser.http_client.getUserAgent());
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try expectJs(frame, "navigator.language === '' && navigator.languages.length === 0");
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "en\r\nX-Injected: 1" },
+    });
+    try ctx.expectSentError(-32602, "Accept-Language contains CR, LF or NUL", .{ .id = 4 });
+}
+
+fn expectJs(frame: *lp.Frame, expression: [:0]const u8) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const value = try ls.local.exec(expression, null);
+    try testing.expect(value.toBool());
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {

@@ -53,8 +53,8 @@ pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
     return exec.session.browser.http_client.getUserAgent();
 }
 
-pub fn getLanguages(_: *const Navigator) [2][]const u8 {
-    return .{ "en-US", "en" };
+pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
+    return exec.session.browser.http_client.getLanguages();
 }
 
 pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
@@ -73,8 +73,9 @@ pub fn getAppVersion(_: *const Navigator) []const u8 {
     return "1.0";
 }
 
-pub fn getLanguage(_: *const Navigator) []const u8 {
-    return "en-US";
+pub fn getLanguage(self: *const Navigator, exec: *const Execution) []const u8 {
+    const languages = self.getLanguages(exec);
+    return if (languages.len == 0) "" else languages[0];
 }
 
 pub fn getOnLine(_: *const Navigator) bool {

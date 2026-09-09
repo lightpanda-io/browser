@@ -459,6 +459,10 @@
     \\          The log level.
     \\          Defaults to {1s}.
     \\          Allowed values: "debug", "info", "warn", "error", "fatal".
+    \\  --locale <TAG>
+    \\          BCP 47 language tag driving navigator.language, the
+    \\          Accept-Language header and the default locale of Intl and
+    \\          toLocaleString. Defaults to en-US.
     \\  --obey-robots
     \\          Fetches and obeys robots.txt of the target page.
     \\          Defaults to false.
@@ -472,6 +476,9 @@
     \\  --storage-sqlite-path <PATH>
     \\          Path to the SQLite database file for persistent storage.
     \\          Use ":memory:" for in-memory storage.
+    \\  --timezone <IANA>
+    \\          Time zone used by Date and Intl, e.g. Europe/Paris or UTC.
+    \\          Defaults to the host time zone.
     \\  --user-agent <STRING>
     \\          Override the User-Agent header entirely. Must not impersonate other
     \\          browsers; any value containing "Mozilla" is forbidden. The browser

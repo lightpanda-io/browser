@@ -276,6 +276,8 @@ const CommonOptions = .{
     .{ .name = "web_bot_auth_keyid", .type = ?[]const u8 },
     .{ .name = "web_bot_auth_domain", .type = ?[]const u8 },
     .{ .name = "user_agent", .type = ?[]const u8, .validator = userAgentValidator },
+    .{ .name = "locale", .type = []const u8, .default = HttpHeaders.default_locale, .validator = localeValidator },
+    .{ .name = "timezone", .type = ?[]const u8, .validator = timezoneValidator },
     .{ .name = "block_private_networks", .type = bool },
     .{ .name = "block_cidrs", .type = ?[]const u8, .validator = accumulateValidator },
     .{ .name = "block_urls", .type = ?[]const u8, .validator = accumulateValidator },
@@ -727,6 +729,20 @@ pub fn userAgent(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn locale(self: *const Config) []const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.locale,
+        else => HttpHeaders.default_locale,
+    };
+}
+
+pub fn timezone(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.timezone,
+        else => null,
+    };
+}
+
 pub fn httpCacheDir(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_cache_dir,
@@ -971,7 +987,8 @@ pub const HttpHeaders = struct {
     // stream when a client sends Accept-Encoding without Accept-Language,
     // treating it as a bot signal. Ship a neutral default so we look like a
     // normal client.
-    pub const accept_language: [:0]const u8 = "en-US,en;q=0.9";
+    pub const default_locale: []const u8 = "en-US";
+    pub const accept_language_default: [:0]const u8 = "en-US,en;q=0.9";
 
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -979,6 +996,12 @@ pub const HttpHeaders = struct {
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
 
     proxy_bearer_header: ?[:0]const u8,
+
+    // Derived from --locale: the header and the navigator.languages list are
+    // the same information in two shapes, so they are built together.
+    accept_language: [:0]const u8,
+    languages: [2][]const u8,
+    languages_len: u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
         const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
@@ -993,10 +1016,18 @@ pub const HttpHeaders = struct {
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
         else
             null;
+        errdefer if (proxy_bearer_header) |hdr| allocator.free(hdr);
+
+        const tag = config.locale();
+        const primary = primarySubtag(tag);
+        const accept_language = try acceptLanguageFor(allocator, tag);
 
         return .{
             .user_agent = user_agent,
             .proxy_bearer_header = proxy_bearer_header,
+            .accept_language = accept_language,
+            .languages = .{ tag, primary },
+            .languages_len = if (primary.len == tag.len) 1 else 2,
         };
     }
 
@@ -1007,6 +1038,36 @@ pub const HttpHeaders = struct {
         if (self.user_agent.ptr != user_agent_base.ptr) {
             allocator.free(self.user_agent);
         }
+        if (self.accept_language.ptr != accept_language_default.ptr) {
+            allocator.free(self.accept_language);
+        }
+    }
+
+    pub fn primarySubtag(tag: []const u8) []const u8 {
+        const end = std.mem.indexOfScalar(u8, tag, '-') orelse tag.len;
+        return tag[0..end];
+    }
+
+    /// Chrome's shape: the tag first, then its language alone, then English
+    /// as a last resort, with descending q values. The default returns the
+    /// comptime constant so callers can tell it apart by pointer.
+    pub fn acceptLanguageFor(allocator: Allocator, tag: []const u8) ![:0]const u8 {
+        if (std.mem.eql(u8, tag, default_locale)) {
+            return accept_language_default;
+        }
+        const primary = primarySubtag(tag);
+        const has_region = primary.len != tag.len;
+        const is_english = std.ascii.eqlIgnoreCase(primary, "en");
+        if (has_region and !is_english) {
+            return std.fmt.allocPrintSentinel(allocator, "{s},{s};q=0.9,en;q=0.8", .{ tag, primary }, 0);
+        }
+        if (has_region) {
+            return std.fmt.allocPrintSentinel(allocator, "{s},{s};q=0.9", .{ tag, primary }, 0);
+        }
+        if (!is_english) {
+            return std.fmt.allocPrintSentinel(allocator, "{s},en;q=0.9", .{tag}, 0);
+        }
+        return allocator.dupeZ(u8, tag);
     }
 };
 
@@ -1245,6 +1306,84 @@ test "Config: validateUserAgent" {
     try std.testing.expectError(error.NonPrintable, validateUserAgent("bad\x01ua"));
 }
 
+test "Config: validateLocale" {
+    try validateLocale("en");
+    try validateLocale("en-US");
+    try validateLocale("zh-Hant-TW");
+    try validateLocale("es-419");
+    try std.testing.expectError(error.InvalidLanguage, validateLocale(""));
+    try std.testing.expectError(error.InvalidLanguage, validateLocale("e"));
+    try std.testing.expectError(error.InvalidLanguage, validateLocale("en_US"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-US-x-toolongsub"));
+    try std.testing.expectError(error.InvalidSubtag, validateLocale("en-U$"));
+    try std.testing.expectError(error.TooLong, validateLocale("en-" ++ "a" ** 40));
+}
+
+test "Config: validateTimezone" {
+    try validateTimezone("UTC");
+    try validateTimezone("Europe/Paris");
+    try validateTimezone("America/Argentina/Buenos_Aires");
+    try std.testing.expectError(error.Empty, validateTimezone(""));
+    try std.testing.expectError(error.InvalidCharacter, validateTimezone("Europe/ Paris"));
+    try std.testing.expectError(error.InvalidCharacter, validateTimezone("UTC\n"));
+    try std.testing.expectError(error.TooLong, validateTimezone("a" ** 65));
+}
+
+test "Config: HttpHeaders.acceptLanguageFor" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { tag: []const u8, expected: []const u8 }{
+        .{ .tag = "en-US", .expected = "en-US,en;q=0.9" },
+        .{ .tag = "en-GB", .expected = "en-GB,en;q=0.9" },
+        .{ .tag = "de-DE", .expected = "de-DE,de;q=0.9,en;q=0.8" },
+        .{ .tag = "de", .expected = "de,en;q=0.9" },
+        .{ .tag = "en", .expected = "en" },
+        .{ .tag = "zh-Hant-TW", .expected = "zh-Hant-TW,zh;q=0.9,en;q=0.8" },
+    };
+    for (cases) |case| {
+        const value = try HttpHeaders.acceptLanguageFor(allocator, case.tag);
+        defer if (value.ptr != HttpHeaders.accept_language_default.ptr) allocator.free(value);
+        try std.testing.expectEqualStrings(case.expected, value);
+    }
+    const default = try HttpHeaders.acceptLanguageFor(allocator, "en-US");
+    try std.testing.expectEqual(HttpHeaders.accept_language_default.ptr, default.ptr);
+}
+
+test "Config: locale drives http_headers" {
+    const allocator = std.testing.allocator;
+    {
+        var config = try Config.init(allocator, "test", .{ .serve = .{ .host = "127.0.0.1" } });
+        defer config.deinit(allocator);
+        try std.testing.expectEqualStrings("en-US,en;q=0.9", config.http_headers.accept_language);
+        try std.testing.expectEqual(2, config.http_headers.languages_len);
+        try std.testing.expectEqualStrings("en-US", config.http_headers.languages[0]);
+        try std.testing.expectEqualStrings("en", config.http_headers.languages[1]);
+    }
+    {
+        var config = try Config.init(allocator, "test", .{ .serve = .{ .host = "127.0.0.1", .locale = "fr" } });
+        defer config.deinit(allocator);
+        try std.testing.expectEqualStrings("fr,en;q=0.9", config.http_headers.accept_language);
+        try std.testing.expectEqual(1, config.http_headers.languages_len);
+        try std.testing.expectEqualStrings("fr", config.http_headers.languages[0]);
+    }
+}
+
+test "Config: parseArgs refuses an invalid --locale and --timezone" {
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--locale", "en_US" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+    {
+        log.expectLog(&.{.app});
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--timezone", "Europe/ Paris" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
 test "Config: parseArgs refuses an invalid --http-header" {
     const invalid = [_][*:0]const u8{
         // no colon to split on
@@ -1372,6 +1511,68 @@ pub fn validateUserAgent(ua: []const u8) !void {
 
     if (std.ascii.indexOfIgnoreCase(ua, "mozilla") != null) {
         return error.Reserved;
+    }
+}
+
+fn localeValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    validateLocale(str) catch |err| {
+        log.fatal(.app, "invalid option value", .{ .arg = "--locale", .value = str, .err = err, .hint = "must be a BCP 47 tag such as en-US, de or zh-Hant-TW" });
+        return error.InvalidArgument;
+    };
+    field.* = try allocator.dupe(u8, str);
+}
+
+fn timezoneValidator(allocator: Allocator, args: *std.process.Args.Iterator, field: *?[]const u8) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    validateTimezone(str) catch |err| {
+        log.fatal(.app, "invalid option value", .{ .arg = "--timezone", .value = str, .err = err, .hint = "must be an IANA time zone such as Europe/Paris or UTC" });
+        return error.InvalidArgument;
+    };
+    field.* = try allocator.dupe(u8, str);
+}
+
+/// A BCP 47 tag restricted to what ICU and the Accept-Language derivation
+/// need: a 2-3 letter language followed by 2-8 character alphanumeric subtags.
+pub fn validateLocale(tag: []const u8) !void {
+    if (tag.len > 35) {
+        return error.TooLong;
+    }
+    var it = std.mem.splitScalar(u8, tag, '-');
+    const language = it.next().?;
+    if (language.len < 2 or language.len > 3) {
+        return error.InvalidLanguage;
+    }
+    for (language) |c| {
+        if (!std.ascii.isAlphabetic(c)) {
+            return error.InvalidLanguage;
+        }
+    }
+    while (it.next()) |subtag| {
+        if (subtag.len < 2 or subtag.len > 8) {
+            return error.InvalidSubtag;
+        }
+        for (subtag) |c| {
+            if (!std.ascii.isAlphanumeric(c)) {
+                return error.InvalidSubtag;
+            }
+        }
+    }
+}
+
+/// Only the shape is checked; ICU resolves the id itself and falls back to
+/// GMT for names it does not know.
+pub fn validateTimezone(id: []const u8) !void {
+    if (id.len == 0) {
+        return error.Empty;
+    }
+    if (id.len > 64) {
+        return error.TooLong;
+    }
+    for (id) |c| {
+        if (c <= ' ' or c == 0x7f) {
+            return error.InvalidCharacter;
+        }
     }
 }
 

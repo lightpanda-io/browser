@@ -153,6 +153,10 @@ test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null els
 // Allocated from self.allocator when set, null otherwise.
 user_agent_override: ?[:0]const u8 = null,
 
+// Accept-Language override set via CDP Emulation.setUserAgentOverride.
+// Drives both the request header and navigator.languages.
+accept_language_override: ?AcceptLanguageOverride = null,
+
 // The driver (CDP / BiDi) attached to us. If there's a driver, then there's
 // an inbox for us to process (and there's someone to wake us up from a poll)
 driver: ?Driver = null,
@@ -263,6 +267,7 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.clearUserAgentOverride();
+    self.clearAcceptLanguageOverride();
     if (self.http_proxy_owned) |owned| {
         self.allocator.free(owned);
     }
@@ -300,6 +305,52 @@ pub fn clearUserAgentOverride(self: *Client) void {
     if (self.user_agent_override) |ua| {
         self.allocator.free(ua);
         self.user_agent_override = null;
+    }
+}
+
+const AcceptLanguageOverride = struct {
+    // The header as given; `languages` are sub-slices of it.
+    header: [:0]const u8,
+    languages: []const []const u8,
+
+    const max_languages = 8;
+};
+
+/// Set an Accept-Language override, allocated from self.allocator. The
+/// navigator.languages list is the header's tags with weights dropped.
+pub fn setAcceptLanguageOverride(self: *Client, value: []const u8) !void {
+    self.clearAcceptLanguageOverride();
+
+    const header = try self.allocator.dupeZ(u8, value);
+    errdefer self.allocator.free(header);
+
+    var languages: std.ArrayList([]const u8) = .empty;
+    errdefer languages.deinit(self.allocator);
+
+    var it = std.mem.splitScalar(u8, header, ',');
+    while (it.next()) |item| {
+        if (languages.items.len == AcceptLanguageOverride.max_languages) {
+            break;
+        }
+        const end = std.mem.indexOfScalar(u8, item, ';') orelse item.len;
+        const tag = std.mem.trim(u8, item[0..end], " \t");
+        if (tag.len == 0) {
+            continue;
+        }
+        try languages.append(self.allocator, tag);
+    }
+
+    self.accept_language_override = .{
+        .header = header,
+        .languages = try languages.toOwnedSlice(self.allocator),
+    };
+}
+
+pub fn clearAcceptLanguageOverride(self: *Client) void {
+    if (self.accept_language_override) |override| {
+        self.allocator.free(override.languages);
+        self.allocator.free(override.header);
+        self.accept_language_override = null;
     }
 }
 
@@ -428,6 +479,23 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
+pub fn getAcceptLanguage(self: *const Client) [:0]const u8 {
+    if (self.accept_language_override) |override| {
+        return override.header;
+    }
+    return self.network.config.http_headers.accept_language;
+}
+
+/// What navigator.languages reports: the override's tags when set, else the
+/// list derived from --locale.
+pub fn getLanguages(self: *const Client) []const []const u8 {
+    if (self.accept_language_override) |override| {
+        return override.languages;
+    }
+    const headers = &self.network.config.http_headers;
+    return headers.languages[0..headers.languages_len];
+}
+
 // Headers _all_ requests include.
 pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
     return .{
@@ -436,7 +504,7 @@ pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
         .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
-        .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
+        .{ .name = "Accept-Language", .value = self.getAcceptLanguage() },
     };
 }
 
@@ -4203,6 +4271,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
         .single_flight = .init(testing.allocator),
     };
     client.url_blocklist = null;
+    client.accept_language_override = null;
     client.test_fail_submit = null;
     // isUrlBlocked reaches through here for the adblocker; tests that want
     // one assign it to `client.network` after this returns.
@@ -4229,6 +4298,36 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
 
     try client.setBlockedUrls(&.{});
     try testing.expectEqual(null, client.url_blocklist);
+}
+
+test "HttpClient: setAcceptLanguageOverride owns, parses, replaces, and clears" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.clearAcceptLanguageOverride();
+
+    var first = "de-DE,de;q=0.9, en;q=0.8".*;
+    try client.setAcceptLanguageOverride(&first);
+    @memset(&first, 'x');
+
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", client.getAcceptLanguage());
+    try testing.expectEqual(3, client.getLanguages().len);
+    try std.testing.expectEqualStrings("de-DE", client.getLanguages()[0]);
+    try std.testing.expectEqualStrings("de", client.getLanguages()[1]);
+    try std.testing.expectEqualStrings("en", client.getLanguages()[2]);
+
+    try client.setAcceptLanguageOverride("fr-FR");
+    try testing.expectEqual(1, client.getLanguages().len);
+    try std.testing.expectEqualStrings("fr-FR", client.getLanguages()[0]);
+
+    try client.setAcceptLanguageOverride("");
+    try std.testing.expectEqualStrings("", client.getAcceptLanguage());
+    try testing.expectEqual(0, client.getLanguages().len);
+
+    client.clearAcceptLanguageOverride();
+    try testing.expectEqual(null, client.accept_language_override);
 }
 
 const TestRequest = struct {

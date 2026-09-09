@@ -478,6 +478,7 @@ pub const BrowserContext = struct {
 
     http_proxy_changed: bool = false,
     user_agent_changed: bool = false,
+    accept_language_changed: bool = false,
 
     // Extra headers to add to all requests.
     extra_headers: std.ArrayList(http.Header) = .empty,
@@ -626,6 +627,9 @@ pub const BrowserContext = struct {
         }
         if (self.user_agent_changed) {
             browser.http_client.clearUserAgentOverride();
+        }
+        if (self.accept_language_changed) {
+            browser.http_client.clearAcceptLanguageOverride();
         }
         self.intercept_state.deinit();
     }
