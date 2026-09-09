@@ -1359,8 +1359,8 @@ pub const PointerEventsCache = StyleManager.PointerEventsCache;
 // Style checks go through the StyleManager of the element's own frame, not
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
-pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache);
+pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
+    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache, access);
 }
 
 pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {

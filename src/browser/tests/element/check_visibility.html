@@ -495,3 +495,170 @@
     el.remove();
   }
 </script>
+
+<style id="style-memo">
+  .memo-hide { display: none; }
+  .memo-tabs input:checked + span { display: none; }
+  .memo-tabs input:indeterminate + span { display: none; }
+  .memo-form input:invalid + span { display: none; }
+  .memo-form select:invalid + span { display: none; }
+  x-memo:not(:defined) { display: none; }
+  .memo-badge:empty { display: none; }
+</style>
+<script id="memo_attribute_mutations">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const check = (visible) => {
+      testing.expectEqual(visible, el.checkVisibility());
+      testing.expectEqual(visible ? "block" : "none", getComputedStyle(el).display);
+      testing.expectEqual(visible, el.offsetWidth > 0);
+    };
+
+    check(true);
+    el.hidden = true;
+    check(false);
+    el.hidden = false;
+    check(true);
+
+    el.classList.add("memo-hide");
+    check(false);
+    el.classList.remove("memo-hide");
+    check(true);
+
+    el.style.display = "none";
+    check(false);
+    el.style.display = "";
+    check(true);
+
+    el.setAttribute("style", "display: none");
+    check(false);
+    el.style.cssText = "color: red";
+    check(true);
+
+    el.remove();
+  }
+</script>
+
+<script id="memo_insert_rule">
+  {
+    const el = document.createElement("div");
+    el.className = "memo-dyn";
+    document.body.appendChild(el);
+    testing.expectEqual(true, el.checkVisibility());
+
+    const style = document.createElement("style");
+    document.head.appendChild(style);
+    const index = style.sheet.insertRule(".memo-dyn { display: none }", style.sheet.cssRules.length);
+    testing.expectEqual(false, el.checkVisibility());
+
+    style.sheet.deleteRule(index);
+    testing.expectEqual(true, el.checkVisibility());
+
+    style.remove();
+    el.remove();
+  }
+</script>
+
+<script id="memo_form_state">
+  {
+    const tabs = document.createElement("div");
+    tabs.className = "memo-tabs";
+    tabs.innerHTML = '<input type="checkbox"><span>panel</span>';
+    document.body.appendChild(tabs);
+    const input = tabs.firstChild;
+    const panel = tabs.lastChild;
+
+    testing.expectEqual(true, panel.checkVisibility());
+    input.checked = true;
+    testing.expectEqual(false, panel.checkVisibility());
+    input.click();
+    testing.expectEqual(true, panel.checkVisibility());
+    input.indeterminate = true;
+    testing.expectEqual(false, panel.checkVisibility());
+    input.indeterminate = false;
+    testing.expectEqual(true, panel.checkVisibility());
+
+    const form = document.createElement("div");
+    form.className = "memo-form";
+    form.innerHTML = '<input required><span>a</span><select required><option value="">-</option><option value="x">x</option></select><span>b</span>';
+    document.body.appendChild(form);
+    const [text, a, select, b] = form.childNodes;
+
+    testing.expectEqual(false, a.checkVisibility());
+    text.value = "filled";
+    testing.expectEqual(true, a.checkVisibility());
+    text.value = "";
+    testing.expectEqual(false, a.checkVisibility());
+
+    testing.expectEqual(false, b.checkVisibility());
+    select.value = "x";
+    testing.expectEqual(true, b.checkVisibility());
+    select.selectedIndex = 0;
+    testing.expectEqual(false, b.checkVisibility());
+
+    tabs.remove();
+    form.remove();
+  }
+</script>
+
+<script id="memo_custom_element_defined">
+  {
+    const el = document.createElement("x-memo");
+    document.body.appendChild(el);
+    testing.expectEqual(false, el.checkVisibility());
+    customElements.define("x-memo", class extends HTMLElement {});
+    testing.expectEqual(true, el.checkVisibility());
+    el.remove();
+  }
+</script>
+
+<script id="memo_character_data">
+  {
+    const badge = document.createElement("span");
+    badge.className = "memo-badge";
+    badge.textContent = "3";
+    document.body.appendChild(badge);
+    const text = badge.firstChild;
+
+    testing.expectEqual(true, badge.checkVisibility());
+    text.data = "";
+    testing.expectEqual(false, badge.checkVisibility());
+    text.appendData("4");
+    testing.expectEqual(true, badge.checkVisibility());
+    text.deleteData(0, 1);
+    testing.expectEqual(false, badge.checkVisibility());
+    text.insertData(0, "5");
+    testing.expectEqual(true, badge.checkVisibility());
+
+    badge.remove();
+  }
+</script>
+
+<script id="memo_reparent">
+  {
+    const hidden = document.createElement("div");
+    hidden.style.display = "none";
+    const shown = document.createElement("div");
+    const child = document.createElement("span");
+    document.body.appendChild(hidden);
+    document.body.appendChild(shown);
+
+    shown.appendChild(child);
+    testing.expectEqual(true, child.checkVisibility());
+    hidden.appendChild(child);
+    testing.expectEqual(false, child.checkVisibility());
+    shown.appendChild(child);
+    testing.expectEqual(true, child.checkVisibility());
+
+    // repeat reads hit the memo
+    for (let i = 0; i < 2; i++) {
+      testing.expectEqual(true, child.checkVisibility());
+      testing.expectEqual("block", getComputedStyle(shown).display);
+      testing.expectEqual("none", getComputedStyle(hidden).display);
+    }
+
+    hidden.remove();
+    shown.remove();
+  }
+</script>

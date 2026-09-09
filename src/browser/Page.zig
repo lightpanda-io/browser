@@ -57,9 +57,8 @@ session: *Session,
 // a cached lookup on Frame 2. We picked the latter.
 dom_version: usize = 0,
 
-// Cascade stamp, bumped by Frame.styleChanged: a superset of dom_version that
-// also moves for non-tree state (form state, custom element definitions, text
-// data, stylesheets). Validates the StyleManager memo.
+// Superset of dom_version that also moves for non-tree state (see
+// Frame.styleChanged); validates the StyleManager memo.
 style_version: usize = 0,
 
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage

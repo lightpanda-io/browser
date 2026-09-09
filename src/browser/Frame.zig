@@ -2184,9 +2184,8 @@ pub fn domChanged(self: *Frame) void {
     observers.scheduleResizeChecks(self);
 }
 
-/// A change that can alter a selector match or cascade result without changing
-/// what live collections see: form state, custom element definitions, text
-/// data, stylesheets. Stamps the StyleManager memo.
+/// Stamps the cascade: any change that can alter a selector match or cascade
+/// result, including non-tree state that live collections never see.
 pub fn styleChanged(self: *Frame) void {
     self._page.style_version += 1;
 }
@@ -2956,8 +2955,7 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // The parser path does its own (limited) notification and
     // connected-callback work, then returns.
     if (comptime from_parser) {
-        // Only the cascade stamp moves for parser insertions; live collections
-        // keep their cursors mid-parse, as before.
+        // Not domChanged: live collections keep their cursors mid-parse.
         self.styleChanged();
 
         // Main-document parser insertions notify per node: scripts running
