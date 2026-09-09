@@ -615,6 +615,9 @@ pub const BrowserContext = struct {
         self.node_registry.deinit();
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
+
+        // Session.deinit (called via closeSession above) already cleared this
+        // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
