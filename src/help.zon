@@ -421,9 +421,10 @@
     \\          Defaults to 1 GiB.
     \\  --http-nav-burst <INT>
     \\          Number of top-level navigations to an idle host allowed to
-    \\          start without waiting for --http-nav-delay. After a burst,
-    \\          navigations are spaced by --http-nav-delay again.
-    \\          Defaults to 1.
+    \\          start without waiting. The allowance refills as the host goes
+    \\          idle again. It buys a head start only: it does not change how
+    \\          fast the delay grows once the host is busy.
+    \\          Defaults to 10.
     \\  --http-nav-delay <INT>
     \\          Fixed time in ms between two top-level navigations to the same
     \\          host (see --http-nav-burst). Set to 0 to disable rate limiting.

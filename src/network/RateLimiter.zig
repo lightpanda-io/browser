@@ -35,8 +35,9 @@ pub const Mode = enum { fixed, adaptive };
 pub const ADAPTIVE_INTERVAL_MS: u64 = 20;
 
 // In adaptive mode, the interval grows by one base interval every
-// `burst * RAMP_BURSTS` navigations: the more we ask a host, the more we
-// space our requests.
+// `RAMP_BURSTS` navigations: the more we ask a host, the more we space our
+// requests. Independent of --http-nav-burst: the burst buys a head start on
+// an idle host, it does not change how fast the spacing ramps up.
 pub const RAMP_BURSTS: u64 = 10;
 
 // One navigation of pressure is forgiven every `COOLDOWN_INTERVALS` base
@@ -70,11 +71,8 @@ interval_ms: u64,
 // base interval: a busy host's burst is spent faster.
 tau: u64,
 
-// The four fields below are not constants: they are derived in init from
-// the --http-nav-delay and --http-nav-burst flags and the constants above.
-
-// Pressure units per extra base interval (see RAMP_BURSTS).
-ramp_step: u64,
+// The three fields below are not constants: they are derived in init from
+// the --http-nav-delay flag and the constants above.
 
 // Elapsed time forgiving one unit of pressure (see COOLDOWN_INTERVALS).
 cooldown_ms: u64,
@@ -126,17 +124,15 @@ pub fn init(allocator: Allocator, interval_ms: u64, burst: u32, mode: Mode) Rate
     lp.assert(interval_ms > 0, "RateLimiter.init", .{ .interval_ms = interval_ms, .mode = mode });
 
     const b: u64 = @max(burst, 1);
-    const ramp_step = b * RAMP_BURSTS;
     return .{
         .allocator = allocator,
         .mode = mode,
         .interval_ms = interval_ms,
         .tau = interval_ms * (b - 1),
-        .ramp_step = ramp_step,
         .cooldown_ms = interval_ms * COOLDOWN_INTERVALS,
         .max_ms = interval_ms * MAX_INTERVALS,
         .pressure_max = switch (mode) {
-            .adaptive => (MAX_INTERVALS - 1) * ramp_step,
+            .adaptive => (MAX_INTERVALS - 1) * RAMP_BURSTS,
             .fixed => 0,
         },
     };
@@ -253,7 +249,7 @@ pub fn observe(self: *RateLimiter, host: []const u8, feedback: Feedback, now: u6
 
     const h = gop.value_ptr;
     self.cooldown(h, now);
-    h.pressure = @min(h.pressure + intervals * self.ramp_step, self.pressure_max);
+    h.pressure = @min(h.pressure + intervals * RAMP_BURSTS, self.pressure_max);
     if (feedback.retry_after_ms) |ms| {
         h.tat = @max(h.tat, now + @min(ms, RETRY_AFTER_MAX_MS));
     }
@@ -278,9 +274,9 @@ fn isLoopback(host: []const u8) bool {
 }
 
 // Effective interval for a host under the given pressure: one extra base
-// interval per full `ramp_step` of navigations, capped at `max_ms`.
+// interval per full `RAMP_BURSTS` of navigations, capped at `max_ms`.
 fn intervalFor(self: *const RateLimiter, pressure: u64) u64 {
-    return @min(self.interval_ms * (1 + pressure / self.ramp_step), self.max_ms);
+    return @min(self.interval_ms * (1 + pressure / RAMP_BURSTS), self.max_ms);
 }
 
 // Credit the time elapsed since the host's cooldown clock to its pressure.
@@ -376,7 +372,12 @@ test "RateLimiter: burst" {
     var strict = RateLimiter.init(testing.allocator, 100, 0, .adaptive);
     defer strict.deinit();
     try testing.expectEqual(0, strict.tau);
-    try testing.expectEqual(10, strict.ramp_step);
+
+    // the burst only buys a head start on an idle host. It does not change
+    // how fast the spacing ramps up, nor how far it can go.
+    try testing.expectEqual(rl.pressure_max, strict.pressure_max);
+    try testing.expectEqual(rl.intervalFor(100), strict.intervalFor(100));
+    try testing.expectEqual(rl.intervalFor(595), strict.intervalFor(595));
 }
 
 test "RateLimiter: pressure ramp" {
@@ -385,8 +386,8 @@ test "RateLimiter: pressure ramp" {
     defer rl.deinit();
 
     // 10 navigations queued at once: the host is now under 10 units of
-    // pressure (ramp_step for burst = 1), so the 11th is spaced by 2x the
-    // base interval, and the 21st by 3x.
+    // pressure (one RAMP_BURSTS), so the 11th is spaced by 2x the base
+    // interval, and the 21st by 3x.
     var last: u64 = 0;
     for (0..10) |_| {
         last = try rl.reserve("a.test", 1000);
