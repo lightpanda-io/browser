@@ -154,10 +154,6 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    if (params.runImmediately) {
-        log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
-    }
-
     // A worldName registers the world itself.
     var world_name: ?[]const u8 = null;
     if (params.worldName) |name| {
@@ -176,6 +172,30 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         .source = source_dupe,
         .world_name = world_name,
     });
+
+    // runImmediately: also evaluate in the current document, in the requested world.
+    if (params.runImmediately) {
+        if (bc.mainFrame()) |frame| {
+            const js_context = if (world_name) |name| blk: {
+                const world = bc.findIsolatedWorld(name) orelse break :blk null;
+                break :blk world.contextFor(frame);
+            } else frame.js;
+            if (js_context) |context| {
+                var ls: js.Local.Scope = undefined;
+                context.localScope(&ls);
+                defer ls.deinit();
+
+                var try_catch: lp.js.TryCatch = undefined;
+                try_catch.init(&ls.local);
+                defer try_catch.deinit();
+
+                ls.local.eval(source_dupe, null) catch |err| {
+                    const caught = try_catch.caughtOrError(cmd.arena, err);
+                    log.warn(.cdp, "script on new doc", .{ .caught = caught });
+                };
+            }
+        }
+    }
 
     var id_buf: [16]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{script_id}) catch "1";
@@ -2444,6 +2464,35 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
         const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
         try testing.expect(v.toBool());
     }
+}
+
+test "cdp.frame: addScriptToEvaluateOnNewDocument runImmediately evaluates in the current document" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RI", .url = "hi.html", .target_id = "FID-00000000RI".* });
+
+    try ctx.processMessage(.{
+        .id = 30,
+        .method = "Page.addScriptToEvaluateOnNewDocument",
+        .params = .{ .source = "window.__now = 1", .runImmediately = true },
+    });
+    try ctx.expectSentResult(.{ .identifier = "1" }, .{ .id = 30 });
+
+    // Without the flag the script only runs on the next document.
+    try ctx.processMessage(.{
+        .id = 31,
+        .method = "Page.addScriptToEvaluateOnNewDocument",
+        .params = .{ .source = "window.__later = 1" },
+    });
+    try ctx.expectSentResult(.{ .identifier = "2" }, .{ .id = 31 });
+
+    const f = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    f.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("window.__now === 1 && window.__later === undefined", null);
+    try testing.expect(v.toBool());
 }
 
 test "cdp.frame: addScriptToEvaluateOnNewDocument" {
