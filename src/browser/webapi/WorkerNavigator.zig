@@ -46,8 +46,8 @@ pub fn getUserAgent(_: *const WorkerNavigator, exec: *const Execution) []const u
     return Navigator.getUserAgent(&Navigator.init, exec);
 }
 
-pub fn getLanguages(_: *const WorkerNavigator) [2][]const u8 {
-    return Navigator.getLanguages(&Navigator.init);
+pub fn getLanguages(_: *const WorkerNavigator, exec: *const Execution) []const []const u8 {
+    return Navigator.getLanguages(&Navigator.init, exec);
 }
 
 pub fn getAppName(_: *const WorkerNavigator) []const u8 {
@@ -62,8 +62,8 @@ pub fn getAppVersion(_: *const WorkerNavigator) []const u8 {
     return Navigator.getAppVersion(&Navigator.init);
 }
 
-pub fn getLanguage(_: *const WorkerNavigator) []const u8 {
-    return Navigator.getLanguage(&Navigator.init);
+pub fn getLanguage(_: *const WorkerNavigator, exec: *const Execution) []const u8 {
+    return Navigator.getLanguage(&Navigator.init, exec);
 }
 
 pub fn getOnLine(_: *const WorkerNavigator) bool {

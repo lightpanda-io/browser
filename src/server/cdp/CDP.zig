@@ -630,6 +630,7 @@ pub const BrowserContext = struct {
         if (self.user_agent_changed) {
             browser.http_client.clearUserAgentOverride();
         }
+        browser.http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
     }
 
