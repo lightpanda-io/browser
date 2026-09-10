@@ -38,8 +38,9 @@ const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-pub const VisibilityCache = std.AutoHashMapUnmanaged(*Element, bool);
-pub const PointerEventsCache = std.AutoHashMapUnmanaged(*Element, bool);
+pub const ChainCache = std.AutoHashMapUnmanaged(*Element, bool);
+pub const VisibilityCache = ChainCache;
+pub const PointerEventsCache = ChainCache;
 
 // Tracks visibility-relevant CSS rules from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
@@ -59,6 +60,10 @@ class_rules: std.StringHashMapUnmanaged(RuleList) = .empty,
 tag_rules: std.AutoHashMapUnmanaged(Tag, RuleList) = .empty,
 other_rules: RuleList = .empty, // universal, attribute, pseudo-class endings
 
+// Own-element results, valid while Page.style_version == memo_version.
+memo: Memo = .empty,
+memo_version: usize = 0,
+
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
 /// rebuilding and do one final pass to apply the resulting layering rank.
@@ -72,8 +77,8 @@ rule_layers: std.ArrayList(u16) = .empty,
 
 next_anon_layer: u32 = 0,
 
-// Document order counter for tie-breaking equal specificity. Starts at 1, 0
-// is used as a sentinel is isElementHidden()
+// Document order counter for tie-breaking equal specificity. Starts at 1;
+// a priority of 0 means no author rule applied (see compute).
 next_doc_order: u32 = 1,
 
 // When true, rules need to be rebuilt
@@ -456,17 +461,7 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     var props = VisibilityProperties{};
     var it = CssParser.parseDeclarationsList(block_text);
     while (it.next()) |decl| {
-        const name = decl.name;
-        const val = decl.value;
-        if (std.ascii.eqlIgnoreCase(name, "display")) {
-            props.display = Display.parse(val);
-        } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
-            props.visibility_hidden = std.ascii.eqlIgnoreCase(val, "hidden") or std.ascii.eqlIgnoreCase(val, "collapse");
-        } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
-            props.opacity_zero = std.ascii.eqlIgnoreCase(val, "0");
-        } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
-            props.pointer_events_none = std.ascii.eqlIgnoreCase(val, "none");
-        }
+        props.apply(decl.name, decl.value);
     }
 
     if (!props.isRelevant()) return;
@@ -506,13 +501,9 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     }
 }
 
-pub fn sheetRemoved(self: *StyleManager) void {
-    self.dirty = true;
-    Frame.observers.scheduleResizeDelivery(self.frame);
-}
-
 pub fn sheetModified(self: *StyleManager) void {
     self.dirty = true;
+    self.frame.styleChanged();
     Frame.observers.scheduleResizeDelivery(self.frame);
 }
 
@@ -541,8 +532,12 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const class_rules_count = self.class_rules.count();
     const tag_rules_count = self.tag_rules.count();
     const other_rules_count = self.other_rules.len;
+    const memo_count = self.memo.count();
 
     self.arena.resetRetain();
+
+    self.memo = .empty;
+    try self.memo.ensureTotalCapacity(self.arena.allocator(), memo_count);
 
     self.next_doc_order = 1;
 
@@ -569,47 +564,40 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     try self.finalizeLayerRanks(build_arena.allocator());
 }
 
-// Check if an element is hidden based on options.
-// By default only checks display:none.
-// Walks up the tree to check ancestors.
+/// Own-element cascade result, resolved for every property at once so one
+/// entry serves any probe.
+pub const Props = packed struct(u8) {
+    // Author value (inline or sheet). Without `author_display` it's the UA
+    // fallback: .none when matchesUaDisplayNoneRule, else .other.
+    display: Display = .other,
+    author_display: bool = false,
+    visibility_hidden: bool = false,
+    opacity_zero: bool = false,
+    pointer_events_none: bool = false,
+    _unused: u2 = 0,
+
+    fn probe(self: Props, comptime what: Probe, options: CheckVisibilityOptions) bool {
+        return switch (what) {
+            .hidden => self.display == .none or
+                (options.check_visibility and self.visibility_hidden) or
+                (options.check_opacity and self.opacity_zero),
+            .visibility => self.visibility_hidden,
+            .pointer_events => self.pointer_events_none,
+        };
+    }
+};
+
+const Probe = enum { hidden, visibility, pointer_events };
+
+const Memo = std.AutoHashMapUnmanaged(*Element, Props);
+
 pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-
-    var current: ?*Element = el;
-
-    while (current) |elem| {
-        // Check cache first (only when checking all properties for caching consistency)
-        if (cache) |c| {
-            if (c.get(elem)) |hidden| {
-                if (hidden) {
-                    return true;
-                }
-                current = elem.parentElement();
-                continue;
-            }
-        }
-
-        const hidden = self.isElementHidden(elem, options, access);
-
-        // Store in cache
-        if (cache) |c| {
-            c.put(self.frame.call_arena, elem, hidden) catch |err| {
-                log.warn(.browser, "StyleManager cache", .{ .err = err, .src = "isHidden" });
-            };
-        }
-
-        if (hidden) {
-            return true;
-        }
-        current = elem.parentElement();
-    }
-
-    return false;
+    return self.anyInChain(el, cache, access, .hidden, options);
 }
 
 /// Computed display:none for a single element (own property, no ancestor walk).
-/// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements"
-/// via `isElementHidden`.
+/// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
 pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
     return self.display(el, access) == .none;
 }
@@ -617,7 +605,7 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: Inline
 /// Own property, no ancestor walk; honors the UA hidden-element rules.
 pub fn display(self: *StyleManager, el: *Element, comptime access: InlineAccess) Display {
     self.rebuildIfDirty() catch return .other;
-    return self.resolve(el, .{}, access).display orelse .other;
+    return self.ownProps(el, access).display;
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
@@ -626,7 +614,165 @@ pub fn display(self: *StyleManager, el: *Element, comptime access: InlineAccess)
 /// dump's "invisible" strip mode.
 pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-    return self.isElementHidden(el, .{ .ua_display_none = false }, access);
+    const p = self.ownProps(el, access);
+    return p.author_display and p.display == .none;
+}
+
+/// Computed visibility:hidden for an element, considering only the `visibility`
+/// chain (walks ancestors since `visibility` inherits by default). Ignores
+/// display:none: an ancestor with display:none means the element isn't
+/// rendered, but its computed `visibility` still reflects inherited visibility.
+pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
+    self.rebuildIfDirty() catch return false;
+    return self.anyInChain(el, null, .materialize, .visibility, .{});
+}
+
+pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerEventsCache, comptime access: InlineAccess) bool {
+    self.rebuildIfDirty() catch return false;
+    return self.anyInChain(el, cache, access, .pointer_events, .{});
+}
+
+fn anyInChain(self: *StyleManager, el: *Element, cache: ?*ChainCache, comptime access: InlineAccess, comptime what: Probe, options: CheckVisibilityOptions) bool {
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.parentElement()) {
+        if (cache) |c| {
+            if (c.get(elem)) |matched| {
+                if (matched) {
+                    return true;
+                }
+                continue;
+            }
+        }
+
+        const matched = self.ownProps(elem, access).probe(what, options);
+        if (cache) |c| {
+            c.put(self.frame.call_arena, elem, matched) catch |err| {
+                log.warn(.browser, "StyleManager cache", .{ .err = err });
+            };
+        }
+        if (matched) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The memoized own-element result. Callers must have run rebuildIfDirty,
+/// which resets the memo.
+fn ownProps(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+    const version = self.frame._page.style_version;
+    if (self.memo_version != version) {
+        self.memo.clearRetainingCapacity();
+        self.memo_version = version;
+    }
+
+    const gop = self.memo.getOrPut(self.arena.allocator(), el) catch |err| {
+        log.warn(.browser, "StyleManager memo", .{ .err = err });
+        return self.compute(el, access);
+    };
+    if (gop.found_existing) {
+        // Layout reads the inline style object directly, so a hit must still
+        // create what a scan-mode miss left unparsed.
+        if (access == .materialize and el._flags.has_inline_style) {
+            _ = inlineStyle(el, .materialize, self.frame);
+        }
+        return gop.value_ptr.*;
+    }
+    gop.value_ptr.* = self.compute(el, access);
+    return gop.value_ptr.*;
+}
+
+const property_fields = std.meta.fieldNames(VisibilityProperties);
+
+// INLINE_PRIORITY can't be beaten, so allInline ends the rule scan early.
+const Priorities = struct {
+    display: u64 = 0,
+    visibility_hidden: u64 = 0,
+    opacity_zero: u64 = 0,
+    pointer_events_none: u64 = 0,
+
+    fn allInline(self: Priorities) bool {
+        inline for (property_fields) |field| {
+            if (@field(self, field) != INLINE_PRIORITY) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+fn compute(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+    const frame = self.frame;
+    var p: Props = .{};
+    var priorities: Priorities = .{};
+
+    const inline_props = inlineProps(el, access, frame);
+    inline for (property_fields) |field| {
+        if (@field(inline_props, field)) |value| {
+            @field(p, field) = value;
+            @field(priorities, field) = INLINE_PRIORITY;
+        }
+    }
+
+    if (!priorities.allInline()) {
+        if (el.getId()) |id| {
+            if (self.id_rules.get(id)) |rules| {
+                checkRules(&rules, &p, &priorities, el, frame);
+            }
+        }
+
+        if (el.getClassName()) |class_attr| {
+            var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
+            while (it.next()) |class| {
+                if (self.class_rules.get(class)) |rules| {
+                    checkRules(&rules, &p, &priorities, el, frame);
+                }
+            }
+        }
+
+        if (self.tag_rules.get(el.getTag())) |rules| {
+            checkRules(&rules, &p, &priorities, el, frame);
+        }
+
+        checkRules(&self.other_rules, &p, &priorities, el, frame);
+    }
+
+    // UA stylesheet display:none fallback (HTML Rendering §15.3.1 "Hidden
+    // elements"). Applied only when no author rule for `display` matched the
+    // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
+    // origin regardless of specificity, so `.x { display: flex }` on a
+    // `<div class="x" hidden>` must report visible.
+    p.author_display = priorities.display != 0;
+    if (!p.author_display and matchesUaDisplayNoneRule(el)) {
+        p.display = .none;
+    }
+
+    return p;
+}
+
+fn checkRules(rules: *const RuleList, p: *Props, priorities: *Priorities, el: *Element, frame: *Frame) void {
+    for (rules.items(.priority), rules.items(.props), rules.items(.selector)) |priority, rule, selector| {
+        // Only rules that set a property nothing stronger has set yet are
+        // worth matching.
+        var relevant = false;
+        inline for (property_fields) |field| {
+            if (@field(rule, field) != null and priority > @field(priorities, field)) {
+                relevant = true;
+            }
+        }
+        if (!relevant or !matchesSelector(el, selector, frame)) {
+            continue;
+        }
+
+        inline for (property_fields) |field| {
+            if (@field(rule, field)) |value| {
+                if (priority > @field(priorities, field)) {
+                    @field(p, field) = value;
+                    @field(priorities, field) = priority;
+                }
+            }
+        }
+    }
 }
 
 /// Centralizes UA-stylesheet display:none truth so `getComputedStyle().display`
@@ -661,283 +807,6 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
     }
 
     return false;
-}
-
-/// Computed visibility:hidden for an element, considering only the `visibility`
-/// chain (walks ancestors since `visibility` inherits by default). Ignores
-/// display:none: an ancestor with display:none means the element isn't
-/// rendered, but its computed `visibility` still reflects inherited visibility.
-pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
-    self.rebuildIfDirty() catch return false;
-    var current: ?*Element = el;
-    while (current) |elem| {
-        if (self.isElementHidden(elem, .{ .check_display = false, .check_visibility = true }, .materialize)) {
-            return true;
-        }
-        current = elem.parentElement();
-    }
-    return false;
-}
-
-/// Check if a single element (not ancestors) is hidden.
-fn isElementHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
-    return self.resolve(el, options, access).hidden();
-}
-
-const Resolved = struct {
-    display: ?Display = null,
-    visibility_hidden: ?bool = null,
-    opacity_zero: ?bool = null,
-
-    fn hidden(self: Resolved) bool {
-        return self.display == .none or (self.visibility_hidden orelse false) or (self.opacity_zero orelse false);
-    }
-};
-
-/// A hiding inline value returns early, so only `hidden()` is exact then.
-fn resolve(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) Resolved {
-    // Track best match per property (value + priority)
-    // Initialize priority to INLINE_PRIORITY for properties we don't care about - this makes
-    // the loop naturally skip them since no stylesheet rule can have priority >= INLINE_PRIORITY
-    var r: Resolved = .{};
-    var display_priority: u64 = 0;
-    var visibility_priority: u64 = 0;
-    var opacity_priority: u64 = 0;
-
-    // Check inline styles FIRST - they use INLINE_PRIORITY so no stylesheet can beat them
-    if (options.check_display) {
-        if (inlineValue(el, comptime .wrap("display"), access, self.frame)) |value| {
-            r.display = Display.parse(value);
-            if (r.display == .none) return r;
-            display_priority = INLINE_PRIORITY;
-        }
-    } else {
-        // Pin to INLINE_PRIORITY so rule-matching skips display entirely.
-        display_priority = INLINE_PRIORITY;
-    }
-
-    if (options.check_visibility) {
-        if (inlineValue(el, comptime .wrap("visibility"), access, self.frame)) |value| {
-            if (std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse")) {
-                r.visibility_hidden = true;
-                return r;
-            }
-            r.visibility_hidden = false;
-            visibility_priority = INLINE_PRIORITY;
-        }
-    } else {
-        // This can't be beat. Setting this means that, when checking rules
-        // we no longer have to check if options.check_visibility is enabled.
-        // We can just compare the priority.
-        visibility_priority = INLINE_PRIORITY;
-    }
-
-    if (options.check_opacity) {
-        if (inlineValue(el, comptime .wrap("opacity"), access, self.frame)) |value| {
-            if (std.ascii.eqlIgnoreCase(value, "0")) {
-                r.opacity_zero = true;
-                return r;
-            }
-            r.opacity_zero = false;
-            opacity_priority = INLINE_PRIORITY;
-        }
-    } else {
-        opacity_priority = INLINE_PRIORITY;
-    }
-
-    if (display_priority == INLINE_PRIORITY and visibility_priority == INLINE_PRIORITY and opacity_priority == INLINE_PRIORITY) {
-        return r;
-    }
-
-    // Helper to check a single rule
-    const Ctx = struct {
-        r: *Resolved,
-        display_priority: *u64,
-        visibility_priority: *u64,
-        opacity_priority: *u64,
-        el: *Element,
-        frame: *Frame,
-
-        fn checkRules(ctx: @This(), rules: *const RuleList) void {
-            if (ctx.display_priority.* == INLINE_PRIORITY and
-                ctx.visibility_priority.* == INLINE_PRIORITY and
-                ctx.opacity_priority.* == INLINE_PRIORITY)
-            {
-                return;
-            }
-
-            const priorities = rules.items(.priority);
-            const props_list = rules.items(.props);
-            const selectors = rules.items(.selector);
-
-            for (priorities, props_list, selectors) |p, props, selector| {
-                // Fast skip using packed priority
-                if (p <= ctx.display_priority.* and p <= ctx.visibility_priority.* and p <= ctx.opacity_priority.*) {
-                    continue;
-                }
-
-                // Logic for property dominance
-                const dominated = (props.display == null or p <= ctx.display_priority.*) and
-                    (props.visibility_hidden == null or p <= ctx.visibility_priority.*) and
-                    (props.opacity_zero == null or p <= ctx.opacity_priority.*);
-
-                if (dominated) continue;
-
-                if (matchesSelector(ctx.el, selector, ctx.frame)) {
-                    // Update best priorities
-                    if (props.display != null and p > ctx.display_priority.*) {
-                        ctx.r.display = props.display;
-                        ctx.display_priority.* = p;
-                    }
-                    if (props.visibility_hidden != null and p > ctx.visibility_priority.*) {
-                        ctx.r.visibility_hidden = props.visibility_hidden;
-                        ctx.visibility_priority.* = p;
-                    }
-                    if (props.opacity_zero != null and p > ctx.opacity_priority.*) {
-                        ctx.r.opacity_zero = props.opacity_zero;
-                        ctx.opacity_priority.* = p;
-                    }
-                }
-            }
-        }
-    };
-    const ctx = Ctx{
-        .r = &r,
-        .display_priority = &display_priority,
-        .visibility_priority = &visibility_priority,
-        .opacity_priority = &opacity_priority,
-        .el = el,
-        .frame = self.frame,
-    };
-
-    if (el.getId()) |id| {
-        if (self.id_rules.get(id)) |rules| {
-            ctx.checkRules(&rules);
-        }
-    }
-
-    if (el.getClassName()) |class_attr| {
-        var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
-        while (it.next()) |class| {
-            if (self.class_rules.get(class)) |rules| {
-                ctx.checkRules(&rules);
-            }
-        }
-    }
-
-    if (self.tag_rules.get(el.getTag())) |rules| {
-        ctx.checkRules(&rules);
-    }
-
-    ctx.checkRules(&self.other_rules);
-
-    // UA stylesheet display:none fallback (HTML Rendering §15.3.1 "Hidden
-    // elements"). Applied only when no author rule for `display` matched the
-    // element — per CSS Cascade §6.1 any normal-origin author rule beats UA
-    // origin regardless of specificity, so `.x { display: flex }` on a
-    // `<div class="x" hidden>` must report visible.
-    if (options.check_display and options.ua_display_none and display_priority == 0) {
-        if (matchesUaDisplayNoneRule(el)) {
-            r.display = .none;
-        }
-    }
-
-    return r;
-}
-
-/// Check if an element has pointer-events:none.
-/// Checks inline style first - if set, skips stylesheet lookup.
-/// Walks up the tree to check ancestors.
-pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerEventsCache) bool {
-    self.rebuildIfDirty() catch return false;
-
-    var current: ?*Element = el;
-
-    while (current) |elem| {
-        // Check cache first
-        if (cache) |c| {
-            if (c.get(elem)) |pe_none| {
-                if (pe_none) return true;
-                current = elem.parentElement();
-                continue;
-            }
-        }
-
-        const pe_none = self.elementHasPointerEventsNone(elem);
-
-        if (cache) |c| {
-            c.put(self.frame.call_arena, elem, pe_none) catch |err| {
-                log.warn(.browser, "StyleManager cache", .{ .err = err, .src = "hasPointerEventsNone" });
-            };
-        }
-
-        if (pe_none) {
-            return true;
-        }
-        current = elem.parentElement();
-    }
-
-    return false;
-}
-
-/// Check if a single element (not ancestors) has pointer-events:none.
-fn elementHasPointerEventsNone(self: *StyleManager, el: *Element) bool {
-    const frame = self.frame;
-
-    // Check inline style first
-    if (inlineValue(el, .wrap("pointer-events"), .materialize, frame)) |value| {
-        if (std.ascii.eqlIgnoreCase(value, "none")) {
-            return true;
-        }
-        return false;
-    }
-
-    var result: ?bool = null;
-    var best_priority: u64 = 0;
-
-    // Helper to check a single rule
-    const checkRules = struct {
-        fn check(rules: *const RuleList, res: *?bool, current_priority: *u64, elem: *Element, p: *Frame) void {
-            if (current_priority.* == INLINE_PRIORITY) return;
-
-            const priorities = rules.items(.priority);
-            const props_list = rules.items(.props);
-            const selectors = rules.items(.selector);
-
-            for (priorities, props_list, selectors) |priority, props, selector| {
-                if (priority <= current_priority.*) continue;
-                if (props.pointer_events_none == null) continue;
-
-                if (matchesSelector(elem, selector, p)) {
-                    res.* = props.pointer_events_none;
-                    current_priority.* = priority;
-                }
-            }
-        }
-    }.check;
-
-    if (el.getId()) |id| {
-        if (self.id_rules.get(id)) |rules| {
-            checkRules(&rules, &result, &best_priority, el, frame);
-        }
-    }
-
-    if (el.getClassName()) |class_attr| {
-        var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
-        while (it.next()) |class| {
-            if (self.class_rules.get(class)) |rules| {
-                checkRules(&rules, &result, &best_priority, el, frame);
-            }
-        }
-    }
-
-    if (self.tag_rules.get(el.getTag())) |rules| {
-        checkRules(&rules, &result, &best_priority, el, frame);
-    }
-
-    checkRules(&self.other_rules, &result, &best_priority, el, frame);
-
-    return result orelse false;
 }
 
 // Extracts visibility-relevant rules from a CSS rule.
@@ -1054,27 +923,18 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     return best_key;
 }
 
+// The declaration names behind VisibilityProperties, in field order.
+const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
+
 /// Extracts visibility-relevant properties from a style declaration.
 fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties {
-    var props = VisibilityProperties{};
+    var props: VisibilityProperties = .{};
     const decl = style.asCSSStyleDeclaration();
-
-    if (decl.findProperty(comptime .wrap("display"))) |property| {
-        props.display = Display.parse(property._value.str());
+    for (property_names) |name| {
+        if (decl.findProperty(.wrap(name))) |property| {
+            props.apply(name, property._value.str());
+        }
     }
-
-    if (decl.findProperty(comptime .wrap("visibility"))) |property| {
-        props.visibility_hidden = property._value.eqlSliceIgnoreCase("hidden") or property._value.eqlSliceIgnoreCase("collapse");
-    }
-
-    if (decl.findProperty(comptime .wrap("opacity"))) |property| {
-        props.opacity_zero = property._value.eqlSliceIgnoreCase("0");
-    }
-
-    if (decl.findProperty(.wrap("pointer-events"))) |property| {
-        props.pointer_events_none = property._value.eqlSliceIgnoreCase("none");
-    }
-
     return props;
 }
 
@@ -1136,7 +996,7 @@ fn matchesSelector(el: *Element, selector: Selector.Selector, frame: *Frame) boo
 }
 
 /// Only the values the dumpers act on; everything else is `other`.
-pub const Display = enum {
+pub const Display = enum(u2) {
     none,
     flex,
     grid,
@@ -1156,12 +1016,25 @@ const VisibilityProperties = struct {
     opacity_zero: ?bool = null,
     pointer_events_none: ?bool = null,
 
-    // return true if any field in VisibilityProperties is not null
+    fn apply(self: *VisibilityProperties, name: []const u8, value: []const u8) void {
+        if (std.ascii.eqlIgnoreCase(name, "display")) {
+            self.display = Display.parse(value);
+        } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
+            self.visibility_hidden = std.ascii.eqlIgnoreCase(value, "hidden") or std.ascii.eqlIgnoreCase(value, "collapse");
+        } else if (std.ascii.eqlIgnoreCase(name, "opacity")) {
+            self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
+        } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
+            self.pointer_events_none = std.ascii.eqlIgnoreCase(value, "none");
+        }
+    }
+
     fn isRelevant(self: VisibilityProperties) bool {
-        return self.display != null or
-            self.visibility_hidden != null or
-            self.opacity_zero != null or
-            self.pointer_events_none != null;
+        inline for (property_fields) |field| {
+            if (@field(self, field) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -1209,10 +1082,8 @@ const RANK_SHIFT: u6 = 52;
 const MAX_DOC_ORDER: u32 = std.math.maxInt(u22) - 1;
 
 const CheckVisibilityOptions = struct {
-    check_display: bool = true,
     check_visibility: bool = false,
     check_opacity: bool = false,
-    ua_display_none: bool = true,
 };
 
 // Inline styles always win over stylesheets - use max u64 as sentinel.
@@ -1235,28 +1106,37 @@ pub const InlineAccess = enum {
     scan,
 };
 
-// `frame` is the StyleManager's frame, which callers guarantee is el's owner
-// frame (el.ownerFrame) — the map where the materialized style lives.
-fn inlineValue(el: *Element, property_name: String, comptime access: InlineAccess, frame: *Frame) ?[]const u8 {
+fn inlineProps(el: *Element, comptime access: InlineAccess, frame: *Frame) VisibilityProperties {
     if (!el._flags.has_inline_style) {
         // Neither a style object nor a style attribute; skip both lookups.
+        return .{};
+    }
+    if (inlineStyle(el, access, frame)) |style| {
+        return extractVisibilityProperties(style);
+    }
+    // A JS-created object is read by both modes; `scan` folds the attribute
+    // text instead of parsing it into the page arena.
+    if (access == .scan) {
+        if (el.getAttributeInterned("style")) |attr| {
+            return scanInlineProps(attr);
+        }
+    }
+    return .{};
+}
+
+/// `frame` must be el's owner frame (el.ownerFrame): that is the map where
+/// the materialized style lives.
+fn inlineStyle(el: *Element, comptime access: InlineAccess, frame: *Frame) ?*CSSStyleProperties {
+    if (el.getStyle(frame)) |style| {
+        return style;
+    }
+    if (access == .scan or el.getAttributeInterned("style") == null) {
         return null;
     }
-    if (el.getStyle(frame)) |style| {
-        return styleValue(style, property_name);
-    }
-    // No JS-set style object and no style attribute -> nothing inline to read.
-    const attr = el.getAttributeInterned("style") orelse return null;
-    switch (access) {
-        .materialize => {
-            const style = el.getOrCreateStyle(frame) catch |err| {
-                log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-                return null;
-            };
-            return styleValue(style, property_name);
-        },
-        .scan => return scanInlineValue(attr, property_name.str()),
-    }
+    return el.getOrCreateStyle(frame) catch |err| {
+        log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
+        return null;
+    };
 }
 
 fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
@@ -1265,22 +1145,44 @@ fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
 }
 
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
-// materialized object was built from.
-fn scanInlineValue(attr: []const u8, property_name: []const u8) ?[]const u8 {
-    var value: ?[]const u8 = null;
-    var important = false;
+// materialized object was built from: a normal declaration never overrides an
+// earlier !important one, and an empty value removes the property.
+fn scanInlineProps(attr: []const u8) VisibilityProperties {
+    const Slot = struct {
+        value: ?[]const u8 = null,
+        important: bool = false,
+
+        fn apply(self: *@This(), declaration: CssParser.Declaration) void {
+            if (self.important and !declaration.important) {
+                return;
+            }
+            if (declaration.value.len == 0) {
+                self.* = .{};
+                return;
+            }
+            self.value = declaration.value;
+            self.important = declaration.important;
+        }
+    };
+
+    var slots = [_]Slot{.{}} ** property_names.len;
     var it = CssParser.parseDeclarationsList(attr);
     while (it.next()) |declaration| {
-        if (std.ascii.eqlIgnoreCase(declaration.name, property_name) == false) {
-            continue;
+        for (property_names, &slots) |name, *slot| {
+            if (std.ascii.eqlIgnoreCase(declaration.name, name)) {
+                slot.apply(declaration);
+                break;
+            }
         }
-        if (important and declaration.important == false) {
-            continue;
-        }
-        value = declaration.value;
-        important = declaration.important;
     }
-    return value;
+
+    var props: VisibilityProperties = .{};
+    for (property_names, slots) |name, slot| {
+        if (slot.value) |value| {
+            props.apply(name, value);
+        }
+    }
+    return props;
 }
 
 /// Resolved value of an element's inline `style=` declaration for `property_name`,
@@ -1288,7 +1190,8 @@ fn scanInlineValue(attr: []const u8, property_name: []const u8) ?[]const u8 {
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
-    return inlineValue(el, property_name, .materialize, self.frame);
+    const style = inlineStyle(el, .materialize, self.frame) orelse return null;
+    return styleValue(style, property_name);
 }
 
 /// Bounds computedFontSize's ancestor recursion (the parent walk and
@@ -1511,7 +1414,7 @@ test "StyleManager: packed priority bounds" {
     try testing.expect(MAX_LAYERS < UNLAYERED_RANK);
 }
 
-test "StyleManager: inlineValue: scan matches materialize" {
+test "StyleManager: inlineProps: scan matches materialize" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1521,28 +1424,91 @@ test "StyleManager: inlineValue: scan matches materialize" {
         \\<i style="color:red; DISPLAY : none !important ; display:block"></i>
         \\<i style="display:block;display:none"></i>
         \\<i style="display: none; display: /* c */ block"></i>
+        \\<i style="visibility:hidden !important; display:none; visibility:visible"></i>
+        \\<i style="opacity: 0; pointer-events: none"></i>
+        \\<i style="pointer-events: none !important; pointer-events: auto; opacity: 1"></i>
         \\<i style="visibility:hidden"></i>
         \\<i style="display:"></i>
         \\<i></i>
     );
-    const expected = [_]?[]const u8{ "none", "none", "none", "block", null, null, null };
+    const expected = [_]VisibilityProperties{
+        .{ .display = .none },
+        .{ .display = .none },
+        .{ .display = .none },
+        .{ .display = .other },
+        .{ .display = .none, .visibility_hidden = true },
+        .{ .opacity_zero = true, .pointer_events_none = true },
+        .{ .opacity_zero = false, .pointer_events_none = true },
+        .{ .visibility_hidden = true },
+        .{},
+        .{},
+    };
 
     var i: usize = 0;
     var child = div.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
-        const scanned = inlineValue(el, comptime .wrap("display"), .scan, frame);
+        const scanned = inlineProps(el, .scan, frame);
         // scanning never creates the style object
         try testing.expectEqual(null, el.getStyle(frame));
-        const materialized = inlineValue(el, comptime .wrap("display"), .materialize, frame);
-        if (expected[i]) |value| {
-            try testing.expectEqual(value, scanned);
-            try testing.expectEqual(value, materialized);
-        } else {
-            try testing.expectEqual(null, scanned);
-            try testing.expectEqual(null, materialized);
+        const materialized = inlineProps(el, .materialize, frame);
+        inline for (property_fields) |field| {
+            try testing.expectEqual(@field(expected[i], field), @field(scanned, field));
+            try testing.expectEqual(@field(expected[i], field), @field(materialized, field));
         }
         i += 1;
     }
     try testing.expectEqual(expected.len, i);
+}
+
+test "StyleManager: memo: reuse and invalidation" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+    const sm = &frame._style_manager;
+
+    const div = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(),
+        \\<p><b style="color: red">x</b></p>
+    );
+    const p = div.asNode().firstChild().?.as(Element);
+    const b = p.asNode().firstChild().?.as(Element);
+
+    // The walk memoizes the element and every ancestor
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(3, sm.memo.count());
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(3, sm.memo.count());
+
+    // A scan never creates the style object; a materialize hit does
+    try testing.expectEqual(null, b.getStyle(frame));
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .materialize));
+    try testing.expect(b.getStyle(frame) != null);
+    try testing.expectEqual(3, sm.memo.count());
+
+    // An attribute change anywhere invalidates the memo
+    try p.setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
+    try testing.expectEqual(true, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.hasDisplayNone(b, .scan));
+    try testing.expectEqual(true, sm.hasDisplayNone(p, .scan));
+    try testing.expectEqual(false, sm.hasAuthorDisplayNone(p, .scan));
+
+    p.removeAttributeSafe(comptime .wrap("hidden"), frame);
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+
+    try b.setStyle("display: none; pointer-events: none", frame);
+    try testing.expectEqual(true, sm.hasAuthorDisplayNone(b, .scan));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(b, null, .scan));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p, null, .scan));
+
+    try b.setStyle("display: flex; visibility: hidden", frame);
+    try testing.expectEqual(.flex, sm.display(b, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, null, .{ .check_visibility = true }, .scan));
+    try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(b, null, .scan));
+
+    // A stylesheet change resets the memo
+    sm.sheetModified();
+    try testing.expectEqual(false, sm.isHidden(p, null, .{}, .scan));
+    try testing.expectEqual(2, sm.memo.count());
 }

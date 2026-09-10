@@ -1052,6 +1052,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
 
+        // `:target` matches off the fragment, which just changed.
+        target.styleChanged();
+
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error
@@ -2176,11 +2179,18 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
 pub fn domChanged(self: *Frame) void {
     self._page.dom_version += 1;
+    self.styleChanged();
 
     // A DOM change is our "rendering opportunity": re-evaluate the layout
     // observers. Both are no-ops unless something they track actually changed.
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
+}
+
+/// Stamps the cascade: any change that can alter a selector match or cascade
+/// result, including non-tree state that live collections never see.
+pub fn styleChanged(self: *Frame) void {
+    self._page.style_version += 1;
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -2738,7 +2748,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // so ask it directly whether it's still in the document.
     if (self.document._active_element) |active| {
         if (active.asNode().isConnected() == false) {
-            self.document._active_element = null;
+            self.document.setActiveElement(null, self);
         }
     }
 
@@ -2948,6 +2958,9 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // The parser path does its own (limited) notification and
     // connected-callback work, then returns.
     if (comptime from_parser) {
+        // Not domChanged: live collections keep their cursors mid-parse.
+        self.styleChanged();
+
         // Main-document parser insertions notify per node: scripts running
         // during parsing can observe the document. Fragment parses
         // (innerHTML et al.) stay silent; Node.setHTML queues one combined

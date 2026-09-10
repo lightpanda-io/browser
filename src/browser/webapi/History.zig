@@ -64,6 +64,8 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,
@@ -86,6 +88,8 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,

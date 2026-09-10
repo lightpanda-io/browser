@@ -764,6 +764,16 @@ pub fn getActiveElement(self: *Document) ?*Element {
     return self.getDocumentElement();
 }
 
+/// Focus takes part in the cascade (`:focus`, `:focus-within`), so every write
+/// to `_active_element` has to go through here to stamp the style version.
+pub fn setActiveElement(self: *Document, element: ?*Element, frame: *Frame) void {
+    if (self._active_element == element) {
+        return;
+    }
+    self._active_element = element;
+    frame.styleChanged();
+}
+
 pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
     if (self._style_sheets) |sheets| {
         return sheets;
@@ -1166,7 +1176,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
 
     // reset the document
     self._elements_by_id.clearAndFree(frame.arena);
-    self._active_element = null;
+    self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._style_sheets = null;
     self._implementation = null;

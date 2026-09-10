@@ -1170,7 +1170,7 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     const new_target = self.asEventTarget();
     const doc = self.asNode().ownerDocument(frame) orelse frame.document;
     const old_active = doc._active_element;
-    doc._active_element = self;
+    doc.setActiveElement(self, frame);
 
     if (old_active) |old| {
         if (old == self) {
@@ -1203,7 +1203,7 @@ pub fn blur(self: *Element, frame: *Frame) !void {
     const doc = self.asNode().ownerDocument(frame) orelse frame.document;
     if (doc._active_element != self) return;
 
-    doc._active_element = null;
+    doc.setActiveElement(null, frame);
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
@@ -1358,8 +1358,8 @@ pub const PointerEventsCache = StyleManager.PointerEventsCache;
 // Style checks go through the StyleManager of the element's own frame, not
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
-pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache);
+pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
+    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache, access);
 }
 
 pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {

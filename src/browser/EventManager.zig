@@ -772,6 +772,9 @@ const ActivationState = struct {
                 prev_radio._checked = true;
                 prev_radio._checked_dirty = true;
             }
+            // Listeners ran between setChecked and here, so `:checked` state
+            // built during dispatch has to be stamped as stale.
+            frame.styleChanged();
             return;
         }
 
