@@ -518,7 +518,10 @@ pub fn getResponseURL(self: *XMLHttpRequest) []const u8 {
 }
 
 pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
-    if (self._ready_state != .done) {
+    // https://xhr.spec.whatwg.org/#the-response-attribute
+    // If the response type is default or text, we don't need it to be done to return things.
+    const needs_done = self._response_type != .default and self._response_type != .text;
+    if (needs_done and self._ready_state != .done) {
         return null;
     }
 
