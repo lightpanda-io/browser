@@ -18,33 +18,7 @@
 
 //! The one staticlib Zig links. Domain crates define their own `extern "C"`
 //! entry points; `extern crate` is what pulls an otherwise-unreferenced crate
-//! into the archive (edition 2018+ drops unused `--extern` deps). Process-wide
-//! concerns (the allocator) live here, not in a domain crate.
+//! into the archive (edition 2018+ drops unused `--extern` deps).
 
 extern crate lightpanda_html5ever;
 extern crate lightpanda_render;
-
-#[cfg(feature = "memstats")]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-#[cfg(feature = "memstats")]
-#[repr(C)]
-pub struct Memory {
-    pub resident: usize,
-    pub allocated: usize,
-}
-
-#[cfg(feature = "memstats")]
-#[no_mangle]
-pub extern "C" fn html5ever_get_memory_usage() -> Memory {
-    use tikv_jemalloc_ctl::{epoch, stats};
-
-    // many statistics are cached and only updated when the epoch is advanced.
-    let _ = epoch::advance();
-
-    Memory {
-        resident: stats::resident::read().unwrap_or(0),
-        allocated: stats::allocated::read().unwrap_or(0),
-    }
-}
