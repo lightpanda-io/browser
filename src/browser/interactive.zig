@@ -180,14 +180,13 @@ fn walkInteractive(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
-    var css_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
     if (root.is(Element)) |root_el| {
         // root is outside of the tree walk, so check its visibility upfront.
-        if (!root_el.checkVisibilityCached(null, frame, .scan)) {
+        if (!root_el.isVisible(frame, .scan)) {
             return &.{};
         }
     }
@@ -213,7 +212,7 @@ fn walkInteractive(
 
         const html_el = el.is(Element.Html) orelse continue;
 
-        const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
+        const itype = classifyInteractivity(frame, el, html_el, listener_targets) orelse continue;
 
         const axn = AXNode.fromNode(node);
         const role = axRole(axn);
@@ -298,9 +297,8 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
-    cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(cache, frame, .scan)) return null;
+    if (el.hasPointerEventsNone(frame, .scan)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {

@@ -51,15 +51,12 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
         .label_index = &label_index,
+        .owner_frame = self.dom_node.ownerFrame(self.frame),
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
@@ -74,15 +71,12 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
         .label_index = &label_index,
+        .owner_frame = self.dom_node.ownerFrame(self.frame),
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
@@ -113,9 +107,8 @@ const NodeData = struct {
 const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
     listener_targets: interactive.ListenerTargetMap,
-    visibility_cache: *Element.VisibilityCache,
-    pointer_events_cache: *Element.PointerEventsCache,
     label_index: *Label.LabelByForIndex,
+    owner_frame: *Frame, // node's ow frame, not the callers
 };
 
 fn walk(
@@ -137,8 +130,14 @@ fn walk(
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame, .scan)) {
+        // Hidden subtrees are never entered, so below the root only the
+        // element's own display matters.
+        const style_manager = &ctx.owner_frame._style_manager;
+        const hidden = if (current_depth == 0)
+            style_manager.isHidden(el, .{}, .scan)
+        else
+            style_manager.hasDisplayNone(el, .scan);
+        if (hidden) {
             return;
         }
 
@@ -184,7 +183,7 @@ fn walk(
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -709,8 +708,7 @@ pub fn getNodeDetails(
 
         if (el.is(Element.Html)) |html_el| {
             const listener_targets = try interactive.buildListenerTargetMap(frame, arena);
-            var pointer_events_cache: Element.PointerEventsCache = .empty;
-            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets, &pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -759,6 +757,40 @@ test "SemanticTree backendDOMNodeId" {
     defer testing.allocator.free(json_str);
 
     try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
+}
+
+test "SemanticTree: styles come from the node's own frame" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    // The caller's frame hides #inner; the frame that actually owns the walked
+    // subtree does not. A backendNodeId lookup can hand us a node from another
+    // frame, so the walk must not use the caller's stylesheets.
+    var page_a = try testing.pageTest("cdp/semantic_tree_frame_a.html", .{});
+    defer page_a.close();
+    var page_b = try testing.pageTest("cdp/semantic_tree_frame_b.html", .{});
+    defer page_b.close();
+
+    const frame_a = page_a.frame().?;
+    const frame_b = page_b.frame().?;
+
+    const target = (try frame_b.window._document.querySelector(.wrap("#target"), frame_b)).?.asNode();
+
+    const st: Self = .{
+        .dom_node = target,
+        .registry = &registry,
+        .frame = frame_a,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = std.math.maxInt(u32) - 1,
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try st.textStringify(&aw.writer);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "inner-b") != null);
 }
 
 test "SemanticTree max_depth" {
