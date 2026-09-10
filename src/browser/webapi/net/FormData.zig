@@ -81,7 +81,7 @@ pub fn init(form_: ?*Form, submitter: ?*Element, exec: *const Execution) !*FormD
 }
 
 pub fn initWithCharset(form_: ?*Form, submitter: ?*Element, charset: []const u8, exec: *const Execution) !*FormData {
-    const arena = try exec.getArena(.small, "FormData");
+    const arena = try exec.getArena(.small, "FormData.initWithCharset");
     errdefer arena.release();
 
     const form_data = try arena.create(FormData);
@@ -130,7 +130,7 @@ pub fn initWithCharset(form_: ?*Form, submitter: ?*Element, charset: []const u8,
 // Fetch §6.4 "package data" with type FormData: parse an
 // application/x-www-form-urlencoded body back into a FormData.
 pub fn initFromUrlEncoded(bytes: []const u8, exec: *const Execution) !*FormData {
-    const arena = try exec.getArena(.small, "FormData");
+    const arena = try exec.getArena(.small, "FormData.initFromUrlEncoded");
     errdefer arena.release();
 
     const form_data = try arena.create(FormData);
@@ -146,7 +146,7 @@ pub fn initFromUrlEncoded(bytes: []const u8, exec: *const Execution) !*FormData 
 // Fetch §6.4 "package data" with type FormData: parse a multipart/form-data
 // body back into a FormData. `boundary` is the Content-Type boundary param.
 pub fn initFromMultipart(bytes: []const u8, boundary: []const u8, exec: *const Execution) !*FormData {
-    const arena = try exec.getArena(.small, "FormData");
+    const arena = try exec.getArena(.small, "FormData.initFromMultipart");
     errdefer arena.release();
 
     const form_data = try arena.create(FormData);
@@ -257,7 +257,7 @@ pub fn append(self: *FormData, name: []const u8, value: EntryValue, filename: ?[
 // the entry owns that reference and deleteByName releases it.
 
 fn fileFrom(source: *Blob, name: []const u8, exec: *Execution) !*File {
-    const arena = try exec.getArena(source._slice.len + source._mime.len + 256, "Blob");
+    const arena = try exec.getArena(source._slice.len + source._mime.len + 256, "FormData.fileFrom");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{
@@ -1007,7 +1007,7 @@ test "FormData: multipart empty body" {
 }
 
 fn buildTestFile(arena: Allocator, page: *@import("../../Page.zig"), name: []const u8, mime: []const u8, body: []const u8) !*File {
-    const blob_arena = try page.getArena(body.len + mime.len + 256, "Blob");
+    const blob_arena = try page.getArena(body.len + mime.len + 256, "FormData.buildTestFile");
     const file = try Factory.chainedWithAllocator(blob_arena.allocator(), .{
         try Blob.buildValueFromBytes(blob_arena, body, mime),
         File{

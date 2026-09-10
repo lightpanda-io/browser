@@ -59,7 +59,10 @@ allocator: Allocator,
 mutex: std.Io.Mutex = .init,
 entry_pool: std.heap.MemoryPool(Arena),
 
-_leak_track: if (lp.IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (lp.IS_DEBUG) .empty else {},
+// Arenas checked out, keyed by the acquire() label. Always tracked: a
+// leak only shows in production, where the debug leak panic is compiled
+// out, and the label is the only thing that names the leaking call site.
+_leak_track: std.StringHashMapUnmanaged(std.enums.EnumArray(BucketSize, isize)) = .empty,
 
 pub fn init(allocator: Allocator, config: Config) ArenaPool {
     return .{
@@ -77,16 +80,19 @@ pub fn deinit(self: *ArenaPool) void {
         var has_leaks = false;
         var it = self._leak_track.iterator();
         while (it.next()) |kv| {
-            if (kv.value_ptr.* != 0) {
-                log.err(.bug, "ArenaPool leak", .{ .name = kv.key_ptr.*, .count = kv.value_ptr.* });
-                has_leaks = true;
+            for (std.enums.values(BucketSize)) |size| {
+                const count = kv.value_ptr.get(size);
+                if (count != 0) {
+                    log.err(.bug, "ArenaPool leak", .{ .name = kv.key_ptr.*, .size = @tagName(size), .count = count });
+                    has_leaks = true;
+                }
             }
         }
         if (has_leaks) {
             @panic("ArenaPool: leaked arenas detected");
         }
-        self._leak_track.deinit(self.allocator);
     }
+    self._leak_track.deinit(self.allocator);
 
     // Free all arenas in all buckets
     inline for (&[_]*Bucket{ &self.tiny, &self.small, &self.medium, &self.large }) |bucket| {
@@ -97,6 +103,42 @@ pub fn deinit(self: *ArenaPool) void {
         }
     }
     self.entry_pool.deinit(self.allocator);
+}
+
+// Caller must hold the mutex.
+fn trackAcquire(self: *ArenaPool, debug: []const u8, size: BucketSize) !void {
+    const gop = try self._leak_track.getOrPut(self.allocator, debug);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .initFill(0);
+    }
+    gop.value_ptr.getPtr(size).* += 1;
+}
+
+// Prometheus gauge naming every checked-out arena by its acquire() label and
+// bucket. arena_inflight says which bucket is growing; this says which caller.
+pub fn writeInflightByName(self: *ArenaPool, writer: *std.Io.Writer) !void {
+    try writer.writeAll(
+        "# HELP arena_inflight_by_name Arenas currently checked out, by acquire() label and bucket\n" ++
+            "# TYPE arena_inflight_by_name gauge\n",
+    );
+
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+
+    var it = self._leak_track.iterator();
+    while (it.next()) |kv| {
+        for (std.enums.values(BucketSize)) |size| {
+            const count = kv.value_ptr.get(size);
+            if (count == 0) {
+                continue;
+            }
+            try writer.print("arena_inflight_by_name{{name=\"{f}\",size=\"{s}\"}} {d}\n", .{
+                std.zig.fmtString(kv.key_ptr.*),
+                @tagName(size),
+                count,
+            });
+        }
+    }
 }
 
 pub fn bucketFor(self: *const ArenaPool, size: usize) BucketSize {
@@ -147,14 +189,8 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         bucket.free_list = entry.next;
         bucket.free_list_len -= 1;
         entry.released = false;
-        if (lp.IS_DEBUG) {
-            entry.debug = debug;
-            const gop = try self._leak_track.getOrPut(self.allocator, debug);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = 0;
-            }
-            gop.value_ptr.* += 1;
-        }
+        entry.debug = debug;
+        try self.trackAcquire(debug, bucket_size);
         entry.account = account;
         lp.metrics.arena_hit.incr(bucket_size);
         return entry;
@@ -171,20 +207,14 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         .bytes = 0,
         .account = account,
         .reported = 0,
-        .debug = if (lp.IS_DEBUG) debug else {},
+        .debug = debug,
         ._arena = undefined,
     };
     // Routed through the entry so it sees every node the arena takes and gives
     // back. entry is pool-allocated, so this pointer is stable.
     entry._arena = ArenaAllocator.init(entry.backing());
 
-    if (lp.IS_DEBUG) {
-        const gop = try self._leak_track.getOrPut(self.allocator, debug);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = 0;
-        }
-        gop.value_ptr.* += 1;
-    }
+    try self.trackAcquire(debug, bucket_size);
     return entry;
 }
 
@@ -203,19 +233,19 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
             // it'll crash in some random code.
             lp.assert(false, "ArenaPool double release", .{
                 .bucket = @tagName(bucket.size),
-                .name = if (comptime lp.IS_DEBUG) entry.debug else "",
+                .name = entry.debug,
             });
         }
         entry.released = true;
 
-        if (comptime lp.IS_DEBUG) {
-            if (self._leak_track.getPtr(entry.debug)) |count| {
+        {
+            if (self._leak_track.getPtr(entry.debug)) |counts| {
                 // Can't go negative: the released check above already caught
                 // a double release of this entry.
-                count.* -= 1;
+                counts.getPtr(bucket.size).* -= 1;
             } else {
                 log.err(.bug, "ArenaPool release unknown", .{ .name = entry.debug });
-                @panic("ArenaPool: release of untracked arena");
+                if (comptime lp.IS_DEBUG) @panic("ArenaPool: release of untracked arena");
             }
         }
     }

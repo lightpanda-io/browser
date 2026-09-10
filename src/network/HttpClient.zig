@@ -1385,9 +1385,9 @@ const SyncContext = struct {
             return arena.allocator();
         }
         const arena = if (content_length) |cl|
-            try self.client.arena_pool.acquire(cl, "syncRequest.body")
+            try self.client.arena_pool.acquire(cl, "HttpClient.bodyAllocator.sized")
         else
-            try self.client.arena_pool.acquire(.large, "syncRequest.body");
+            try self.client.arena_pool.acquire(.large, "HttpClient.bodyAllocator.unsized");
         self.arena = arena;
         return arena.allocator();
     }

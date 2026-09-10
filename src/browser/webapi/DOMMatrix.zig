@@ -35,7 +35,7 @@ pub fn init(init_: ?js.Value, exec: *const js.Execution) !*DOMMatrix {
 }
 
 pub fn create(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrix {
-    const arena = try page.getArena(.tiny, "DOMMatrix");
+    const arena = try page.getArena(.tiny, "DOMMatrix.create");
     errdefer arena.release();
 
     const self = try Factory.chainedWithAllocator(arena.allocator(), .{

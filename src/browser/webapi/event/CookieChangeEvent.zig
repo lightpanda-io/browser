@@ -46,7 +46,7 @@ const CookieChangeEventOptions = struct {
 const Options = Event.inheritOptions(CookieChangeEvent, CookieChangeEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, exec: *const Execution) !*CookieChangeEvent {
-    const arena = try exec.getArena(.tiny, "CookieChangeEvent");
+    const arena = try exec.getArena(.tiny, "CookieChangeEvent.init");
     errdefer arena.release();
     const type_string = try String.init(arena.allocator(), typ, .{});
 
@@ -74,7 +74,7 @@ pub fn initSingle(
     snapshot: Notification.CookieChanged,
     exec: *const Execution,
 ) !*CookieChangeEvent {
-    const arena = try exec.getArena(.tiny, "CookieChangeEvent");
+    const arena = try exec.getArena(.tiny, "CookieChangeEvent.initSingle");
     errdefer arena.release();
     const type_string = try String.init(arena.allocator(), "change", .{});
 

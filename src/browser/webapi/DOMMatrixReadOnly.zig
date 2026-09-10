@@ -79,7 +79,7 @@ pub fn releaseRef(self: *DOMMatrixReadOnly, page: *Page) void {
 }
 
 pub fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
-    const arena = try page.getArena(.tiny, "DOMMatrix");
+    const arena = try page.getArena(.tiny, "DOMMatrixReadOnly.createBare");
     errdefer arena.release();
 
     const self = try arena.create(DOMMatrixReadOnly);

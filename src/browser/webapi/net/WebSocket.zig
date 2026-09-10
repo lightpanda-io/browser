@@ -584,7 +584,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
 
     switch (data) {
         .blob => |blob| {
-            const arena = try self._exec.getArena(blob._slice.len, "WebSocket.message");
+            const arena = try self._exec.getArena(blob._slice.len, "WebSocket.send.blob");
             errdefer arena.release();
             try self.queueMessage(.{ .binary = .{
                 .arena = arena,
@@ -593,7 +593,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
         },
         .js_val => |js_val| {
             if (js_val.isString()) |str| {
-                const arena = try self._exec.getArena(str.len(), "WebSocket.message");
+                const arena = try self._exec.getArena(str.len(), "WebSocket.send.string");
                 errdefer arena.release();
                 try self.queueMessage(.{ .text = .{
                     .arena = arena,
@@ -603,7 +603,7 @@ pub fn send(self: *WebSocket, data: SendData) !void {
                 const binary = try js_val.toZig(BinaryData);
                 const buffer = binary.asBuffer();
 
-                const arena = try self._exec.getArena(buffer.len, "WebSocket.message");
+                const arena = try self._exec.getArena(buffer.len, "WebSocket.send.buffer");
                 errdefer arena.release();
                 try self.queueMessage(.{ .binary = .{
                     .arena = arena,

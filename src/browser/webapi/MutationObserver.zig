@@ -224,7 +224,7 @@ pub fn notifyAttributeChange(
             }
         }
 
-        const arena = try frame.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationObserver.notifyAttributeChange");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -268,7 +268,7 @@ pub fn notifyCharacterDataChange(
             continue;
         }
 
-        const arena = try frame.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationObserver.notifyCharacterDataChange");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,
@@ -315,7 +315,7 @@ pub fn notifyChildListChange(
             continue;
         }
 
-        const arena = try frame.getArena(.tiny, "MutationRecord");
+        const arena = try frame.getArena(.tiny, "MutationObserver.notifyChildListChange");
         const record = try arena.create(MutationRecord);
         record.* = .{
             ._arena = arena,

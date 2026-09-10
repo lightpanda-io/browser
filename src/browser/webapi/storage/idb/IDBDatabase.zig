@@ -249,7 +249,7 @@ pub fn getVersion(self: *const IDBDatabase) i64 {
 }
 
 pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList {
-    const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
+    const arena = try exec.getArena(.small, "IDBDatabase.getObjectStoreNames");
     errdefer arena.release();
 
     const names = try self._engine.objectStoreNames(arena.allocator(), self._database_id);

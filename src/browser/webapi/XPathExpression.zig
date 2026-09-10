@@ -70,7 +70,7 @@ pub fn evaluate(
     // which matches every modern browser's effective behavior.
     _ = result;
 
-    const arena = try frame.getArena(.medium, "XPathResult");
+    const arena = try frame.getArena(.medium, "XPathExpression.evaluate");
     errdefer arena.release();
 
     const eval_result = try xpath.Evaluator.evaluate(arena.allocator(), self._expr, context_node, frame);

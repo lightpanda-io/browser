@@ -134,7 +134,7 @@ pub const Durability = enum {
 };
 
 pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Execution) !*IDBTransaction {
-    const arena = try exec.getArena(.small, "IDBTransaction");
+    const arena = try exec.getArena(.small, "IDBTransaction.init");
 
     const self = blk: {
         errdefer arena.release();
@@ -163,7 +163,7 @@ pub fn init(db: *IDBDatabase, mode: Mode, durability: Durability, exec: *Executi
 // no gate registration, so it starts with zero refs: the caller (the open
 // path) must pin it for the duration of the upgrade.
 pub fn initVersionChange(db: *IDBDatabase, exec: *Execution) !*IDBTransaction {
-    const arena = try exec.getArena(.small, "IDBTransaction");
+    const arena = try exec.getArena(.small, "IDBTransaction.initVersionChange");
     errdefer arena.release();
 
     const self = try exec._factory.eventTargetWithAllocator(arena.allocator(), IDBTransaction{
@@ -563,7 +563,7 @@ pub fn getDb(self: *IDBTransaction) *IDBDatabase {
 }
 
 pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringList {
-    const arena = try exec.getArena(.small, "IDB.getObjectStoreNames");
+    const arena = try exec.getArena(.small, "IDBTransaction.getObjectStoreNames");
     errdefer arena.release();
 
     // A versionchange transaction spans every store; its set changes as the

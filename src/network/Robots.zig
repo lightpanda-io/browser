@@ -139,8 +139,27 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .{ .present = robots });
+        // Two fetches for the same host can both land here, the check isn't
+        // atomic. If we just overwrite the entry, we'll leak the previous key.
+        if (try self.putKey(url)) |value_ptr| {
+            value_ptr.* = .{ .present = robots };
+            return;
+        }
+        var discarded = robots;
+        discarded.deinit(self.allocator);
+    }
+
+    // Reserves `url` in the map, duping the key. Returns the value pointer to
+    // fill in, or null when an entry already exists (which the caller must
+    // not overwrite). Caller holds the mutex.
+    fn putKey(self: *RobotStore, url: []const u8) !?*RobotsEntry {
+        const gop = try self.map.getOrPut(self.allocator, url);
+        if (gop.found_existing) {
+            return null;
+        }
+        errdefer _ = self.map.remove(url);
+        gop.key_ptr.* = try self.allocator.dupe(u8, url);
+        return gop.value_ptr;
     }
 
     // The returned slice is owned by the store
@@ -160,8 +179,10 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .allowed);
+        // See put(): an existing entry is left alone rather than overwritten.
+        if (try self.putKey(url)) |value_ptr| {
+            value_ptr.* = .allowed;
+        }
     }
 
     /// This URL is fully restricted from crawling.
@@ -169,8 +190,10 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .disallowed);
+        // See put(): an existing entry is left alone rather than overwritten.
+        if (try self.putKey(url)) |value_ptr| {
+            value_ptr.* = .disallowed;
+        }
     }
 };
 

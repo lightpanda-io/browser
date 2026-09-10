@@ -95,7 +95,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*File {
     const name = try reader.readBytes();
     const last_modified = try reader.readUint64();
 
-    const arena = try page.getPinnedArena(data.len + mime.len + name.len + 256, "Blob.clone");
+    const arena = try page.getPinnedArena(data.len + mime.len + name.len + 256, "File.structuredDeserialize");
     errdefer arena.release();
 
     const file = try Factory.chainedWithAllocator(arena.allocator(), .{

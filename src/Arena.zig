@@ -63,7 +63,7 @@ account: ?*Account,
 // `bytes` as of the last report() — what the account has already been told.
 reported: usize,
 
-debug: if (lp.IS_DEBUG) []const u8 else void = if (lp.IS_DEBUG) "" else {},
+debug: []const u8 = "",
 
 pub fn allocator(self: *Arena) Allocator {
     return self._arena.allocator();

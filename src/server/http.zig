@@ -478,6 +478,7 @@ const Route = struct {
 const routes = [_]Route{
     .{ .method = .GET, .path = "/", .gate = .cdp, .handler = upgradeCDP },
     .{ .method = .GET, .path = "/metrics", .gate = .metrics, .handler = serveMetrics },
+    .{ .method = .GET, .path = "/metrics2", .gate = .metrics, .handler = serveMetrics2 },
     .{ .method = .GET, .path = "/json/version", .gate = .cdp, .handler = serveJSONVersion },
     .{ .method = .GET, .path = "/json/list", .gate = .cdp, .handler = serveJSONList },
     .{ .method = .GET, .path = "/json", .gate = .cdp, .handler = serveJSONList },
@@ -654,6 +655,15 @@ fn serveJSONProtocol(server: *Server, conn: *Connection, req: *Connection.Reques
 fn serveMetrics(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
     const writer = try beginBody(server);
     lp.metrics.write(writer);
+    return serveDynamicHTTPResponse(server, conn, req, "200 OK", "text/plain; version=0.0.4; charset=utf-8");
+}
+
+fn serveMetrics2(server: *Server, conn: *Connection, req: *Connection.Request) !Served {
+    const writer = try beginBody(server);
+    lp.metrics.write(writer);
+    server.app.arena_pool.writeInflightByName(writer) catch |err| {
+        lp.log.err(.app, "arena inflight metrics", .{ .err = err });
+    };
     return serveDynamicHTTPResponse(server, conn, req, "200 OK", "text/plain; version=0.0.4; charset=utf-8");
 }
 

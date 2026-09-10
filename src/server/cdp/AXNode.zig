@@ -1523,7 +1523,7 @@ test "AXNode: writer" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
@@ -1613,7 +1613,7 @@ test "AXNode: writer prunes hidden and resolves labels" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
@@ -1746,7 +1746,7 @@ test "AXNode: Writer query filters by role" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
@@ -1827,7 +1827,7 @@ test "AXNode: writer maps password input to textbox" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
         .root = node,
@@ -1878,7 +1878,7 @@ test "AXNode: Writer query filters by accessible name" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
@@ -1917,7 +1917,7 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
 
     // Fixture has a CSS-hidden checkbox `<input id="toggle-switch" ...>` plus
@@ -1968,7 +1968,7 @@ test "AXNode: Writer query no match returns empty array" {
 
     const node = try registry.register(doc.asNode());
     var label_index: Label.LabelByForIndex = .{};
-    const temp_arena = try frame.getArena(.medium, "AXNode");
+    const temp_arena = try frame.getArena(.medium, "AXNode test");
     defer temp_arena.release();
 
     const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{

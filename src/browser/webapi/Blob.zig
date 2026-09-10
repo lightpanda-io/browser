@@ -117,7 +117,7 @@ pub fn buildValue(parts_: ?[]const []const u8, opts: InitOptions, exec: *const E
 
     const data, const arena = blk: {
         const parts = parts_ orelse {
-            break :blk .{ "", try exec.getPinnedArena(.tiny, "Blob") };
+            break :blk .{ "", try exec.getPinnedArena(.tiny, "Blob.buildValue") };
         };
         var len: usize = 0;
         for (parts) |part| {
@@ -171,7 +171,7 @@ fn normalizeType(arena: std.mem.Allocator, input: []const u8) ![]const u8 {
 
 /// Creates a new Blob from raw byte slices (for internal Zig use).
 pub fn initFromBytes(data: []const u8, content_type: []const u8, exec: *const Execution) !*Blob {
-    const arena = try exec.getPinnedArena(data.len + content_type.len + 256, "Blob");
+    const arena = try exec.getPinnedArena(data.len + content_type.len + 256, "Blob.initFromBytes");
     errdefer arena.release();
 
     const self = try arena.create(Blob);
@@ -201,7 +201,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*Blob {
     const mime = try reader.readBytes();
     const data = try reader.readBytes();
 
-    const arena = try page.getPinnedArena(data.len + mime.len + 256, "Blob.clone");
+    const arena = try page.getPinnedArena(data.len + mime.len + 256, "Blob.clone.structuredDeserialize");
     errdefer arena.release();
 
     const self = try arena.create(Blob);

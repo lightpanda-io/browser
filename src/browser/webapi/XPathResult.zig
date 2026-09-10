@@ -89,7 +89,7 @@ pub fn fromExpression(
     requested_type: u16,
     frame: *Frame,
 ) !*XPathResult {
-    const arena = try frame.getArena(.medium, "XPathResult");
+    const arena = try frame.getArena(.medium, "XPathResult.fromExpression");
     errdefer arena.release();
 
     // The AST borrows string slices from its input (literals, names,
