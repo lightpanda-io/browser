@@ -269,7 +269,9 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
 }
 
 pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
-    const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
+    const document = frame.window._document;
+    const target = (try document.elementFromPoint(x, y, frame)) orelse
+        document.getDocumentElement() orelse return;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame mouse wheel", .{
             .url = frame.url,
@@ -301,15 +303,48 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
         return;
     }
 
-    // Apply the scroll and fire a trusted scroll event, mirroring WebDriver wheel.
+    // Scroll the nearest scroll container under the cursor, else the viewport.
     // CDP deltas are untrusted, so guard NaN and saturate the addition.
-    const new_left: i32 = @as(i32, @intCast(target.getScrollLeft(frame))) +| deltaToScroll(delta_x);
-    const new_top: i32 = @as(i32, @intCast(target.getScrollTop(frame))) +| deltaToScroll(delta_y);
-    try target.setScrollLeft(new_left, frame);
-    try target.setScrollTop(new_top, frame);
+    const dx = deltaToScroll(delta_x);
+    const dy = deltaToScroll(delta_y);
+    if (scrollContainerOf(target, frame)) |container| {
+        const new_left: i32 = @as(i32, @intCast(container.getScrollLeft(frame))) +| dx;
+        const new_top: i32 = @as(i32, @intCast(container.getScrollTop(frame))) +| dy;
+        try container.setScrollLeft(new_left, frame);
+        try container.setScrollTop(new_top, frame);
 
-    const scroll_event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page);
-    try frame._event_manager.dispatch(target.asEventTarget(), scroll_event);
+        const scroll_event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page);
+        try frame._event_manager.dispatch(container.asEventTarget(), scroll_event);
+        return;
+    }
+    try frame.window.scrollBy(.{ .x = dx }, dy, frame);
+}
+
+// Closest ancestor-or-self with overflow auto or scroll; html/body scroll the viewport.
+fn scrollContainerOf(start: *Element, frame: *Frame) ?*Element {
+    var current: ?*Element = start;
+    while (current) |el| : (current = el.parentElement()) {
+        switch (el.getTag()) {
+            .html, .body => return null,
+            else => {},
+        }
+        if (isScrollContainer(el, frame)) {
+            return el;
+        }
+    }
+    return null;
+}
+
+fn isScrollContainer(el: *Element, frame: *Frame) bool {
+    const style = frame.window.getComputedStyle(el, null, frame) catch return false;
+    const decl = style.asCSSStyleDeclaration();
+    inline for (.{ "overflow-y", "overflow-x", "overflow" }) |property| {
+        const value = decl.getPropertyValue(property, frame);
+        if (std.mem.indexOf(u8, value, "auto") != null or std.mem.indexOf(u8, value, "scroll") != null) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn deltaToScroll(d: f64) i32 {

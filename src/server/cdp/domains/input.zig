@@ -297,6 +297,90 @@ test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: dispatchMouseEvent mouseWheel scrolls a scroll container, not the viewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+    });
+
+    const box = try ls.local.compileAndRun("document.getElementById('scrollbox').scrollTop === 40 && window.scrolled === true", null);
+    try testing.expect(box.isTrue());
+    const win = try ls.local.compileAndRun("window.scrollY === 0", null);
+    try testing.expect(win.isTrue());
+}
+
+test "cdp.input: dispatchMouseEvent mouseWheel on page content scrolls the viewport" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaX = 5, .deltaY = 600 },
+    });
+    var result = try ls.local.compileAndRun("window.scrollX === 5 && window.scrollY === 600", null);
+    try testing.expect(result.isTrue());
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = -200 },
+    });
+    result = try ls.local.compileAndRun("window.scrollY === 400", null);
+    try testing.expect(result.isTrue());
+
+    // No element under the point.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = 100_000, .y = 100_000, .deltaY = 100 },
+    });
+    result = try ls.local.compileAndRun("window.scrollY === 500", null);
+    try testing.expect(result.isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click fires dblclick" {
     var ctx = try testing.context();
     defer ctx.deinit();
