@@ -66,7 +66,7 @@ pub const TestContext = struct {
 
     pub fn bidi(self: *TestContext) *BiDi {
         if (!self.bidi_initialized) {
-            self.bidi_.init(base.test_app, self.bidi_socket, &self.inbox, null) catch |err| @panic(@errorName(err));
+            self.bidi_.init(base.test_app, &self.inbox, .{ .socket = self.bidi_socket }) catch |err| @panic(@errorName(err));
             self.bidi_initialized = true;
             self.driver = .init(.{ .bidi = &self.bidi_ }, &self.inbox);
             self.driver.attach();

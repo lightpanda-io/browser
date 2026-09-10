@@ -406,6 +406,7 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "http_session_timeout", .type = u32, .default = 60 },
             .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
@@ -879,6 +880,15 @@ pub fn maxConnections(self: *const Config) u16 {
     };
 }
 
+// Null disables the reaper: sessions then only end on DELETE /session/{id}.
+pub fn httpSessionTimeout(self: *const Config) ?u64 {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.http_session_timeout == 0) null else @as(u64, opts.http_session_timeout) * 1000,
+        .mcp => 60_000, // 1 minute
+        else => unreachable,
+    };
+}
+
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
@@ -1311,6 +1321,26 @@ test "Config: parseArgs --http-version" {
         const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-version", "3" };
         const proc_args: std.process.Args = .{ .vector = &argv };
         try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs --http-session-timeout" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(60_000, config.httpSessionTimeout());
+    }
+    {
+        // 0 disables the reaper
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-session-timeout", "0" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
     }
 }
 
