@@ -126,9 +126,8 @@ pub fn compile(context: *const Context, pattern: []const u8, case_insensitive: b
         &err_offset,
         context.compile_context,
     ) orelse {
-        // Compile errors are positive codes; 21 is the one for a failed
-        // allocation, and that is ours, not the pattern's.
-        if (err_code == 21) return error.OutOfMemory;
+        // A failed allocation is ours, not the pattern's.
+        if (err_code == pcre2.PCRE2_ERROR_HEAP_FAILED) return error.OutOfMemory;
         var buf: [256]u8 = undefined;
         const len = pcre2.pcre2_get_error_message_8(err_code, &buf, buf.len);
         const message: []const u8 = if (len < 0) "unknown error" else buf[0..@intCast(len)];
