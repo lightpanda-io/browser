@@ -665,6 +665,19 @@ test "adblock.AdBlocker: the regex rules from EasyList" {
     try expectVerdict(&blocker, .none, "https://x.com/ABCD.js", "x.com", script);
 }
 
+test "adblock.AdBlocker: a regex is found under every token it may match" {
+    var blocker: AdBlocker = try .init(testing.allocator);
+    defer blocker.deinit();
+
+    try testLoad(&blocker,
+        \\/\/ads(\/?x|\/y)/$script
+    );
+    try expectVerdict(&blocker, .blocked, "https://example.com/adsx", "example.com", script);
+    try expectVerdict(&blocker, .blocked, "https://example.com/ads/x", "example.com", script);
+    try expectVerdict(&blocker, .blocked, "https://example.com/ads/y", "example.com", script);
+    try expectVerdict(&blocker, .none, "https://example.com/ads/z", "example.com", script);
+}
+
 test "adblock.AdBlocker: $badfilter removes a regex rule" {
     var blocker: AdBlocker = try .init(testing.allocator);
     defer blocker.deinit();

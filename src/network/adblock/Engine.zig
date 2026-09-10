@@ -637,12 +637,25 @@ const RegexShape = struct {
         return c == maybe_token or c == maybe_token_optional or isTokenChar(c);
     }
 
+    /// Whether what `s` matches could start with a token character. An
+    /// optional non-token stretch may be absent, so whatever follows it
+    /// answers instead.
     fn startsTokenish(s: []const u8) bool {
-        return s.len != 0 and isTokenish(s[0]);
+        for (s) |c| {
+            if (isTokenish(c)) return true;
+            if (c != not_token_optional) return false;
+        }
+        return false;
     }
 
     fn endsTokenish(s: []const u8) bool {
-        return s.len != 0 and isTokenish(s[s.len - 1]);
+        var i = s.len;
+        while (i > 0) {
+            i -= 1;
+            if (isTokenish(s[i])) return true;
+            if (s[i] != not_token_optional) return false;
+        }
+        return false;
     }
 };
 
@@ -692,6 +705,9 @@ test "adblock.Engine: regex filters yield the tokens every match carries" {
 
     // An optional stretch may vanish and glue its neighbours: "adsbanner".
     tokens = try tokensOf(arena, "/\\/ads\\/?banner\\//", &buf);
+    try testing.expectEqual(0, tokens.len);
+    // ... also from inside a group: "adsx" is a match.
+    tokens = try tokensOf(arena, "/\\/ads(\\/?x|\\/y)/", &buf);
     try testing.expectEqual(0, tokens.len);
     // A repeat is not the literal it repeats.
     tokens = try tokensOf(arena, "/\\/ab+c\\//", &buf);
