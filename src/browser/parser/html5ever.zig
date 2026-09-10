@@ -96,13 +96,6 @@ pub extern "c" fn html5ever_parse_fragment(
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
 pub extern "c" fn html5ever_attribute_iterator_count(ctx: *anyopaque) usize;
 
-pub extern "c" fn html5ever_get_memory_usage() MemoryUsage;
-
-const MemoryUsage = extern struct {
-    resident: usize,
-    allocated: usize,
-};
-
 // Streaming parser API
 pub extern "c" fn html5ever_streaming_parser_create(
     doc: *anyopaque,
