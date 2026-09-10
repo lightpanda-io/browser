@@ -25,11 +25,15 @@ const http = @import("http.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
 const HttpClient = @import("HttpClient.zig");
+const Network = @import("Network.zig");
+
+const CorsStore = @import("CorsStore.zig");
 
 const log = lp.log;
 
 const CorsGate = @This();
 
+network: *Network,
 single_flight: SingleFlight,
 
 // CORS Request Headers
@@ -220,6 +224,22 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         return .allowed;
     }
 
+    if (try URL.getOrigin(transfer.arena.allocator(), req.url)) |target| {
+        if (self.network.cors_store.get(.{ .origin = origin, .target = target })) |cached| {
+            const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
+            if (CorsStore.covers(cached, req.method, req.credentials_mode == .include, authored.items)) {
+                log.debug(.cors, "cross origin", .{
+                    .url = req.url,
+                    .origin = origin,
+                    .preflight = false,
+                    .cached = true,
+                });
+                lp.metrics.cors_check.incr(.cached);
+                return .allowed;
+            }
+        }
+    }
+
     log.debug(.cors, "cross origin", .{
         .url = req.url,
         .origin = origin,
@@ -229,6 +249,21 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     try self.fetchThenResume(transfer);
     return .pending;
+}
+
+fn collectAuthoredHeaders(transfer: *Transfer, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    var header_names: std.ArrayList([]const u8) = .empty;
+    for (transfer.req_headers.items) |hdr| {
+        if (hdr.source != .author) continue;
+        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
+        try header_names.append(allocator, try std.ascii.allocLowerString(allocator, hdr.name));
+    }
+    std.mem.sort([]const u8, header_names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+    return header_names;
 }
 
 const CorsKey = struct {
