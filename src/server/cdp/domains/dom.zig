@@ -57,6 +57,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getOuterHTML,
         requestNode,
         setFileInputFiles,
+        focus,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -77,6 +78,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getOuterHTML => return getOuterHTML(cmd),
         .requestNode => return requestNode(cmd),
         .setFileInputFiles => return setFileInputFiles(cmd),
+        .focus => return focus(cmd),
     }
 }
 
@@ -682,6 +684,23 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+fn focus(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    try element.focus(frame);
+
+    return cmd.sendResult(null, .{});
+}
+
 fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
     // Mirror File.init: a Blob and File sharing one reference-counted arena,
     // but read the bytes straight off disk into it (single copy, no JS parts).
@@ -848,6 +867,45 @@ test "cdp.dom: performSearch with XPath" {
         .params = .{ .query = "div p" },
     });
     try ctx.expectSentResult(.{ .searchId = "4", .resultCount = 2 }, .{ .id = 24 });
+}
+
+test "cdp.dom: focus makes the node activeElement and routes key events to it" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "#keyTarget" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.focus", .params = .{ .nodeId = 1 } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    var result = try ls.local.compileAndRun("document.activeElement.id === 'keyTarget'", null);
+    try testing.expect(result.isTrue());
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .text = "a" },
+    });
+    result = try ls.local.compileAndRun("window.keyPressed === 'a' && document.getElementById('keyTarget').value === 'a'", null);
+    try testing.expect(result.isTrue());
 }
 
 test "cdp.dom: setFileInputFiles on file input" {
