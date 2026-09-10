@@ -71,7 +71,7 @@ pub fn getText(self: *const Option, frame: *Frame) []const u8 {
     return node.getTextContentAlloc(frame.call_arena) catch "";
 }
 
-pub fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
+fn setText(self: *Option, value: []const u8, frame: *Frame) !void {
     try self.asNode().setTextContent(value, frame);
 }
 
@@ -79,7 +79,7 @@ pub fn getSelected(self: *const Option) bool {
     return self._selected;
 }
 
-pub fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
+fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
     self._selected = selected;
     if (self.ownerSelect()) |select| {
         if (selected) {
@@ -103,11 +103,11 @@ fn ownerSelect(self: *Option) ?*Select {
     return null;
 }
 
-pub fn getDefaultSelected(self: *const Option) bool {
+fn getDefaultSelected(self: *const Option) bool {
     return self.asConstElement().hasAttributeInterned("selected");
 }
 
-pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
+fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
     self._default_selected = value;
     if (value) {
         try self.asElement().setAttributeSafe(comptime .wrap("selected"), .wrap(""), frame);
@@ -120,11 +120,11 @@ pub fn setDefaultSelected(self: *Option, value: bool, frame: *Frame) !void {
 // On getting, return the `label` content attribute if present (verbatim, even
 // when empty), otherwise the value of the `text` IDL attribute. On setting,
 // reflect to the `label` content attribute.
-pub fn getLabel(self: *const Option, frame: *Frame) []const u8 {
+fn getLabel(self: *const Option, frame: *Frame) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("label")) orelse self.getText(frame);
 }
 
-pub fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
+fn setLabel(self: *Option, label: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("label"), .wrap(label), frame);
 }
 

@@ -70,7 +70,7 @@ pub fn evaluate(arena: Allocator, expr: *const ast.Expr, context_node: *Node, fr
     return res;
 }
 
-pub const SearchError = Error || Parser.Error;
+const SearchError = Error || Parser.Error;
 
 /// Convenience for `DOM.performSearch`: parse + evaluate and unwrap the
 /// node-set. Top-level scalar expressions yield an empty slice
@@ -769,7 +769,7 @@ fn predicateMatches(val: result.Result, position: usize) bool {
     };
 }
 
-pub fn sortDocOrder(nodes: []*Node) void {
+fn sortDocOrder(nodes: []*Node) void {
     if (nodes.len <= 1) return;
     std.mem.sort(*Node, nodes, {}, lessThanDocOrder);
 }

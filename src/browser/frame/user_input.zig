@@ -51,7 +51,7 @@ pub const mouse_button = struct {
     pub const fifth: i32 = 4; // forward
 };
 
-pub const HoverContext = struct {
+const HoverContext = struct {
     x: f64 = 0,
     y: f64 = 0,
     buttons: u16 = 0,

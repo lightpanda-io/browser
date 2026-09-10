@@ -60,25 +60,25 @@ pub const ErrorCode = enum(i64) {
 };
 
 // Core MCP Types mapping to official specification
-pub const InitializeParams = struct {
+const InitializeParams = struct {
     protocolVersion: []const u8,
     capabilities: Capabilities,
     clientInfo: Implementation,
 };
 
-pub const Capabilities = struct {
+const Capabilities = struct {
     experimental: ?std.json.Value = null,
     roots: ?RootsCapability = null,
     sampling: ?SamplingCapability = null,
 };
 
-pub const RootsCapability = struct {
+const RootsCapability = struct {
     listChanged: ?bool = null,
 };
 
-pub const SamplingCapability = struct {};
+const SamplingCapability = struct {};
 
-pub const Implementation = struct {
+const Implementation = struct {
     name: []const u8,
     version: []const u8,
 };
@@ -93,7 +93,7 @@ pub const InitializeResult = struct {
     instructions: ?[]const u8 = null,
 };
 
-pub const ServerCapabilities = struct {
+const ServerCapabilities = struct {
     experimental: ?std.json.Value = null,
     logging: ?LoggingCapability = null,
     prompts: ?PromptsCapability = null,
@@ -101,15 +101,15 @@ pub const ServerCapabilities = struct {
     tools: ?ToolsCapability = null,
 };
 
-pub const LoggingCapability = struct {};
-pub const PromptsCapability = struct {
+const LoggingCapability = struct {};
+const PromptsCapability = struct {
     listChanged: ?bool = null,
 };
-pub const ResourcesCapability = struct {
+const ResourcesCapability = struct {
     subscribe: ?bool = null,
     listChanged: ?bool = null,
 };
-pub const ToolsCapability = struct {
+const ToolsCapability = struct {
     listChanged: ?bool = null,
 };
 

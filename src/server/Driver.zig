@@ -38,7 +38,7 @@ const Driver = @This();
 // Doubles as the metrics label
 pub const Protocol = enum { cdp, bidi };
 
-pub const Impl = union(Protocol) {
+const Impl = union(Protocol) {
     cdp: *CDP,
     bidi: *BiDi,
 };

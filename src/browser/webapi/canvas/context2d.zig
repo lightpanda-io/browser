@@ -29,7 +29,7 @@ const CanvasPattern = @import("CanvasPattern.zig");
 
 const Execution = js.Execution;
 
-pub const default_font = "10px sans-serif";
+const default_font = "10px sans-serif";
 
 // Chart libraries flip font and dash per label per animation frame, so these
 // are stored inline: a page-arena copy per change never comes back. Only a

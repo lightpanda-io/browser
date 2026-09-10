@@ -178,11 +178,11 @@ fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
+fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
     return self._on_ready_state_change;
 }
 
-pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
+fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
         self._on_ready_state_change = try cb.persistWithThis(self);
     } else {
@@ -190,18 +190,18 @@ pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getWithCredentials(self: *const XMLHttpRequest) bool {
+fn getWithCredentials(self: *const XMLHttpRequest) bool {
     return self._with_credentials;
 }
 
-pub fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
+fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
     if (self._ready_state != .unsent and self._ready_state != .opened) {
         return error.InvalidStateError;
     }
     self._with_credentials = value;
 }
 
-pub fn getTimeout(self: *const XMLHttpRequest) u32 {
+fn getTimeout(self: *const XMLHttpRequest) u32 {
     return self._timeout;
 }
 
@@ -250,7 +250,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8, async
     try self.stateChanged(.opened, exec);
 }
 
-pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, exec: *const Execution) !void {
+fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, exec: *const Execution) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
@@ -280,7 +280,7 @@ fn isByteString(s: []const u8) bool {
 }
 
 // https://xhr.spec.whatwg.org/#the-overridemimetype()-method
-pub fn overrideMimeType(self: *XMLHttpRequest, mime: []const u8) !void {
+fn overrideMimeType(self: *XMLHttpRequest, mime: []const u8) !void {
     if (self._ready_state == .loading or self._ready_state == .done) {
         return error.InvalidStateError;
     }
@@ -422,7 +422,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 // https://xhr.spec.whatwg.org/#the-upload-attribute
 // The XMLHttpRequestUpload object is created lazily and cached: scripts expect
 // the same instance on every access so their event listeners stick.
-pub fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
+fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
     if (self._upload) |upload| {
         return upload;
     }
@@ -434,7 +434,7 @@ pub fn getUpload(self: *XMLHttpRequest) !*XMLHttpRequestUpload {
     return upload;
 }
 
-pub fn getReadyState(self: *const XMLHttpRequest) u32 {
+fn getReadyState(self: *const XMLHttpRequest) u32 {
     return @intFromEnum(self._ready_state);
 }
 
@@ -454,7 +454,7 @@ pub fn getResponseHeader(self: *const XMLHttpRequest, name: []const u8) ?[]const
     return null;
 }
 
-pub fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
+fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution) ![]const u8 {
     if (self._ready_state != .done) {
         // MDN says this should return null, but it seems to return an empty string
         // in every browser. Specs are too hard for a dumbo like me to understand.
@@ -469,11 +469,11 @@ pub fn getAllResponseHeaders(self: *const XMLHttpRequest, exec: *const Execution
     return buf.written();
 }
 
-pub fn getResponseType(self: *const XMLHttpRequest) ResponseType {
+fn getResponseType(self: *const XMLHttpRequest) ResponseType {
     return self._response_type;
 }
 
-pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execution) !void {
+fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Execution) !void {
     const rt: ResponseType = if (value.len == 0)
         .default
     else
@@ -497,7 +497,7 @@ pub fn setResponseType(self: *XMLHttpRequest, value: []const u8, exec: *const Ex
     }
 }
 
-pub fn getResponseText(self: *const XMLHttpRequest) []const u8 {
+fn getResponseText(self: *const XMLHttpRequest) []const u8 {
     // TODO: per WHATWG XHR "get a text response", the bytes must be decoded
     // using the final encoding derived from the final MIME type
     // (_override_mime ?? _response_mime). Currently the raw bytes are
@@ -509,15 +509,15 @@ pub fn getStatus(self: *const XMLHttpRequest) u16 {
     return self._response_status;
 }
 
-pub fn getStatusText(self: *const XMLHttpRequest) []const u8 {
+fn getStatusText(self: *const XMLHttpRequest) []const u8 {
     return std.http.Status.phrase(@enumFromInt(self._response_status)) orelse "";
 }
 
-pub fn getResponseURL(self: *XMLHttpRequest) []const u8 {
+fn getResponseURL(self: *XMLHttpRequest) []const u8 {
     return self._response_url;
 }
 
-pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
+fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     if (self._ready_state != .done) {
         return null;
     }
@@ -579,7 +579,7 @@ pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     return res;
 }
 
-pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Document {
+fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Document {
     if (self._ready_state != .done) {
         return null;
     }

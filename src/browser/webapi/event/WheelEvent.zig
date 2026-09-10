@@ -36,11 +36,11 @@ _delta_y: f64,
 _delta_z: f64,
 _delta_mode: u32,
 
-pub const DOM_DELTA_PIXEL: u32 = 0x00;
-pub const DOM_DELTA_LINE: u32 = 0x01;
-pub const DOM_DELTA_PAGE: u32 = 0x02;
+const DOM_DELTA_PIXEL: u32 = 0x00;
+const DOM_DELTA_LINE: u32 = 0x01;
+const DOM_DELTA_PAGE: u32 = 0x02;
 
-pub const WheelEventOptions = struct {
+const WheelEventOptions = struct {
     deltaMode: u32 = 0,
     deltaX: f64 = 0.0,
     deltaY: f64 = 0.0,
@@ -102,19 +102,19 @@ pub fn asEvent(self: *WheelEvent) *Event {
     return self._proto.asEvent();
 }
 
-pub fn getDeltaX(self: *const WheelEvent) f64 {
+fn getDeltaX(self: *const WheelEvent) f64 {
     return self._delta_x;
 }
 
-pub fn getDeltaY(self: *const WheelEvent) f64 {
+fn getDeltaY(self: *const WheelEvent) f64 {
     return self._delta_y;
 }
 
-pub fn getDeltaZ(self: *const WheelEvent) f64 {
+fn getDeltaZ(self: *const WheelEvent) f64 {
     return self._delta_z;
 }
 
-pub fn getDeltaMode(self: *const WheelEvent) u32 {
+fn getDeltaMode(self: *const WheelEvent) u32 {
     return self._delta_mode;
 }
 

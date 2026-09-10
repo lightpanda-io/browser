@@ -163,7 +163,7 @@ pub fn getBaseVal(self: *const AnimatedEnumeration) u16 {
     return self._default_value;
 }
 
-pub fn setBaseVal(self: *AnimatedEnumeration, value: u16, frame: *Frame) !void {
+fn setBaseVal(self: *AnimatedEnumeration, value: u16, frame: *Frame) !void {
     for (self._entries) |entry| {
         if (entry.value == value) {
             try self._element.setAttributeSafe(self._attr_name, .wrap(entry.keyword), frame);
@@ -173,7 +173,7 @@ pub fn setBaseVal(self: *AnimatedEnumeration, value: u16, frame: *Frame) !void {
     return error.TypeError;
 }
 
-pub fn getAnimVal(self: *const AnimatedEnumeration) u16 {
+fn getAnimVal(self: *const AnimatedEnumeration) u16 {
     return self.getBaseVal();
 }
 

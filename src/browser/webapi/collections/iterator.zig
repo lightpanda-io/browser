@@ -34,8 +34,6 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
         const Result = struct {
             done: bool,
             value: ?R.ValueType,
-
-            pub const js_as_object = true;
         };
 
         pub fn init(inner: Inner, executor: R.Executor) !*Self {

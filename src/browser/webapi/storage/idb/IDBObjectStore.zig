@@ -182,11 +182,11 @@ pub fn getAll(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, 
     return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
+fn getAllKeys(self: *IDBObjectStore, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .key, exec);
 }
 
-pub fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution) !*IDBRequest {
+fn getAllRecords(self: *IDBObjectStore, options: ?js.Value, exec: *Execution) !*IDBRequest {
     try self.assertLive();
     const txn = self._txn;
     try txn.assertActive();
@@ -258,14 +258,14 @@ pub fn runGetKey(self: *IDBObjectStore, request: *IDBRequest, bounds: Engine.Bou
     try request.setValue(try Key.decodeToJs(arena, exec.js.local.?, bytes));
 }
 
-pub fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+fn openCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
     try self._txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
     return IDBCursor.init(self, bounds, direction orelse .next, false, exec);
 }
 
-pub fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+fn openKeyCursor(self: *IDBObjectStore, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     try self.assertLive();
     try self._txn.assertActive();
     const bounds = try IDBKeyRange.resolveQuery(self._txn._arena.allocator(), query, exec);
@@ -297,15 +297,15 @@ pub fn setName(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
     self._name = try txn.dupe(name);
 }
 
-pub fn getKeyPath(self: *IDBObjectStore, exec: *Execution) !js.Value {
+fn getKeyPath(self: *IDBObjectStore, exec: *Execution) !js.Value {
     return idb.cachedKeyPathJs(&self._key_path_js, self._txn, self._key_path, exec);
 }
 
-pub fn getAutoIncrement(self: *const IDBObjectStore) bool {
+fn getAutoIncrement(self: *const IDBObjectStore) bool {
     return self._auto_increment;
 }
 
-pub fn getTransaction(self: *IDBObjectStore) *IDBTransaction {
+fn getTransaction(self: *IDBObjectStore) *IDBTransaction {
     return self._txn;
 }
 
@@ -527,7 +527,7 @@ const CreateIndexOptions = struct {
 };
 
 // Only callable during an upgrade (versionchange transaction).
-pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPath, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
+fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPath, options: ?CreateIndexOptions, exec: *Execution) !*IDBIndex {
     try self.assertLive();
     const txn = self._txn;
     if (txn._mode != .versionchange) {
@@ -600,7 +600,7 @@ pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: Key.KeyPat
 }
 
 // Only callable during an upgrade (versionchange transaction).
-pub fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
+fn deleteIndex(self: *IDBObjectStore, name: []const u8, _: *Execution) !void {
     try self.assertLive();
     const txn = self._txn;
     if (txn._mode != .versionchange) {

@@ -822,13 +822,13 @@ pub const ToolResult = struct {
     image: ?lp.screenshot.Prepared = null,
 };
 
-pub const GotoParams = struct {
+const GotoParams = struct {
     url: [:0]const u8,
     timeout: ?u32 = null,
     waitUntil: lp.Config.WaitUntil = default_nav_wait,
 };
 
-pub const UrlParams = struct {
+const UrlParams = struct {
     url: ?[:0]const u8 = null,
     timeout: ?u32 = null,
 };
@@ -855,8 +855,8 @@ pub const CallOpts = struct {
 
 // An inline screenshot is re-sent on every turn; keep it within what models
 // consume. Files written to `path` are full size.
-pub const inline_image_max_width = 1280;
-pub const inline_image_max_height = 4096;
+const inline_image_max_width = 1280;
+const inline_image_max_height = 4096;
 
 pub fn call(
     arena: std.mem.Allocator,
@@ -1030,7 +1030,7 @@ fn execGoto(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     };
 }
 
-pub const SearchParams = struct {
+const SearchParams = struct {
     query: []const u8,
     timeout: ?u32 = null,
 };
@@ -1123,7 +1123,7 @@ fn engineKey(comptime engine: anytype) error{MissingApiKey}!?[]const u8 {
     return if (comptime isKeyless(engine.Client)) null else error.MissingApiKey;
 }
 
-pub const KeyStatus = struct {
+const KeyStatus = struct {
     env_var: [:0]const u8,
     state: enum { set, keyless, missing },
 };
@@ -2152,14 +2152,6 @@ fn execGetUrl(session: *lp.Session) ToolError![]const u8 {
     return page.url;
 }
 
-/// URL of the active frame, or a stable placeholder when no page is loaded.
-/// Use from contexts that just want a string for display/logging; callers
-/// that need to react to "no page" should check `currentFrame()` directly.
-pub fn currentUrlOrPlaceholder(session: *lp.Session) []const u8 {
-    const frame = session.currentFrame() orelse return "(no page loaded)";
-    return frame.url;
-}
-
 fn execGetCookies(arena: std.mem.Allocator, session: *lp.Session, arguments: ?std.json.Value) ToolError![]const u8 {
     const Params = struct { url: ?[]const u8 = null, all: bool = false };
     const args = try parseArgsOrDefault(Params, arena, arguments);
@@ -2308,7 +2300,7 @@ fn resolveBySelector(session: *lp.Session, selector: []const u8) ToolError!NodeA
     return .{ .node = node, .page = page, .target = .{ .selector = selector } };
 }
 
-pub const ParseArgsError = error{ OutOfMemory, InvalidParams };
+const ParseArgsError = error{ OutOfMemory, InvalidParams };
 
 /// Surface field/value context for known typed args — `std.json`'s parse
 /// errors only carry the tag (`InvalidEnumTag`, …), not which field failed.

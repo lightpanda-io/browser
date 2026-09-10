@@ -290,11 +290,11 @@ pub fn newRequest(self: *WorkerGlobalScope, req: HttpClient.Request) !*HttpClien
     return self._session.browser.http_client.newRequest(req, &self._http_owner);
 }
 
-pub fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
+fn getSelf(self: *WorkerGlobalScope) *WorkerGlobalScope {
     return self;
 }
 
-pub fn setSelf(self: *WorkerGlobalScope, value: JS.Value) void {
+fn setSelf(self: *WorkerGlobalScope, value: JS.Value) void {
     self.replaceGlobalProperty(value, "self");
 }
 
@@ -302,19 +302,19 @@ pub fn getConsole(self: *WorkerGlobalScope) *Console {
     return &self._console;
 }
 
-pub fn setConsole(self: *WorkerGlobalScope, value: JS.Value) void {
+fn setConsole(self: *WorkerGlobalScope, value: JS.Value) void {
     self.replaceGlobalProperty(value, "console");
 }
 
-pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
+fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
 }
 
-pub fn getNavigator(self: *WorkerGlobalScope) *WorkerNavigator {
+fn getNavigator(self: *WorkerGlobalScope) *WorkerNavigator {
     return &self._navigator;
 }
 
-pub fn getScheduler(self: *WorkerGlobalScope) *Scheduler {
+fn getScheduler(self: *WorkerGlobalScope) *Scheduler {
     return &self._scheduler;
 }
 
@@ -326,43 +326,43 @@ pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
     return &self._location;
 }
 
-pub fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
+fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
     if (self._cookie_store) |cs| return cs;
     const cs = try self._factory.eventTargetWithAllocator(self.arena, CookieStore{ ._proto = undefined });
     self._cookie_store = cs;
     return cs;
 }
 
-pub fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
+fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
+fn setOnError(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
-pub fn getOnRejectionHandled(self: *const WorkerGlobalScope) ?JS.Function.Global {
+fn getOnRejectionHandled(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_rejection_handled;
 }
 
-pub fn setOnRejectionHandled(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
+fn setOnRejectionHandled(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_rejection_handled = getFunctionFromSetter(setter);
 }
 
-pub fn getOnUnhandledRejection(self: *const WorkerGlobalScope) ?JS.Function.Global {
+fn getOnUnhandledRejection(self: *const WorkerGlobalScope) ?JS.Function.Global {
     return self._on_unhandled_rejection;
 }
 
-pub fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
+fn setOnUnhandledRejection(self: *WorkerGlobalScope, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
 const base64 = @import("encoding/base64.zig");
-pub fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
+fn btoa(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) ![]const u8 {
     return base64.encode(exec.local_arena, input);
 }
 
-pub fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) !JS.String.OneByte {
+fn atob(_: *const WorkerGlobalScope, input: base64.BinInput, exec: *JS.Execution) !JS.String.OneByte {
     const bytes = try base64.decode(exec.local_arena, input);
     return .{ .bytes = bytes };
 }
@@ -401,7 +401,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     }
 }
 
-pub fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
+fn importScripts(self: *WorkerGlobalScope, urls: []const [:0]const u8) !void {
     if (self._is_module) {
         // not allowed to be called when the worker type is module (scripts should
         // use actual imports).
@@ -532,7 +532,7 @@ pub fn fetch(_: *const WorkerGlobalScope, input: Fetch.Input, options: ?Fetch.In
     return Fetch.init(input, options, exec);
 }
 
-pub fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
+fn queueMicrotask(self: *WorkerGlobalScope, cb: JS.Function) void {
     self.js.queueMicrotaskFunc(cb);
 }
 
@@ -545,7 +545,7 @@ pub fn setTimeout(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, delay
     });
 }
 
-pub fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
+fn clearTimeout(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
@@ -558,11 +558,11 @@ pub fn setInterval(self: *WorkerGlobalScope, handler: Timers.LegacyHandler, dela
     });
 }
 
-pub fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
+fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
+fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
     if (self._idb_factory) |f| {
         return f;
     }

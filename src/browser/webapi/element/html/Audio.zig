@@ -49,10 +49,6 @@ pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
     return node.as(Media);
 }
 
-pub fn asMedia(self: *Audio) *Media {
-    return Factory.protoOf(self);
-}
-
 pub fn asElement(self: *Audio) *Element {
     return Factory.protoOf(self).asElement();
 }

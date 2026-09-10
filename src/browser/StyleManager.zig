@@ -657,7 +657,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
 /// Own-element cascade result, resolved for every property at once so one
 /// entry serves any probe.
-pub const Props = packed struct(u8) {
+const Props = packed struct(u8) {
     // Author value (inline or sheet). Without `author_display` it's the UA
     // fallback: .none when matchesUaDisplayNoneRule, else .other.
     display: Display = .other,

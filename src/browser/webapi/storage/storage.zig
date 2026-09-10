@@ -150,7 +150,7 @@ pub const Lookup = struct {
         return @intCast(self._data.count());
     }
 
-    pub fn hasItem(self: *const Lookup, k: []const u8) bool {
+    fn hasItem(self: *const Lookup, k: []const u8) bool {
         return self._data.contains(k);
     }
 

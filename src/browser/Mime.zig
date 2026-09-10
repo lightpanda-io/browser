@@ -37,7 +37,7 @@ pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
 /// The fallback for a Content-Type that fails to parse.
 pub const octet_stream = Mime{ .content_type = .{ .application_octet_stream = {} } };
 
-pub const ContentTypeEnum = enum {
+const ContentTypeEnum = enum {
     text_xml,
     text_html,
     text_javascript,
@@ -56,7 +56,7 @@ pub const ContentTypeEnum = enum {
     other_xml,
 };
 
-pub const ContentType = union(ContentTypeEnum) {
+const ContentType = union(ContentTypeEnum) {
     text_xml: void,
     text_html: void,
     text_javascript: void,
@@ -116,7 +116,7 @@ pub const ContentTypeIterator = struct {
         return .{ .rest = rest, .essence = essence };
     }
 
-    pub const Parameter = struct {
+    const Parameter = struct {
         key: []const u8,
         /// `value` can be an empty string ("").
         value: []const u8,
@@ -161,7 +161,7 @@ pub const ContentTypeIterator = struct {
 };
 
 /// Returns the null-terminated charset value.
-pub fn charsetStringZ(mime: *const Mime) [:0]const u8 {
+fn charsetStringZ(mime: *const Mime) [:0]const u8 {
     return mime.charset[0..mime.charset_len :0];
 }
 

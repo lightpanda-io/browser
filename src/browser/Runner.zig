@@ -185,7 +185,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 }
 
-pub const TickResult = union(enum) {
+const TickResult = union(enum) {
     done,
     ok: u32,
 };

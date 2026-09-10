@@ -261,7 +261,7 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
     return try std.mem.join(exec.local_arena, ", ", all_values);
 }
 
-pub fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
+fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
     return self._list.getAll(exec.local_arena, "set-cookie");
 }
 

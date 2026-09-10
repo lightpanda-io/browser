@@ -55,12 +55,12 @@ pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, frame: *Frame
     return self._proto.getAtIndex(index, frame);
 }
 
-pub const NamedItemResult = union(enum) {
+const NamedItemResult = union(enum) {
     element: *Element,
     radio_node_list: *RadioNodeList,
 };
 
-pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
+fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
     if (name.len == 0) {
         return null;
     }

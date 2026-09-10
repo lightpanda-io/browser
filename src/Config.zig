@@ -245,7 +245,7 @@ pub const LoadResources = packed struct(u4) {
     stylesheet: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u1) {
+const ExperimentalFeatures = packed struct(u1) {
     cors: bool = false,
 };
 
@@ -486,7 +486,7 @@ const Commands = cli.Builder(.{
     } },
 });
 
-pub const RunMode = Commands.Enum;
+const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
 
@@ -621,7 +621,7 @@ pub fn httpHeaders(self: *const Config) []const HttpHeader {
     };
 }
 
-pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
+fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         else => null,
@@ -715,7 +715,7 @@ fn stderrIsTty() bool {
     return stderr_tty_cached;
 }
 
-pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
+fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
         else => null,
@@ -986,7 +986,7 @@ pub const HttpHeaders = struct {
     // The neutral default: some bot-protection frontends (e.g. Akamai on
     // canada.ca) RST the HTTP/2 stream when a client sends Accept-Encoding
     // without Accept-Language.
-    pub const default_locale: [:0]const u8 = "en-US";
+    const default_locale: [:0]const u8 = "en-US";
 
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";

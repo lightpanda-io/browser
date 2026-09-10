@@ -63,19 +63,19 @@ pub fn asEvent(self: *DeviceMotionEvent) *Event {
 }
 
 // There is no motion sensor: the acceleration and rotation members are null.
-pub fn getAcceleration(_: *const DeviceMotionEvent) ?bool {
+fn getAcceleration(_: *const DeviceMotionEvent) ?bool {
     return null;
 }
 
-pub fn getAccelerationIncludingGravity(_: *const DeviceMotionEvent) ?bool {
+fn getAccelerationIncludingGravity(_: *const DeviceMotionEvent) ?bool {
     return null;
 }
 
-pub fn getRotationRate(_: *const DeviceMotionEvent) ?bool {
+fn getRotationRate(_: *const DeviceMotionEvent) ?bool {
     return null;
 }
 
-pub fn getInterval(self: *const DeviceMotionEvent) f64 {
+fn getInterval(self: *const DeviceMotionEvent) f64 {
     return self._interval;
 }
 

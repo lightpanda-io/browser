@@ -144,7 +144,7 @@ fn newUserContext(self: *BiDi, id: []const u8) !void {
     @memcpy(self.user_context.id_buf[0..id.len], id);
 }
 
-pub const UserContext = struct {
+const UserContext = struct {
     id_len: u8,
     id_buf: [36]u8, // "default" or uuid
     session: *Session,

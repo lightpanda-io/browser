@@ -338,7 +338,7 @@ pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
 
 // The full type list for a leaf. Walks the Proto chain.
 // For example CData.Text -> [_]type{EventTarget, Node, CData, Text}).
-pub fn prototypeTypes(comptime Leaf: type) []const type {
+fn prototypeTypes(comptime Leaf: type) []const type {
     comptime {
         var types: []const type = &.{Leaf};
         var T = Leaf;
@@ -581,7 +581,7 @@ fn destroyChain(
     }
 }
 
-pub fn createT(self: *Factory, comptime T: type) !*T {
+fn createT(self: *Factory, comptime T: type) !*T {
     const allocator = self._slab.allocator();
     return try allocator.create(T);
 }

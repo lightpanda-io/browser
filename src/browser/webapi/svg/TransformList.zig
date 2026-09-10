@@ -68,7 +68,7 @@ pub const replaceItem = M.replaceItem;
 pub const removeItem = M.removeItem;
 pub const appendItem = M.appendItem;
 
-pub fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
+fn consolidate(self: *TransformList, frame: *Frame) !?*Transform {
     try M.requireMutable(self);
     try M.sync(self, frame);
     if (self._items.items.len == 0) return null;

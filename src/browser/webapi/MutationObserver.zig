@@ -63,7 +63,7 @@ const ResolvedOptions = struct {
     attributeFilter: ?[]const []const u8 = null,
 };
 
-pub const ObserveOptions = struct {
+const ObserveOptions = struct {
     attributeFilter: ?[]const []const u8 = null,
     attributeOldValue: ?bool = null,
     attributes: ?bool = null,
@@ -397,34 +397,34 @@ pub const MutationRecord = struct {
         return self._target;
     }
 
-    pub fn getAttributeNamespace(self: *const MutationRecord) ?[]const u8 {
+    fn getAttributeNamespace(self: *const MutationRecord) ?[]const u8 {
         _ = self;
         // Non-namespaced attribute mutations return null. Full namespace tracking
         // for setAttributeNS mutations is not yet implemented.
         return null;
     }
 
-    pub fn getAttributeName(self: *const MutationRecord) ?[]const u8 {
+    fn getAttributeName(self: *const MutationRecord) ?[]const u8 {
         return self._attribute_name;
     }
 
-    pub fn getOldValue(self: *const MutationRecord) ?[]const u8 {
+    fn getOldValue(self: *const MutationRecord) ?[]const u8 {
         return self._old_value;
     }
 
-    pub fn getAddedNodes(self: *const MutationRecord) []const *Node {
+    fn getAddedNodes(self: *const MutationRecord) []const *Node {
         return self._added_nodes;
     }
 
-    pub fn getRemovedNodes(self: *const MutationRecord) []const *Node {
+    fn getRemovedNodes(self: *const MutationRecord) []const *Node {
         return self._removed_nodes;
     }
 
-    pub fn getPreviousSibling(self: *const MutationRecord) ?*Node {
+    fn getPreviousSibling(self: *const MutationRecord) ?*Node {
         return self._previous_sibling;
     }
 
-    pub fn getNextSibling(self: *const MutationRecord) ?*Node {
+    fn getNextSibling(self: *const MutationRecord) ?*Node {
         return self._next_sibling;
     }
 

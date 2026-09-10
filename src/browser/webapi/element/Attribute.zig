@@ -150,7 +150,7 @@ pub const List = struct {
     pub const Lookup = std.AutoHashMapUnmanaged(LookupKey, *Attribute);
 
     // for Frame._attribute_lookup which is our identity map for attributes
-    pub const LookupKey = struct {
+    const LookupKey = struct {
         list: *const List,
         // canonical (see canonicalizeName), so identity is the address
         name: [*]const u8,
@@ -504,7 +504,7 @@ pub const List = struct {
             return formatAttribute(self.name(), self.value(), writer);
         }
 
-        pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
+        fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
             return frame._factory.node(Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
@@ -627,7 +627,7 @@ pub const NamedNodeMap = struct {
         return self._element.setAttributeNode(attribute, frame);
     }
 
-    pub fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
+    fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
         // this 2-step process (get then delete) isn't efficient. But we don't
         // expect this to be called often, and this lets us keep delete straightforward.
         const attr = (try self.getByName(name, frame)) orelse return null;

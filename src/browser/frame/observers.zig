@@ -142,7 +142,7 @@ pub fn hasIntersectionObservers(frame: *const Frame) bool {
     return frame._intersection.observers.items.len > 0;
 }
 
-pub fn checkIntersections(frame: *Frame) !void {
+fn checkIntersections(frame: *Frame) !void {
     for (frame._intersection.observers.items) |observer| {
         try observer.checkIntersections(frame);
     }

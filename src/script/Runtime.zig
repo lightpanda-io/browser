@@ -102,18 +102,18 @@ const ConsoleData = struct {
     method: ConsoleMethod,
 };
 
-pub const ConsoleObserver = struct {
+const ConsoleObserver = struct {
     context: *anyopaque,
     notify: *const fn (context: *anyopaque) void,
 };
 
-pub const InitError = error{
+const InitError = error{
     OutOfMemory,
     RuntimeInitFailed,
     TooManyContexts,
 };
 
-pub const RunError = error{
+const RunError = error{
     OutOfMemory,
 };
 

@@ -210,7 +210,7 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
         values: std.enums.EnumArray(T, Gauge) = .initFill(.{}),
 
         pub const Tag = T;
-        pub const label_name = label;
+        const label_name = label;
 
         const Self = @This();
 
@@ -241,7 +241,7 @@ fn CounterEnum(comptime label: []const u8, comptime T: type) type {
         counts: std.enums.EnumArray(T, Counter) = .initFill(.{}),
 
         pub const Tag = T;
-        pub const label_name = label;
+        const label_name = label;
 
         const Self = @This();
 

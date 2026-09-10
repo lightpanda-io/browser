@@ -44,11 +44,11 @@ const WebDriver = @This();
 
 _pad: bool = false,
 
-pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
+fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
     page.session.cookie_jar.clearRetainingCapacity();
 }
 
-pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
+fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
     const AXNode = @import("../../server/cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
     var labels: Label.LabelByForIndex = .{};
@@ -88,7 +88,7 @@ const WebDriverCookie = struct {
 };
 
 // Unlike the script-facing CookieStore, WebDriver can see HttpOnly cookies.
-pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
+fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
     const jar = &frame._session.cookie_jar;
     const target = Cookie.PreparedUri.init(frame.url);
     if (target.host.len == 0) {

@@ -55,15 +55,15 @@ const XPathResult = @This();
 // BOOLEAN, UNORDERED_NODE_ITERATOR) depending on what the expression
 // produced.
 pub const ANY_TYPE: u16 = 0;
-pub const NUMBER_TYPE: u16 = 1;
-pub const STRING_TYPE: u16 = 2;
-pub const BOOLEAN_TYPE: u16 = 3;
-pub const UNORDERED_NODE_ITERATOR_TYPE: u16 = 4;
-pub const ORDERED_NODE_ITERATOR_TYPE: u16 = 5;
-pub const UNORDERED_NODE_SNAPSHOT_TYPE: u16 = 6;
-pub const ORDERED_NODE_SNAPSHOT_TYPE: u16 = 7;
-pub const ANY_UNORDERED_NODE_TYPE: u16 = 8;
-pub const FIRST_ORDERED_NODE_TYPE: u16 = 9;
+const NUMBER_TYPE: u16 = 1;
+const STRING_TYPE: u16 = 2;
+const BOOLEAN_TYPE: u16 = 3;
+const UNORDERED_NODE_ITERATOR_TYPE: u16 = 4;
+const ORDERED_NODE_ITERATOR_TYPE: u16 = 5;
+const UNORDERED_NODE_SNAPSHOT_TYPE: u16 = 6;
+const ORDERED_NODE_SNAPSHOT_TYPE: u16 = 7;
+const ANY_UNORDERED_NODE_TYPE: u16 = 8;
+const FIRST_ORDERED_NODE_TYPE: u16 = 9;
 
 const Value = union(enum) {
     number: f64,
@@ -213,7 +213,7 @@ fn getInvalidIteratorState(_: *const XPathResult) bool {
 
 // ----- methods -----
 
-pub fn iterateNext(self: *XPathResult) !?*Node {
+fn iterateNext(self: *XPathResult) !?*Node {
     if (self._type != UNORDERED_NODE_ITERATOR_TYPE and self._type != ORDERED_NODE_ITERATOR_TYPE) {
         return error.InvalidStateError;
     }
@@ -224,7 +224,7 @@ pub fn iterateNext(self: *XPathResult) !?*Node {
     return node;
 }
 
-pub fn snapshotItem(self: *const XPathResult, index: u32) !?*Node {
+fn snapshotItem(self: *const XPathResult, index: u32) !?*Node {
     if (self._type != UNORDERED_NODE_SNAPSHOT_TYPE and self._type != ORDERED_NODE_SNAPSHOT_TYPE) {
         return error.InvalidStateError;
     }
