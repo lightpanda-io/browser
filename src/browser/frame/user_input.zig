@@ -853,37 +853,10 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
 
     var tw = TreeWalker.Full.Elements.init(document.asNode(), .{});
     while (tw.next()) |candidate| {
-        if (candidate.isDisabled()) {
+        const candidate_tab_index = candidate.focusTabIndex() orelse continue;
+        if (candidate_tab_index < 0) {
             continue;
         }
-        if (candidate.is(Element.Html) == null) {
-            continue;
-        }
-
-        const candidate_tab_index = blk: {
-            if (candidate.getAttributeInterned("tabindex")) |attr| {
-                if (Element.Html.parseInteger(attr)) |tab_index| {
-                    if (tab_index < 0) {
-                        continue;
-                    }
-                    break :blk tab_index;
-                }
-                break :blk 0;
-            }
-
-            // no tab index, maybe this item isn't focusable..
-            const focusable = switch (candidate.getTag()) {
-                .button, .select, .textarea, .iframe => true,
-                .input => candidate.as(Element.Html.Input)._input_type != .hidden,
-                .anchor, .area => candidate.getAttributeInterned("href") != null,
-                else => false,
-            };
-            if (focusable == false) {
-                continue;
-            }
-
-            break :blk 0;
-        };
 
         if (edge == null or focusOrderBefore(candidate, candidate_tab_index, edge.?, edge_tab_index) == forward) {
             edge = candidate;
