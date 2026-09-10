@@ -31,6 +31,7 @@ const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
 const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
+const referrer = @import("../../referrer.zig");
 
 const Execution = js.Execution;
 
@@ -47,6 +48,8 @@ _credentials: Credentials,
 _redirect: Redirect,
 _mode: Mode,
 _signal: ?*AbortSignal,
+_referrer: ReferrerValue,
+_referrer_policy: ?referrer.Policy,
 _body_used: bool = false,
 
 pub const Input = union(enum) {
@@ -63,7 +66,15 @@ pub const InitOpts = struct {
     mode: Mode = .cors,
     priority: ?[]const u8 = null,
     redirect: Redirect = .follow,
+    referrer: ?[]const u8 = null,
+    referrerPolicy: ?[]const u8 = null,
     signal: ?*AbortSignal = null,
+};
+
+pub const ReferrerValue = union(enum) {
+    client,
+    none,
+    url: [:0]const u8,
 };
 
 const Priority = enum { high, low, auto };
@@ -162,6 +173,24 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
+    const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
+        if (r.len == 0) break :blk .none;
+        if (std.mem.eql(u8, r, "about:client")) break :blk .client;
+        break :blk .{ .url = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* }) };
+    } else switch (input) {
+        .url => .client,
+        .request => |r| r._referrer,
+    };
+
+    // Per spec, an unrecognized policy string is ignored
+    // referrer.parse already returns null for that case.
+    const referrer_policy: ?referrer.Policy = if (opts.referrerPolicy) |rp|
+        referrer.parse(rp)
+    else switch (input) {
+        .url => null,
+        .request => |r| r._referrer_policy,
+    };
+
     const self = try arena.create(Request);
     self.* = .{
         ._url = url,
@@ -174,6 +203,8 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._mode = mode,
         ._body = body,
         ._signal = signal,
+        ._referrer = referrer_value,
+        ._referrer_policy = referrer_policy,
     };
     arena.report();
     return self;
@@ -342,6 +373,8 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._mode = self._mode,
         ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
+        ._referrer = self._referrer,
+        ._referrer_policy = self._referrer_policy,
     };
     arena.report();
     return request;

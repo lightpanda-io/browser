@@ -89,6 +89,13 @@ pub const GlobalScope = union(enum) {
         };
     }
 
+    pub fn referrerSource(self: GlobalScope) [:0]const u8 {
+        return switch (self) {
+            .frame => |frame| frame.referrerSource(),
+            .worker => |worker| worker.url,
+        };
+    }
+
     pub fn isSameOrigin(self: GlobalScope, target: [:0]const u8) bool {
         return switch (self) {
             inline else => |g| g.isSameOrigin(target),

@@ -92,6 +92,10 @@ pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer)
     return self.js.global.headersForRequest(transfer);
 }
 
+pub fn referrerSource(self: *const Execution) [:0]const u8 {
+    return self.js.global.referrerSource();
+}
+
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
     return self.js.global.isSameOrigin(url);
 }
