@@ -1153,6 +1153,41 @@ pub fn remove(self: *Element, frame: *Frame) void {
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
+// The tabindex of a focusable area, or null when the element can't take focus
+// at all. A negative value is still focusable, just skipped by sequential
+// focus navigation.
+// https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
+pub fn focusTabIndex(self: *Element) ?i32 {
+    if (self.isDisabled()) {
+        return null;
+    }
+    if (self.is(Html) == null) {
+        return null;
+    }
+
+    if (self.getAttributeInterned("tabindex")) |attr| {
+        return Html.parseInteger(attr) orelse 0;
+    }
+
+    return switch (self.getTag()) {
+        .button, .select, .textarea, .iframe => 0,
+        .input => if (self.as(Html.Input)._input_type != .hidden) 0 else null,
+        .anchor, .area => if (self.getAttributeInterned("href") != null) 0 else null,
+        else => null,
+    };
+}
+
+// A focusable area that can take focus right now: connected and being rendered.
+pub fn isFocusable(self: *Element, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
+    if (self.focusTabIndex() == null) {
+        return false;
+    }
+    if (self.asNode().isConnected() == false) {
+        return false;
+    }
+    return self.isVisible(frame, access);
+}
+
 pub fn focus(self: *Element, frame: *Frame) !void {
     if (self.asNode().isConnected() == false) {
         // a disconnected node cannot take focus
