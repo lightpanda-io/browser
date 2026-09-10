@@ -66,6 +66,9 @@ pub fn init(
     protocol: Driver.Protocol,
     inbox: *Inbox,
 ) !void {
+    // The Link owns the socket from here on
+    errdefer sys_net.close(socket);
+
     if (lp.IS_TEST == false) {
         const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
@@ -95,8 +98,13 @@ pub fn deinit(self: *Link) void {
 }
 
 pub fn create(app: *App, socket: posix.socket_t, protocol: Driver.Protocol, inbox: *Inbox) !*Link {
-    const link = try app.allocator.create(Link);
+    const link = app.allocator.create(Link) catch |err| {
+        sys_net.close(socket);
+        return err;
+    };
     errdefer app.allocator.destroy(link);
+
+    // init immediately takes ownership of the socket
     try link.init(app, socket, protocol, inbox);
     return link;
 }

@@ -111,10 +111,10 @@ pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void 
         .streams = .{ .allocator = allocator },
     };
 
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
-    errdefer self.browser.deinit();
-
     try self.link.init(app, socket, .cdp, inbox);
+    errdefer self.link.deinit();
+
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
 }
 
 pub fn deinit(self: *CDP) void {

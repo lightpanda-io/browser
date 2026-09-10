@@ -440,6 +440,7 @@ const forbidden_host_response = errorResponse(403, "Host not allowed");
 const request_too_large_response = errorResponse(413, "Request too large");
 const not_found_response = errorResponse(404, "Not found");
 const session_connected_response = errorResponse(409, "Session already connected");
+const session_busy_response = errorResponse(429, "Session is releasing its previous connection");
 const method_not_allowed_response = errorResponse(405, "Method not allowed");
 const service_unavailable_response = errorResponse(503, "Too many connections");
 const internal_error_response = errorResponse(500, "Internal server error");
@@ -696,7 +697,7 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
     var session_id: [36]u8 = undefined;
     uuidv4(&session_id);
 
-    _ = server.spawnWorker(.bidi, .{ .session = session_id }) catch |err| {
+    const worker = server.spawnWorker(.bidi, .{ .session = session_id }) catch |err| {
         log.err(.serve, "worker spawn", .{ .err = err });
         return serveWebDriver(server, conn, req, "500 Internal Server Error", .{
             .@"error" = "session not created",
@@ -704,6 +705,9 @@ fn newSession(server: *Server, conn: *Connection, req: *Connection.Request) !Ser
             .stacktrace = "",
         });
     };
+    // The client never learns the id if we fail to answer (e.g. it hung up),
+    // so nothing would ever DELETE this session.
+    errdefer server.quitSession(worker);
 
     const is_requesting_websocket_url = blk: {
         const caps = parsed.capabilities orelse break :blk false;
@@ -741,6 +745,12 @@ fn upgradeSession(server: *Server, conn: *Connection, req: *Connection.Request) 
     const worker = server.findSession(req.session_id.?) orelse {
         return serveNotFound(server, conn, req);
     };
+
+    if (worker.linkDropping()) {
+        // The previous connection is gone but the worker hasn't given the
+        // link back yet. Dirver can retry.
+        return serveHTTPResponse(server, conn, req, .{ .static = session_busy_response });
+    }
 
     if (worker.link != null) {
         // already joined

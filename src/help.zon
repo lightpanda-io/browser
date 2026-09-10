@@ -48,7 +48,8 @@
     \\  --http-session-timeout <INT>
     \\          Seconds before an idle HTTP session times-out. Only meaningful
     \\          when connecting using the WebDriver protocol.
-    \\          Defaults to 60.
+    \\          Defaults to 60, disable by setting to 0 (a session then lives
+    \\          until the driver deletes it).
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.

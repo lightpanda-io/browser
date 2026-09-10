@@ -134,14 +134,14 @@ pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
         .session_arena = std.heap.ArenaAllocator.init(allocator),
     };
 
-    try self.browser.init(app, .{});
-    errdefer self.browser.deinit();
-
     switch (origin) {
         .socket => |socket| self.link = try Link.create(app, socket, .bidi, inbox),
         .session => {},
     }
     errdefer if (self.link) |l| l.destroy();
+
+    try self.browser.init(app, .{});
+    errdefer self.browser.deinit();
 
     self.notification = try Notification.init(allocator);
     errdefer self.notification.deinit();
@@ -180,7 +180,9 @@ pub fn adoptLink(self: *BiDi, l: *Link) void {
     if (self.link != null) {
         // the loop only hands one over once it has seen the previous one
         // released (Server.Worker.link is null)
-        lp.assert(false, "BiDi.adoptLink held", .{});
+        if (comptime lp.IS_DEBUG) {
+            lp.assert(false, "BiDi.adoptLink held", .{});
+        }
         l.destroy();
         return;
     }
@@ -201,7 +203,13 @@ pub fn onLinkGone(self: *BiDi) bool {
 }
 
 fn releaseLink(self: *BiDi, worker: *Server.Worker) void {
-    const l = self.link orelse return;
+    const l = self.link orelse {
+        // the loop only tells us the link is gone while we hold it
+        if (comptime lp.IS_DEBUG) {
+            lp.assert(false, "BiDi.releaseLink empty", .{});
+        }
+        return;
+    };
     self.link = null;
     // blocks until the loop has stopped reading from it
     worker.releaseLink();

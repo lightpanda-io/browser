@@ -87,8 +87,8 @@ sessions: std.AutoHashMapUnmanaged([36]u8, *Worker),
 // head read.
 idle_sessions: DoublyLinkedList,
 
-// --session-timeout, see Worker.deadline
-session_timeout_ms: u64,
+// --http-session-timeout, see Worker.deadline. Null disables the reaper.
+session_timeout_ms: ?u64,
 
 // Worker communicates with the main loop through this queue, protected by the
 // mutex.
@@ -484,7 +484,6 @@ pub fn attachConnection(self: *Server, worker: *Worker, conn: *Connection) void 
     lp.assert(worker.link == null, "Server.deliverLink held", .{});
     const link = Link.create(self.app, conn.socket, worker.protocol, &worker.inbox) catch |err| {
         log.err(.serve, "link create", .{ .err = err });
-        sys_net.close(conn.socket);
         return;
     };
 
@@ -640,8 +639,13 @@ fn markIdle(self: *Server, worker: *Worker, now: u64) void {
         // ending already (or never a HTTP session)
         return;
     }
+    const timeout = self.session_timeout_ms orelse {
+        // reaping disabled: the session lives until DELETE /session/{id}
+        return;
+    };
+
     lp.assert(worker.deadline == null, "Server.markIdle idle", .{});
-    worker.deadline = now + self.session_timeout_ms;
+    worker.deadline = now + timeout;
     self.idle_sessions.append(&worker.idle_node);
 }
 
@@ -1253,6 +1257,13 @@ pub const Worker = struct {
         session: [36]u8,
     };
 
+    pub fn linkDropping(self: *const Worker) bool {
+        // There's a window where the loop has stopped reading the link but the
+        // worker hasn't handed it back yet. A driver that tries to re-establish
+        // the link will get an error and will have to retry.
+        return self.monitored == false and self.link != null;
+    }
+
     // -- Worker thread from here down --
 
     // The origin travels as an argument: the loop owns session_id and may
@@ -1789,7 +1800,8 @@ test "server: HTTP session outlives its websocket" {
     }
 
     // The worker lets go of its link right after replying; the loop learns
-    // of it a moment later, and refuses a new one until then.
+    // of it a moment later, and asks for a retry (429, not the 409 of a
+    // session someone else is actually connected to) until then.
     var c = try createTestClient();
     defer c.deinit();
     var attempts: usize = 0;
@@ -1798,7 +1810,7 @@ test "server: HTTP session outlives its websocket" {
         if (std.mem.startsWith(u8, res, "HTTP/1.1 101 ")) {
             break;
         }
-        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 409 "));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 429 "));
         try testing.expect(attempts < 100);
         c.deinit();
         c = try createTestClient();
@@ -1836,6 +1848,20 @@ test "server: HTTP session idle timeout" {
         try testing.expect(attempts == 0);
         lp.io.sleep(.fromMilliseconds(20), .awake) catch {};
     }
+}
+
+test "server: HTTP session idle timeout disabled" {
+    const server = testing.test_cdp_server.?;
+    const original = server.session_timeout_ms;
+    defer server.session_timeout_ms = original;
+    // what --http-session-timeout 0 gives us
+    server.session_timeout_ms = null;
+
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+
+    // never idle-listed, so nothing reaps it: it's still there to DELETE
+    lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+    try deleteHTTPSession(&session_id, true);
 }
 
 test "server: HTTP session ended before its worker attached" {
