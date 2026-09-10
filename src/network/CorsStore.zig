@@ -159,7 +159,7 @@ pub fn get(self: *CorsStore, key: Key) ?Entry {
 
     const entry = self.map.get(key) orelse return null;
 
-    if (entry.expires_at <= lp.datetime.timestamp(.real)) {
+    if (entry.expires_at <= lp.datetime.milliTimestamp(.real)) {
         const kv = self.map.fetchRemove(key).?;
         kv.key.deinit(self.allocator);
         kv.value.deinit(self.allocator);
@@ -250,7 +250,7 @@ test "CorsStore: put then get, miss on different origin/target" {
         .methods = std.EnumSet(http.Method).initOne(.POST),
         .headers_wildcard = false,
         .headers = headers,
-        .expires_at = lp.datetime.timestamp(.real) + 60_000,
+        .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
     });
 
     // store.get returns the store's own copy — not caller-owned, don't free it.
@@ -273,7 +273,7 @@ test "CorsStore: expired entries are evicted on get" {
         .methods = .initEmpty(),
         .headers_wildcard = true,
         .headers = &.{}, // empty slice, nothing to free
-        .expires_at = lp.datetime.timestamp(.real) - 1,
+        .expires_at = lp.datetime.milliTimestamp(.real) - 1,
     });
 
     try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example" }));
@@ -295,7 +295,7 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
         .methods = std.EnumSet(http.Method).initOne(.POST),
         .headers_wildcard = false,
         .headers = h1,
-        .expires_at = lp.datetime.timestamp(.real) + 60_000,
+        .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
     });
     freeHeaders(allocator, h1);
 
@@ -307,7 +307,7 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
         .methods = std.EnumSet(http.Method).initOne(.PUT),
         .headers_wildcard = false,
         .headers = h2,
-        .expires_at = lp.datetime.timestamp(.real) + 60_000,
+        .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
     });
     freeHeaders(allocator, h2);
 
@@ -328,7 +328,7 @@ test "CorsStore: covers rejects credentialed request against uncredentialed wild
         .methods = .initEmpty(),
         .headers_wildcard = true,
         .headers = &.{},
-        .expires_at = std.math.maxInt(i64),
+        .expires_at = std.math.maxInt(u64),
     };
     try testing.expect(!CorsStore.covers(entry, .GET, true, &.{}));
     try testing.expect(CorsStore.covers(entry, .GET, false, &.{}));
@@ -341,7 +341,7 @@ test "CorsStore: covers never lets a wildcard cover Authorization" {
         .methods = .initEmpty(),
         .headers_wildcard = true,
         .headers = &.{},
-        .expires_at = std.math.maxInt(i64),
+        .expires_at = std.math.maxInt(u64),
     };
     try testing.expect(!CorsStore.covers(entry, .GET, false, &.{"authorization"}));
     try testing.expect(CorsStore.covers(entry, .GET, false, &.{"x-anything"}));

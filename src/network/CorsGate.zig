@@ -225,19 +225,17 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         return .allowed;
     }
 
-    if (try URL.getOrigin(transfer.arena.allocator(), req.url)) |target| {
-        if (self.network.cors_store.get(.{ .origin = origin, .target = target })) |cached| {
-            const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
-            if (CorsStore.covers(cached, req.method, req.credentials_mode == .include, authored.items)) {
-                log.debug(.cors, "cross origin", .{
-                    .url = req.url,
-                    .origin = origin,
-                    .preflight = false,
-                    .cached = true,
-                });
-                lp.metrics.cors_check.incr(.cached);
-                return .allowed;
-            }
+    if (self.network.cors_store.get(.{ .origin = origin, .target = req.url })) |cached| {
+        const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
+        if (CorsStore.covers(cached, req.method, req.credentials_mode == .include, authored.items)) {
+            log.debug(.cors, "cross origin", .{
+                .url = req.url,
+                .origin = origin,
+                .preflight = false,
+                .cached = true,
+            });
+            lp.metrics.cors_check.incr(.cached);
+            return .allowed;
         }
     }
 
@@ -303,7 +301,6 @@ const CorsPreflightContext = struct {
     key: []const u8,
     url: [:0]const u8,
     origin: []const u8,
-    target: []const u8,
     method: http.Method,
     request_headers: []const []const u8,
     wants_credentials: bool,
@@ -401,9 +398,13 @@ const CorsPreflightContext = struct {
     }
 
     fn cacheGrant(self: *CorsPreflightContext, acam: ?[]const u8, acah: ?[]const u8, acma: ?[]const u8) !void {
-        if (self.target.len == 0) return;
+        if (self.url.len == 0) return;
 
-        const max_age_s: u64 = if (acma) |v| std.fmt.parseUnsigned(u64, v, 10) catch return else return;
+        const max_age_s: u64 = blk: {
+            const v = acma orelse break :blk 5;
+            if (v.len == 0) break :blk 5;
+            break :blk std.fmt.parseUnsigned(u64, v, 10) catch return;
+        };
         if (max_age_s == 0) return;
 
         const capped_s: u64 = @min(max_age_s, 7200);
@@ -434,14 +435,14 @@ const CorsPreflightContext = struct {
         }
 
         try self.gate.network.cors_store.put(
-            .{ .origin = self.origin, .target = self.target },
+            .{ .origin = self.origin, .target = self.url },
             .{
                 .credentials = self.wants_credentials,
                 .methods_wildcard = methods_wildcard,
                 .methods = methods,
                 .headers_wildcard = headers_wildcard,
                 .headers = owned_headers,
-                .expires_at = lp.datetime.timestamp(.real) + capped_ms,
+                .expires_at = lp.datetime.milliTimestamp(.real) + capped_ms,
             },
         );
     }
@@ -584,7 +585,6 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     const owned_url = try arena.dupeZ(u8, transfer.req.url);
     const owned_key = try arena.dupe(u8, key);
     const owned_origin = try arena.dupe(u8, origin);
-    const owned_target = try URL.getOrigin(arena.allocator(), transfer.req.url) orelse "";
 
     const owned_header_names = try arena.alloc([]const u8, header_names.items.len);
     for (header_names.items, 0..) |name, i| {
@@ -599,7 +599,6 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .key = owned_key,
         .url = owned_url,
         .origin = owned_origin,
-        .target = owned_target,
         .method = transfer.req.method,
         .request_headers = owned_header_names,
         .wants_credentials = transfer.req.credentials_mode == .include,
