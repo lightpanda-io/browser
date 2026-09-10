@@ -82,11 +82,16 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     // tree builders (Playwright ariaSnapshot) consult on every element.
     if (self._is_computed) {
         if (self._element) |element| {
-            const style_manager = &element.ownerFrame(frame)._style_manager;
             if (wrapped.eql(comptime .wrap("display"))) {
-                if (style_manager.hasDisplayNone(element, .materialize)) return "none";
+                const style_manager = &element.ownerFrame(frame)._style_manager;
+                if (style_manager.hasDisplayNone(element, .materialize)) {
+                    return "none";
+                }
             } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                if (style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+                const style_manager = &element.ownerFrame(frame)._style_manager;
+                if (style_manager.hasVisibilityHiddenInherited(element)) {
+                    return "hidden";
+                }
             }
         }
     }
@@ -95,9 +100,15 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         // Only return default values for computed styles
         if (self._is_computed) {
             if (self._element) |element| {
+                const style_manager = &element.ownerFrame(frame)._style_manager;
+
+                if (isCustomProperty(normalized)) {
+                    return style_manager.customPropertyValue(element, wrapped) orelse "";
+                }
+
                 // Resolve inline `style=` declarations through the element's
                 // parsed inline style, so computed values match `el.style`.
-                if (element.ownerFrame(frame)._style_manager.inlineStyleValue(element, wrapped)) |value| {
+                if (style_manager.inlineStyleValue(element, wrapped)) |value| {
                     return value;
                 }
 
@@ -292,6 +303,20 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     }
 }
 
+pub fn iterator(self: *const CSSStyleDeclaration) Iterator {
+    return .{ .node = self._properties.first };
+}
+
+pub const Iterator = struct {
+    node: ?*std.DoublyLinkedList.Node,
+
+    pub fn next(self: *Iterator) ?*Property {
+        const node = self.node orelse return null;
+        self.node = node.next;
+        return Property.fromNodeLink(node);
+    }
+};
+
 pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
     while (node) |n| {
@@ -305,11 +330,20 @@ pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
 }
 
 fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
+    if (isCustomProperty(name)) {
+        // Custom properties are case-sensitive
+        return name;
+    }
+
     if (name.len > buf.len) {
         log.info(.dom, "css.long.name", .{ .name = name });
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 // Normalize CSS property values for canonical serialization

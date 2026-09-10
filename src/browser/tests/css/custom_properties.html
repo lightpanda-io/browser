@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<head>
+  <script src="../testing.js"></script>
+</head>
+
+<!--
+  getComputedStyle().getPropertyValue('--x') resolution.
+
+  Custom properties inherit, so the answer depends on the element asked, not
+  just on the document: the nearest ancestor that declares the property wins
+  outright, and specificity only breaks ties between rules matching that same
+  element. The declared token stream is returned verbatim - `var()` inside a
+  value is NOT substituted.
+-->
+
+<style>
+  :root { --brand: #336699; --theme: light; }
+  html { --from-html: html; }
+
+  .card { --pad: 16px; --dup: from-class; }
+  #card { --dup: from-id; }
+
+  /* Case-sensitive: these are two different properties. */
+  #case { --Token: upper; --token: lower; }
+
+  /* Later normal declaration wins, but never over an earlier !important. */
+  #within-block { --normal-last: first; --normal-last: second; }
+  #within-block { --important-first: kept !important; --important-first: ignored; }
+
+  /* Interaction state can't be resolved statically, so :hover is skipped. */
+  #dynamic:hover { --hover-only: nope; }
+
+  /* Values are stored as declared: no var() substitution. */
+  #alias { --base: 4px; --derived: var(--base); }
+
+  /* Nearest ancestor wins over a more specific rule further up. */
+  #outer.outer.outer { --nearest: far; }
+  .inner { --nearest: near; }
+</style>
+
+<body>
+  <div class="card" id="card" style="--inline: 8px; --pad: inline-wins">card</div>
+  <div class="card">plain card</div>
+  <div id="case">case</div>
+  <div id="within-block">within-block</div>
+  <div id="dynamic">dynamic</div>
+  <div id="alias">alias</div>
+  <div id="outer" class="outer"><div class="inner"><span id="nearest">nearest</span></div></div>
+  <div id="plain">plain</div>
+  <style id="dyn"></style>
+</body>
+
+<script id=custom_property_sources>
+{
+  const card = getComputedStyle($('#card'));
+  // Declared on :root, reached by inheritance.
+  testing.expectEqual('#336699', card.getPropertyValue('--brand'));
+  testing.expectEqual('html', card.getPropertyValue('--from-html'));
+  // Declared on the element's own class rule.
+  testing.expectEqual('16px', getComputedStyle($('.card:not([id])')).getPropertyValue('--pad'));
+  // Inline declaration beats the class rule.
+  testing.expectEqual('inline-wins', card.getPropertyValue('--pad'));
+  testing.expectEqual('8px', card.getPropertyValue('--inline'));
+  // Higher specificity wins between two rules matching the same element.
+  testing.expectEqual('from-id', card.getPropertyValue('--dup'));
+
+  // :root is reachable from the root element itself, not only by inheritance.
+  testing.expectEqual('#336699', getComputedStyle(document.documentElement).getPropertyValue('--brand'));
+
+  // Undeclared names resolve to the empty string.
+  testing.expectEqual('', card.getPropertyValue('--nope'));
+  testing.expectEqual('', getComputedStyle($('#plain')).getPropertyValue('--nope'));
+}
+</script>
+
+<script id=custom_property_case_sensitive>
+{
+  const style = getComputedStyle($('#case'));
+  testing.expectEqual('upper', style.getPropertyValue('--Token'));
+  testing.expectEqual('lower', style.getPropertyValue('--token'));
+  testing.expectEqual('', style.getPropertyValue('--TOKEN'));
+
+  // Same on the inline path: --A and --a are distinct properties.
+  const el = document.createElement('div');
+  el.style.setProperty('--A', 'a-upper');
+  el.style.setProperty('--a', 'a-lower');
+  testing.expectEqual(2, el.style.length);
+  testing.expectEqual('a-upper', el.style.getPropertyValue('--A'));
+  testing.expectEqual('a-lower', el.style.getPropertyValue('--a'));
+}
+</script>
+
+<script id=custom_property_within_block>
+{
+  const style = getComputedStyle($('#within-block'));
+  testing.expectEqual('second', style.getPropertyValue('--normal-last'));
+  testing.expectEqual('kept', style.getPropertyValue('--important-first'));
+}
+</script>
+
+<script id=custom_property_dynamic_pseudo_skipped>
+{
+  testing.expectEqual('', getComputedStyle($('#dynamic')).getPropertyValue('--hover-only'));
+}
+</script>
+
+<script id=custom_property_no_var_substitution>
+{
+  const style = getComputedStyle($('#alias'));
+  testing.expectEqual('4px', style.getPropertyValue('--base'));
+  testing.expectEqual('var(--base)', style.getPropertyValue('--derived'));
+}
+</script>
+
+<script id=custom_property_nearest_ancestor_wins>
+{
+  // #outer.outer.outer is far more specific than .inner, but .inner is nearer,
+  // and inheritance outranks the cascade across elements.
+  testing.expectEqual('near', getComputedStyle($('#nearest')).getPropertyValue('--nearest'));
+  testing.expectEqual('far', getComputedStyle($('#outer')).getPropertyValue('--nearest'));
+}
+</script>
+
+<script id=custom_property_inline_on_ancestor>
+{
+  const parent = document.createElement('div');
+  parent.style.setProperty('--from-ancestor-inline', '4px');
+  const child = document.createElement('div');
+  parent.appendChild(child);
+  document.body.appendChild(parent);
+
+  testing.expectEqual('4px', getComputedStyle(child).getPropertyValue('--from-ancestor-inline'));
+  // Still inherits document-level tokens through the new subtree.
+  testing.expectEqual('light', getComputedStyle(child).getPropertyValue('--theme'));
+}
+</script>
+
+<script id=custom_property_cssom_rules>
+{
+  // The CSSOM path (addRule) has to agree with the raw-text path (addRawRule).
+  const sheet = $('#dyn').sheet;
+  sheet.insertRule('#plain { --Om: om-upper; --om: om-lower }', 0);
+
+  const plain = $('#plain');
+  testing.expectEqual('om-upper', getComputedStyle(plain).getPropertyValue('--Om'));
+  testing.expectEqual('om-lower', getComputedStyle(plain).getPropertyValue('--om'));
+
+  // Mutating the rule's declaration must not leave us serving a freed value.
+  sheet.cssRules[0].style.setProperty('--Om', 'x');
+  sheet.insertRule('#nothing-matches { color: red }', 0);
+  testing.expectEqual('x', getComputedStyle(plain).getPropertyValue('--Om'));
+
+  sheet.deleteRule(0);
+  sheet.deleteRule(0);
+  testing.expectEqual('', getComputedStyle(plain).getPropertyValue('--Om'));
+}
+</script>
+
+<script id=custom_property_not_on_inline_declaration>
+{
+  // A non-computed declaration only ever reports its own inline properties;
+  // it must not start resolving stylesheet rules.
+  testing.expectEqual('', $('#card').style.getPropertyValue('--brand'));
+  testing.expectEqual('8px', $('#card').style.getPropertyValue('--inline'));
+}
+</script>
+
+<script id=custom_property_on_rule_declaration>
+{
+  // A CSSStyleRule's declaration is not a computed style: it reports exactly
+  // the custom properties the rule declares, and nothing inherited.
+  const rule = document.styleSheets[0].cssRules[0];
+  testing.expectEqual(':root', rule.selectorText);
+  testing.expectEqual('#336699', rule.style.getPropertyValue('--brand'));
+  testing.expectEqual('light', rule.style.getPropertyValue('--theme'));
+  testing.expectEqual(2, rule.style.length);
+  testing.expectEqual('--brand', rule.style.item(0));
+  testing.expectEqual('--brand: #336699; --theme: light;', rule.style.cssText);
+  testing.expectEqual('', rule.style.getPropertyValue('--pad'));
+}
+</script>
