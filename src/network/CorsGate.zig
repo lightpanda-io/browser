@@ -46,6 +46,7 @@ const ACCESS_CONTROL_ALLOW_ORIGIN = "access-control-allow-origin";
 const ACCESS_CONTROL_ALLOW_METHODS = "access-control-allow-methods";
 const ACCESS_CONTROL_ALLOW_HEADERS = "access-control-allow-headers";
 const ACCESS_CONTROL_ALLOW_CREDENTIALS = "access-control-allow-credentials";
+const ACCESS_CONTROL_MAX_AGE = "access-control-max-age";
 
 pub fn deinit(self: *CorsGate) void {
     self.single_flight.deinit();
@@ -302,6 +303,7 @@ const CorsPreflightContext = struct {
     key: []const u8,
     url: [:0]const u8,
     origin: []const u8,
+    target: []const u8,
     method: http.Method,
     request_headers: []const []const u8,
     wants_credentials: bool,
@@ -398,6 +400,52 @@ const CorsPreflightContext = struct {
         return true;
     }
 
+    fn cacheGrant(self: *CorsPreflightContext, acam: ?[]const u8, acah: ?[]const u8, acma: ?[]const u8) !void {
+        if (self.target.len == 0) return;
+
+        const max_age_s: u64 = if (acma) |v| std.fmt.parseUnsigned(u64, v, 10) catch return else return;
+        if (max_age_s == 0) return;
+
+        const capped_s: u64 = @min(max_age_s, 7200);
+        const capped_ms = capped_s * 1000;
+
+        const allocator = self.arena.allocator();
+
+        const methods_wildcard = acam != null and std.mem.eql(u8, acam.?, "*") and !self.wants_credentials;
+        var methods = std.EnumSet(http.Method).initEmpty();
+        if (!methods_wildcard) {
+            if (acam) |list| {
+                var it = std.mem.splitScalar(u8, list, ',');
+                while (it.next()) |raw| {
+                    const token = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (std.meta.stringToEnum(http.Method, token)) |m| methods.insert(m);
+                }
+            }
+        }
+
+        const headers_wildcard = acah != null and std.mem.eql(u8, acah.?, "*") and !self.wants_credentials;
+        var owned_headers: []const []const u8 = &.{};
+        if (!headers_wildcard and self.request_headers.len > 0) {
+            const dup = try allocator.alloc([]const u8, self.request_headers.len);
+            for (self.request_headers, 0..) |src, i| {
+                dup[i] = try allocator.dupe(u8, src);
+            }
+            owned_headers = dup;
+        }
+
+        try self.gate.network.cors_store.put(
+            .{ .origin = self.origin, .target = self.target },
+            .{
+                .credentials = self.wants_credentials,
+                .methods_wildcard = methods_wildcard,
+                .methods = methods,
+                .headers_wildcard = headers_wildcard,
+                .headers = owned_headers,
+                .expires_at = lp.datetime.timestamp(.real) + capped_ms,
+            },
+        );
+    }
+
     fn methodAllowed(list: []const u8, method: http.Method) bool {
         const method_name = @tagName(method);
         var it = std.mem.splitScalar(u8, list, ',');
@@ -436,6 +484,7 @@ const CorsPreflightContext = struct {
         var acam: ?[]const u8 = null;
         var acah: ?[]const u8 = null;
         var acac: ?[]const u8 = null;
+        var acma: ?[]const u8 = null;
 
         var iter = transfer.responseHeaderIterator();
         while (iter.next()) |hdr| {
@@ -447,10 +496,17 @@ const CorsPreflightContext = struct {
                 acah = hdr.value;
             } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_CREDENTIALS, hdr.name)) {
                 acac = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_MAX_AGE, hdr.name)) {
+                acma = hdr.value;
             }
         }
 
         self.allowed = self.validateHeaders(acao, acam, acah, acac);
+        if (self.allowed) {
+            self.cacheGrant(acam, acah, acma) catch |err| {
+                log.warn(.cors, "preflight cache store failed", .{ .url = self.url, .err = err });
+            };
+        }
         return .proceed;
     }
 
@@ -528,6 +584,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     const owned_url = try arena.dupeZ(u8, transfer.req.url);
     const owned_key = try arena.dupe(u8, key);
     const owned_origin = try arena.dupe(u8, origin);
+    const owned_target = try URL.getOrigin(arena.allocator(), transfer.req.url) orelse "";
 
     const owned_header_names = try arena.alloc([]const u8, header_names.items.len);
     for (header_names.items, 0..) |name, i| {
@@ -542,6 +599,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .key = owned_key,
         .url = owned_url,
         .origin = owned_origin,
+        .target = owned_target,
         .method = transfer.req.method,
         .request_headers = owned_header_names,
         .wants_credentials = transfer.req.credentials_mode == .include,
