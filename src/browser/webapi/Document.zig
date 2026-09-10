@@ -917,16 +917,12 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     // preorder counter instead of calling calculateDocumentPosition per node
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
-    //
-    // We also share a single VisibilityCache across all elements so the
-    // ancestor-walk inside isHidden gets amortized.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
     var stack: std.ArrayList(*Node) = .empty;
     try stack.append(frame.local_arena, root);
 
-    var visibility_cache: Element.VisibilityCache = .{};
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
@@ -940,7 +936,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
+            if (element.isVisible(frame, .materialize)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;

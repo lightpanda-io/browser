@@ -38,10 +38,6 @@ const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-pub const ChainCache = std.AutoHashMapUnmanaged(*Element, bool);
-pub const VisibilityCache = ChainCache;
-pub const PointerEventsCache = ChainCache;
-
 // Tracks visibility-relevant CSS rules from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
@@ -591,9 +587,9 @@ const Probe = enum { hidden, visibility, pointer_events };
 
 const Memo = std.AutoHashMapUnmanaged(*Element, Props);
 
-pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
+pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, cache, access, .hidden, options);
+    return self.anyInChain(el, access, .hidden, options);
 }
 
 /// Computed display:none for a single element (own property, no ancestor walk).
@@ -624,33 +620,18 @@ pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: 
 /// rendered, but its computed `visibility` still reflects inherited visibility.
 pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, null, .materialize, .visibility, .{});
+    return self.anyInChain(el, .materialize, .visibility, .{});
 }
 
-pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerEventsCache, comptime access: InlineAccess) bool {
+pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, cache, access, .pointer_events, .{});
+    return self.anyInChain(el, access, .pointer_events, .{});
 }
 
-fn anyInChain(self: *StyleManager, el: *Element, cache: ?*ChainCache, comptime access: InlineAccess, comptime what: Probe, options: CheckVisibilityOptions) bool {
+fn anyInChain(self: *StyleManager, el: *Element, comptime access: InlineAccess, comptime what: Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
-        if (cache) |c| {
-            if (c.get(elem)) |matched| {
-                if (matched) {
-                    return true;
-                }
-                continue;
-            }
-        }
-
-        const matched = self.ownProps(elem, access).probe(what, options);
-        if (cache) |c| {
-            c.put(self.frame.call_arena, elem, matched) catch |err| {
-                log.warn(.browser, "StyleManager cache", .{ .err = err });
-            };
-        }
-        if (matched) {
+        if (self.ownProps(elem, access).probe(what, options)) {
             return true;
         }
     }
@@ -1474,41 +1455,41 @@ test "StyleManager: memo: reuse and invalidation" {
     const b = p.asNode().firstChild().?.as(Element);
 
     // The walk memoizes the element and every ancestor
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
     try testing.expectEqual(3, sm.memo.count());
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
     try testing.expectEqual(3, sm.memo.count());
 
     // A scan never creates the style object; a materialize hit does
     try testing.expectEqual(null, b.getStyle(frame));
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .materialize));
+    try testing.expectEqual(false, sm.isHidden(b, .{}, .materialize));
     try testing.expect(b.getStyle(frame) != null);
     try testing.expectEqual(3, sm.memo.count());
 
     // An attribute change anywhere invalidates the memo
     try p.setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
-    try testing.expectEqual(true, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, .{}, .scan));
     try testing.expectEqual(false, sm.hasDisplayNone(b, .scan));
     try testing.expectEqual(true, sm.hasDisplayNone(p, .scan));
     try testing.expectEqual(false, sm.hasAuthorDisplayNone(p, .scan));
 
     p.removeAttributeSafe(comptime .wrap("hidden"), frame);
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
 
     try b.setStyle("display: none; pointer-events: none", frame);
     try testing.expectEqual(true, sm.hasAuthorDisplayNone(b, .scan));
-    try testing.expectEqual(true, sm.hasPointerEventsNone(b, null, .scan));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(p, null, .scan));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(b, .scan));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p, .scan));
 
     try b.setStyle("display: flex; visibility: hidden", frame);
     try testing.expectEqual(.flex, sm.display(b, .scan));
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
-    try testing.expectEqual(true, sm.isHidden(b, null, .{ .check_visibility = true }, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, .{ .check_visibility = true }, .scan));
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(b, null, .scan));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(b, .scan));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
-    try testing.expectEqual(false, sm.isHidden(p, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(p, .{}, .scan));
     try testing.expectEqual(2, sm.memo.count());
 }

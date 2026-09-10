@@ -43,7 +43,6 @@ pub const Writer = struct {
     root: *const NodeRegistry.Node,
     registry: *NodeRegistry,
     frame: *Frame,
-    visibility_cache: *DOMNode.Element.VisibilityCache,
     label_index: *Label.LabelByForIndex,
     temp_arena: *lp.Arena,
     // When null, emit the full AX tree (getFullAXTree). When set, walk the
@@ -96,7 +95,7 @@ pub const Writer = struct {
     // when a <label> targets a CSS-hidden checkbox/radio. Shared between the
     // tree (writeNode) and query (emitMatch) paths so the two can't drift.
     fn resolveRole(self: *const Writer, axn: AXNode) !ResolvedRole {
-        if (labelPromotionTarget(axn, self.frame, self.visibility_cache)) |input| {
+        if (labelPromotionTarget(axn, self.frame)) |input| {
             return .{
                 .role = switch (input._input_type) {
                     .checkbox => "checkbox",
@@ -147,7 +146,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const child_el = dom_node.as(DOMNode.Element);
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame, self.visibility_cache)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
                         continue;
                     }
                 },
@@ -536,7 +535,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .role = resolved.role }, w);
 
-        const ignore = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
+        const ignore = axn.isIgnore(self.frame, in_aria_hidden);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -618,7 +617,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeNodeChildren.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHidden(child_el, self.frame, self.visibility_cache)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame)) {
                         continue;
                     }
                 }
@@ -713,7 +712,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const ignored = axn.isIgnore(self.frame, self.visibility_cache, in_aria_hidden);
+        const ignored = axn.isIgnore(self.frame, in_aria_hidden);
 
         try w.beginObject();
 
@@ -1210,7 +1209,6 @@ fn nameFromContentRole(role_: ?[]const u8) bool {
 fn labelPromotionTarget(
     axn: AXNode,
     frame: *Frame,
-    cache: *DOMNode.Element.VisibilityCache,
 ) ?*DOMNode.Element.Html.Input {
     // Respect an explicit role= on the label.
     if (axn.role_attr != null) return null;
@@ -1224,7 +1222,7 @@ fn labelPromotionTarget(
 
     // Only promote when the control is hidden; otherwise it appears
     // normally and the label stays as-is.
-    if (!isHidden(control, frame, cache)) return null;
+    if (!isHidden(control, frame)) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1280,7 +1278,7 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
-fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.VisibilityCache) bool {
+fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
     if (elt.getAttributeInterned("aria-hidden")) |value| {
         if (std.mem.eql(u8, value, "true")) {
             return true;
@@ -1297,7 +1295,7 @@ fn isHidden(elt: *DOMNode.Element, frame: *Frame, cache: *DOMNode.Element.Visibi
 
     // CSS display:none and visibility:hidden (both inherited from ancestors via
     // style computation). Matches Chromium's AX tree which prunes both.
-    if (frame._style_manager.isHidden(elt, cache, .{ .check_visibility = true }, .scan)) {
+    if (frame._style_manager.isHidden(elt, .{ .check_visibility = true }, .scan)) {
         return true;
     }
 
@@ -1346,7 +1344,7 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache, in_aria_hidden: bool) bool {
+fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
@@ -1392,7 +1390,7 @@ fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache
         return true;
     }
 
-    if (isHidden(elt, frame, cache)) {
+    if (isHidden(elt, frame)) {
         return true;
     }
 
@@ -1407,7 +1405,7 @@ fn isIgnore(self: AXNode, frame: *Frame, cache: *DOMNode.Element.VisibilityCache
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                if (!axn.isIgnore(frame, cache, in_aria_hidden)) {
+                if (!axn.isIgnore(frame, in_aria_hidden)) {
                     return false;
                 }
             }
@@ -1524,7 +1522,6 @@ test "AXNode: writer" {
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1532,7 +1529,6 @@ test "AXNode: writer" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
@@ -1616,7 +1612,6 @@ test "AXNode: writer prunes hidden and resolves labels" {
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1624,7 +1619,6 @@ test "AXNode: writer prunes hidden and resolves labels" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
@@ -1751,7 +1745,6 @@ test "AXNode: Writer query filters by role" {
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1760,7 +1753,6 @@ test "AXNode: Writer query filters by role" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
         .filter = .{ .role = "heading" },
@@ -1834,7 +1826,6 @@ test "AXNode: writer maps password input to textbox" {
     try testing.expectEqual("none", hidden_role);
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1842,7 +1833,6 @@ test "AXNode: writer maps password input to textbox" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
     }, .{});
@@ -1887,7 +1877,6 @@ test "AXNode: Writer query filters by accessible name" {
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1896,7 +1885,6 @@ test "AXNode: Writer query filters by accessible name" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
         .filter = .{ .accessible_name = "Search" },
@@ -1928,7 +1916,6 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1943,7 +1930,6 @@ test "AXNode: Writer query combined role+name filter promotes hidden-input label
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
         .filter = .{ .accessible_name = "Enable feature", .role = "checkbox" },
@@ -1981,7 +1967,6 @@ test "AXNode: Writer query no match returns empty array" {
     var doc = frame.window._document;
 
     const node = try registry.register(doc.asNode());
-    var visibility_cache: DOMNode.Element.VisibilityCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     const temp_arena = try frame.getArena(.medium, "AXNode");
     defer temp_arena.release();
@@ -1990,7 +1975,6 @@ test "AXNode: Writer query no match returns empty array" {
         .root = node,
         .registry = &registry,
         .frame = frame,
-        .visibility_cache = &visibility_cache,
         .label_index = &label_index,
         .temp_arena = temp_arena,
         .filter = .{ .role = "marquee" },

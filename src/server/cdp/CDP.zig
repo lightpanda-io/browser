@@ -31,7 +31,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Element = @import("../../browser/webapi/Element.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
@@ -703,15 +702,12 @@ pub const BrowserContext = struct {
         // cross-frame queries produces names/visibility from the wrong document.
         const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(fallback);
-        const cache = try frame.call_arena.create(Element.VisibilityCache);
-        cache.* = .empty;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{
             .frame = frame,
             .root = root,
             .registry = &self.node_registry,
-            .visibility_cache = cache,
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
