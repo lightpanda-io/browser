@@ -180,10 +180,11 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
     };
 }
 
-// Dispatch a single trusted mouse event of the given type on `target`, carrying
-// the pressed button and pointer position. `detail` is the click count (used for
-// click/dblclick); 0 for events where it does not apply.
-fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, detail: u32) !void {
+/// Dispatch a single trusted mouse event of the given type on `target`, carrying
+/// the pressed button and pointer position. `detail` is the click count (used for
+/// click/dblclick); 0 for events where it does not apply. Reports whether the
+/// event was cancelled via preventDefault().
+fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, detail: u32) !bool {
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
@@ -193,7 +194,13 @@ fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u
         .button = button,
         .detail = detail,
     }, frame);
-    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+
+    const base_event = event.asEvent();
+    base_event.acquireRef();
+    defer base_event.releaseRef(frame._page);
+
+    try frame._event_manager.dispatch(target.asEventTarget(), base_event);
+    return base_event.getDefaultPrevented();
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
@@ -208,8 +215,10 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
             .type = frame._type,
         });
     }
-    try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
-    try focusForMouseDown(frame, target);
+    const suppressed = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, 0);
+    if (!suppressed) {
+        try focusForMouseDown(frame, target);
+    }
 }
 
 pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
@@ -251,19 +260,19 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
 
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
 
-    try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, detail);
+    _ = try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, detail);
 
     // After mouseup, the activation event depends on the button.
     switch (button) {
         mouse_button.main => {
-            try dispatchMouseEventOn(frame, target, "click", x, y, button, detail);
+            _ = try dispatchMouseEventOn(frame, target, "click", x, y, button, detail);
             // A second click in quick succession also fires dblclick.
             if (click_count == 2) {
-                try dispatchMouseEventOn(frame, target, "dblclick", x, y, button, detail);
+                _ = try dispatchMouseEventOn(frame, target, "dblclick", x, y, button, detail);
             }
         },
-        mouse_button.auxiliary => try dispatchMouseEventOn(frame, target, "auxclick", x, y, button, detail),
-        mouse_button.secondary => try dispatchMouseEventOn(frame, target, "contextmenu", x, y, button, detail),
+        mouse_button.auxiliary => _ = try dispatchMouseEventOn(frame, target, "auxclick", x, y, button, detail),
+        mouse_button.secondary => _ = try dispatchMouseEventOn(frame, target, "contextmenu", x, y, button, detail),
         else => {},
     }
 }
@@ -353,8 +362,8 @@ fn isEditingHost(node: *Node) bool {
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
-// Find the outermost element of the contiguous editable chain containing the
-// target.
+/// Find the outermost element of the contiguous editable chain containing the
+/// target.
 fn outermostEditingHost(target: *Element) ?*Element {
     var node: ?*Node = target.asNode();
     var editable: ?*Node = null;
@@ -374,31 +383,42 @@ fn outermostEditingHost(target: *Element) ?*Element {
     return host.is(Element);
 }
 
-/// `null` means the element is not mouse-focusable. Unlike sequential focus,
-/// any explicit tabindex value, including a negative one, is mouse-focusable.
-fn mouseFocusTabIndex(el: *Element) ?i32 {
-    if (el.isDisabled()) return null;
-    if (el.is(Element.Html) == null) return null;
+/// Unlike sequential focus, any explicit, parseable tabindex value, including
+/// a negative one, is mouse-focusable — on any element, not just HTML ones, so
+/// this is checked before the HTML-only guard below. An unparsable tabindex is
+/// treated as if the attribute were absent (HTML §6.6.3), so native
+/// focusability still applies — mirrors HtmlElement.getTabIndex's
+/// parse-failure fallthrough.
+fn isMouseFocusable(el: *Element) bool {
+    if (el.isDisabled()) return false;
 
     if (el.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
-        return Element.Html.parseInteger(attr) orelse 0;
+        if (Element.Html.parseInteger(attr)) |_| {
+            return true;
+        }
     }
 
-    const native = switch (el.getTag()) {
+    if (el.is(Element.Html) == null) {
+        // Mirrors hasClickActivationBehavior: an SVG link is focusable by the
+        // same href it activates on.
+        if (el.is(Element.Svg.Graphics.A) != null) {
+            return svgAnchorHref(el) != null;
+        }
+        return false;
+    }
+
+    return switch (el.getTag()) {
         .button, .select, .textarea, .iframe => true,
         .input => el.as(Element.Html.Input)._input_type != .hidden,
         .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
         else => false,
     };
-    return if (native) 0 else null;
-}
-
-fn isMouseFocusable(el: *Element) bool {
-    return mouseFocusTabIndex(el) != null;
 }
 
 /// Mousedown default action: focus the editing host if the click is inside
-/// one, otherwise the nearest mouse-focusable element (self or ancestor).
+/// one, otherwise the nearest mouse-focusable element (self or ancestor). If
+/// no ancestor is mouse-focusable, blur whatever was previously focused —
+/// a mousedown outside any focusable element moves focus to the body.
 pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     if (outermostEditingHost(target)) |host| {
         try host.focus(frame);
@@ -412,6 +432,11 @@ pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
             try el.focus(frame);
             return;
         }
+    }
+
+    const doc = target.asNode().ownerDocument(frame) orelse frame.document;
+    if (doc._active_element) |active| {
+        try active.blur(frame);
     }
 }
 

@@ -22,7 +22,7 @@
     <button id="btnPreventDefault">Prevent Default</button>
     <button id="btnDisabled" disabled>Disabled</button>
     <div id="focusTarget" tabindex="0" onclick="window.focusTargetFocused = document.activeElement === this;">Focus me</div>
-    <div id="plain" onclick="window.focusAfterPlain = document.activeElement.id;">Not focusable</div>
+    <div id="plain" onclick="window.plainBlurred = document.activeElement === document.body;">Not focusable</div>
     <script>
         window.seq = [];
         const btn = document.getElementById('btn');
@@ -39,8 +39,11 @@
             btnPreventDefault.addEventListener(t, function(e) { window.seqPrevented.push(e.type); });
         }
 
-        window.disabledMousedowned = false;
-        document.getElementById('btnDisabled').addEventListener('mousedown', function() { window.disabledMousedowned = true; });
+        window.disabledEvents = [];
+        const btnDisabled = document.getElementById('btnDisabled');
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            btnDisabled.addEventListener(t, function(e) { window.disabledEvents.push(e.type); });
+        }
 
         document.getElementById('chk').addEventListener('click', function() { window.chkClicked = true; });
         document.getElementById('chk').addEventListener('change', function() { window.chkChanged = true; });

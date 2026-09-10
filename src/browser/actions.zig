@@ -46,7 +46,7 @@ fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame
     };
 }
 
-// Dispatches a trusted pointer event and reports whether it was cancelled.
+/// Dispatches a trusted pointer event and reports whether it was cancelled.
 fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail: u32, frame: *Frame) !bool {
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
@@ -70,7 +70,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail:
     return base_event.getDefaultPrevented();
 }
 
-fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !void {
+fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !bool {
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
@@ -78,7 +78,13 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *F
         .buttons = buttons,
         .detail = 1,
     }, frame);
-    try dispatch(el, event.asEvent(), typ, frame);
+
+    const base_event = event.asEvent();
+    base_event.acquireRef();
+    defer base_event.releaseRef(frame._page);
+
+    try dispatch(el, base_event, typ, frame);
+    return base_event.getDefaultPrevented();
 }
 
 /// A full trusted primary-button click sequence, as a real user click would
@@ -97,15 +103,17 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
     // still fires.
     const suppress_mouse = try dispatchPointer(el, "pointerdown", 1, 0, frame);
     if (!suppress_mouse) {
-        try dispatchMouse(el, "mousedown", 1, frame);
-        Frame.user_input.focusForMouseDown(frame, el) catch |err| {
-            lp.log.warn(.app, "click mousedown focus", .{ .err = err });
-        };
+        const suppress_focus = try dispatchMouse(el, "mousedown", 1, frame);
+        if (!suppress_focus) {
+            Frame.user_input.focusForMouseDown(frame, el) catch |err| {
+                lp.log.warn(.app, "click mousedown focus", .{ .err = err });
+            };
+        }
     }
 
     _ = try dispatchPointer(el, "pointerup", 0, 0, frame);
     if (!suppress_mouse) {
-        try dispatchMouse(el, "mouseup", 0, frame);
+        _ = try dispatchMouse(el, "mouseup", 0, frame);
     }
 
     _ = try dispatchPointer(el, "click", 0, 1, frame);
