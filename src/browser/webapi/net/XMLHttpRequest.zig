@@ -518,7 +518,10 @@ pub fn getResponseURL(self: *XMLHttpRequest) []const u8 {
 }
 
 pub fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
-    if (self._ready_state != .done) {
+    // https://xhr.spec.whatwg.org/#the-response-attribute
+    // If the response type is default or text, we don't need it to be done to return things.
+    const needs_done = self._response_type != .default and self._response_type != .text;
+    if (needs_done and self._ready_state != .done) {
         return null;
     }
 
@@ -786,21 +789,14 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, exec: *const Execution
 }
 
 fn parseMethod(method: []const u8) !http.Method {
-    if (std.ascii.eqlIgnoreCase(method, "get")) {
-        return .GET;
-    }
-    if (std.ascii.eqlIgnoreCase(method, "post")) {
-        return .POST;
-    }
-    if (std.ascii.eqlIgnoreCase(method, "delete")) {
-        return .DELETE;
-    }
-    if (std.ascii.eqlIgnoreCase(method, "put")) {
-        return .PUT;
-    }
-    if (std.ascii.eqlIgnoreCase(method, "propfind")) {
-        return .PROPFIND;
-    }
+    if (std.ascii.eqlIgnoreCase(method, "get")) return .GET;
+    if (std.ascii.eqlIgnoreCase(method, "put")) return .PUT;
+    if (std.ascii.eqlIgnoreCase(method, "post")) return .POST;
+    if (std.ascii.eqlIgnoreCase(method, "delete")) return .DELETE;
+    if (std.ascii.eqlIgnoreCase(method, "head")) return .HEAD;
+    if (std.ascii.eqlIgnoreCase(method, "options")) return .OPTIONS;
+    if (std.ascii.eqlIgnoreCase(method, "patch")) return .PATCH;
+    if (std.ascii.eqlIgnoreCase(method, "propfind")) return .PROPFIND;
     return error.InvalidMethod;
 }
 
