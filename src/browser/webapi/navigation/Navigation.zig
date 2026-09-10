@@ -53,6 +53,11 @@ _entries: std.ArrayList(*NavigationHistoryEntry) = .empty,
 _next_entry_id: usize = 0,
 _activation: ?NavigationActivation = null,
 
+// True right after createPage seeds the synthetic initial about:blank
+// entry, and never otherwise. Per spec, the first real navigation away
+// from that initial entry replaces it.
+_initial_entry: bool = false,
+
 fn asEventTarget(self: *Navigation) *EventTarget {
     return self._proto;
 }
@@ -162,14 +167,19 @@ pub fn commitNavigation(self: *Navigation, frame: *Frame) !void {
     defer self._current_navigation_kind = null;
 
     const from_entry = self.getCurrentEntryOrNull();
+    const was_initial_entry = self._initial_entry;
     if (from_entry == null) {
         kind = .{ .push = null };
+    } else if (was_initial_entry) {
+        kind = .{ .replace = null };
     }
+    self._initial_entry = false;
 
     try self.updateEntries(url, kind, frame, false);
 
     self._activation = NavigationActivation{
-        ._from = from_entry,
+        // If we are navigating away from the initial about:blank, we have no from.
+        ._from = if (was_initial_entry) null else from_entry,
         ._entry = self.getCurrentEntry(),
         ._type = kind.toNavigationType(),
     };

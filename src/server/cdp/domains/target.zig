@@ -221,17 +221,6 @@ fn createTarget(cmd: *CDP.Command) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    // https://html.spec.whatwg.org/multipage/document-sequences.html --
-    // Creating a new browsing context always produces an initial about:blank
-    // Document with its own session history entry, even before any real
-    // navigation happens.
-    _ = try frame._session.navigation.pushEntry(
-        frame.url,
-        .{ .source = .navigation, .value = null },
-        frame,
-        false,
-    );
-
     if (!std.mem.eql(u8, "about:blank", params.url)) {
         const encoded_url = try URL.resolveNavigation(frame.call_arena, params.url, .{});
         try frame.navigate(
