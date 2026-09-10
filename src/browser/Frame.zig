@@ -1052,6 +1052,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
 
+        // `:target` matches off the fragment, which just changed.
+        target.styleChanged();
+
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error
@@ -2745,7 +2748,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // so ask it directly whether it's still in the document.
     if (self.document._active_element) |active| {
         if (active.asNode().isConnected() == false) {
-            self.document._active_element = null;
+            self.document.setActiveElement(null, self);
         }
     }
 
