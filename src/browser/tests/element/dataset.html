@@ -121,6 +121,104 @@
 }
 </script>
 
+<script id=propertyEnumeration>
+{
+  const el = document.getElementById('test');
+
+  // dataset is not [LegacyUnenumerableNamedProperties]: the names enumerate.
+  testing.expectEqual('foo,helloWorld', Object.keys(el.dataset).join(','));
+  testing.expectEqual('foo,helloWorld', Object.getOwnPropertyNames(el.dataset).join(','));
+  testing.expectEqual('{"foo":"bar","helloWorld":"test"}', JSON.stringify(el.dataset));
+
+  const desc = Object.getOwnPropertyDescriptor(el.dataset, 'foo');
+  testing.expectEqual('bar', desc.value);
+  testing.expectEqual(true, desc.enumerable);
+  testing.expectEqual(true, desc.configurable);
+  testing.expectEqual(true, desc.writable);
+  testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(el.dataset, 'nonExistent'));
+
+  // inherited properties are still found by `in`, but are not own
+  testing.expectEqual(true, 'toString' in el.dataset);
+  testing.expectEqual(false, Object.hasOwn(el.dataset, 'toString'));
+}
+</script>
+
+<script id=presenceTracksAttribute>
+{
+  const el = document.createElement('div');
+  const ds = el.dataset;
+
+  testing.expectEqual(false, 'live' in ds);
+  el.setAttribute('data-live', 'x');
+  testing.expectEqual(true, 'live' in ds);
+  el.removeAttribute('data-live');
+  testing.expectEqual(false, 'live' in ds);
+
+  ds.viaSetter = 'y';
+  testing.expectEqual(true, 'viaSetter' in ds);
+  delete ds.viaSetter;
+  testing.expectEqual(false, 'viaSetter' in ds);
+
+  // an empty value is still a present property
+  el.setAttribute('data-empty', '');
+  testing.expectEqual(true, 'empty' in ds);
+  testing.expectEqual('', ds.empty);
+
+  // the bare data- attribute maps to the empty name
+  el.setAttribute('data-', 'bare');
+  testing.expectEqual(true, '' in ds);
+  testing.expectEqual('bare', ds['']);
+
+  // deleting a name that was never there succeeds
+  testing.expectEqual(true, delete ds.neverThere);
+}
+</script>
+
+<script id=numericPropertyNames>
+{
+  const el = document.createElement('div');
+
+  el.dataset[0] = 'zero';
+  testing.expectEqual('zero', el.getAttribute('data-0'));
+  testing.expectEqual('zero', el.dataset[0]);
+  testing.expectEqual('zero', el.dataset['0']);
+  testing.expectEqual(true, '0' in el.dataset);
+  testing.expectEqual(true, Object.hasOwn(el.dataset, '0'));
+  testing.expectEqual('0', Object.keys(el.dataset).join(','));
+
+  delete el.dataset[0];
+  testing.expectEqual(null, el.getAttribute('data-0'));
+  testing.expectEqual(undefined, el.dataset[0]);
+  testing.expectEqual(false, '0' in el.dataset);
+
+  el.setAttribute('data-12', 'twelve');
+  testing.expectEqual('twelve', el.dataset[12]);
+  testing.expectEqual('twelve', el.dataset['12']);
+  testing.expectEqual(true, '12' in el.dataset);
+  testing.expectEqual(false, '13' in el.dataset);
+}
+</script>
+
+<script id=indexedSetRunsCustomElementReactions>
+{
+  const seen = [];
+  class DataWatcher extends HTMLElement {
+    static get observedAttributes() { return ['data-0', 'data-name']; }
+    attributeChangedCallback(name, oldValue, newValue) {
+      seen.push(name + '=' + newValue);
+    }
+  }
+  customElements.define('data-watcher', DataWatcher);
+
+  const el = document.createElement('data-watcher');
+  el.dataset.name = 'named';
+  el.dataset[0] = 'indexed';
+  delete el.dataset[0];
+
+  testing.expectEqual('data-name=named,data-0=indexed,data-0=null', seen.join(','));
+}
+</script>
+
 <script id=identityCheck>
 {
   const el = document.getElementById('test');

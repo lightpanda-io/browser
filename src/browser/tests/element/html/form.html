@@ -5,6 +5,13 @@
 <form id="form_with_name" name="myForm"></form>
 <form id="form_without_name"></form>
 
+<form id="form_controls">
+  <input name="user" autocomplete="off">
+  <input id="pass" type="password" autocomplete="off">
+  <input type="radio" name="choice" value="1" autocomplete="off">
+  <input type="radio" name="choice" value="2" autocomplete="off">
+</form>
+
 <script id="name_initial">
 {
   testing.expectEqual('myForm', $('#form_with_name').name)
@@ -659,5 +666,26 @@
 
   new FormData(form);
   testing.expectEqual('InvalidStateError', caught);
+}
+</script>
+
+<script id="elements_named_presence">
+{
+  const els = $('#form_controls').elements;
+
+  testing.expectEqual(true, 'user' in els);
+  testing.expectEqual(true, 'pass' in els);
+  testing.expectEqual(true, Object.hasOwn(els, 'choice'));
+
+  testing.expectEqual(false, 'nonExistent' in els);
+  testing.expectEqual(false, Object.hasOwn(els, 'nonExistent'));
+  testing.expectEqual(false, '' in els);
+
+  // a duplicated name is still one present property, backed by a RadioNodeList
+  testing.expectEqual('RadioNodeList', els.choice.constructor.name);
+
+  // [LegacyUnenumerableNamedProperties]
+  testing.expectEqual(false, Object.keys(els).includes('user'));
+  testing.expectEqual(false, Object.getOwnPropertyDescriptor(els, 'user').enumerable);
 }
 </script>

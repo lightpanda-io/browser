@@ -153,6 +153,10 @@ test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null els
 // Allocated from self.allocator when set, null otherwise.
 user_agent_override: ?[:0]const u8 = null,
 
+// Accept-Language override set via CDP Emulation.setUserAgentOverride.
+// Drives both the request header and navigator.languages.
+accept_language_override: ?lp.Config.HttpHeaders.AcceptLanguage = null,
+
 // The driver (CDP / BiDi) attached to us. If there's a driver, then there's
 // an inbox for us to process (and there's someone to wake us up from a poll)
 driver: ?Driver = null,
@@ -263,6 +267,7 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.clearUserAgentOverride();
+    self.clearAcceptLanguageOverride();
     if (self.http_proxy_owned) |owned| {
         self.allocator.free(owned);
     }
@@ -300,6 +305,19 @@ pub fn clearUserAgentOverride(self: *Client) void {
     if (self.user_agent_override) |ua| {
         self.allocator.free(ua);
         self.user_agent_override = null;
+    }
+}
+
+// Set an Accept-Language override, allocated from self.allocator.
+pub fn setAcceptLanguageOverride(self: *Client, value: []const u8) !void {
+    self.clearAcceptLanguageOverride();
+    self.accept_language_override = try .init(self.allocator, value);
+}
+
+pub fn clearAcceptLanguageOverride(self: *Client) void {
+    if (self.accept_language_override) |override| {
+        override.deinit(self.allocator);
+        self.accept_language_override = null;
     }
 }
 
@@ -428,6 +446,14 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
+pub fn getAcceptLanguage(self: *const Client) [:0]const u8 {
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).header;
+}
+
+pub fn getLanguages(self: *const Client) []const []const u8 {
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).languages;
+}
+
 // Headers _all_ requests include.
 pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
     return .{
@@ -436,7 +462,7 @@ pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
         .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
-        .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
+        .{ .name = "Accept-Language", .value = self.getAcceptLanguage() },
     };
 }
 
@@ -1030,6 +1056,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 return transfer.failAsync(error.UrlBlocked);
             }
 
+            if (transfer.req.internal == false) {
+                try setOriginHeader(transfer);
+            }
+
             if (self.obey_cors and !transfer.req.internal) {
                 if (!isCrossOriginModeAllowed(transfer)) {
                     log.warn(.http, "blocked by mode", .{
@@ -1085,6 +1115,40 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
         },
         .network => try self.processTransfer(transfer),
     }
+}
+
+// A cors request always carries an Origin. Everything else only carries one
+// for an unsafe method - same origin or not. Can't go in CorsGate since it can
+// be disabled.
+fn setOriginHeader(transfer: *Transfer) !void {
+    const req = &transfer.req;
+
+    const cross_origin = transfer._cors_origin_tainted or blk: {
+        const origin = req.origin orelse break :blk true;
+        break :blk URL.isSameOrigin(req.url, origin) == false;
+    };
+
+    const cors_tainted = cross_origin and switch (req.request_mode) {
+        .cors, .same_origin => true,
+        // A navigation is never cors-tainted. Chrome only sends an Origin on
+        // an unsafe one (a form POST), which the method check below covers.
+        .no_cors, .navigate => false,
+    };
+
+    const unsafe_method = req.method != .GET and req.method != .HEAD;
+    if (cors_tainted == false and unsafe_method == false) {
+        // A 301/302/303 rewrites the method to GET, leaving the previous hop's
+        // Origin behind. Only drop one we put there ourselves.
+        for (transfer.req_headers.items, 0..) |hdr, i| {
+            if (hdr.source == .user_agent and std.ascii.eqlIgnoreCase(hdr.name, "origin")) {
+                _ = transfer.req_headers.orderedRemove(i);
+                break;
+            }
+        }
+        return;
+    }
+
+    try transfer.setHeader("Origin", transfer.effectiveOrigin(), .{});
 }
 
 // RobotsGate resumption.
@@ -3145,6 +3209,16 @@ pub const Transfer = struct {
         for (self.req_headers.items) |hdr| {
             try conn.addHeader(arena, hdr.name, hdr.value);
         }
+        if (req.body != null and self.findRequestHeader("content-type") == null) {
+            // Prevent libcurl from always setting application/x-www-form-urlencoded
+            try conn.addRawHeader("Content-Type:");
+        }
+        if (req.body == null and (req.method == .POST or req.method == .PUT) and
+            self.findRequestHeader("content-length") == null)
+        {
+            // https://fetch.spec.whatwg.org/#http-network-or-cache-fetch step 10
+            try conn.addRawHeader("Content-Length: 0");
+        }
         if (req.body != null) {
             // Browsers never send Expect: 100-continue; libcurl generates it
             // for HTTP/1.1 requests whose body exceeds 1MB
@@ -4203,6 +4277,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
         .single_flight = .init(testing.allocator),
     };
     client.url_blocklist = null;
+    client.accept_language_override = null;
     client.test_fail_submit = null;
     // isUrlBlocked reaches through here for the adblocker; tests that want
     // one assign it to `client.network` after this returns.
@@ -4229,6 +4304,27 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
 
     try client.setBlockedUrls(&.{});
     try testing.expectEqual(null, client.url_blocklist);
+}
+
+test "HttpClient: setAcceptLanguageOverride owns, replaces, and clears" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.clearAcceptLanguageOverride();
+
+    var first = "de-DE,de;q=0.9".*;
+    try client.setAcceptLanguageOverride(&first);
+    @memset(&first, 'x');
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9", client.getAcceptLanguage());
+    try testing.expectEqual(2, client.getLanguages().len);
+
+    try client.setAcceptLanguageOverride("fr-FR");
+    try std.testing.expectEqualStrings("fr-FR", client.getLanguages()[0]);
+
+    client.clearAcceptLanguageOverride();
+    try testing.expectEqual(null, client.accept_language_override);
 }
 
 const TestRequest = struct {

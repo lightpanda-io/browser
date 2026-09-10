@@ -60,6 +60,9 @@ other_rules: RuleList = .empty, // universal, attribute, pseudo-class endings
 memo: Memo = .empty,
 memo_version: usize = 0,
 
+// Keyed by property name, pruning to what is (hopefully) one or few rules
+custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
+
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
 /// rebuilding and do one final pass to apply the resulting layering rank.
@@ -438,34 +441,112 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
     while (tag_it.next()) |rules| {
         self.stampRuleList(rules);
     }
+
+    // Even if we lazilly parse custom properties, we need to stamp the priority
+    // now, since the rule_layers only exist during the build
+    var custom_it = self.custom_rules.valueIterator();
+    while (custom_it.next()) |property| {
+        for (property.rules.items) |*rule| {
+            rule.priority |= @as(u64, self.layerRank(rule.priority)) << RANK_SHIFT;
+        }
+    }
 }
 
 fn stampRuleList(self: *StyleManager, rules: *RuleList) void {
-    const layers = self.layers.items;
-    const rule_layers = self.rule_layers.items;
     for (rules.items(.priority)) |*priority| {
-        const doc_order: u32 = @as(u22, @truncate(priority.*));
-        const layer = rule_layers[doc_order - 1];
-        const rank = if (layer == NO_LAYER) UNLAYERED_RANK else layers[layer].rank;
-        priority.* |= @as(u64, rank) << RANK_SHIFT;
+        priority.* |= @as(u64, self.layerRank(priority.*)) << RANK_SHIFT;
     }
 }
 
-fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
-    if (selector_text.len == 0) return;
+/// The cascade-layer rank for a packed priority, via its doc_order.
+fn layerRank(self: *const StyleManager, priority: u64) u32 {
+    const doc_order: u32 = @as(u22, @truncate(priority));
+    const layer = self.rule_layers.items[doc_order - 1];
+    return if (layer == NO_LAYER) UNLAYERED_RANK else self.layers.items[layer].rank;
+}
 
-    var props = VisibilityProperties{};
-    var it = CssParser.parseDeclarationsList(block_text);
-    while (it.next()) |decl| {
-        props.apply(decl.name, decl.value);
+fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
+    if (selector_text.len == 0) {
+        return;
     }
 
-    if (!props.isRelevant()) return;
+    var props = VisibilityProperties{};
 
-    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
+    // Keyed rather than appended so a block declaring the same custom property
+    // twice keeps only the winner. Lives in build_arena: addSelectorRules
+    // copies what it needs into the rule arena.
+    var customs: std.StringArrayHashMapUnmanaged(CustomDeclaration) = .empty;
+
+    var it = CssParser.parseDeclarationsList(block_text);
+    while (it.next()) |decl| {
+        if (isCustomProperty(decl.name)) {
+            // Last one wins, except that a normal declaration never overrides
+            // an earlier !important one, same as applyParsedDeclaration.
+            const gop = try customs.getOrPut(build_arena, decl.name);
+            if (gop.found_existing and gop.value_ptr.important and decl.important == false) {
+                continue;
+            }
+            gop.value_ptr.* = .{ .name = decl.name, .value = decl.value, .important = decl.important };
+        } else {
+            props.apply(decl.name, decl.value);
+        }
+    }
+
+    return self.addSelectorRules(build_arena, selector_text, props, customs.values(), layer);
+}
+
+// Visibility rules get one VisibilityRule per selector (not per selector list)
+// so each has correct specificity, bucketed by their rightmost selector part.
+// Custom properties are keyed by name instead, and lazily parse the selector.
+fn addSelectorRules(
+    self: *StyleManager,
+    build_arena: Allocator,
+    selector_text: []const u8,
+    props: VisibilityProperties,
+    customs: []const CustomDeclaration,
+    layer: u16,
+) !void {
+    const relevant = props.isRelevant();
+    if (relevant == false and customs.len == 0) {
+        return;
+    }
+
+    const arena = self.arena.allocator();
+
+    if (customs.len > 0) {
+        const doc_order = @min(self.next_doc_order, MAX_DOC_ORDER);
+        self.next_doc_order += 1;
+        try self.rule_layers.append(build_arena, layer);
+
+        for (customs) |custom| {
+            const gop = try self.custom_rules.getOrPut(arena, custom.name);
+            if (gop.found_existing == false) {
+                gop.value_ptr.* = .{};
+            }
+            try gop.value_ptr.rules.append(arena, .{
+                .value = custom.value,
+                .priority = doc_order,
+                .selector_text = selector_text,
+            });
+        }
+    }
+
+    if (relevant == false) {
+        return;
+    }
+
+    const selectors = SelectorParser.parseList(arena, selector_text) catch return;
+
     for (selectors) |selector| {
-        const rightmost = if (selector.segments.len > 0) selector.segments[selector.segments.len - 1].compound else selector.first;
-        const bucket_key = getBucketKey(rightmost) orelse continue;
+        // Get the rightmost compound (last segment, or first if no segments)
+        const rightmost = if (selector.segments.len > 0)
+            selector.segments[selector.segments.len - 1].compound
+        else
+            selector.first;
+
+        // Find the bucketing key from rightmost compound
+        const bucket_key = getBucketKey(rightmost) orelse continue; // skip if dynamic pseudo-class
+
         const rule = VisibilityRule{
             .props = props,
             .selector = selector,
@@ -476,25 +557,35 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
 
         switch (bucket_key) {
             .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
+                const gop = try self.id_rules.getOrPut(arena, id);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{};
+                }
+                try gop.value_ptr.append(arena, rule);
             },
             .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
+                const gop = try self.class_rules.getOrPut(arena, class);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{};
+                }
+                try gop.value_ptr.append(arena, rule);
             },
             .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
+                const gop = try self.tag_rules.getOrPut(arena, tag);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{};
+                }
+                try gop.value_ptr.append(arena, rule);
             },
             .other => {
-                try self.other_rules.append(self.arena.allocator(), rule);
+                try self.other_rules.append(arena, rule);
             },
         }
     }
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 pub fn sheetModified(self: *StyleManager) void {
@@ -529,6 +620,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const tag_rules_count = self.tag_rules.count();
     const other_rules_count = self.other_rules.len;
     const memo_count = self.memo.count();
+    const custom_rules_count = self.custom_rules.count();
 
     self.arena.resetRetain();
 
@@ -548,6 +640,9 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
     self.other_rules = .{};
     try self.other_rules.ensureTotalCapacity(self.arena.allocator(), other_rules_count);
+
+    self.custom_rules = .empty;
+    try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
 
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
@@ -785,70 +880,52 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
     return false;
 }
 
-// Extracts visibility-relevant rules from a CSS rule.
-// Creates one VisibilityRule per selector (not per selector list) so each has correct specificity.
-// Buckets rules by their rightmost selector part for fast lookup.
+// Extracts visibility-relevant rules and custom properties from a CSSOM rule.
+// Creates one VisibilityRule per selector (not per selector list) so each has
+// correct specificity, bucketed by the rightmost selector part for fast lookup.
+// The raw-text twin of this is addRawRule; both hand off to addSelectorRules.
 fn addRule(self: *StyleManager, build_arena: Allocator, style_rule: *CSSStyleRule) !void {
     const selector_text = style_rule._selector_text;
     if (selector_text.len == 0) {
         return;
     }
 
-    // Check if the rule has visibility-relevant properties
     const style = style_rule._style orelse return;
     const props = extractVisibilityProperties(style);
-    if (!props.isRelevant()) {
-        return;
-    }
+    const customs = try self.extractCustomDeclarations(style);
 
-    // Parse the selector list
-    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
-    if (selectors.len == 0) {
-        return;
-    }
+    // A custom rule holds selector_text until the property is looked up, but it
+    // doesn't need a copy: setSelectorText allocates the replacement from the
+    // frame arena and never frees the old one. Worst case we match a stale
+    // selector, which is what the rest of this file already does when a rule is
+    // mutated without going through sheetModified().
+    return self.addSelectorRules(build_arena, selector_text, props, customs, NO_LAYER);
+}
 
-    // Create one rule per selector - each has its own specificity
-    // e.g., "#id, .class { display: none }" becomes two rules with different specificities
-    for (selectors) |selector| {
-        // Get the rightmost compound (last segment, or first if no segments)
-        const rightmost = if (selector.segments.len > 0)
-            selector.segments[selector.segments.len - 1].compound
-        else
-            selector.first;
+/// The CSSOM counterpart to addRawRule's `--*` branch. Names within one
+/// declaration block are already unique, so there is nothing to dedup here.
+///
+/// Unlike the selector text, both strings have to be copied: they can point
+/// into the Property itself (small string optimization), and setProperty /
+/// removeProperty destroy it without going through sheetModified(). We'd be
+/// left reading freed memory rather than something merely stale.
+fn extractCustomDeclarations(self: *StyleManager, style: *CSSStyleProperties) ![]const CustomDeclaration {
+    const arena = self.arena.allocator();
 
-        // Find the bucketing key from rightmost compound
-        const bucket_key = getBucketKey(rightmost) orelse continue; // skip if dynamic pseudo-class
-
-        const rule = VisibilityRule{
-            .props = props,
-            .selector = selector,
-            .priority = (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER),
-        };
-        self.next_doc_order += 1;
-        try self.rule_layers.append(build_arena, NO_LAYER);
-
-        // Add to appropriate bucket
-        switch (bucket_key) {
-            .id => |id| {
-                const gop = try self.id_rules.getOrPut(self.arena.allocator(), id);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .class => |class| {
-                const gop = try self.class_rules.getOrPut(self.arena.allocator(), class);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .tag => |tag| {
-                const gop = try self.tag_rules.getOrPut(self.arena.allocator(), tag);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(self.arena.allocator(), rule);
-            },
-            .other => {
-                try self.other_rules.append(self.arena.allocator(), rule);
-            },
+    var customs: std.ArrayList(CustomDeclaration) = .empty;
+    var it = style.asCSSStyleDeclaration().iterator();
+    while (it.next()) |property| {
+        const name = property._name.str();
+        if (isCustomProperty(name) == false) {
+            continue;
         }
+        try customs.append(arena, .{
+            .name = try arena.dupe(u8, name),
+            .value = try arena.dupe(u8, property._value.str()),
+            .important = property._important,
+        });
     }
+    return customs.items;
 }
 
 const BucketKey = union(enum) {
@@ -1025,6 +1102,36 @@ const VisibilityRule = struct {
     priority: u64,
 };
 
+// custom_rules map is property_name -> CustomProperty, loosely:
+//    --color => [(:root, "#ff0"), (.card, "#000")]
+// So when code says "getComputedStyle(el).getPropertyValue("--color")
+// We end up with a relatively small number of rules
+const CustomProperty = struct {
+    rules: std.ArrayList(CustomRule) = .empty,
+    parsed: ?[]const ParsedCustomRule = null, // lazily parsed
+};
+
+const CustomRule = struct {
+    selector_text: []const u8,
+    value: []const u8,
+    priority: u64,
+};
+
+/// Some frameworks define hundreds+ of custom properties, 99% of which are
+/// never accessed via JS. So we don't parse them until something asks for it.
+const ParsedCustomRule = struct {
+    selector: Selector.Selector,
+    value: []const u8,
+    priority: u64, // packed the same way as VisibilityRule.priority
+};
+
+/// A `--*` declaration on its way from a rule block into custom_rules.
+const CustomDeclaration = struct {
+    name: []const u8,
+    value: []const u8,
+    important: bool,
+};
+
 const Layer = struct {
     // dotted path from the root
     path: []const u8,
@@ -1137,6 +1244,84 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
     return styleValue(style, property_name);
 }
 
+/// Computed value of a custom property (`--x`) on `el`, or null when nothing
+/// declares it. The value is returned as-is, no var substitution
+pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    self.rebuildIfDirty() catch return null;
+
+    // Only the rules declaring this name; usually a handful, often none. An
+    // element can still shadow them with an inline declaration, so a miss here
+    // means walking for inline styles, not returning early.
+    const rules = self.parsedCustomRules(property_name.str()) catch |err| blk: {
+        log.err(.browser, "StyleManager customProperty", .{ .err = err });
+        break :blk &.{};
+    };
+
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.parentElement()) {
+        if (self.inlineStyleValue(elem, property_name)) |value| {
+            return value;
+        }
+
+        var winner: ?[]const u8 = null;
+        var priority: u64 = 0;
+        for (rules) |rule| {
+            if (rule.priority <= priority) {
+                continue;
+            }
+            if (matchesSelector(elem, rule.selector, self.frame) == false) {
+                continue;
+            }
+            winner = rule.value;
+            priority = rule.priority;
+        }
+
+        if (winner) |value| {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+/// Gets the parsed rule for a custom property name
+fn parsedCustomRules(self: *StyleManager, name: []const u8) ![]const ParsedCustomRule {
+    const property = self.custom_rules.getPtr(name) orelse return &.{};
+    if (property.parsed) |parsed| {
+        // the custom property exists, and we already parsed it.
+        return parsed;
+    }
+
+    const arena = self.arena.allocator();
+    var parsed: std.ArrayList(ParsedCustomRule) = .empty;
+
+    for (property.rules.items) |rule| {
+        const selectors = SelectorParser.parseList(arena, rule.selector_text) catch continue;
+        for (selectors) |selector| {
+            const rightmost = if (selector.segments.len > 0)
+                selector.segments[selector.segments.len - 1].compound
+            else
+                selector.first;
+
+            {
+                // we don't use buckets for custom properties (are property name
+                // lookup is more efficient), but we still want to skip dynamic
+                // pseudo-classes just like visibility does
+                _ = getBucketKey(rightmost) orelse continue;
+            }
+
+            try parsed.append(arena, .{
+                .selector = selector,
+                .value = rule.value,
+                .priority = rule.priority | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT),
+            });
+        }
+    }
+
+    property.parsed = parsed.items;
+    return parsed.items;
+}
+
 /// Bounds computedFontSize's ancestor recursion (the parent walk and
 /// `inherit`/relative-unit chains share it).
 const MAX_FONT_ANCESTOR_DEPTH = 32;
@@ -1188,6 +1373,10 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
+test "StyleManager: custom properties" {
+    try testing.htmlRunner("css/custom_properties.html", .{});
+}
+
 test "StyleManager: computeSpecificity: element selector" {
     // div -> (0, 0, 1)
     const selector = Selector.Selector{

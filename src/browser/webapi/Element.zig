@@ -946,8 +946,7 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
         if (el == self) {
             return attr;
         }
-        attr._element = null;
-        _ = try el.removeAttributeNode(attr, frame);
+        return error.InUseAttribute;
     }
 
     return self._attributes.putAttribute(attr, self, frame);

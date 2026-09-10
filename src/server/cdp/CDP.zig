@@ -31,7 +31,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Element = @import("../../browser/webapi/Element.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
@@ -615,6 +614,9 @@ pub const BrowserContext = struct {
         self.node_registry.deinit();
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
+
+        // Session.deinit (called via closeSession above) already cleared this
+        // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
@@ -627,6 +629,7 @@ pub const BrowserContext = struct {
         if (self.user_agent_changed) {
             browser.http_client.clearUserAgentOverride();
         }
+        browser.http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
     }
 
