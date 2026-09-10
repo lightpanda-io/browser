@@ -31,7 +31,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Element = @import("../../browser/webapi/Element.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
