@@ -2532,28 +2532,30 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try testing.waitForPage(bc);
     }
 
-    // Three entries (ids 0, 1, 2), currentIndex points at the most-recent.
+    // Three entries (ids 1, 2, 3) — id 0 was the synthetic initial
+    // about:blank entry that loadBrowserContext's navigation to dom1.html
+    // replaced. currentIndex points at the most-recent.
     {
         try ctx.processMessage(.{ .id = 30, .method = "Page.getNavigationHistory" });
         try ctx.expectSentResult(.{
             .currentIndex = 2,
             .entries = &[_]NavigationEntry{
                 .{
-                    .id = 0,
+                    .id = 1,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
                     .title = "",
                     .transitionType = "other",
                 },
                 .{
-                    .id = 1,
+                    .id = 2,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
                     .title = "",
                     .transitionType = "other",
                 },
                 .{
-                    .id = 2,
+                    .id = 3,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
                     .title = "",
@@ -2568,7 +2570,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try ctx.processMessage(.{
             .id = 40,
             .method = "Page.navigateToHistoryEntry",
-            .params = .{ .entryId = 0 },
+            .params = .{ .entryId = 1 },
         });
         try testing.waitForPage(bc);
 
@@ -2581,7 +2583,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try ctx.processMessage(.{
             .id = 41,
             .method = "Page.navigateToHistoryEntry",
-            .params = .{ .entryId = 1 },
+            .params = .{ .entryId = 2 },
         });
         try testing.waitForPage(bc);
 
