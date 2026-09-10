@@ -61,7 +61,7 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 /// so the result stays in sync with viewport emulation. The viewport comes
 /// from the page (overridable via Emulation.setDeviceMetricsOverride),
 /// matching `Window.innerWidth` / `innerHeight`.
-pub fn getMatches(self: *const MediaQueryList) bool {
+fn getMatches(self: *const MediaQueryList) bool {
     return MediaQuery.matches(self._media, self._frame._page.getViewport());
 }
 
@@ -102,11 +102,11 @@ pub fn removeListener(self: *MediaQueryList, cb_: ?js.Function, exec: *js.Execut
     try self._proto.removeEventListener("change", .{ .value = .{ .function = cb } }, null, exec);
 }
 
-pub fn getOnChange(self: *const MediaQueryList) ?js.Function.Global {
+fn getOnChange(self: *const MediaQueryList) ?js.Function.Global {
     return self._on_change;
 }
 
-pub fn setOnChange(self: *MediaQueryList, cb: ?js.Function.Global) void {
+fn setOnChange(self: *MediaQueryList, cb: ?js.Function.Global) void {
     self._on_change = cb;
 }
 

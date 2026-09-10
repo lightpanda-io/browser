@@ -371,27 +371,27 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     });
 }
 
-pub fn getOnMessage(self: *const Worker) ?js.Function.Global {
+fn getOnMessage(self: *const Worker) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessageError(self: *const Worker) ?js.Function.Global {
+fn getOnMessageError(self: *const Worker) ?js.Function.Global {
     return self._on_messageerror;
 }
 
-pub fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_messageerror = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const Worker) ?js.Function.Global {
+fn getOnError(self: *const Worker) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 

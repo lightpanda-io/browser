@@ -628,7 +628,7 @@ pub const Iterator = struct {
     }
 };
 
-pub const Callable = struct {
+const Callable = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {

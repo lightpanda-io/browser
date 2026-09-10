@@ -47,7 +47,7 @@ pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getContentWindow(self: *const IFrame, frame: *Frame) ?Window.Access {
+fn getContentWindow(self: *const IFrame, frame: *Frame) ?Window.Access {
     const frame_window = self._window orelse return null;
     return Window.Access.init(frame.window, frame_window);
 }
@@ -68,7 +68,7 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
     return self.asNode().resolveURLReflect(self._src, frame, .{});
 }
 
-pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
+fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
     const element = self.asElement();
     try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
     self._src = element.getAttributeInterned("src") orelse unreachable;
@@ -84,16 +84,16 @@ pub fn hasSrcdoc(self: *IFrame) bool {
     return self.asElement().getAttributeSafe(comptime .wrap("srcdoc")) != null;
 }
 
-pub fn getSrcdoc(self: *IFrame) []const u8 {
+fn getSrcdoc(self: *IFrame) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("srcdoc")) orelse "";
 }
 
-pub fn setSrcdoc(self: *IFrame, value: []const u8, frame: *Frame) !void {
+fn setSrcdoc(self: *IFrame, value: []const u8, frame: *Frame) !void {
     // Build.attributeChange triggers the (re)navigation.
     try self.asElement().setAttributeSafe(comptime .wrap("srcdoc"), .wrap(value), frame);
 }
 
-pub fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
+fn getSandbox(self: *IFrame, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;

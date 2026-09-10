@@ -38,7 +38,7 @@ _data_transfer: ?*DataTransfer = null,
 _input_type: []const u8,
 _is_composing: bool,
 
-pub const InputEventOptions = struct {
+const InputEventOptions = struct {
     data: ?[]const u8 = null,
     dataTransfer: ?*DataTransfer = null,
     inputType: ?[]const u8 = null,
@@ -126,15 +126,15 @@ pub fn getData(self: *const InputEvent) ?[]const u8 {
     return self._data;
 }
 
-pub fn getDataTransfer(self: *const InputEvent) ?*DataTransfer {
+fn getDataTransfer(self: *const InputEvent) ?*DataTransfer {
     return self._data_transfer;
 }
 
-pub fn getInputType(self: *const InputEvent) []const u8 {
+fn getInputType(self: *const InputEvent) []const u8 {
     return self._input_type;
 }
 
-pub fn getIsComposing(self: *const InputEvent) bool {
+fn getIsComposing(self: *const InputEvent) bool {
     return self._is_composing;
 }
 

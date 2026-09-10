@@ -993,11 +993,11 @@ pub const Script = struct {
     }
 };
 
-pub const ImportAsync = struct {
+const ImportAsync = struct {
     data: *anyopaque,
     callback: ImportAsync.Callback,
 
-    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
+    const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
 };
 
 pub const ModuleSource = struct {
@@ -1016,7 +1016,7 @@ pub const ModuleSource = struct {
     }
 };
 
-pub const ImportedModule = struct {
+const ImportedModule = struct {
     waiters: u16 = 1,
     // Created by a <link rel=modulepreload> hint and not yet claimed by a real
     // import. While set, the single waiter slot belongs to the hint, which

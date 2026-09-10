@@ -185,7 +185,7 @@ const Error = struct {
 };
 
 pub const PrescanResource = h5e.PrescanResource;
-pub const PrescanCallback = h5e.PrescanCallback;
+const PrescanCallback = h5e.PrescanCallback;
 
 // Preload scanner: a tokenizer-only pass over a buffered document, reporting
 // fetchable script resources (and the first <base href>) through `callback`.

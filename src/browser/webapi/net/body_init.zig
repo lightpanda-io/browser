@@ -128,7 +128,7 @@ pub const BodyInit = union(enum) {
 // `content_type`, when non-null, is the spec-mandated default Content-Type
 // for the body source — callers MUST only apply it if the user has not
 // already set a Content-Type header (per Fetch §6.5).
-pub const Extracted = struct {
+const Extracted = struct {
     bytes: []const u8,
     content_type: ?[]const u8,
 };

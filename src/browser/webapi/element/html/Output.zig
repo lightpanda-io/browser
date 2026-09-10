@@ -41,11 +41,11 @@ pub fn asNode(self: *Output) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Output, frame: *Frame) !js.Array {
+fn getLabels(self: *Output, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
+fn getHtmlFor(self: *Output, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;

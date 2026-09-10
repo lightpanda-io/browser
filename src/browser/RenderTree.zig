@@ -48,7 +48,7 @@ pub const Child = struct {
 };
 
 /// The rendering children of one parent, in tree order.
-pub const Children = struct {
+const Children = struct {
     boxed: bool,
     yielded: bool = false,
     next_node: ?*Node,
@@ -104,7 +104,7 @@ pub fn slotted(self: *const RenderTree, slot: *Slot) Slotted {
     };
 }
 
-pub const ClassifyOpts = struct {
+const ClassifyOpts = struct {
     boxed: bool = false,
     // Reached through a <slot>'s assignment: the element's own `slot`
     // attribute then no longer excludes it.
@@ -216,7 +216,7 @@ pub fn isStandaloneAnchor(el: *Element, frame: *Frame) bool {
     return true;
 }
 
-pub const ContentInfo = struct {
+const ContentInfo = struct {
     has_visible: bool,
     has_block: bool,
 };

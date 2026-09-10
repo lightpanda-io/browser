@@ -226,13 +226,13 @@ pub const DateTime = struct {
         rfc3339,
     };
 
-    pub const TimestampPrecision = enum {
+    const TimestampPrecision = enum {
         seconds,
         milliseconds,
         microseconds,
     };
 
-    pub const TimeUnit = enum {
+    const TimeUnit = enum {
         days,
         hours,
         minutes,
@@ -301,7 +301,7 @@ pub const DateTime = struct {
         }
     }
 
-    pub fn parseRFC822(input: []const u8) !DateTime {
+    fn parseRFC822(input: []const u8) !DateTime {
         if (input.len < 10) {
             return error.InvalidDateTime;
         }
@@ -342,7 +342,7 @@ pub const DateTime = struct {
         return initUTC(year, @intFromEnum(month) + 1, day, tm.hour, tm.min, tm.sec, tm.micros);
     }
 
-    pub fn parseRFC3339(input: []const u8) !DateTime {
+    fn parseRFC3339(input: []const u8) !DateTime {
         var parser = Parser.init(input);
 
         const dt = try parser.rfc3339Date();

@@ -45,7 +45,7 @@ pub const Scope = enum {
     cors,
 };
 
-pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
+const num_scopes = @typeInfo(Scope).@"enum".fields.len;
 
 /// A single `--log-filter-scopes` directive. `scope == null` targets every
 /// scope (the `all` keyword). `enable` is true for `+X` (filter in), false
@@ -347,7 +347,7 @@ pub const KV = struct {
 };
 
 /// A string the pretty format paints; logfmt writes it plainly.
-pub const Colored = struct {
+const Colored = struct {
     code: []const u8,
     text: []const u8,
 
@@ -566,7 +566,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
     return writer.writeByte('"');
 }
 
-pub const LogFormatWriter = struct {
+const LogFormatWriter = struct {
     writer: *std.Io.Writer,
 
     pub fn write(self: LogFormatWriter, key: []const u8, value: anytype) !void {

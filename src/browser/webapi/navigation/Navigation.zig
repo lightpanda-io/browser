@@ -67,19 +67,19 @@ pub fn onRemoveFrame(self: *Navigation) void {
     }
 }
 
-pub fn getActivation(self: *const Navigation) ?NavigationActivation {
+fn getActivation(self: *const Navigation) ?NavigationActivation {
     return self._activation;
 }
 
-pub fn getCanGoBack(self: *const Navigation) bool {
+fn getCanGoBack(self: *const Navigation) bool {
     return self._index > 0;
 }
 
-pub fn getCanGoForward(self: *const Navigation) bool {
+fn getCanGoForward(self: *const Navigation) bool {
     return self._entries.items.len > self._index + 1;
 }
 
-pub fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
+fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
     if (self._entries.items.len > self._index) {
         return self._entries.items[self._index];
     } else return null;
@@ -94,7 +94,7 @@ pub fn getCurrentEntry(self: *Navigation) *NavigationHistoryEntry {
     return self.getCurrentEntryOrNull().?;
 }
 
-pub fn getTransition(_: *const Navigation) ?NavigationTransition {
+fn getTransition(_: *const Navigation) ?NavigationTransition {
     // For now, all transitions are just considered complete.
     return null;
 }
@@ -414,7 +414,7 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
     return try self.navigateInner(_url, kind, frame);
 }
 
-pub const ReloadOptions = struct {
+const ReloadOptions = struct {
     info: ?js.Value = null,
     state: ?js.Value = null,
 };
@@ -439,7 +439,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     return self.navigateInner(entry._url, .reload, frame);
 }
 
-pub const TraverseToOptions = struct {
+const TraverseToOptions = struct {
     info: ?js.Value = null,
 };
 
@@ -457,11 +457,11 @@ pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions,
     return error.InvalidStateError;
 }
 
-pub const UpdateCurrentEntryOptions = struct {
+const UpdateCurrentEntryOptions = struct {
     state: js.Value,
 };
 
-pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, frame: *Frame) !void {
+fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, frame: *Frame) !void {
     const arena = frame._session.arena;
 
     const previous = self.getCurrentEntry();
@@ -493,7 +493,7 @@ fn getOnCurrentEntryChange(self: *Navigation) ?js.Function.Global {
     return self._on_currententrychange;
 }
 
-pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
+fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
     if (self._on_currententrychange) |old| old.release();
     if (listener) |listen| {
         self._on_currententrychange = try listen.persistWithThis(self);

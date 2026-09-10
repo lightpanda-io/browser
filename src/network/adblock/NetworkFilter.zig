@@ -48,7 +48,7 @@ generichide: bool = false,
 specifichide: bool = false,
 elemhide: bool = false,
 
-pub const PatternKind = enum {
+const PatternKind = enum {
     /// '*' or empty pattern, matches every URL (option-only filters).
     any,
     /// Pure hostname (`||example.com^`, bare hostname lines, hosts files).
@@ -81,7 +81,7 @@ pub const ResourceTypes = packed struct(u16) {
 
     /// Default type set of a filter with no type option: everything except
     /// top-level documents (matches uBO/adblock-rust semantics).
-    pub const all_network: ResourceTypes = .{
+    const all_network: ResourceTypes = .{
         .subdocument = true,
         .script = true,
         .stylesheet = true,

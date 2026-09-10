@@ -100,15 +100,15 @@ fn getLengthAdjust(self: *TextContent, frame: *Frame) !*AnimatedEnumeration {
     return AnimatedEnumeration.getOrCreate(self.asElement(), .length_adjust, frame);
 }
 
-pub fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
+fn getNumberOfChars(self: *TextContent, frame: *Frame) u32 {
     return text_measure.utf16Length(self.text(frame));
 }
 
-pub fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
+fn getComputedTextLength(self: *TextContent, frame: *Frame) f64 {
     return text_measure.width(self.text(frame), self.fontSize(frame));
 }
 
-pub fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
+fn getSubStringLength(self: *TextContent, charnum: u32, nchars: u32, frame: *Frame) !f64 {
     return text_measure.substringWidth(self.text(frame), charnum, nchars, self.fontSize(frame));
 }
 

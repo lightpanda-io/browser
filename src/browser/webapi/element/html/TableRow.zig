@@ -21,7 +21,7 @@ pub fn asNode(self: *TableRow) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getCells(self: *TableRow, frame: *Frame) collections.NodeLive(.cells) {
+fn getCells(self: *TableRow, frame: *Frame) collections.NodeLive(.cells) {
     return collections.NodeLive(.cells).init(self.asNode(), {}, frame);
 }
 

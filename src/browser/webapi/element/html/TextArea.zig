@@ -49,11 +49,11 @@ _on_selectionchange: ?js.Function.Global = null,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
-pub fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
+fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
     return self._on_selectionchange;
 }
 
-pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
+fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
     if (listener) |listen| {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
@@ -104,7 +104,7 @@ pub fn setUserValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     self._user_edited = true;
 }
 
-pub fn getDefaultValue(self: *const TextArea) []const u8 {
+fn getDefaultValue(self: *const TextArea) []const u8 {
     const node = self.asConstNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
@@ -114,7 +114,7 @@ pub fn getDefaultValue(self: *const TextArea) []const u8 {
     return "";
 }
 
-pub fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
+fn setDefaultValue(self: *TextArea, value: []const u8, frame: *Frame) !void {
     const node = self.asNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
@@ -154,11 +154,11 @@ pub fn selectionAvailable(_: *const TextArea) bool {
 }
 
 // Non-null unlike input
-pub fn getSelectionStart(self: *const TextArea) u32 {
+fn getSelectionStart(self: *const TextArea) u32 {
     return self._selection_start;
 }
 
-pub fn getSelectionEnd(self: *const TextArea) u32 {
+fn getSelectionEnd(self: *const TextArea) u32 {
     return self._selection_end;
 }
 
@@ -186,7 +186,7 @@ pub fn getForm(self: *TextArea, frame: *Frame) ?*Form {
     return null;
 }
 
-pub fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
+fn getLabels(self: *TextArea, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
@@ -197,14 +197,14 @@ pub fn getWillValidate(self: *const TextArea) bool {
     return !self.asConstElement().isDisabled();
 }
 
-pub fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
+fn getValidity(self: *TextArea, frame: *Frame) !*ValidityState {
     if (self._validity) |v| return v;
     const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
     self._validity = v;
     return v;
 }
 
-pub fn getValidationMessage(self: *const TextArea) []const u8 {
+fn getValidationMessage(self: *const TextArea) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please fill out this field.";
@@ -223,11 +223,11 @@ pub fn checkValidity(self: *TextArea, frame: *Frame) !bool {
     return false;
 }
 
-pub fn reportValidity(self: *TextArea, frame: *Frame) !bool {
+fn reportValidity(self: *TextArea, frame: *Frame) !bool {
     return self.checkValidity(frame);
 }
 
-pub fn setCustomValidity(self: *TextArea, message: []const u8, frame: *Frame) !void {
+fn setCustomValidity(self: *TextArea, message: []const u8, frame: *Frame) !void {
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
@@ -262,10 +262,6 @@ pub fn suffersTooShort(self: *const TextArea) bool {
     if (min < 0) return false;
     const count = std.unicode.utf8CountCodepoints(value) catch value.len;
     return count < @as(usize, @intCast(min));
-}
-
-pub fn getDisabled(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
 pub fn getRequired(self: *const TextArea) bool {

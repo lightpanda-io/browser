@@ -548,7 +548,7 @@ const TextVisitor = struct {
     }
 };
 
-pub const NodeDetails = struct {
+const NodeDetails = struct {
     backendNodeId: NodeRegistry.Id,
     tag_name: []const u8,
     role: []const u8,

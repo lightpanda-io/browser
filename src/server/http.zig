@@ -117,7 +117,7 @@ pub const Connection = struct {
         header: void, // still parsing the header
         request: Request,
 
-        pub fn parseHeader(self: *State, data: []u8) !bool {
+        fn parseHeader(self: *State, data: []u8) !bool {
             const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
                 return false;
             };

@@ -142,22 +142,22 @@ pub fn close(self: *MessagePort) void {
     self._entangled_port = null;
 }
 
-pub fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
+fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
+fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
     self._on_message = cb;
     if (cb != null) {
         self.start();
     }
 }
 
-pub fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
+fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
     return self._on_message_error;
 }
 
-pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
+fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
     self._on_message_error = cb;
 }
 

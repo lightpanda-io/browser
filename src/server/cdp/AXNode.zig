@@ -748,7 +748,7 @@ pub const Writer = struct {
     }
 };
 
-pub const AXRole = enum(u8) {
+const AXRole = enum(u8) {
     // zig fmt: off
     none, article, banner, blockquote, button, caption, cell, checkbox, code, color,
     columnheader, combobox, complementary, contentinfo, date, definition, deletion,

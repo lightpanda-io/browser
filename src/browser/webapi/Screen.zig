@@ -38,7 +38,7 @@ pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
 }
 
-pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
+fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
     if (self._orientation) |orientation| {
         return orientation;
     }

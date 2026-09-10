@@ -30,9 +30,8 @@ const Certificates = @import("Certificates.zig");
 const log = lp.log;
 const posix = std.posix;
 
-pub const ENABLE_DEBUG = false;
+const ENABLE_DEBUG = false;
 
-pub const WaitFd = libcurl.CurlWaitFd;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
@@ -96,7 +95,7 @@ pub const Header = struct {
         return null;
     }
 
-    pub const ParamIterator = struct {
+    const ParamIterator = struct {
         rest: []const u8,
 
         pub fn next(self: *ParamIterator) ?Param {
@@ -573,12 +572,6 @@ pub const Connection = struct {
             return 0;
         }
         return @intCast(status);
-    }
-
-    pub fn getRedirectCount(self: *const Connection) !u32 {
-        var count: c_long = undefined;
-        try libcurl.curl_easy_getinfo(self._easy, .redirect_count, &count);
-        return @intCast(count);
     }
 
     // -1 when the transfer used no connection.

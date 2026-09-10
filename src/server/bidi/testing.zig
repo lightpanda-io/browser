@@ -34,7 +34,7 @@ pub const arena = base.arena_allocator;
 pub const expect = std.testing.expect;
 pub const expectEqual = base.expectEqual;
 pub const expectError = base.expectError;
-pub const expectString = base.expectString;
+const expectString = base.expectString;
 pub const expectLog = base.expectLog;
 pub const silenceLog = base.silenceLog;
 
@@ -91,7 +91,7 @@ pub const TestContext = struct {
         try self.processMessage(.{ .id = command_id_session, .method = "session.new" });
     }
 
-    pub const ContextOpts = struct {
+    const ContextOpts = struct {
         // Relative to `test_server`. Left null, the context stays on
         // about:blank.
         url: ?[]const u8 = null,

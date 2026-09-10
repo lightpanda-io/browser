@@ -522,15 +522,6 @@ pub fn Builder(comptime commands: anytype) type {
             return error.UnknownCommand;
         }
 
-        /// Returns the type for validator function.
-        pub fn ValidatorFn(comptime T: type, comptime is_multiple: bool) type {
-            if (is_multiple) {
-                return *const fn (Allocator, *std.process.Args.Iterator, *std.ArrayList(T)) anyerror!void;
-            }
-
-            return *const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void;
-        }
-
         /// Turns a snake_case string to kebab-case in comptime.
         fn toKebabCase(comptime str: []const u8) [str.len]u8 {
             var output: [str.len]u8 = str[0..str.len].*;
@@ -572,7 +563,8 @@ pub fn Builder(comptime commands: anytype) type {
             ///     .field_name = "struct_field_name",
             ///     .type = T, // or .{ .cli = T, .memory = T }
             ///     .multiple = ?bool,
-            ///     .validator = ?ValidatorFn(T, is_multiple),
+            ///     // *ArrayList(T) instead of *T when `.multiple`
+            ///     .validator = ?*const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void,
             /// };
             /// ```
             option: anytype,

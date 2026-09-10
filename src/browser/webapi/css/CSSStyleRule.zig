@@ -21,7 +21,7 @@ pub fn init(frame: *Frame) !*CSSStyleRule {
     return style_rule;
 }
 
-pub fn getSelectorText(self: *const CSSStyleRule) []const u8 {
+fn getSelectorText(self: *const CSSStyleRule) []const u8 {
     return self._selector_text;
 }
 

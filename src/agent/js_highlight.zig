@@ -25,11 +25,11 @@ pub const Kind = enum { comment, string, variable, interpolation, number, keywor
 /// block comments and template literals outlive a line boundary.
 pub const State = enum { normal, block_comment, template };
 
-pub const StringSpan = struct { end: usize, closed: bool };
+const StringSpan = struct { end: usize, closed: bool };
 
 /// Scan the quoted run opening at `text[start]`. Escapes are not honored —
 /// good enough for coloring, not parsing.
-pub fn scanString(text: []const u8, start: usize) StringSpan {
+fn scanString(text: []const u8, start: usize) StringSpan {
     if (start >= text.len) return .{ .end = start, .closed = false };
     const close = std.mem.indexOfScalarPos(u8, text, start + 1, text[start]) orelse
         return .{ .end = text.len, .closed = false };
@@ -45,7 +45,7 @@ fn dollarRefEnd(text: []const u8, start: usize, end: usize) usize {
     return i;
 }
 
-pub const DollarRef = struct { start: usize, end: usize, kind: Kind };
+const DollarRef = struct { start: usize, end: usize, kind: Kind };
 
 /// Next `$name` (`.variable`) ref at or after `from` within `text[..end]`,
 /// or null; bare `$`s are skipped. `interpolation` additionally recognizes

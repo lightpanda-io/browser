@@ -52,17 +52,17 @@ pub fn only(value: js.Value, exec: *Execution) !*IDBKeyRange {
     return create(exec, encoded, encoded, false, false);
 }
 
-pub fn lowerBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
+fn lowerBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
     const encoded = try Key.encodeValue(exec.arena, value);
     return create(exec, encoded, null, open orelse false, false);
 }
 
-pub fn upperBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
+fn upperBound(value: js.Value, open: ?bool, exec: *Execution) !*IDBKeyRange {
     const encoded = try Key.encodeValue(exec.arena, value);
     return create(exec, null, encoded, false, open orelse false);
 }
 
-pub fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?bool, exec: *Execution) !*IDBKeyRange {
+fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?bool, exec: *Execution) !*IDBKeyRange {
     const lo = try Key.encodeValue(exec.arena, lower);
     const up = try Key.encodeValue(exec.arena, upper);
     if (std.mem.order(u8, lo, up) == .gt) {
@@ -71,21 +71,21 @@ pub fn bound(lower: js.Value, upper: js.Value, lower_open: ?bool, upper_open: ?b
     return create(exec, lo, up, lower_open orelse false, upper_open orelse false);
 }
 
-pub fn getLower(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
+fn getLower(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
     const encoded = self._lower orelse return null;
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getUpper(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
+fn getUpper(self: *const IDBKeyRange, exec: *Execution) !?js.Value {
     const encoded = self._upper orelse return null;
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getLowerOpen(self: *const IDBKeyRange) bool {
+fn getLowerOpen(self: *const IDBKeyRange) bool {
     return self._lower_open;
 }
 
-pub fn getUpperOpen(self: *const IDBKeyRange) bool {
+fn getUpperOpen(self: *const IDBKeyRange) bool {
     return self._upper_open;
 }
 
@@ -113,7 +113,7 @@ fn containsEncoded(self: *const IDBKeyRange, encoded: []const u8) bool {
 }
 
 // SQL bounds for the engine's ranged queries.
-pub fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
+fn toBounds(self: *const IDBKeyRange) Engine.Bounds {
     return .{
         .is_point = false,
         .lower = self._lower orelse Engine.Bounds.min_sentinel,

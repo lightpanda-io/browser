@@ -244,7 +244,7 @@ pub fn getBaseVal(self: *AnimatedLength) *Length {
     return self._base_val;
 }
 
-pub fn getAnimVal(self: *AnimatedLength) *Length {
+fn getAnimVal(self: *AnimatedLength) *Length {
     return self._anim_val;
 }
 

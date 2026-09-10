@@ -53,7 +53,7 @@ _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 // into a DOMRect only if it ends up on a delivered entry.
 const zero_rect: DOMRect.Data = .{};
 
-pub const ObserverInit = struct {
+const ObserverInit = struct {
     root: ?*Node = null,
     rootMargin: ?[]const u8 = null,
     threshold: Threshold = .{ .scalar = 0.0 },
@@ -145,7 +145,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
     }
 }
 
-pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
+fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
     const original_length = self._observing.items.len;
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
@@ -346,7 +346,7 @@ pub const IntersectionObserverEntry = struct {
         return self._target;
     }
 
-    pub fn getTime(self: *const IntersectionObserverEntry) f64 {
+    fn getTime(self: *const IntersectionObserverEntry) f64 {
         return self._time;
     }
 
@@ -354,19 +354,19 @@ pub const IntersectionObserverEntry = struct {
         return self._bounding_client_rect;
     }
 
-    pub fn getIntersectionRect(self: *const IntersectionObserverEntry) *DOMRect {
+    fn getIntersectionRect(self: *const IntersectionObserverEntry) *DOMRect {
         return self._intersection_rect;
     }
 
-    pub fn getRootBounds(self: *const IntersectionObserverEntry) ?*DOMRect {
+    fn getRootBounds(self: *const IntersectionObserverEntry) ?*DOMRect {
         return self._root_bounds;
     }
 
-    pub fn getIntersectionRatio(self: *const IntersectionObserverEntry) f64 {
+    fn getIntersectionRatio(self: *const IntersectionObserverEntry) f64 {
         return self._intersection_ratio;
     }
 
-    pub fn getIsIntersecting(self: *const IntersectionObserverEntry) bool {
+    fn getIsIntersecting(self: *const IntersectionObserverEntry) bool {
         return self._is_intersecting;
     }
 

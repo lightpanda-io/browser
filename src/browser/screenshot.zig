@@ -41,7 +41,7 @@ pub const Opts = struct {
     clip: ?Clip = null,
     scale: f32 = 1.0,
 
-    pub const Clip = struct {
+    const Clip = struct {
         x: f32,
         y: f32,
         width: f32,
@@ -248,7 +248,7 @@ const Sink = struct {
 };
 
 // Mirrors the C ABI in src/rust/render/lib.rs.
-pub const LpSpan = extern struct {
+const LpSpan = extern struct {
     text: [*]const u8,
     len: usize,
     flags: u32,
@@ -301,7 +301,7 @@ const RENDER_MEASURE_ONLY: u32 = 1 << 0;
 // The laid-out document `lp_layout_new` exports, in layout px: blocks own a
 // range of lines, lines a range of runs and clusters, runs a range of
 // glyphs. Consumed by pdf.zig; see the Rust definitions for field docs.
-pub const LpLayout = extern struct {
+const LpLayout = extern struct {
     height: f32,
     pre_pad: f32,
     quote_indent: f32,
@@ -365,14 +365,14 @@ pub const LpDecoration = extern struct {
     color: u32,
 };
 
-pub const LpGlyph = extern struct {
+const LpGlyph = extern struct {
     id: u32,
     x: f32,
     y: f32,
     advance: f32,
 };
 
-pub const LpCluster = extern struct {
+const LpCluster = extern struct {
     font: u32,
     glyph: u32,
     text_start: u32,

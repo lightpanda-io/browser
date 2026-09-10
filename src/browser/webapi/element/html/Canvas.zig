@@ -70,7 +70,7 @@ const DrawingContext = union(enum) {
     webgl: *WebGLRenderingContext,
 };
 
-pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingContext {
+fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingContext {
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
@@ -110,7 +110,7 @@ fn hasBitmap(self: *const Canvas) bool {
 /// Serializes the canvas, always as the blank PNG. Per spec an unsupported
 /// `type` falls back to image/png, and with nothing drawn there is no lossy
 /// encoding for `quality` to control, so both arguments are ignored.
-pub fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64) []const u8 {
+fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64) []const u8 {
     // Per spec, a canvas with no pixels serializes to this exact string.
     return if (self.hasBitmap()) BlankPNG.data_url else "data:,";
 }
@@ -179,7 +179,7 @@ const ToBlobCallback = struct {
 
 /// Transfers control of the canvas to an OffscreenCanvas.
 /// Returns an OffscreenCanvas with the same dimensions.
-pub fn transferControlToOffscreen(self: *Canvas, exec: *Execution) !*OffscreenCanvas {
+fn transferControlToOffscreen(self: *Canvas, exec: *Execution) !*OffscreenCanvas {
     const width = self.getWidth();
     const height = self.getHeight();
     return OffscreenCanvas.constructor(width, height, exec);

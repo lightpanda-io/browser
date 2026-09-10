@@ -131,7 +131,7 @@ pub const DownloadBehavior = enum {
     deny,
 };
 
-pub const CancelHook = struct {
+const CancelHook = struct {
     context: *anyopaque,
     check: *const fn (*anyopaque) bool,
 };

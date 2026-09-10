@@ -72,7 +72,7 @@ pub fn asEvent(self: *PageTransitionEvent) *Event {
     return self._proto;
 }
 
-pub fn getPersisted(self: *PageTransitionEvent) bool {
+fn getPersisted(self: *PageTransitionEvent) bool {
     return self._persisted;
 }
 

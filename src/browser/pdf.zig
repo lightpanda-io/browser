@@ -58,7 +58,7 @@ pub const Opts = struct {
 };
 
 /// 1-based, inclusive. `to = maxInt(u32)` for an open end ("5-").
-pub const PageRange = struct {
+const PageRange = struct {
     from: u32,
     to: u32,
 };
@@ -144,7 +144,7 @@ pub const Prepared = struct {
     }
 
     /// How many pages the document paginates to, without writing any.
-    pub fn pageCount(self: *const Prepared) std.Io.Writer.Error!u32 {
+    fn pageCount(self: *const Prepared) std.Io.Writer.Error!u32 {
         var discard: std.Io.Writer.Discarding = .init(&.{});
         return self.render(&discard.writer, true);
     }

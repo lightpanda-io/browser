@@ -164,7 +164,7 @@ pub fn once(comptime f: fn () void) Once(f) {
     return .{};
 }
 
-pub fn Once(comptime f: fn () void) type {
+fn Once(comptime f: fn () void) type {
     return struct {
         done: bool = false,
         mutex: std.Io.Mutex = .init,
