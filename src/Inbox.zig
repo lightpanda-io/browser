@@ -125,7 +125,7 @@ pub const Message = struct {
     payload: Payload,
     node: DoublyLinkedList.Node = .{},
 
-    const Payload = union(enum) {
+    pub const Payload = union(enum) {
         // A CDP text/binary frame, parsed on the Network thread. `raw`
         // is the original JSON bytes (owned). `arena` holds any
         // auxiliary allocations from parseFromSliceLeaky (typically

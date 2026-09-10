@@ -23,6 +23,7 @@ const App = @import("../../App.zig");
 const Inbox = @import("../../Inbox.zig");
 const Notification = @import("../../Notification.zig");
 
+const sys_net = @import("../../sys/net.zig");
 const http = @import("../../network/http.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 
@@ -97,20 +98,26 @@ streams: @import("domains/io.zig").Streams,
 
 pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void {
     const allocator = app.allocator;
+    {
+        // this is documentation, and future-proofing, to show exactly where
+        // the socket's ownership is
+        errdefer sys_net.close(socket);
 
-    self.* = .{
-        .app = app,
-        .link = undefined,
-        .browser = undefined,
-        .allocator = allocator,
-        .browser_context = null,
-        .frame_arena = std.heap.ArenaAllocator.init(allocator),
-        .message_arena = std.heap.ArenaAllocator.init(allocator),
-        .notification_arena = std.heap.ArenaAllocator.init(allocator),
-        .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
-        .streams = .{ .allocator = allocator },
-    };
+        self.* = .{
+            .app = app,
+            .link = undefined,
+            .browser = undefined,
+            .allocator = allocator,
+            .browser_context = null,
+            .frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .message_arena = std.heap.ArenaAllocator.init(allocator),
+            .notification_arena = std.heap.ArenaAllocator.init(allocator),
+            .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+            .streams = .{ .allocator = allocator },
+        };
+    }
 
+    // takes ownership of the socket
     try self.link.init(app, socket, .cdp, inbox);
     errdefer self.link.deinit();
 

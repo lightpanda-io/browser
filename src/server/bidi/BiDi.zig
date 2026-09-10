@@ -21,11 +21,14 @@ const lp = @import("lightpanda");
 
 const App = @import("../../App.zig");
 const Inbox = @import("../../Inbox.zig");
+
+const sys_net = @import("../../sys/net.zig");
 const uuidv4 = @import("../../id.zig").uuidv4;
-const Browser = @import("../../browser/Browser.zig");
-const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
 const NodeRegistry = @import("../../NodeRegistry.zig");
+
+const Browser = @import("../../browser/Browser.zig");
+const Session = @import("../../browser/Session.zig");
 
 const Link = @import("../Link.zig");
 const Server = @import("../Server.zig");
@@ -113,27 +116,36 @@ const InputMessage = struct {
 
 pub fn init(self: *BiDi, app: *App, inbox: *Inbox, origin: Origin) !void {
     const allocator = app.allocator;
-    self.* = .{
-        .app = app,
-        .link = null,
-        .inbox = inbox,
-        .mode = switch (origin) {
-            .socket => .bidi_only,
-            .session => |session| .{ .http = session.worker },
-        },
-        .browser = undefined,
-        .user_context = undefined,
-        .notification = undefined,
-        .session_id = switch (origin) {
-            .socket => null,
-            .session => |session| session.id,
-        },
-        .node_registry = .init(allocator),
-        .handles = .{ .allocator = allocator },
-        .message_arena = std.heap.ArenaAllocator.init(allocator),
-        .session_arena = std.heap.ArenaAllocator.init(allocator),
-    };
+    {
+        // this is documentation, and future-proofing, to show exactly where
+        // the socket's ownership is
+        errdefer if (origin == .socket) {
+            sys_net.close(origin.socket);
+        };
 
+        self.* = .{
+            .app = app,
+            .link = null,
+            .inbox = inbox,
+            .mode = switch (origin) {
+                .socket => .bidi_only,
+                .session => |session| .{ .http = session.worker },
+            },
+            .browser = undefined,
+            .user_context = undefined,
+            .notification = undefined,
+            .session_id = switch (origin) {
+                .socket => null,
+                .session => |session| session.id,
+            },
+            .node_registry = .init(allocator),
+            .handles = .{ .allocator = allocator },
+            .message_arena = std.heap.ArenaAllocator.init(allocator),
+            .session_arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
+
+    // Link.create takes ownership of the socket
     switch (origin) {
         .socket => |socket| self.link = try Link.create(app, socket, .bidi, inbox),
         .session => {},
