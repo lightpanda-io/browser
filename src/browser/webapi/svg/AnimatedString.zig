@@ -56,12 +56,12 @@ pub fn getBaseVal(self: *const AnimatedString) []const u8 {
     return self._element.getAttributeSafe(self.attributeName()) orelse "";
 }
 
-pub fn setBaseVal(self: *AnimatedString, value: String, frame: *Frame) !void {
+fn setBaseVal(self: *AnimatedString, value: String, frame: *Frame) !void {
     try self._element.setAttribute(self.attributeName(), value, frame);
 }
 
 // No real animation, return the BaseVal
-pub fn getAnimVal(self: *const AnimatedString) []const u8 {
+fn getAnimVal(self: *const AnimatedString) []const u8 {
     return self.getBaseVal();
 }
 

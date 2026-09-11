@@ -102,7 +102,7 @@ pub fn observe(self: *ResizeObserver, target: *Element, options_: ?Options, fram
     Frame.observers.scheduleResizeDelivery(frame);
 }
 
-pub fn unobserve(self: *ResizeObserver, target: *Element, frame: *Frame) void {
+fn unobserve(self: *ResizeObserver, target: *Element, frame: *Frame) void {
     for (self._observations.items, 0..) |obs, i| {
         if (obs.target == target) {
             _ = self._observations.swapRemove(i);
@@ -214,19 +214,19 @@ pub const ResizeObserverEntry = struct {
         return self._target;
     }
 
-    pub fn getContentRect(self: *const ResizeObserverEntry) *DOMRect {
+    fn getContentRect(self: *const ResizeObserverEntry) *DOMRect {
         return self._content_rect;
     }
 
-    pub fn getBorderBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getBorderBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
-    pub fn getContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
-    pub fn getDevicePixelContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
+    fn getDevicePixelContentBoxSize(self: *const ResizeObserverEntry) []const *ResizeObserverSize {
         return &self._box_size;
     }
 
@@ -258,11 +258,11 @@ pub const ResizeObserverSize = struct {
         });
     }
 
-    pub fn getInlineSize(self: *const ResizeObserverSize) f64 {
+    fn getInlineSize(self: *const ResizeObserverSize) f64 {
         return self._inline_size;
     }
 
-    pub fn getBlockSize(self: *const ResizeObserverSize) f64 {
+    fn getBlockSize(self: *const ResizeObserverSize) f64 {
         return self._block_size;
     }
 

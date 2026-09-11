@@ -29,7 +29,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const InteractivityType = enum {
+const InteractivityType = enum {
     native,
     aria,
     contenteditable,
@@ -37,7 +37,7 @@ pub const InteractivityType = enum {
     focusable,
 };
 
-pub const InteractiveElement = struct {
+const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -149,7 +149,7 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
-pub const FindFilter = struct {
+const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
     /// Accessible-name substring match (case-insensitive). When null, name is not filtered.

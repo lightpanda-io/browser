@@ -129,11 +129,11 @@ pub fn getAll(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: 
     return self._getAll(query_or_options, count_, .value, exec);
 }
 
-pub fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
+fn getAllKeys(self: *IDBIndex, query_or_options: ?js.Value, count_: ?f64, exec: *Execution) !*IDBRequest {
     return self._getAll(query_or_options, count_, .key, exec);
 }
 
-pub fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*IDBRequest {
+fn getAllRecords(self: *IDBIndex, options: ?js.Value, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
     const args = try IDBKeyRange.resolveGetAllOptions(t._arena.allocator(), options, exec);
     const request = try t.newRequest();
@@ -200,13 +200,13 @@ pub fn runCount(self: *IDBIndex, request: *IDBRequest, bounds: Engine.Bounds, ex
     try request.setValue(try exec.js.local.?.zigValueToJs(n, .{}));
 }
 
-pub fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+fn openCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
     const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, false, exec);
 }
 
-pub fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
+fn openKeyCursor(self: *IDBIndex, query: ?js.Value, direction: ?IDBCursor.Direction, exec: *Execution) !*IDBRequest {
     const t = try self.txn();
     const bounds = try IDBKeyRange.resolveQuery(t._arena.allocator(), query, exec);
     return IDBCursor.initIndex(self, bounds, direction orelse .next, true, exec);
@@ -236,19 +236,19 @@ pub fn setName(self: *IDBIndex, name: []const u8, _: *Execution) !void {
     self._name = try t.dupe(name);
 }
 
-pub fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
+fn getKeyPath(self: *IDBIndex, exec: *Execution) !js.Value {
     return idb.cachedKeyPathJs(&self._key_path_js, self._store._txn, self._key_path, exec);
 }
 
-pub fn getUnique(self: *const IDBIndex) bool {
+fn getUnique(self: *const IDBIndex) bool {
     return self._unique;
 }
 
-pub fn getMultiEntry(self: *const IDBIndex) bool {
+fn getMultiEntry(self: *const IDBIndex) bool {
     return self._multi_entry;
 }
 
-pub fn getObjectStore(self: *IDBIndex) *IDBObjectStore {
+fn getObjectStore(self: *IDBIndex) *IDBObjectStore {
     return self._store;
 }
 

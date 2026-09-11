@@ -97,12 +97,12 @@ pub const SameSite = enum {
     Lax,
     None,
 };
-pub const CookiePriority = enum {
+const CookiePriority = enum {
     Low,
     Medium,
     High,
 };
-pub const CookieSourceScheme = enum {
+const CookieSourceScheme = enum {
     Unset,
     NonSecure,
     Secure,
@@ -205,7 +205,7 @@ pub const CookieWriter = struct {
         try w.endArray();
     }
 };
-pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
+fn writeCookie(cookie: *const Cookie, w: anytype) !void {
     try w.beginObject();
     {
         try w.objectField("name");

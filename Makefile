@@ -3,8 +3,6 @@
 
 ZIG := zig
 BC := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-# tikv-jemalloc-sys's nested make can't parse inherited "-- F=..." overrides
-MAKEOVERRIDES =
 # option test filter make test F="server"
 F=
 

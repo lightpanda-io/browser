@@ -80,7 +80,7 @@ pub const Mode = enum {
     animation_frame,
 };
 
-pub const ScheduleOpts = struct {
+const ScheduleOpts = struct {
     repeat: bool,
     params: []js.Value.Global,
     name: []const u8,

@@ -76,11 +76,11 @@ pub fn getCssText(self: *const CSSRule, _: *Frame) []const u8 {
     return self._text;
 }
 
-pub fn getParentRule(_: *const CSSRule) ?*CSSRule {
+fn getParentRule(_: *const CSSRule) ?*CSSRule {
     return null;
 }
 
-pub fn getParentStyleSheet(self: *const CSSRule) ?*CSSRule {
+fn getParentStyleSheet(self: *const CSSRule) ?*CSSRule {
     _ = self;
     return null;
 }

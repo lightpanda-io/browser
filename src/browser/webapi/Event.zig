@@ -68,7 +68,7 @@ _time_origin: u64 = 0,
 // - 2: both zig and v8 have a reference
 _rc: lp.RC = .{},
 
-pub const EventPhase = enum(u8) {
+const EventPhase = enum(u8) {
     none = 0,
     capturing_phase = 1,
     at_target = 2,
@@ -142,7 +142,7 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, opts_: ?Options, comptime trus
     return event;
 }
 
-pub fn initEvent(
+fn initEvent(
     self: *Event,
     event_string: []const u8,
     bubbles: ?bool,
@@ -229,15 +229,15 @@ pub fn getType(self: *const Event) []const u8 {
     return self._type_string.str();
 }
 
-pub fn getBubbles(self: *const Event) bool {
+fn getBubbles(self: *const Event) bool {
     return self._bubbles;
 }
 
-pub fn getCancelable(self: *const Event) bool {
+fn getCancelable(self: *const Event) bool {
     return self._cancelable;
 }
 
-pub fn getComposed(self: *const Event) bool {
+fn getComposed(self: *const Event) bool {
     return self._composed;
 }
 
@@ -245,7 +245,7 @@ pub fn getTarget(self: *const Event) ?*EventTarget {
     return self._target;
 }
 
-pub fn getCurrentTarget(self: *const Event) ?*EventTarget {
+fn getCurrentTarget(self: *const Event) ?*EventTarget {
     return self._current_target;
 }
 
@@ -255,11 +255,11 @@ pub fn preventDefault(self: *Event) void {
     }
 }
 
-pub fn stopPropagation(self: *Event) void {
+fn stopPropagation(self: *Event) void {
     self._stop_propagation = true;
 }
 
-pub fn stopImmediatePropagation(self: *Event) void {
+fn stopImmediatePropagation(self: *Event) void {
     self._stop_immediate_propagation = true;
     self._stop_propagation = true;
 }
@@ -281,19 +281,19 @@ pub fn setReturnValue(self: *Event, v: bool) void {
     }
 }
 
-pub fn getCancelBubble(self: *const Event) bool {
+fn getCancelBubble(self: *const Event) bool {
     return self._stop_propagation;
 }
 
-pub fn setCancelBubble(self: *Event) void {
+fn setCancelBubble(self: *Event) void {
     self.stopPropagation();
 }
 
-pub fn getEventPhase(self: *const Event) u8 {
+fn getEventPhase(self: *const Event) u8 {
     return @intFromEnum(self._event_phase);
 }
 
-pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
+fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     const origin = if (self._time_origin != 0) self._time_origin else exec.performance()._time_origin;
     if (self._time_stamp <= origin) {
         return 0.0;
@@ -301,19 +301,11 @@ pub fn getTimeStamp(self: *const Event, exec: *js.Execution) f64 {
     return @as(f64, @floatFromInt(self._time_stamp - origin)) / 1000.0;
 }
 
-pub fn setTrusted(self: *Event) void {
-    self._is_trusted = true;
-}
-
-pub fn setUntrusted(self: *Event) void {
-    self._is_trusted = false;
-}
-
 pub fn getIsTrusted(self: *const Event) bool {
     return self._is_trusted;
 }
 
-pub fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
+fn composedPath(self: *Event, exec: *Execution) ![]const *EventTarget {
     // Return empty array if event is not being dispatched
     if (self._event_phase == .none) {
         return &.{};

@@ -61,7 +61,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     return event;
 }
 
-pub fn initCustomEvent(
+fn initCustomEvent(
     self: *CustomEvent,
     event_string: []const u8,
     bubbles: ?bool,

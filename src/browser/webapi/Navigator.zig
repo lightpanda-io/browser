@@ -57,7 +57,7 @@ pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const
     return exec.session.browser.http_client.getLanguages();
 }
 
-pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
+fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
     return null;
 }
 
@@ -82,7 +82,7 @@ pub fn getOnLine(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getCookieEnabled(_: *const Navigator) bool {
+fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
@@ -94,7 +94,7 @@ pub fn getDeviceMemory(_: *const Navigator) f64 {
     return 8.0;
 }
 
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
+fn getMaxTouchPoints(_: *const Navigator) u32 {
     return 0;
 }
 
@@ -106,7 +106,7 @@ pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
 }
 
-pub fn getWebdriver(_: *const Navigator) bool {
+fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
 
@@ -130,26 +130,26 @@ pub fn getPlatform(_: *const Navigator) []const u8 {
 }
 
 /// Returns whether Java is enabled (always false)
-pub fn javaEnabled(_: *const Navigator) bool {
+fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
 /// Noop, signal that the data was successfully queued
-pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
+fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
     _ = url;
     _ = data;
     return true;
 }
 
-pub fn getPlugins(self: *Navigator) *PluginArray {
+fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
-pub fn getPermissions(self: *Navigator) *Permissions {
+fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
 
-pub fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
+fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
     if (self._geolocation) |g| {
         return g;
     }
@@ -158,11 +158,11 @@ pub fn getGeolocation(self: *Navigator, exec: *Execution) !*Geolocation {
     return g;
 }
 
-pub fn getStorage(self: *Navigator) *StorageManager {
+fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
-pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
+fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
@@ -170,11 +170,11 @@ pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
-pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }
-pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
+fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
 }

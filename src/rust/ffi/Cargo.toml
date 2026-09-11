@@ -11,8 +11,3 @@ crate-type = ["staticlib"]
 [dependencies]
 lightpanda-html5ever = { path = "../html5ever" }
 lightpanda-render = { path = "../render" }
-tikv-jemallocator = { version = "0.6.1", features = ["stats"], optional = true }
-tikv-jemalloc-ctl = { version = "0.6.1", features = ["stats"], optional = true }
-
-[features]
-memstats = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]

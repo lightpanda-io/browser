@@ -63,7 +63,7 @@ pub fn getSelectedIndex(self: *const HTMLOptionsCollection) i32 {
     return self._select.getSelectedIndex();
 }
 
-pub fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32, frame: *Frame) !void {
+fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32, frame: *Frame) !void {
     return self._select.setSelectedIndex(index, frame);
 }
 

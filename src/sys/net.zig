@@ -37,7 +37,7 @@ pub fn family(a: *const IpAddress) u32 {
     };
 }
 
-pub const Sockaddr = struct {
+const Sockaddr = struct {
     storage: posix.sockaddr.storage,
     len: posix.socklen_t,
 
@@ -159,7 +159,7 @@ pub fn accept(sock: socket_t, addr: ?*posix.sockaddr, addr_size: ?*posix.socklen
     return accepted_sock;
 }
 
-pub const ShutdownHow = enum { recv, send, both };
+const ShutdownHow = enum { recv, send, both };
 
 pub fn shutdown(sock: socket_t, how: ShutdownHow) !void {
     const c_how: c_int = switch (how) {

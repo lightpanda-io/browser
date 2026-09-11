@@ -245,7 +245,7 @@ pub const LoadResources = packed struct(u4) {
     stylesheet: bool = false,
 };
 
-pub const ExperimentalFeatures = packed struct(u1) {
+const ExperimentalFeatures = packed struct(u1) {
     cors: bool = false,
 };
 
@@ -406,6 +406,7 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "http_session_timeout", .type = u32, .default = 60 },
             .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
@@ -486,7 +487,7 @@ const Commands = cli.Builder(.{
     } },
 });
 
-pub const RunMode = Commands.Enum;
+const RunMode = Commands.Enum;
 pub const Mode = Commands.Union;
 pub const Agent = @FieldType(Mode, "agent");
 
@@ -621,7 +622,7 @@ pub fn httpHeaders(self: *const Config) []const HttpHeader {
     };
 }
 
-pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
+fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         else => null,
@@ -715,7 +716,7 @@ fn stderrIsTty() bool {
     return stderr_tty_cached;
 }
 
-pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
+fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.user_agent_suffix,
         else => null,
@@ -879,6 +880,15 @@ pub fn maxConnections(self: *const Config) u16 {
     };
 }
 
+// Null disables the reaper: sessions then only end on DELETE /session/{id}.
+pub fn httpSessionTimeout(self: *const Config) ?u64 {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.http_session_timeout == 0) null else @as(u64, opts.http_session_timeout) * 1000,
+        .mcp => 60_000, // 1 minute
+        else => unreachable,
+    };
+}
+
 pub fn maxPendingConnections(self: *const Config) u31 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_pending_connections,
@@ -986,7 +996,7 @@ pub const HttpHeaders = struct {
     // The neutral default: some bot-protection frontends (e.g. Akamai on
     // canada.ca) RST the HTTP/2 stream when a client sends Accept-Encoding
     // without Accept-Language.
-    pub const default_locale: [:0]const u8 = "en-US";
+    const default_locale: [:0]const u8 = "en-US";
 
     // Document-navigation Accept value Chrome sends.
     pub const navigation_accept: [:0]const u8 = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -1311,6 +1321,26 @@ test "Config: parseArgs --http-version" {
         const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--http-version", "3" };
         const proc_args: std.process.Args = .{ .vector = &argv };
         try std.testing.expectError(error.InvalidArgument, parseArgs(std.testing.allocator, proc_args));
+    }
+}
+
+test "Config: parseArgs --http-session-timeout" {
+    // parseArgs allocations live for the process; an arena stands in for main's.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(60_000, config.httpSessionTimeout());
+    }
+    {
+        // 0 disables the reaper
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--http-session-timeout", "0" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.httpSessionTimeout());
     }
 }
 

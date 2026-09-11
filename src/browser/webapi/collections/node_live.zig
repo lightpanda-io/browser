@@ -47,14 +47,14 @@ const Mode = enum {
     form,
 };
 
-pub const ClassNameFilter = struct {
+const ClassNameFilter = struct {
     names: [][]const u8,
     // getElementsByClassName matches class names ASCII case-insensitively
     // when the document is in quirks mode.
     case_insensitive: bool = false,
 };
 
-pub const TagNameNsFilter = struct {
+const TagNameNsFilter = struct {
     namespace: ?Element.Namespace, // null means wildcard "*"
     local_name: String,
 };
@@ -169,19 +169,6 @@ pub fn NodeLive(comptime mode: Mode) type {
 
             self._last_length = l;
             return l;
-        }
-
-        // This API supports indexing by both numeric index and id/name
-        // i.e. a combination of getAtIndex and getByName
-        pub fn getIndexed(self: *Self, value: js.Atom, frame: *Frame) !?*Element {
-            if (value.isUint()) |n| {
-                return self.getAtIndex(n, frame);
-            }
-
-            const name = value.toString();
-            defer value.freeString(name);
-
-            return self.getByName(name, frame) orelse return error.NotHandled;
         }
 
         pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {

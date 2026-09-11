@@ -269,16 +269,16 @@ fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
     }
 }
 
-pub fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
+fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
     try self.setPropertyImpl("float", value_ orelse "", false, frame);
     try self.syncStyleAttribute(frame);
 }
 
-pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();

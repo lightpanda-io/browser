@@ -33,7 +33,7 @@ pub const Proto = UIEvent;
 _proto: *UIEvent,
 _data: []const u8 = "",
 
-pub const TextEventOptions = struct {
+const TextEventOptions = struct {
     data: ?[]const u8 = null,
 };
 
@@ -78,7 +78,7 @@ pub fn getData(self: *const TextEvent) []const u8 {
     return self._data;
 }
 
-pub fn initTextEvent(
+fn initTextEvent(
     self: *TextEvent,
     typ: []const u8,
     bubbles: ?bool,

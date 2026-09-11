@@ -141,7 +141,7 @@ pub fn getTitle(self: *HTMLDocument, frame: *Frame) ![]const u8 {
     return result.items;
 }
 
-pub fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
+fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
     const head = self.getHead() orelse return;
 
     // Find existing title element in head
@@ -169,35 +169,35 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, frame: *Frame) !void {
     _ = try head.asNode().appendChild(title_node, frame);
 }
 
-pub fn getImages(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+fn getImages(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .img, frame);
 }
 
-pub fn getScripts(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+fn getScripts(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .script, frame);
 }
 
-pub fn getLinks(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.links) {
+fn getLinks(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.links) {
     return collections.NodeLive(.links).init(self.asNode(), {}, frame);
 }
 
-pub fn getAnchors(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.anchors) {
+fn getAnchors(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.anchors) {
     return collections.NodeLive(.anchors).init(self.asNode(), {}, frame);
 }
 
-pub fn getForms(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+fn getForms(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .form, frame);
 }
 
-pub fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
+fn getEmbeds(self: *HTMLDocument, frame: *Frame) !collections.NodeLive(.tag) {
     return collections.NodeLive(.tag).init(self.asNode(), .embed, frame);
 }
 
-pub fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
+fn getApplets(_: *const HTMLDocument, frame: *Frame) !*collections.HTMLCollection {
     return frame._factory.create(collections.HTMLCollection{ ._data = .empty });
 }
 
-pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
+fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
     return self._proto._current_script;
 }
 
@@ -207,19 +207,19 @@ pub fn getDir(self: *HTMLDocument) []const u8 {
     return html.getDir();
 }
 
-pub fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
+fn setDir(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     const el = self._proto.getDocumentElement() orelse return;
     const html = el.is(Element.Html) orelse return;
     try html.asElement().setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-pub fn getLang(self: *HTMLDocument) []const u8 {
+fn getLang(self: *HTMLDocument) []const u8 {
     const el = self._proto.getDocumentElement() orelse return "";
     const html = el.is(Element.Html) orelse return "";
     return html.getLang();
 }
 
-pub fn setLang(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
+fn setLang(self: *HTMLDocument, value: []const u8, frame: *Frame) !void {
     const el = self._proto.getDocumentElement() orelse return;
     const html = el.is(Element.Html) orelse return;
     try html.setLang(value, frame);
@@ -229,7 +229,7 @@ pub fn getAll(self: *HTMLDocument, frame: *Frame) !*collections.HTMLAllCollectio
     return frame._factory.create(collections.HTMLAllCollection.init(self.asNode(), frame));
 }
 
-pub fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
+fn getDocType(self: *HTMLDocument, frame: *Frame) !*DocumentType {
     if (self._document_type) |dt| {
         return dt;
     }

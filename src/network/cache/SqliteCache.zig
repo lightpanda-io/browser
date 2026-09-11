@@ -81,7 +81,7 @@ const purge_expired_sql =
     \\     and stored_at + max_age - age_at_store <= $1
 ;
 
-pub const SqliteCachePath = union(enum) {
+const SqliteCachePath = union(enum) {
     path: []const u8,
     memory,
 

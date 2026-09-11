@@ -219,15 +219,15 @@ pub fn getMethod(self: *const Request) []const u8 {
     return @tagName(self._method);
 }
 
-pub fn getCache(self: *const Request) []const u8 {
+fn getCache(self: *const Request) []const u8 {
     return @tagName(self._cache);
 }
 
-pub fn getCredentials(self: *const Request) []const u8 {
+fn getCredentials(self: *const Request) []const u8 {
     return @tagName(self._credentials);
 }
 
-pub fn getRedirect(self: *const Request) []const u8 {
+fn getRedirect(self: *const Request) []const u8 {
     return @tagName(self._redirect);
 }
 
@@ -235,11 +235,11 @@ pub fn getMode(self: *const Request) []const u8 {
     return @tagName(self._mode);
 }
 
-pub fn getSignal(self: *const Request) ?*AbortSignal {
+fn getSignal(self: *const Request) ?*AbortSignal {
     return self._signal;
 }
 
-pub fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
+fn getHeaders(self: *Request, exec: *const Execution) !*Headers {
     if (self._headers) |headers| {
         return headers;
     }
@@ -253,7 +253,7 @@ fn headerGuard(mode: Mode) Headers.Guard {
     return if (mode == .@"no-cors") .request_no_cors else .request;
 }
 
-pub fn getBodyUsed(self: *const Request) bool {
+fn getBodyUsed(self: *const Request) bool {
     if (self._body == null) {
         return false;
     }
