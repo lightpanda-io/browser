@@ -86,8 +86,11 @@ fn setDownloadBehavior(cmd: *CDP.Command) !void {
         eventsEnabled: ?bool = null,
     })) orelse return error.InvalidParams;
 
-    if (params.browserContextId != null) {
-        log.warn(.not_implemented, "Browser.setDownloadBehavior", .{ .param = "browserContextId" });
+    if (params.browserContextId) |browser_context_id| {
+        const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+        if (std.mem.eql(u8, browser_context_id, bc.id) == false) {
+            return error.UnknownBrowserContextId;
+        }
     }
 
     // `default` defers the choice to the browser; we map it to `deny` (no
@@ -331,6 +334,29 @@ test "cdp.browser: setDownloadBehavior stores config on the session" {
     try testing.expectEqual(.deny, bc.session.download_behavior);
     try testing.expect(bc.session.download_path == null);
     try testing.expect(bc.session.download_events_enabled == false);
+}
+
+test "cdp.browser: setDownloadBehavior checks browserContextId" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-DL", .session_id = "SID-DL" });
+
+    try ctx.processMessage(.{
+        .id = 40,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "allow", .downloadPath = "/tmp/lp-downloads", .browserContextId = "BID-DL" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 40, .session_id = null });
+    try testing.expectEqual(.allow, bc.session.download_behavior);
+
+    try ctx.processMessage(.{
+        .id = 41,
+        .method = "Browser.setDownloadBehavior",
+        .params = .{ .behavior = "deny", .browserContextId = "BID-OTHER" },
+    });
+    try ctx.expectSentError(-31998, "UnknownBrowserContextId", .{ .id = 41 });
+    try testing.expectEqual(.allow, bc.session.download_behavior);
 }
 
 test "cdp.browser: setDownloadBehavior is a no-op when no context is loaded" {
