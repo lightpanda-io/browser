@@ -670,14 +670,10 @@ const Memo = std.AutoHashMapUnmanaged(*Element, Props);
 
 pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     self.rebuildIfDirty() catch return false;
+    if (!options.ancestors) {
+        return self.ownProps(el).probe(.hidden, options);
+    }
     return self.anyInChain(el, .hidden, options);
-}
-
-/// The element's own properties only, for walks that never enter a hidden
-/// subtree and so already know every ancestor is visible.
-pub fn isHiddenSelf(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
-    self.rebuildIfDirty() catch return false;
-    return self.ownProps(el).probe(.hidden, options);
 }
 
 /// Computed display:none for a single element (own property, no ancestor walk).
@@ -1198,6 +1194,8 @@ const MAX_DOC_ORDER: u32 = std.math.maxInt(u22) - 1;
 const CheckVisibilityOptions = struct {
     check_visibility: bool = false,
     check_opacity: bool = false,
+    // false is only sound when every ancestor is already known visible.
+    ancestors: bool = true,
 };
 
 // Inline styles always win over stylesheets - use max u64 as sentinel.

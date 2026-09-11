@@ -84,7 +84,7 @@ pub const Writer = struct {
             try self.walkQuery(self.root.dom, false, w);
         } else {
             const root = AXNode.fromNode(self.root.dom);
-            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
+            const root_hidden = if (self.root.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
             if (try self.writeNode(self.root.id, root, false, root_hidden, w)) {
                 try self.writeNodeChildren(root, false, w);
             }
@@ -147,7 +147,7 @@ pub const Writer = struct {
                     // visibility:hidden, aria-hidden, hidden, inert). Matches
                     // Chromium: these elements aren't exposed to the AX tree.
                     const child_el = dom_node.as(DOMNode.Element);
-                    if (child_in_aria_hidden or isHiddenSelf(child_el, self.frame)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame, .{ .ancestors = false })) {
                         continue;
                     }
                 },
@@ -618,7 +618,7 @@ pub const Writer = struct {
                 // Skip hidden element children so childIds matches the
                 // subtree-pruning done in writeNodeChildren.
                 if (child.is(DOMNode.Element)) |child_el| {
-                    if (child_in_aria_hidden or isHiddenSelf(child_el, self.frame)) {
+                    if (child_in_aria_hidden or isHidden(child_el, self.frame, .{ .ancestors = false })) {
                         continue;
                     }
                 }
@@ -713,7 +713,7 @@ pub const Writer = struct {
         }
 
         const node = try self.registry.register(axn.dom);
-        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame) else false;
+        const hidden = if (axn.dom.is(DOMNode.Element)) |el| isHidden(el, self.frame, .{}) else false;
         const ignored = axn.isIgnore(self.frame, in_aria_hidden, hidden);
 
         try w.beginObject();
@@ -1224,7 +1224,7 @@ fn labelPromotionTarget(
 
     // Only promote when the control is hidden; otherwise it appears
     // normally and the label stays as-is.
-    if (!isHidden(control, frame)) return null;
+    if (!isHidden(control, frame, .{})) return null;
 
     if (control.getTag() != .input) return null;
     const input = control.as(DOMNode.Element.Html.Input);
@@ -1280,16 +1280,12 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
-// Hidden by its own attributes, or by display:none / visibility:hidden on
-// it or an ancestor. Matches Chromium's AX tree which prunes both.
-fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
-    return hasHidingAttribute(elt) or frame._style_manager.isHidden(elt, .{ .check_visibility = true });
-}
-
-// Own attributes and cascade only: for walks that already pruned hidden
-// subtrees, so every ancestor is known visible.
-fn isHiddenSelf(elt: *DOMNode.Element, frame: *Frame) bool {
-    return hasHidingAttribute(elt) or frame._style_manager.isHiddenSelf(elt, .{ .check_visibility = true });
+/// Chromium's AX tree prunes display:none and visibility:hidden alike.
+fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: struct { ancestors: bool = true }) bool {
+    return hasHidingAttribute(elt) or frame._style_manager.isHidden(elt, .{
+        .check_visibility = true,
+        .ancestors = options.ancestors,
+    });
 }
 
 fn hasHidingAttribute(elt: *DOMNode.Element) bool {
@@ -1406,7 +1402,7 @@ fn isIgnore(self: AXNode, frame: *Frame, in_aria_hidden: bool, hidden: bool) boo
             var it = node.childrenIterator();
             while (it.next()) |child| {
                 const axn = AXNode.fromNode(child);
-                const child_hidden = if (child.is(DOMNode.Element)) |child_el| isHiddenSelf(child_el, frame) else false;
+                const child_hidden = if (child.is(DOMNode.Element)) |child_el| isHidden(child_el, frame, .{ .ancestors = false }) else false;
                 if (!axn.isIgnore(frame, in_aria_hidden, child_hidden)) {
                     return false;
                 }
