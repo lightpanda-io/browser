@@ -29,6 +29,7 @@ const idb = @import("idb.zig");
 const Engine = @import("Engine.zig");
 const IDBIndex = @import("IDBIndex.zig");
 const IDBCursor = @import("IDBCursor.zig");
+const IDBOpenDBRequest = @import("IDBOpenDBRequest.zig");
 const IDBDatabase = @import("IDBDatabase.zig");
 const IDBKeyRange = @import("IDBKeyRange.zig");
 const IDBObjectStore = @import("IDBObjectStore.zig");
@@ -44,6 +45,7 @@ const IDBRequest = @This();
 pub const Proto = EventTarget;
 
 _proto: *EventTarget,
+_type: Type = .generic,
 _op: Operation = .none,
 _error: ?anyerror = null,
 _txn: Txn = .none,
@@ -101,8 +103,15 @@ const Txn = union(enum) {
     borrowed: *IDBTransaction,
 };
 
-pub fn init(exec: *Execution) !*IDBRequest {
-    return exec._factory.eventTarget(IDBRequest{ ._proto = undefined });
+pub const Type = union(enum) {
+    generic,
+    open: *IDBOpenDBRequest,
+};
+
+// An open/deleteDatabase request: page-scoped, exposed as IDBOpenDBRequest.
+pub fn initOpen(exec: *Execution) !*IDBRequest {
+    const open = try exec._factory.idbOpenRequest(IDBOpenDBRequest{ ._proto = undefined });
+    return open._proto;
 }
 
 pub fn asEventTarget(self: *IDBRequest) *EventTarget {
@@ -219,6 +228,10 @@ pub fn deliver(self: *IDBRequest, exec: *Execution) !void {
 pub fn fireUpgradeNeeded(self: *IDBRequest, exec: *Execution, old_version: u64, new_version: u64) !void {
     self._ready_state = .done;
     const event = try IDBVersionChangeEvent.initTrusted(.wrap("upgradeneeded"), old_version, new_version, exec);
+    // Keep the event alive past dispatch: we read _listeners_did_throw below.
+    event.asEvent().acquireRef();
+    defer _ = event.asEvent().releaseRef(exec.page);
+
     try exec.dispatch(self.asEventTarget(), event.asEvent(), self._on_upgrade_needed, .{ .context = "IDBRequest.upgradeneeded" });
 
     // A throwing listener aborts the upgrade (after every listener ran).
@@ -305,7 +318,7 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
     }
 }
 
-pub fn getReadyState(self: *const IDBRequest) ReadyState {
+fn getReadyState(self: *const IDBRequest) ReadyState {
     return self._ready_state;
 }
 
@@ -317,7 +330,10 @@ const JsResult = union(enum) {
     database: *IDBDatabase,
 };
 
-pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
+fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     return switch (self._result) {
         .none => |n| .{ .none = n },
         .value => |global| .{ .value = global.local(exec.js.local.?) },
@@ -327,11 +343,11 @@ pub fn getResult(self: *const IDBRequest, exec: *Execution) JsResult {
 
 // The bridge converts the active union variant (the store/index/cursor, or JS
 // null for an open/delete request).
-pub fn getSource(self: *const IDBRequest) Source {
+fn getSource(self: *const IDBRequest) Source {
     return self._source;
 }
 
-pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
+fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
     return switch (self._txn) {
         .none => null,
         .owned, .borrowed => |txn| txn,
@@ -340,7 +356,10 @@ pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
 
 // Return this as a DOMException directly. If we return an error, the bridge
 // *will* convert it to a DOMException, but it'll throw it, not return it.
-pub fn getError(self: *const IDBRequest) ?DOMException {
+fn getError(self: *const IDBRequest) !?DOMException {
+    if (self._ready_state == .pending) {
+        return error.InvalidStateError;
+    }
     const err = self._error orelse return null;
     const mapped: anyerror = switch (err) {
         // sqlite's generic constraint failure is IDB's ConstraintError.
@@ -350,19 +369,19 @@ pub fn getError(self: *const IDBRequest) ?DOMException {
     return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
 }
 
-pub fn getOnSuccess(self: *const IDBRequest) ?js.Function.Global {
+fn getOnSuccess(self: *const IDBRequest) ?js.Function.Global {
     return self._on_success;
 }
 
-pub fn setOnSuccess(self: *IDBRequest, setter: ?FunctionSetter) void {
+fn setOnSuccess(self: *IDBRequest, setter: ?FunctionSetter) void {
     self._on_success = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const IDBRequest) ?js.Function.Global {
+fn getOnError(self: *const IDBRequest) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *IDBRequest, setter: ?FunctionSetter) void {
+fn setOnError(self: *IDBRequest, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
@@ -383,7 +402,7 @@ fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
 }
 
 // A database operation, captured when a request method is called and run later.
-pub const Operation = union(enum) {
+const Operation = union(enum) {
     none,
     store_get: StoreQuery,
     store_get_key: StoreQuery,
@@ -489,9 +508,8 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(IDBRequest.getReadyState, null, .{});
     pub const result = bridge.accessor(IDBRequest.getResult, null, .{});
     pub const source = bridge.accessor(IDBRequest.getSource, null, .{});
-    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{ .null_as_undefined = true });
-    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{ .null_as_undefined = true });
+    pub const transaction = bridge.accessor(IDBRequest.getTransaction, null, .{});
+    pub const @"error" = bridge.accessor(IDBRequest.getError, null, .{});
     pub const onsuccess = bridge.accessor(IDBRequest.getOnSuccess, IDBRequest.setOnSuccess, .{});
     pub const onerror = bridge.accessor(IDBRequest.getOnError, IDBRequest.setOnError, .{});
-    pub const onupgradeneeded = bridge.accessor(IDBRequest.getOnUpgradeNeeded, IDBRequest.setOnUpgradeNeeded, .{});
 };

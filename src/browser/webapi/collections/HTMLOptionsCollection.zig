@@ -63,8 +63,8 @@ pub fn getSelectedIndex(self: *const HTMLOptionsCollection) i32 {
     return self._select.getSelectedIndex();
 }
 
-pub fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32) !void {
-    return self._select.setSelectedIndex(index);
+fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32, frame: *Frame) !void {
+    return self._select.setSelectedIndex(index, frame);
 }
 
 const Option = @import("../element/html/Option.zig");
@@ -118,7 +118,15 @@ pub const JsApi = struct {
 
     // Indexed access
     pub const @"[int]" = bridge.indexed(HTMLOptionsCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, null, .{ .null_as_undefined = true });
+    pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, null, struct {
+        fn wrap(self: *HTMLOptionsCollection, name: []const u8, frame: *Frame) !u32 {
+            if (self.getByName(name, frame) != null) {
+                // Named properties are [LegacyUnenumerableNamedProperties]: the query
+                return js.v8.DontEnum;
+            }
+            return error.NotHandled;
+        }
+    }.wrap, .{ .null_as_undefined = true });
 
     pub const selectedIndex = bridge.accessor(HTMLOptionsCollection.getSelectedIndex, HTMLOptionsCollection.setSelectedIndex, .{});
     pub const add = bridge.function(HTMLOptionsCollection.add, .{ .ce_reactions = true });

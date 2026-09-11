@@ -200,17 +200,14 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8, variant: AdjacentVar
 }
 
 // beforebegin/afterend insert into the parent, which must exist and, for the
-// html variant, cannot be a document or fragment.
+// html variant, cannot be a document.
 fn adjacentParent(self: *Node, variant: AdjacentVariant) !*Node {
     const parent_node = self.parentNode() orelse switch (variant) {
         .html => return error.NoModificationAllowed,
         .node => return error.AdjacentNoParent,
     };
-    if (variant == .html) {
-        switch (parent_node._type) {
-            .document, .document_fragment => return error.NoModificationAllowed,
-            else => {},
-        }
+    if (variant == .html and parent_node._type == .document) {
+        return error.NoModificationAllowed;
     }
     return parent_node;
 }
@@ -1593,7 +1590,7 @@ fn removeAllChildrenCollecting(self: *Node, notify: bool, frame: *Frame) !std.Ar
 }
 
 /// Shared implementation in Element and DocumentFragment
-pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, frame: *Frame) !void {
+pub fn setHTML(self: *Node, html: []const u8, opts: Frame.parse.FragmentParseOpts, frame: *Frame) !void {
     frame.domChanged();
 
     // Observers of this subtree get one combined "replace all" mutation
@@ -1603,11 +1600,7 @@ pub fn setHTML(self: *Node, html: []const u8, allow_declarative_shadow: bool, fr
     const removed = try self.removeAllChildrenCollecting(notify, frame);
 
     if (html.len > 0) {
-        if (allow_declarative_shadow) {
-            try Frame.parse.htmlUnsafeAsChildren(frame, self, html);
-        } else {
-            try Frame.parse.htmlAsChildren(frame, self, html);
-        }
+        try Frame.parse.fragment(frame, self, html, opts);
     }
 
     if (notify) {

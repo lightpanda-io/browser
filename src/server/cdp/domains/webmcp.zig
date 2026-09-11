@@ -260,9 +260,7 @@ pub fn onToolAdded(
     global.getJs().localScope(&ls);
     defer ls.deinit();
 
-    const frame_id = switch (global) {
-        inline else => |g| g._frame_id,
-    };
+    const frame_id = global.frameId();
 
     const writer = ToolWriter{
         .frame_id = id.toFrameId(frame_id),
@@ -278,9 +276,7 @@ pub fn onToolRemoved(
     bc: *CDP.BrowserContext,
     event: *const Notification.ModelContextToolEvent,
 ) !void {
-    const frame_id = switch (event.exec.js.global) {
-        inline else => |g| g._frame_id,
-    };
+    const frame_id = event.exec.frameId();
     try bc.cdp.sendEvent("WebMCP.toolsRemoved", .{
         .tools = &.{
             .{ .name = event.tool.name, .frameId = id.toFrameId(frame_id) },

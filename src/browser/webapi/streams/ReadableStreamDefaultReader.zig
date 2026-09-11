@@ -61,6 +61,7 @@ pub fn read(self: *ReadableStreamDefaultReader, exec: *const Execution) !js.Prom
     const stream = self._stream orelse {
         return local.rejectPromise(.{ .type_error = "Reader has been released" });
     };
+    stream._disturbed = true;
 
     if (stream._state == .errored) {
         //const err = stream._stored_error orelse "Stream errored";

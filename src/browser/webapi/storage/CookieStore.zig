@@ -181,11 +181,11 @@ const ChangeCallback = struct {
     }
 };
 
-pub fn getOnChange(self: *const CookieStore) ?js.Function.Global {
+fn getOnChange(self: *const CookieStore) ?js.Function.Global {
     return self._on_change;
 }
 
-pub fn setOnChange(self: *CookieStore, setter: ?FunctionSetter) void {
+fn setOnChange(self: *CookieStore, setter: ?FunctionSetter) void {
     const s = setter orelse {
         self._on_change = null;
         return;

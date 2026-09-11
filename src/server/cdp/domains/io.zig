@@ -21,11 +21,9 @@
 // `eof` and then close.
 
 const std = @import("std");
-const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 
-const log = lp.log;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: *CDP.Command) !void {

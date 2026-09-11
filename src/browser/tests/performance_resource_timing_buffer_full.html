@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<!-- Its own file: script blocks run concurrently, so a fetch here would show
+     up in the other resource tests' observers. -->
+<script id=buffer_full type=module>
+  {
+    const state = await testing.async();
+    performance.clearResourceTimings();
+    // Every resource overflows a zero-length buffer.
+    performance.setResourceTimingBufferSize(0);
+
+    const order = [];
+    let event = null;
+    performance.onresourcetimingbufferfull = (e) => {
+      event = e;
+      order.push('handler');
+    };
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      order.push('listener');
+      state.resolve();
+    });
+
+    await (await fetch(testing.ORIGIN + '/xhr')).text();
+    await state.done(() => {
+      performance.onresourcetimingbufferfull = null;
+      testing.expectEqual(['handler', 'listener'], order);
+      testing.expectEqual('resourcetimingbufferfull', event.type);
+      testing.expectEqual(true, event.isTrusted);
+      // Non-bubbling per spec, Chrome, and WPT
+      // (resource-timing/buffer-full-when-populate-entries.html). Firefox
+      // fires it bubbling, so this one assertion fails there.
+      testing.expectEqual(false, event.bubbles);
+      testing.expectEqual(true, event.target === performance);
+      // The event fires, but the entry that triggered it is still dropped.
+      testing.expectEqual(0, performance.getEntriesByType('resource').length);
+    });
+  }
+</script>

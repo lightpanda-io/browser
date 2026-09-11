@@ -293,15 +293,21 @@ pub fn abortWith(self: *IDBTransaction, exec: *Execution, reason: ?anyerror) err
     self._error = reason;
 
     // An aborted upgrade reverts the schema: stores and indexes created during
-    // it no longer exist, so handles the caller still holds must report deleted.
+    // it no longer exist, so handles the caller still holds must report
+    // deleted; pre-existing ones that were renamed get their names back (a
+    // created one has no earlier name to go back to and keeps its last).
     if (self._mode == .versionchange) {
         for (self._stores.items) |store| {
             if (store._created) {
                 store._deleted = true;
+            } else if (store._original_name) |name| {
+                store._name = name;
             }
             for (store._indexes.items) |idx| {
                 if (idx._created) {
                     idx._deleted = true;
+                } else if (idx._original_name) |name| {
+                    idx._name = name;
                 }
             }
         }
@@ -506,7 +512,10 @@ pub fn enqueue(self: *IDBTransaction, request: *IDBRequest) !void {
     try self._queue.append(self._arena.allocator(), request);
 }
 
-pub fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
+fn objectStore(self: *IDBTransaction, name: []const u8) !*IDBObjectStore {
+    if (self._settled) {
+        return error.InvalidStateError;
+    }
     for (self._stores.items) |store| {
         if (std.mem.eql(u8, store._name, name)) {
             return store;
@@ -545,11 +554,11 @@ pub fn getMode(self: *const IDBTransaction) Mode {
     return self._mode;
 }
 
-pub fn getDurability(self: *const IDBTransaction) Durability {
+fn getDurability(self: *const IDBTransaction) Durability {
     return self._durability;
 }
 
-pub fn getDb(self: *IDBTransaction) *IDBDatabase {
+fn getDb(self: *IDBTransaction) *IDBDatabase {
     return self._db;
 }
 
@@ -576,7 +585,7 @@ pub fn getObjectStoreNames(self: *IDBTransaction, exec: *Execution) !*DOMStringL
     return list;
 }
 
-pub fn getError(self: *const IDBTransaction) ?DOMException {
+fn getError(self: *const IDBTransaction) ?DOMException {
     const err = self._error orelse return null;
     const mapped: anyerror = switch (err) {
         error.Constraint => error.ConstraintError,
@@ -585,27 +594,27 @@ pub fn getError(self: *const IDBTransaction) ?DOMException {
     return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
 }
 
-pub fn getOnComplete(self: *const IDBTransaction) ?js.Function.Global {
+fn getOnComplete(self: *const IDBTransaction) ?js.Function.Global {
     return self._on_complete;
 }
 
-pub fn setOnComplete(self: *IDBTransaction, setter: ?FunctionSetter) void {
+fn setOnComplete(self: *IDBTransaction, setter: ?FunctionSetter) void {
     self._on_complete = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const IDBTransaction) ?js.Function.Global {
+fn getOnError(self: *const IDBTransaction) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *IDBTransaction, setter: ?FunctionSetter) void {
+fn setOnError(self: *IDBTransaction, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
-pub fn getOnAbort(self: *const IDBTransaction) ?js.Function.Global {
+fn getOnAbort(self: *const IDBTransaction) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *IDBTransaction, setter: ?FunctionSetter) void {
+fn setOnAbort(self: *IDBTransaction, setter: ?FunctionSetter) void {
     self._on_abort = getFunctionFromSetter(setter);
 }
 

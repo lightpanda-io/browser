@@ -104,6 +104,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
+    frame.styleChanged();
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
@@ -157,9 +158,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, frame: *Frame
         return local.resolvePromise(definition.constructor);
     }
 
-    validateName(name) catch |err| switch (err) {
-        error.SyntaxError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } }),
-    };
+    try validateName(name);
 
     const gop = try self._when_defined.getOrPut(frame.arena, name);
     if (gop.found_existing) {

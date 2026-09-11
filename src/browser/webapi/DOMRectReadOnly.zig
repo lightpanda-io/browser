@@ -54,7 +54,7 @@ pub fn init(x_: ?f64, y_: ?f64, width_: ?f64, height_: ?f64, exec: *const js.Exe
     }, exec._factory);
 }
 
-pub fn createBare(rect: Data, factory: *Factory) !*DOMRectReadOnly {
+fn createBare(rect: Data, factory: *Factory) !*DOMRectReadOnly {
     return factory.create(DOMRectReadOnly{
         ._type = .generic,
         ._x = rect.x,
@@ -64,7 +64,7 @@ pub fn createBare(rect: Data, factory: *Factory) !*DOMRectReadOnly {
     });
 }
 
-pub fn fromRect(other_: ?Data, exec: *const js.Execution) !*DOMRectReadOnly {
+fn fromRect(other_: ?Data, exec: *const js.Execution) !*DOMRectReadOnly {
     return createBare(other_ orelse .{}, exec._factory);
 }
 
@@ -108,15 +108,15 @@ pub fn getTop(self: *const DOMRectReadOnly) f64 {
     return @min(self._y, self._y + self._height);
 }
 
-pub fn getRight(self: *const DOMRectReadOnly) f64 {
+fn getRight(self: *const DOMRectReadOnly) f64 {
     return @max(self._x, self._x + self._width);
 }
 
-pub fn getBottom(self: *const DOMRectReadOnly) f64 {
+fn getBottom(self: *const DOMRectReadOnly) f64 {
     return @max(self._y, self._y + self._height);
 }
 
-pub fn getLeft(self: *const DOMRectReadOnly) f64 {
+fn getLeft(self: *const DOMRectReadOnly) f64 {
     return @min(self._x, self._x + self._width);
 }
 

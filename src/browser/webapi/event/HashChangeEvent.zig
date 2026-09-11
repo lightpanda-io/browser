@@ -75,11 +75,11 @@ pub fn asEvent(self: *HashChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getOldURL(self: *const HashChangeEvent) []const u8 {
+fn getOldURL(self: *const HashChangeEvent) []const u8 {
     return self._old_url;
 }
 
-pub fn getNewURL(self: *const HashChangeEvent) []const u8 {
+fn getNewURL(self: *const HashChangeEvent) []const u8 {
     return self._new_url;
 }
 

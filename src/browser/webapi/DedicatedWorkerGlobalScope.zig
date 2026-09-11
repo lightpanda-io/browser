@@ -86,19 +86,19 @@ pub fn close(self: *DedicatedWorkerGlobalScope) void {
     self._closed = true;
 }
 
-pub fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
+fn getOnMessage(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
+fn setOnMessage(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
     self._on_message = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
+fn getOnMessageError(self: *const DedicatedWorkerGlobalScope) ?js.Function.Global {
     return self._on_messageerror;
 }
 
-pub fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
+fn setOnMessageError(self: *DedicatedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
     self._on_messageerror = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 

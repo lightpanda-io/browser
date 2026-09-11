@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+
+<!-- A document without a browsing context (DOMParser, createHTMLDocument,
+     new Document) has no custom element registry: its elements are created
+     undefined and only upgraded once inserted into this document. -->
+
+<script id="domparser">
+{
+    let calls = [];
+
+    class ParsedComponent extends HTMLElement {
+        constructor() {
+            super();
+            calls.push('constructor:' + this.childNodes.length);
+        }
+        connectedCallback() {
+            calls.push('connected:' + this.querySelectorAll('[ref]').length);
+        }
+        disconnectedCallback() {
+            calls.push('disconnected');
+        }
+    }
+    customElements.define('parsed-component', ParsedComponent);
+
+    const doc = new DOMParser().parseFromString(
+        '<div id="wrap"><parsed-component><span ref="a"></span><span ref="b"></span></parsed-component></div>',
+        'text/html',
+    );
+    const parsed = doc.querySelector('parsed-component');
+    testing.expectEqual('', calls.join(','));
+    testing.expectEqual(true, parsed instanceof HTMLElement);
+    testing.expectEqual(false, parsed instanceof ParsedComponent);
+
+    // Inserting into this document upgrades it with its subtree in place:
+    // the constructor and connectedCallback run once, and the existing
+    // wrapper is the one that gets upgraded.
+    document.body.appendChild(doc.getElementById('wrap'));
+    testing.expectEqual('constructor:2,connected:2', calls.join(','));
+    testing.expectEqual(true, parsed instanceof ParsedComponent);
+    testing.expectEqual(parsed, document.querySelector('parsed-component'));
+}
+</script>
+
+<script id="createHTMLDocument">
+{
+    let constructed = 0;
+
+    const other = document.implementation.createHTMLDocument('other');
+    other.body.innerHTML = '<inner-html-element></inner-html-element>';
+    const created = other.createElement('created-element');
+    other.body.appendChild(created);
+
+    class InnerHtmlElement extends HTMLElement {
+        constructor() { super(); constructed++; }
+    }
+    class CreatedElement extends HTMLElement {
+        constructor() { super(); constructed++; }
+    }
+    // A later definition does not upgrade elements owned by the other
+    // document, connected there or not.
+    customElements.define('inner-html-element', InnerHtmlElement);
+    customElements.define('created-element', CreatedElement);
+    testing.expectEqual(0, constructed);
+
+    const inner = other.querySelector('inner-html-element');
+    testing.expectEqual(false, inner instanceof InnerHtmlElement);
+    testing.expectEqual(false, created instanceof CreatedElement);
+
+    // Elements created after the definition stay undefined too.
+    const late = other.createElement('created-element');
+    testing.expectEqual(false, late instanceof CreatedElement);
+    other.body.innerHTML = '<inner-html-element></inner-html-element>';
+    testing.expectEqual(false, other.querySelector('inner-html-element') instanceof InnerHtmlElement);
+    testing.expectEqual(0, constructed);
+
+    document.body.appendChild(late);
+    testing.expectEqual(true, late instanceof CreatedElement);
+    testing.expectEqual(1, constructed);
+}
+</script>
+
+<script id="newDocument">
+{
+    let constructed = 0;
+    class BareDocElement extends HTMLElement {
+        constructor() { super(); constructed++; }
+    }
+    customElements.define('bare-doc-element', BareDocElement);
+
+    const bare = new Document();
+    bare.appendChild(bare.createElement('html'));
+    bare.documentElement.innerHTML = '<bare-doc-element></bare-doc-element>';
+
+    const el = bare.querySelector('bare-doc-element');
+    testing.expectEqual(0, constructed);
+    testing.expectEqual(true, el instanceof Element);
+    testing.expectEqual(false, el instanceof BareDocElement);
+}
+</script>
+</body>

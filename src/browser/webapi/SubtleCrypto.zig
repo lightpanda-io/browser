@@ -59,31 +59,18 @@ pub fn generateKey(
         .aes_key_gen => |params| return AES.generate(params, extractable, key_usages, exec),
         .ec_key_gen => |params| return EC.generate(params, extractable, key_usages, exec),
         .rsa_hashed_key_gen => |params| {
-            RSA.validate(params, key_usages) catch |err| {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-            };
+            try RSA.validate(params, key_usages);
             log.warn(.not_implemented, "generateKey", .{ .name = params.name });
         },
         .name => |js_name| return generateKeyFromName(try js_name.toSSO(false), extractable, key_usages, exec),
         .object => |object| return generateKeyFromName(try object.name.toSSO(false), extractable, key_usages, exec),
-        .invalid => return local.rejectPromise(.{ .type_error = "invalid algorithm" }),
+        .invalid => return local.typeError("invalid algorithm"),
     }
 
-    return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+    return error.NotSupported;
 }
 
 fn generateKeyFromName(
-    name: String,
-    extractable: bool,
-    key_usages: []const []const u8,
-    exec: *const Execution,
-) !js.Promise {
-    return _generateKeyFromName(name, extractable, key_usages, exec) catch |err| {
-        return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = err } });
-    };
-}
-
-fn _generateKeyFromName(
     name: String,
     extractable: bool,
     key_usages: []const []const u8,
@@ -150,18 +137,16 @@ pub fn importKey(
     const is_private = importKind(format, key_data);
     if (asymmetricAllowedUsages(name, is_private)) |allowed| {
         // Public keys may have empty usages; secret/private keys may not.
-        const mask = common.usageMaskInner(allowed, key_usages, is_private) catch |err| {
-            return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-        };
+        const mask = try common.usageMaskInner(allowed, key_usages, is_private);
         if (EC.canonicalName(name) != null) {
             const der = switch (key_data) {
                 .bytes => |b| b.values,
-                .jwk => return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } }),
+                .jwk => return error.NotSupported,
             };
             return EC.import(name, algo.namedCurve(), format, der, is_private, extractable, mask, exec);
         }
         log.warn(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     }
 
     // Resolve the raw key bytes from the requested format. Symmetric keys
@@ -171,27 +156,22 @@ pub fn importKey(
             break :blk switch (key_data) {
                 .bytes => |b| b.values,
                 // A JWK object passed where a BufferSource is expected.
-                .jwk => return local.rejectPromise(.{ .type_error = "raw format expects a BufferSource" }),
+                .jwk => return local.typeError("raw format expects a BufferSource"),
             };
         }
         if (std.mem.eql(u8, format, "jwk")) {
             const jwk = switch (key_data) {
                 .jwk => |j| j,
-                .bytes => return local.rejectPromise(.{ .type_error = "jwk format expects an object" }),
+                .bytes => return local.typeError("jwk format expects an object"),
             };
             if (!std.mem.eql(u8, jwk.kty, "oct")) {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
+                return error.DataError;
             }
-            const k = jwk.k orelse {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } });
-            };
-            break :blk common.base64Decode(exec.local_arena, k) catch |err| switch (err) {
-                error.DataError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.DataError } }),
-                else => |e| return e,
-            };
+            const k = jwk.k orelse return error.DataError;
+            break :blk try common.base64Decode(exec.local_arena, k);
         }
         // spki / pkcs8 (asymmetric formats) are not supported for these algorithms.
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     };
 
     if (AES.canonicalName(name) != null) {
@@ -202,9 +182,7 @@ pub fn importKey(
     // no length constraint and these keys are non-extractable.
     inline for ([_][]const u8{ "HKDF", "PBKDF2" }) |derive_name| {
         if (eqlIgnoreCase(name, derive_name)) {
-            const mask = common.usageMask(&.{ "deriveKey", "deriveBits" }, key_usages) catch |err| {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = err } });
-            };
+            const mask = try common.usageMask(&.{ "deriveKey", "deriveBits" }, key_usages);
             const crypto_key = try CryptoKey.init(exec, .{
                 ._type = .derive,
                 ._kind = .secret,
@@ -222,13 +200,13 @@ pub fn importKey(
                 .string => |s| s,
                 .object => |o| o.name,
             },
-            else => return local.rejectPromise(.{ .type_error = "HMAC import requires a hash" }),
+            else => return local.typeError("HMAC import requires a hash"),
         };
         return HMAC.import(hash_name, raw, extractable, key_usages, exec);
     }
 
     log.warn(.not_implemented, "SubtleCrypto.importKey", .{ .name = name });
-    return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+    return error.NotSupported;
 }
 
 /// Whether the requested format/key-data describe a private key. The format
@@ -274,7 +252,7 @@ pub fn exportKey(
 ) !js.Promise {
     const local = exec.js.local.?;
     if (!key.canExportKey()) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return error.InvalidAccessError;
     }
 
     if (std.mem.eql(u8, format, "raw")) {
@@ -288,10 +266,10 @@ pub fn exportKey(
     const is_unsupported = std.mem.eql(u8, format, "pkcs8") or std.mem.eql(u8, format, "spki");
     if (is_unsupported) {
         log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     }
 
-    return local.rejectPromise(.{ .type_error = "invalid format" });
+    return local.typeError("invalid format");
 }
 
 /// The JSON Web Key returned for symmetric ("oct") keys.
@@ -318,7 +296,7 @@ fn exportJwk(key: *CryptoKey, exec: *const Execution) !js.Promise {
         },
         else => {
             log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = "jwk", .type = key._type });
-            return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+            return error.NotSupported;
         },
     };
 
@@ -340,9 +318,7 @@ pub fn deriveBits(
     exec: *const Execution,
 ) !js.Promise {
     const local = exec.js.local.?;
-    const bits = deriveRaw(algo, base_key, length, base_key.canDeriveBits(), exec) catch |err| {
-        return rejectDerive(local, err);
-    };
+    const bits = try deriveRaw(algo, base_key, length, base_key.canDeriveBits(), exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = bits });
 }
 
@@ -357,35 +333,28 @@ pub fn deriveKey(
     key_usages: []const []const u8,
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.js.local.?;
     // The base key's deriveKey usage (not deriveBits) gates this operation.
     const usage_ok = base_key.canDeriveKey();
 
     switch (derived) {
         .keyed => |k| {
             if (AES.canonicalName(k.name) == null) {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+                return error.NotSupported;
             }
-            const bits = deriveRaw(algo, base_key, k.length, usage_ok, exec) catch |err| {
-                return rejectDerive(local, err);
-            };
+            const bits = try deriveRaw(algo, base_key, k.length, usage_ok, exec);
             return AES.import(k.name, bits, extractable, key_usages, exec);
         },
         .hmac => |h| {
             const hash_name = h.hash.name();
-            const hash_md = crypto.findDigest(hash_name) catch {
-                return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
-            };
+            const hash_md = crypto.findDigest(hash_name) catch return error.NotSupported;
             // Default length, per spec, is the hash's block size (in bits).
             const length: u32 = h.length orelse @intCast(crypto.EVP_MD_block_size(hash_md) * 8);
-            const bits = deriveRaw(algo, base_key, length, usage_ok, exec) catch |err| {
-                return rejectDerive(local, err);
-            };
+            const bits = try deriveRaw(algo, base_key, length, usage_ok, exec);
             return HMAC.import(hash_name, bits, extractable, key_usages, exec);
         },
         .object, .name => {
             log.warn(.not_implemented, "SubtleCrypto.deriveKey", .{});
-            return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+            return error.NotSupported;
         },
     }
 }
@@ -426,16 +395,6 @@ fn deriveRaw(
     }
 }
 
-/// Maps a KDF error to the spec-mandated DOMException (OutOfMemory propagates).
-fn rejectDerive(local: *const js.Local, err: KDF.Error) !js.Promise {
-    return switch (err) {
-        error.InvalidAccessError => local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
-        error.NotSupported => local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } }),
-        error.OperationError => local.rejectPromise(.{ .dom_exception = .{ .err = error.OperationError } }),
-        error.OutOfMemory => error.OutOfMemory,
-    };
-}
-
 /// Encrypts data with the given key and algorithm.
 pub fn encrypt(
     _: *const SubtleCrypto,
@@ -469,15 +428,10 @@ fn cryptOp(
     const params = switch (algo) {
         .params => |p| p,
         // A bare string identifier carries no iv/counter, so it can't drive AES.
-        .name => return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } }),
+        .name => return error.NotSupported,
     };
 
-    const out = AES.crypt(params, key, data, encrypting, exec) catch |err| switch (err) {
-        error.InvalidAccessError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
-        error.OperationError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.OperationError } }),
-        error.NotSupported => return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } }),
-        error.OutOfMemory => return error.OutOfMemory,
-    };
+    const out = try AES.crypt(params, key, data, encrypting, exec);
     return local.resolvePromise(js.ArrayBuffer{ .values = out });
 }
 
@@ -495,7 +449,7 @@ pub fn sign(
         .hmac => return HMAC.sign(algo, key, data, exec),
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return exec.js.local.?.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+            return error.InvalidAccessError;
         },
     };
 }
@@ -509,14 +463,13 @@ pub fn verify(
     data: []const u8, // ArrayBuffer.
     exec: *const Execution,
 ) !js.Promise {
-    const local = exec.js.local.?;
     if (!algo.isHMAC()) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } });
+        return error.InvalidAccessError;
     }
 
     return switch (key._type) {
         .hmac => HMAC.verify(key, signature, data, exec),
-        else => local.rejectPromise(.{ .dom_exception = .{ .err = error.InvalidAccessError } }),
+        else => error.InvalidAccessError,
     };
 }
 
@@ -540,16 +493,14 @@ pub fn digest(_: *const SubtleCrypto, algo: DigestInput, data: js.TypedArray(u8)
     const local = exec.js.local.?;
 
     const algo_name = algo.name() orelse {
-        return local.rejectPromise(.{ .type_error = "required member name is undefined" });
+        return local.typeError("required member name is undefined");
     };
     if (algo_name.len > 10) {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
+        return error.NotSupported;
     }
 
     const normalized = std.ascii.upperString(exec.buf, algo_name);
-    const digest_type = crypto.findDigest(normalized) catch {
-        return local.rejectPromise(.{ .dom_exception = .{ .err = error.NotSupported } });
-    };
+    const digest_type = crypto.findDigest(normalized) catch return error.NotSupported;
 
     const bytes = data.values;
     const out = exec.buf[0..crypto.EVP_MAX_MD_SIZE];

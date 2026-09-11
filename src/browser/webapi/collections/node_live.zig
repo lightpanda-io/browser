@@ -47,14 +47,14 @@ const Mode = enum {
     form,
 };
 
-pub const ClassNameFilter = struct {
+const ClassNameFilter = struct {
     names: [][]const u8,
     // getElementsByClassName matches class names ASCII case-insensitively
     // when the document is in quirks mode.
     case_insensitive: bool = false,
 };
 
-pub const TagNameNsFilter = struct {
+const TagNameNsFilter = struct {
     namespace: ?Element.Namespace, // null means wildcard "*"
     local_name: String,
 };
@@ -171,19 +171,6 @@ pub fn NodeLive(comptime mode: Mode) type {
             return l;
         }
 
-        // This API supports indexing by both numeric index and id/name
-        // i.e. a combination of getAtIndex and getByName
-        pub fn getIndexed(self: *Self, value: js.Atom, frame: *Frame) !?*Element {
-            if (value.isUint()) |n| {
-                return self.getAtIndex(n, frame);
-            }
-
-            const name = value.toString();
-            defer value.freeString(name);
-
-            return self.getByName(name, frame) orelse return error.NotHandled;
-        }
-
         pub fn getAtIndex(self: *Self, index: usize, frame: *const Frame) ?*Element {
             _ = self.versionCheck(frame);
 
@@ -239,7 +226,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 if (element._namespace != .html) {
                     continue;
                 }
-                const element_name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+                const element_name = element.getName() orelse continue;
                 if (std.mem.eql(u8, element_name, name)) {
                     return element;
                 }
@@ -309,7 +296,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                     }
 
                     const el = node.is(Element) orelse return false;
-                    const class_attr = el.getAttributeSafe(comptime .wrap("class")) orelse return false;
+                    const class_attr = el.getAttributeInterned("class") orelse return false;
                     for (self._filter.names) |class_name| {
                         if (!Selector.classAttributeContainsCase(class_attr, class_name, self._filter.case_insensitive)) {
                             return false;
@@ -321,7 +308,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     // getElementsByName only considers HTML elements.
                     if (el._namespace != .html) return false;
-                    const name_attr = el.getAttributeSafe(comptime .wrap("name")) orelse return false;
+                    const name_attr = el.getName() orelse return false;
                     return std.mem.eql(u8, name_attr, self._filter);
                 },
                 .all_elements => return node._type == .element,
@@ -361,14 +348,14 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .wrap("href"));
+                    return el.hasAttributeInterned("href");
                 },
                 .anchors => {
                     // Anchors are <a> elements with name attribute
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .wrap("name"));
+                    return el.hasName();
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;

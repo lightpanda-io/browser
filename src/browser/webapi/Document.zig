@@ -25,12 +25,12 @@ const public_suffix_list = @import("../../data/public_suffix_list.zig");
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Parser = @import("../parser/Parser.zig");
 
 const Node = @import("Node.zig");
 const Window = @import("Window.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
-const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
@@ -85,11 +85,11 @@ _throw_on_dynamic_markup_insertion_counter: u32 = 0,
 
 _on_selectionchange: ?js.Function.Global = null,
 
-pub fn getOnSelectionChange(self: *Document) ?js.Function.Global {
+fn getOnSelectionChange(self: *Document) ?js.Function.Global {
     return self._on_selectionchange;
 }
 
-pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
+fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
     if (listener) |listen| {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
@@ -100,11 +100,11 @@ pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
 // Stored in the frame's attribute-listener map (like element and ShadowRoot
 // property handlers), which the dispatch propagation path consults for any
 // event target.
-pub fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
+fn getOnClick(self: *Document, frame: *Frame) ?js.Function.Global {
     return (self._frame orelse frame)._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
 }
 
-pub fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnClick(self: *Document, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     const owner = self._frame orelse frame;
     if (Window.getFunctionFromSetter(setter)) |cb| {
         try owner._event_target_attr_listeners.put(owner.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
@@ -158,7 +158,7 @@ pub fn getLocation(self: *const Document) ?*Location {
     return doc_frame.window._location;
 }
 
-pub fn setLocation(self: *Document, url: [:0]const u8) !void {
+fn setLocation(self: *Document, url: [:0]const u8) !void {
     if (self._type != .html) return;
     const frame = self._frame orelse return;
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = frame });
@@ -178,13 +178,13 @@ pub fn isQuirksMode(self: *const Document) bool {
     return true;
 }
 
-pub fn getCompatMode(self: *const Document) []const u8 {
+fn getCompatMode(self: *const Document) []const u8 {
     return if (self.isQuirksMode()) "BackCompat" else "CSS1Compat";
 }
 
 // document.lastModified: the response's Last-Modified header in local time,
 // "MM/DD/YYYY hh:mm:ss", defaulting to the current time.
-pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
+fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     const dt = @import("../../datetime.zig");
 
     const timestamp = blk: {
@@ -213,7 +213,7 @@ pub fn getLastModified(self: *const Document, frame: *Frame) ![]const u8 {
     });
 }
 
-pub fn getReferrer(self: *const Document) []const u8 {
+fn getReferrer(self: *const Document) []const u8 {
     const frame = self._frame orelse return "";
     return frame._referrer orelse "";
 }
@@ -237,7 +237,7 @@ pub fn getContentType(self: *const Document) []const u8 {
     };
 }
 
-pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
+fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
     const doc_frame = self._frame orelse frame;
 
     // When document.domain has been set, the effective domain is encoded in
@@ -255,7 +255,7 @@ pub fn getDomain(self: *const Document, frame: *const Frame) []const u8 {
     return URL.getOriginHostname(origin);
 }
 
-pub fn setDomain(self: *Document, value: []const u8) !void {
+fn setDomain(self: *Document, value: []const u8) !void {
     // e.g. (new Document().domain = '')
     const doc_frame = self._frame orelse return error.SecurityError;
     const origin = doc_frame.origin orelse return error.SecurityError;
@@ -288,7 +288,7 @@ fn isCookieAverse(self: *const Document, frame: *const Frame) bool {
     return doc_frame.document != self and frame.document != self;
 }
 
-pub fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
+fn getCookie(self: *Document, frame: *Frame) ![]const u8 {
     if (self.isCookieAverse(frame)) {
         return "";
     }
@@ -373,13 +373,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try Frame.node_factory.createElementNS(frame, ns, normalized_name, null);
+    const node = try self.createElementNode(ns, normalized_name, frame);
     const element = node.as(Element);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
@@ -394,7 +389,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
+    const node = try self.createElementNode(ns, name, frame);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
@@ -403,15 +398,28 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
             try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
         }
     }
+    return node.as(Element);
+}
+
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8, frame: *Frame) !*Node {
+    const previous_creation = frame._custom_element_creation;
+    if (self._frame == null) {
+        // a document without a browser context, e.g. DOMParser, has no custom
+        // element registry
+        frame._custom_element_creation = .undefined;
+    }
+    defer frame._custom_element_creation = previous_creation;
+
+    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
 
     // Track owner document if it's not the main document
     if (self != frame.document) {
         try frame.setNodeOwnerDocument(node, self);
     }
-    return node.as(Element);
+    return node;
 }
 
-pub fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
+fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
     try Element.Attribute.validateAttributeName(name.str);
     return frame._factory.node(Element.Attribute{
         ._name = name.str,
@@ -446,7 +454,7 @@ pub fn getElementById(self: *Document, id: []const u8, frame: *Frame) ?*Element 
     if (self._removed_ids.remove(id)) {
         var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
         while (tw.next()) |el| {
-            const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
+            const element_id = el.getId() orelse continue;
             if (std.mem.eql(u8, element_id, id)) {
                 // we ignore this error to keep getElementById easy to call
                 // if it really failed, then we're out of memory and nothing's
@@ -473,13 +481,13 @@ pub fn getElementsByClassName(self: *Document, class_name: []const u8, frame: *F
     return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn getElementsByName(self: *Document, name: []const u8, frame: *Frame) !collections.NodeLive(.name) {
+fn getElementsByName(self: *Document, name: []const u8, frame: *Frame) !collections.NodeLive(.name) {
     const arena = frame.arena;
     const filter = try arena.dupe(u8, name);
     return collections.NodeLive(.name).init(self.asNode(), filter, frame);
 }
 
-pub fn getChildren(self: *Document, frame: *Frame) !collections.NodeLive(.child_elements) {
+fn getChildren(self: *Document, frame: *Frame) !collections.NodeLive(.child_elements) {
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
@@ -494,7 +502,7 @@ pub fn getDocumentElement(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getSelection(self: *Document) *Selection {
+fn getSelection(self: *Document) *Selection {
     return &self._selection;
 }
 
@@ -506,14 +514,14 @@ pub fn querySelectorAll(self: *Document, input: String, frame: *Frame) !*Selecto
     return Selector.querySelectorAll(self.asNode(), input.str(), frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
-pub fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
+fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
     if (self._implementation) |impl| return impl;
     const impl = try frame._factory.create(DOMImplementation{ ._document = self });
     self._implementation = impl;
     return impl;
 }
 
-pub fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
+fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
     const frag = try Node.DocumentFragment.init(frame);
     // Track owner document if it's not the main document
     if (self != frame.document) {
@@ -563,11 +571,11 @@ pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []
 }
 
 const Range = @import("Range.zig");
-pub fn createRange(self: *Document, frame: *Frame) !*Range {
+fn createRange(self: *Document, frame: *Frame) !*Range {
     return Range.initIn(self.asNode(), frame);
 }
 
-pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
+fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@import("Event.zig") {
     const Event = @import("Event.zig");
     if (event_type.len > 100) {
         return error.NotSupported;
@@ -668,11 +676,11 @@ pub fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*
     return event;
 }
 
-pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
+fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, frame: *Frame) !*DOMTreeWalker {
     return DOMTreeWalker.init(root, try whatToShow(what_to_show), filter, frame);
 }
 
-pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, frame: *Frame) !*DOMNodeIterator {
+fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, frame: *Frame) !*DOMNodeIterator {
     return DOMNodeIterator.init(root, try whatToShow(what_to_show), filter, frame);
 }
 
@@ -700,7 +708,7 @@ pub fn evaluate(
     );
 }
 
-pub fn createExpression(
+fn createExpression(
     _: *const Document,
     expression: []const u8,
     resolver: ?js.Value,
@@ -710,7 +718,7 @@ pub fn createExpression(
     return XPathExpression.init(expression, frame);
 }
 
-pub fn createNSResolver(_: *const Document, node: *Node) ?*Node {
+fn createNSResolver(_: *const Document, node: *Node) ?*Node {
     return node;
 }
 
@@ -728,7 +736,7 @@ fn whatToShow(value_: ?js.Value) !u32 {
     return value.toZig(u32);
 }
 
-pub fn getReadyState(self: *const Document) []const u8 {
+fn getReadyState(self: *const Document) []const u8 {
     return @tagName(self._ready_state);
 }
 
@@ -756,6 +764,16 @@ pub fn getActiveElement(self: *Document) ?*Element {
     return self.getDocumentElement();
 }
 
+/// Focus takes part in the cascade (`:focus`, `:focus-within`), so every write
+/// to `_active_element` has to go through here to stamp the style version.
+pub fn setActiveElement(self: *Document, element: ?*Element, frame: *Frame) void {
+    if (self._active_element == element) {
+        return;
+    }
+    self._active_element = element;
+    frame.styleChanged();
+}
+
 pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
     if (self._style_sheets) |sheets| {
         return sheets;
@@ -765,7 +783,7 @@ pub fn getStyleSheets(self: *Document, frame: *Frame) !*StyleSheetList {
     return sheets;
 }
 
-pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
+fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     if (self._fonts) |fonts| {
         return fonts;
     }
@@ -775,7 +793,7 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     return fonts;
 }
 
-pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
+fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
@@ -796,7 +814,7 @@ pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     return node;
 }
 
-pub fn importNode(_: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
+fn importNode(_: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
@@ -899,16 +917,12 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     // preorder counter instead of calling calculateDocumentPosition per node
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
-    //
-    // We also share a single VisibilityCache across all elements so the
-    // ancestor-walk inside isHidden gets amortized.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
     var stack: std.ArrayList(*Node) = .empty;
     try stack.append(frame.local_arena, root);
 
-    var visibility_cache: Element.VisibilityCache = .{};
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
@@ -922,7 +936,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.checkVisibilityCached(&visibility_cache, frame, .materialize)) {
+            if (element.isVisible(frame)) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -949,7 +963,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     return topmost;
 }
 
-pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
+fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]const *Element {
     // Get topmost element
     var current: ?*Element = (try self.elementFromPoint(x, y, frame)) orelse return &.{};
     var result: std.ArrayList(*Element) = .empty;
@@ -960,7 +974,7 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, frame: *Frame) ![]cons
     return result.items;
 }
 
-pub fn getDocType(self: *Document) ?*Node {
+fn getDocType(self: *Document) ?*Node {
     var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
     while (tw.next()) |node| {
         if (node._type == .document_type) {
@@ -992,7 +1006,7 @@ pub fn write(self: *Document, text: []const []const u8, frame: *Frame) !void {
 // https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#dom-document-writeln
 // `writeln(...text)` runs the document write steps with `text` followed by a
 // U+000A LINE FEED character.
-pub fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
+fn writeln(self: *Document, text: []const []const u8, frame: *Frame) !void {
     return self.writeInternal(text, true, frame);
 }
 
@@ -1158,7 +1172,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
 
     // reset the document
     self._elements_by_id.clearAndFree(frame.arena);
-    self._active_element = null;
+    self.setActiveElement(null, frame);
     self._open_popovers = .empty;
     self._style_sheets = null;
     self._implementation = null;
@@ -1215,7 +1229,7 @@ fn finishScriptCreatedParser(self: *Document, frame: *Frame) !void {
     frame.documentIsComplete();
 }
 
-pub fn getFirstElementChild(self: *Document) ?*Element {
+fn getFirstElementChild(self: *Document) ?*Element {
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {
@@ -1225,7 +1239,7 @@ pub fn getFirstElementChild(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getLastElementChild(self: *Document) ?*Element {
+fn getLastElementChild(self: *Document) ?*Element {
     var maybe_child = self.asNode().lastChild();
     while (maybe_child) |child| {
         if (child.is(Element)) |el| {
@@ -1236,7 +1250,7 @@ pub fn getLastElementChild(self: *Document) ?*Element {
     return null;
 }
 
-pub fn getChildElementCount(self: *Document) u32 {
+fn getChildElementCount(self: *Document) u32 {
     var i: u32 = 0;
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
@@ -1247,7 +1261,7 @@ pub fn getChildElementCount(self: *Document) u32 {
     return i;
 }
 
-pub fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
+fn getAdoptedStyleSheets(self: *Document, frame: *Frame) !js.Object.Global {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }
@@ -1262,7 +1276,7 @@ pub fn hasFocus(_: *Document) bool {
     return true;
 }
 
-pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
+fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
@@ -1365,7 +1379,7 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
 
 // DOM §1.4 "Name validation" productions.
 
-pub fn isValidElementLocalName(name: []const u8) bool {
+fn isValidElementLocalName(name: []const u8) bool {
     if (name.len == 0) {
         return false;
     }
@@ -1395,7 +1409,7 @@ pub fn isValidElementLocalName(name: []const u8) bool {
     return true;
 }
 
-pub fn isValidNamespacePrefix(prefix: []const u8) bool {
+fn isValidNamespacePrefix(prefix: []const u8) bool {
     if (prefix.len == 0) {
         return false;
     }
@@ -1408,7 +1422,7 @@ pub fn isValidNamespacePrefix(prefix: []const u8) bool {
     return true;
 }
 
-pub fn isValidAttributeLocalName(name: []const u8) bool {
+fn isValidAttributeLocalName(name: []const u8) bool {
     if (name.len == 0) {
         return false;
     }
@@ -1427,7 +1441,7 @@ fn validateElementName(name: []const u8) !void {
     }
 }
 
-pub const ValidatedName = struct {
+const ValidatedName = struct {
     prefix: ?[]const u8,
     local_name: []const u8,
     namespace: ?[]const u8,

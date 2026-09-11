@@ -20,8 +20,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const Metrics = @This();
-const Driver = @import("server/Handshake.zig").Driver;
+const Driver = @import("server/Driver.zig").Protocol;
 
+serve_http_requests: CounterEnum("status", @import("network/http.zig").StatusCategory) = .{},
+serve_http_evictions: Counter = .{},
+serve_session_timeouts: Counter = .{},
+serve_inbox_backlog: Counter = .{},
 serve_connections: CounterEnum("driver", Driver) = .{},
 serve_connection_limit: Counter = .{},
 serve_active_connections: GaugeEnum("driver", Driver) = .{},
@@ -88,13 +92,22 @@ http_navigation_delay_ms: Histogram(&.{
 }) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
+cors_check: CounterEnum("result", enum { same_origin, no_cors, simple, preflight }) = .{},
+cors_preflight: CounterEnum("result", enum { allowed, blocked }) = .{},
+cors_response: CounterEnum("result", enum { allowed, blocked }) = .{},
+adblock_verdicts: CounterEnum("verdict", @import("network/adblock/AdBlocker.zig").Verdict) = .{},
+adblock_rules: GaugeEnum("state", enum { loaded, skipped, cosmetic }) = .{},
 
 // Emitted as each metric's "# HELP" line. A field without an entry is a
 // compile error.
 const help = .{
-    .serve_connections = "Websocket connections accepted, by driver protocol",
-    .serve_connection_limit = "Connections rejected because --cdp-max-connections was reached (counted before the handshake, so no driver label)",
-    .serve_active_connections = "Currently connected clients, by driver protocol",
+    .serve_http_requests = "HTTP responses sent, by status category (includes the pre-parse 400/413 rejections)",
+    .serve_http_evictions = "HTTP connections closed for sitting past their deadline without completing a request",
+    .serve_session_timeouts = "WebDriver sessions timed out",
+    .serve_inbox_backlog = "Websocket connections closed for queueing more unprocessed messages than the worker could drain",
+    .serve_connections = "Drivers started, by protocol",
+    .serve_connection_limit = "Accepts deferred because the connection budget was full: the listener pauses until a slot frees (counted before any handshake, so no driver label)",
+    .serve_active_connections = "Drivers currently running, by protocol",
     .serve_commands = "Commands dispatched, by driver protocol",
     .serve_unknown_commands = "Commands rejected for an unknown domain, module or method, by driver protocol",
     .js_heap_limits = "Pages terminated for reaching the V8 heap limit",
@@ -117,6 +130,11 @@ const help = .{
     .http_navigation_delay_ms = "Time in milliseconds a throttled top-level navigation waited",
     .robots_status = "robots.txt response status",
     .robots_access = "robots.txt result",
+    .cors_check = "CORS initial classification: same_origin/no_cors need no CORS handling, simple needs response validation only, preflight needs an OPTIONS round-trip first",
+    .cors_preflight = "CORS preflight (OPTIONS) results, one per request that required one",
+    .cors_response = "CORS actual-response validation results",
+    .adblock_verdicts = "Adblocker decisions for evaluated requests, by verdict (none = not blocked, allowed = an exception overrode a block)",
+    .adblock_rules = "Filter-list rules by fate: loaded into the matcher, skipped as unsupported, or cosmetic (domain-scoped element hiding, outside the network realm)",
 };
 
 pub fn write(self: *const Metrics, writer: *std.Io.Writer) void {
@@ -185,7 +203,11 @@ const Gauge = struct {
 
     fn write(self: *const Gauge, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
         try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
-        try writer.print(name ++ " {d}\n", .{@atomicLoad(isize, &self.value, .monotonic)});
+        try writer.print(name ++ " {d}\n", .{self.get()});
+    }
+
+    fn get(self: *const Gauge) isize {
+        return @atomicLoad(isize, &self.value, .monotonic);
     }
 };
 
@@ -194,7 +216,7 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
         values: std.enums.EnumArray(T, Gauge) = .initFill(.{}),
 
         pub const Tag = T;
-        pub const label_name = label;
+        const label_name = label;
 
         const Self = @This();
 
@@ -206,11 +228,18 @@ fn GaugeEnum(comptime label: []const u8, comptime T: type) type {
             self.values.getPtr(tag).decr();
         }
 
+        pub fn add(self: *Self, tag: T, n: i64) void {
+            self.values.getPtr(tag).add(n);
+        }
+
+        pub fn get(self: *const Self, tag: T) isize {
+            return self.values.getPtrConst(tag).get();
+        }
+
         fn write(self: *const Self, comptime name: []const u8, comptime help_text: []const u8, writer: *std.Io.Writer) !void {
             try writer.writeAll("# HELP " ++ name ++ " " ++ help_text ++ "\n" ++ "# TYPE " ++ name ++ " gauge\n");
             inline for (comptime std.enums.values(Tag)) |tag| {
-                const value = @atomicLoad(isize, &self.values.getPtrConst(tag).value, .monotonic);
-                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{value});
+                try writer.print(name ++ "{{" ++ label ++ "=\"" ++ @tagName(tag) ++ "\"}} {d}\n", .{self.get(tag)});
             }
         }
     };
@@ -221,7 +250,7 @@ fn CounterEnum(comptime label: []const u8, comptime T: type) type {
         counts: std.enums.EnumArray(T, Counter) = .initFill(.{}),
 
         pub const Tag = T;
-        pub const label_name = label;
+        const label_name = label;
 
         const Self = @This();
 

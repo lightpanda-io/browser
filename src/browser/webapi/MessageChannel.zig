@@ -38,11 +38,11 @@ pub fn init(exec: *Execution) !*MessageChannel {
     });
 }
 
-pub fn getPort1(self: *const MessageChannel) *MessagePort {
+fn getPort1(self: *const MessageChannel) *MessagePort {
     return self._port1;
 }
 
-pub fn getPort2(self: *const MessageChannel) *MessagePort {
+fn getPort2(self: *const MessageChannel) *MessagePort {
     return self._port2;
 }
 

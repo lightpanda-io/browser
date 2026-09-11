@@ -705,7 +705,7 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 }
 
 // Generate a constructor template for a JsApi type (public for reuse)
-pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
+fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback, const arity = comptime blk: {
         if (@hasDecl(JsApi, "constructor")) {
             break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };

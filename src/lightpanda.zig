@@ -19,55 +19,57 @@
 const std = @import("std");
 
 pub const log = @import("log.zig");
-pub const datetime = @import("datetime.zig");
+pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
-pub const ArenaPool = @import("ArenaPool.zig");
-pub const Network = @import("network/Network.zig");
 pub const Config = @import("Config.zig");
+pub const cookies = @import("cookies.zig");
+pub const datetime = @import("datetime.zig");
+pub const core_dump = @import("core_dump.zig");
+pub const ArenaPool = @import("ArenaPool.zig");
+pub const build_config = @import("build_config");
 pub const String = @import("string.zig").String;
+pub const ToolSession = @import("ToolSession.zig");
 pub const Notification = @import("Notification.zig");
 pub const Server = @import("server/Server.zig");
-
-pub const URL = @import("browser/URL.zig");
-pub const Page = @import("browser/Page.zig");
-pub const Frame = @import("browser/Frame.zig");
-pub const Browser = @import("browser/Browser.zig");
-pub const Session = @import("browser/Session.zig");
-pub const ToolSession = @import("ToolSession.zig");
-
-pub const js = @import("browser/js/js.zig");
-pub const dump = @import("browser/dump.zig");
-pub const markdown = @import("browser/markdown.zig");
-pub const screenshot = @import("browser/screenshot.zig");
-pub const pdf = @import("browser/pdf.zig");
 pub const Base64Writer = @import("Base64Writer.zig");
-const Selector = @import("browser/webapi/selector/Selector.zig");
-const Node = @import("browser/webapi/Node.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const NodeRegistry = @import("NodeRegistry.zig");
-pub const interactive = @import("browser/interactive.zig");
-pub const links = @import("browser/links.zig");
-pub const forms = @import("browser/forms.zig");
-pub const actions = @import("browser/actions.zig");
-pub const structured_data = @import("browser/structured_data.zig");
-pub const tools = @import("browser/tools.zig");
+pub const crash_handler = @import("crash_handler.zig");
+
+pub const Network = @import("network/Network.zig");
 pub const HttpClient = @import("network/HttpClient.zig");
 
-pub const mcp = @import("mcp.zig");
+pub const pdf = @import("browser/pdf.zig");
+pub const URL = @import("browser/URL.zig");
+pub const dump = @import("browser/dump.zig");
+pub const Page = @import("browser/Page.zig");
+pub const Frame = @import("browser/Frame.zig");
+pub const forms = @import("browser/forms.zig");
+pub const links = @import("browser/links.zig");
+pub const tools = @import("browser/tools.zig");
+pub const actions = @import("browser/actions.zig");
+pub const Browser = @import("browser/Browser.zig");
+pub const Session = @import("browser/Session.zig");
+pub const markdown = @import("browser/markdown.zig");
+pub const screenshot = @import("browser/screenshot.zig");
+pub const RenderTree = @import("browser/RenderTree.zig");
+pub const interactive = @import("browser/interactive.zig");
+pub const structured_data = @import("browser/structured_data.zig");
+pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
+
+pub const js = @import("browser/js/js.zig");
+const Node = @import("browser/webapi/Node.zig");
+const Selector = @import("browser/webapi/selector/Selector.zig");
+
 pub const Agent = @import("agent/Agent.zig");
-pub const Command = @import("script/command.zig").Command;
+pub const skill = @import("script/skill.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
 pub const Schema = @import("script/Schema.zig");
-pub const skill = @import("script/skill.zig");
-pub const cookies = @import("cookies.zig");
-pub const build_config = @import("build_config");
-pub const crash_handler = @import("crash_handler.zig");
-pub const core_dump = @import("core_dump.zig");
+pub const Command = @import("script/command.zig").Command;
 
 pub var metrics = @import("Metrics.zig"){};
-
 pub const IS_TEST = @import("builtin").is_test;
 pub const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -163,7 +165,7 @@ pub fn once(comptime f: fn () void) Once(f) {
     return .{};
 }
 
-pub fn Once(comptime f: fn () void) type {
+fn Once(comptime f: fn () void) type {
     return struct {
         done: bool = false,
         mutex: std.Io.Mutex = .init,
@@ -456,12 +458,16 @@ const Binary = union(enum) {
 };
 
 fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Binary {
-    const root = try dumpRoot(frame, opts.selector);
+    const state = try RenderTree.resolve(arena, try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     return switch (opts.dump_mode.?) {
-        .png => .{ .png = try screenshot.preparePng(arena, root, .fromViewport(frame._page.getViewport(), true), frame) },
-        .pdf => .{ .pdf = try pdf.prepare(arena, root, .{}, frame) },
+        .png => .{ .png = try screenshot.preparePng(arena, state, pngOpts(frame), frame) },
+        .pdf => .{ .pdf = try pdf.prepare(arena, state, .{}, frame) },
         else => unreachable,
     };
+}
+
+fn pngOpts(frame: *Frame) screenshot.Opts {
+    return .fromViewport(frame._page.getViewport(), true);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
@@ -472,29 +478,24 @@ fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {
 }
 
 fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Frame, writer: *std.Io.Writer) !void {
-    const root = try dumpRoot(frame, opts.selector);
+    var arena: std.heap.ArenaAllocator = .init(app.allocator);
+    defer arena.deinit();
+    const state = try RenderTree.resolve(arena.allocator(), try dumpRoot(frame, opts.selector), opts.dump.strip, frame);
     switch (mode) {
-        .html => if (opts.selector == null)
-            try dump.root(frame.window._document, opts.dump, writer, frame)
-        else
-            try dump.deep(root, opts.dump, writer, frame),
-        .markdown => try markdown.dump(root, .{ .max_bytes = opts.dump.max_bytes, .strip = opts.dump.strip }, writer, frame),
+        .html => try dump.render(state, opts.dump, writer, frame),
+        .markdown => try markdown.dump(state, .{ .max_bytes = opts.dump.max_bytes }, writer, frame),
         .png => {
-            var arena: std.heap.ArenaAllocator = .init(app.allocator);
-            defer arena.deinit();
-            _ = try screenshot.png(arena.allocator(), root, .fromViewport(frame._page.getViewport(), true), writer, frame);
+            _ = try screenshot.png(arena.allocator(), state, pngOpts(frame), writer, frame);
         },
         .pdf => {
-            var arena: std.heap.ArenaAllocator = .init(app.allocator);
-            defer arena.deinit();
-            try pdf.print(arena.allocator(), root, .{}, writer, frame);
+            try pdf.print(arena.allocator(), state, .{}, writer, frame);
         },
         .semantic_tree, .semantic_tree_text => {
             var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
             const st: SemanticTree = .{
-                .dom_node = root,
+                .dom_node = state.root,
                 .registry = &registry,
                 .frame = frame,
                 .arena = frame.call_arena,

@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const log = lp.log;
 
-pub const CompiledPattern = struct {
+const CompiledPattern = struct {
     pattern: []const u8,
     ty: enum {
         prefix, // "/admin/" - prefix match
@@ -54,7 +54,7 @@ pub const CompiledPattern = struct {
     }
 };
 
-pub const Rule = union(enum) {
+const Rule = union(enum) {
     allow: CompiledPattern,
     disallow: CompiledPattern,
 
@@ -96,7 +96,7 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    pub const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
+    const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
 
     allocator: std.mem.Allocator,
     map: RobotsMap,
@@ -417,7 +417,7 @@ fn parseRulesWithUserAgent(
     return .{ .rules = out_rules, .content_signals = out_signals };
 }
 
-pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
+fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
     const parsed = try parseRulesWithUserAgent(allocator, user_agent, bytes);
     const rules = parsed.rules;
 

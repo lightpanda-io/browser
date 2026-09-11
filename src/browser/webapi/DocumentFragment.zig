@@ -76,7 +76,7 @@ pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
 
     var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe(comptime .wrap("id"))) |element_id| {
+        if (el.getId()) |element_id| {
             if (std.mem.eql(u8, element_id, id)) {
                 return el;
             }
@@ -93,7 +93,7 @@ pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, frame: *Fram
     return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
-pub fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
+fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
@@ -106,7 +106,7 @@ pub fn firstElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn lastElementChild(self: *DocumentFragment) ?*Element {
+fn lastElementChild(self: *DocumentFragment) ?*Element {
     var maybe_child = self.asNode().lastChild();
     while (maybe_child) |child| {
         if (child.is(Element)) |el| return el;
@@ -115,7 +115,7 @@ pub fn lastElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn getChildElementCount(self: *DocumentFragment) usize {
+fn getChildElementCount(self: *DocumentFragment) usize {
     var count: usize = 0;
     var it = self.asNode().childrenIterator();
     while (it.next()) |node| {
@@ -162,13 +162,13 @@ pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, frame: *Fra
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
-    return parent.setHTML(html, false, frame);
+    return parent.setHTML(html, .{}, frame);
 }
 
 /// allows declarative shadow dom
 pub fn setHTMLUnsafe(self: *DocumentFragment, html: []const u8, frame: *Frame) !void {
     const parent = self.asNode();
-    return parent.setHTML(html, true, frame);
+    return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
 }
 
 pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node {

@@ -19,3 +19,21 @@
   // testing.expectEqual(null, document.getElementById('p1'));
   // testing.expectEqual(true, document.body.outerHTML.replaceAll(/\n/g, '').startsWith('<body><script id="outerHTML">'));
 </script>
+
+<table id=t1><tbody><tr id=tr1><td>a</td></tr></tbody></table>
+<script id=outerHTML_table_context>
+  // The parent (tr / tbody) is the parse context, so table bits survive.
+  $('#tr1').outerHTML = '<tr id=tr2><td>b</td></tr>';
+  testing.expectEqual('<tbody><tr id="tr2"><td>b</td></tr></tbody>', $('#t1').innerHTML);
+
+  $('#tr2').firstElementChild.outerHTML = '<td>c</td><th>d</th>';
+  testing.expectEqual('<tr id="tr2"><td>c</td><th>d</th></tr>', $('#tr2').outerHTML);
+
+  // A fragment parent is a body context.
+  const frag = document.createDocumentFragment();
+  const span = document.createElement('span');
+  frag.appendChild(span);
+  span.outerHTML = '<tr><td>x</td></tr>';
+  testing.expectEqual(0, frag.children.length);
+  testing.expectEqual('x', frag.textContent);
+</script>

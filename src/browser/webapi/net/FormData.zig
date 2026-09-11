@@ -214,7 +214,7 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub const EntryValue = union(enum) {
+const EntryValue = union(enum) {
     blob: *Blob, // can be of _type == .file
     bytes: []const u8, //must be last, everything can coerce to a []const u8
 };
@@ -331,7 +331,7 @@ pub const EncType = union(enum) {
     plaintext,
 };
 
-pub const WriteOpts = struct {
+const WriteOpts = struct {
     encoding: EncType = .urlencode,
     charset: []const u8 = "UTF-8",
 };
@@ -495,7 +495,7 @@ fn writeMultipartName(writer: *std.Io.Writer, name: []const u8, comptime newline
 // Inverse of urlEncode: application/x-www-form-urlencoded parsing per
 // URL §5.1 — '+' decodes to a space, invalid percent sequences pass through
 // verbatim, and a pair without '=' becomes an entry with an empty value.
-pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
+fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
     var it = std.mem.splitScalar(u8, bytes, '&');
     while (it.next()) |pair| {
         if (pair.len == 0) {
@@ -811,7 +811,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
                     continue;
                 }
 
-                const name = element.getAttributeSafe(comptime .wrap("name"));
+                const name = element.getName();
                 const x_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.x", .{n}) else "x";
                 const y_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.y", .{n}) else "y";
                 try appendString(&list, arena, x_key, "0");
@@ -820,7 +820,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
         }
 
-        const name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+        const name = element.getName() orelse continue;
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;

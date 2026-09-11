@@ -50,15 +50,15 @@ pub fn asEventTarget(self: *TaskSignal) *EventTarget {
     return self._proto.asEventTarget();
 }
 
-pub fn getPriority(self: *const TaskSignal) Scheduler.Priority {
+fn getPriority(self: *const TaskSignal) Scheduler.Priority {
     return self._priority;
 }
 
-pub fn getOnPriorityChange(self: *const TaskSignal) ?js.Function.Global {
+fn getOnPriorityChange(self: *const TaskSignal) ?js.Function.Global {
     return self._on_prioritychange;
 }
 
-pub fn setOnPriorityChange(self: *TaskSignal, cb: ?js.Function.Global) !void {
+fn setOnPriorityChange(self: *TaskSignal, cb: ?js.Function.Global) !void {
     self._on_prioritychange = cb;
 }
 

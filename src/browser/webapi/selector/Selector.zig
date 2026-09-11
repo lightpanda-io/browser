@@ -115,8 +115,14 @@ pub const Cache = struct {
 
 fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame: *Frame) !*List {
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
+
+    // One cache for the whole list: every selector walks the same root, and it
+    // fills lazily, so a subtree that no selector reaches costs nothing.
+    var nth: List.NthCache = .{ .allocator = frame.local_arena };
+    defer nth.deinit();
+
     for (selectors) |selector| {
-        try List.collect(arena.allocator(), root, selector, &nodes, frame);
+        try List.collect(arena.allocator(), root, selector, &nodes, &nth, frame);
     }
 
     const list = try arena.create(List);
@@ -129,7 +135,7 @@ fn collectAll(arena: *lp.Arena, selectors: []const Selector, root: *Node, frame:
 
 fn matchesAny(selectors: []const Selector, el: *Node.Element, scope: *Node, frame: *Frame) bool {
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, scope, frame)) {
+        if (List.matches(el.asNode(), selector, scope, null, frame)) {
             return true;
         }
     }
@@ -182,22 +188,66 @@ pub fn matchesUncached(arena: Allocator, el: *Node.Element, input: []const u8, f
     return matchesAny(try Parser.parseList(arena, input), el, el.asNode(), frame);
 }
 
+// Class attribute token separators as a mask
+const class_separators: u64 = (1 << '\t') | (1 << '\n') | (1 << 0x0C) | (1 << '\r') | (1 << ' ');
+
+inline fn isClassSeparator(c: u8) bool {
+    return c <= ' ' and (class_separators >> @intCast(c)) & 1 == 1;
+}
+
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {
-    return classAttributeContainsCase(class_attr, class_name, false);
+    // Both callers pass a single parsed class name. `[class~="a b"]` is not
+    // this path, it goes through the attribute .word matcher.
+    if (comptime lp.IS_DEBUG) {
+        for (class_name) |c| {
+            std.debug.assert(isClassSeparator(c) == false);
+        }
+    }
+
+    const len = class_name.len;
+    if (len == 0 or class_attr.len < len) {
+        return false;
+    }
+
+    // Scan for the name's first byte and verify the token boundaries around it,
+    // rather than splitting class_attr into tokens: most bytes then cost a
+    // single compare, and a token whose first byte differs is rejected without
+    // any boundary or length work.
+    //
+    // Deliberately not std.mem.indexOfScalarPos: its vector setup costs more
+    // than it saves at class-attribute lengths. Measured against it on both the
+    // benchmark shape (~12 bytes) and tailwind-style values (~105 bytes), this
+    // loop wins on every case but one.
+    const last = class_attr.len - len;
+    const first = class_name[0];
+    var at: usize = 0;
+    while (at <= last) : (at += 1) {
+        if (class_attr[at] != first) {
+            continue;
+        }
+        const end = at + len;
+        if ((at == 0 or isClassSeparator(class_attr[at - 1])) and
+            (end == class_attr.len or isClassSeparator(class_attr[end])) and
+            std.mem.eql(u8, class_attr[at..end], class_name))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn classAttributeContainsCase(class_attr: []const u8, class_name: []const u8, case_insensitive: bool) bool {
+    if (case_insensitive == false) {
+        return classAttributeContains(class_attr, class_name);
+    }
+
     if (class_name.len == 0) {
         return false;
     }
 
     var it = std.mem.tokenizeAny(u8, class_attr, &[_]u8{ '\t', '\n', 0x0C, '\r', ' ' });
     while (it.next()) |token| {
-        if (case_insensitive) {
-            if (std.ascii.eqlIgnoreCase(token, class_name)) {
-                return true;
-            }
-        } else if (std.mem.eql(u8, token, class_name)) {
+        if (std.ascii.eqlIgnoreCase(token, class_name)) {
             return true;
         }
     }
@@ -373,6 +423,9 @@ pub const Selector = struct {
 };
 
 pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.Element {
+    var nth: List.NthCache = .{ .allocator = frame.local_arena };
+    defer nth.deinit();
+
     for (selectors) |selector| {
         // Fast path: single compound with only an ID selector
         if (selector.segments.len == 0 and selector.first.parts.len == 1) {
@@ -388,11 +441,47 @@ pub fn query(selectors: []const Selector, root: *Node, frame: *Frame) !?*Node.El
             }
         }
 
-        if (List.initOne(root, selector, frame)) |node| {
+        if (List.initOne(root, selector, &nth, frame)) |node| {
             if (node.is(Node.Element)) |el| {
                 return el;
             }
         }
     }
     return null;
+}
+
+const testing = @import("../../../testing.zig");
+
+test "Selector: classAttributeContains" {
+    // hit at each token position, and the whole value as one token
+    try testing.expectEqual(true, classAttributeContains("row", "row"));
+    try testing.expectEqual(true, classAttributeContains("row cell", "row"));
+    try testing.expectEqual(true, classAttributeContains("cell row", "row"));
+    try testing.expectEqual(true, classAttributeContains("a row b", "row"));
+
+    // a substring of a token is not a token
+    try testing.expectEqual(false, classAttributeContains("rows", "row"));
+    try testing.expectEqual(false, classAttributeContains("brow", "row"));
+    try testing.expectEqual(false, classAttributeContains("arrow-key", "row"));
+    // ...but a real token after a false start still matches
+    try testing.expectEqual(true, classAttributeContains("rows row", "row"));
+    try testing.expectEqual(true, classAttributeContains("row-a row", "row"));
+
+    // every HTML whitespace separates, 0x0B (VT) does not
+    for ([_]u8{ '\t', '\n', 0x0C, '\r', ' ' }) |ws| {
+        try testing.expectEqual(true, classAttributeContains(&.{ 'a', ws, 'r', 'o', 'w' }, "row"));
+    }
+    try testing.expectEqual(false, classAttributeContains(&.{ 'a', 0x0B, 'r', 'o', 'w' }, "row"));
+
+    // degenerate inputs
+    try testing.expectEqual(false, classAttributeContains("", "row"));
+    try testing.expectEqual(false, classAttributeContains("row", ""));
+    try testing.expectEqual(false, classAttributeContains("ro", "row"));
+    try testing.expectEqual(false, classAttributeContains("   ", "row"));
+    try testing.expectEqual(true, classAttributeContains("  row  ", "row"));
+
+    // case sensitivity is the caller's choice
+    try testing.expectEqual(false, classAttributeContains("ROW", "row"));
+    try testing.expectEqual(true, classAttributeContainsCase("ROW", "row", true));
+    try testing.expectEqual(false, classAttributeContainsCase("ROWS", "row", true));
 }

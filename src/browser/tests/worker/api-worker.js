@@ -26,8 +26,10 @@
       statusText: 'Created',
       headers: { 'content-type': 'text/plain' },
     });
+    // Clone before consuming: a disturbed body can't be cloned.
+    const response_clone = response.clone();
     const response_body_text = await response.text();
-    const response_clone_text = await response.clone().text();
+    const response_clone_text = await response_clone.text();
 
     // AbortController + AbortSignal dispatch (exercises the inline-else dispatch path)
     const controller = new AbortController();

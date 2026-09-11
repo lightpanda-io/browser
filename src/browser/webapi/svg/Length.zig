@@ -103,7 +103,7 @@ pub fn reflectedConfigured(
     });
 }
 
-pub fn getUnitType(self: *Length) u16 {
+fn getUnitType(self: *Length) u16 {
     self.syncFromAttribute();
     return @intFromEnum(self._unit);
 }
@@ -134,12 +134,12 @@ pub fn setValue(self: *Length, value: f64, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn getValueInSpecifiedUnits(self: *Length) f64 {
+fn getValueInSpecifiedUnits(self: *Length) f64 {
     self.syncFromAttribute();
     return self._value;
 }
 
-pub fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void {
+fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
     self.syncFromAttribute();
@@ -150,12 +150,12 @@ pub fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void 
     try self.writeBack(frame);
 }
 
-pub fn getValueAsString(self: *Length, frame: *Frame) ![]const u8 {
+fn getValueAsString(self: *Length, frame: *Frame) ![]const u8 {
     self.syncFromAttribute();
     return self.serialize(frame);
 }
 
-pub fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
+fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
     try self.ensureWritable();
     const parsed = parse(value.str()) catch return error.SyntaxError;
     self._value = parsed.value;
@@ -163,7 +163,7 @@ pub fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: *Frame) !void {
+fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     const unit = try checkedUnit(unit_type);
     try ensureFinite(value);
@@ -172,7 +172,7 @@ pub fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: 
     try self.writeBack(frame);
 }
 
-pub fn convertToSpecifiedUnits(self: *Length, unit_type: u16, frame: *Frame) !void {
+fn convertToSpecifiedUnits(self: *Length, unit_type: u16, frame: *Frame) !void {
     try self.ensureWritable();
     const target = try checkedUnit(unit_type);
     const absolute = self.getValue(frame);

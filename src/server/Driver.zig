@@ -16,74 +16,82 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const lp = @import("lightpanda");
 
-const WS = @import("../network/WS.zig");
 const Inbox = @import("../Inbox.zig");
-
-const CDP = @import("cdp/CDP.zig");
-const Server = @import("Server.zig");
-const BiDi = @import("bidi/BiDi.zig");
-const Connection = @import("Connection.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 
+const WS = @import("WS.zig");
+const Link = @import("Link.zig");
+
+const CDP = @import("cdp/CDP.zig");
+const BiDi = @import("bidi/BiDi.zig");
+
 const log = lp.log;
 
-// Parts of the driver are owned by the server run loop, parts are owned by
+// Parts of the driver are owned by the server loop, parts are owned by
 // the worker thread. The run loop reads messages and pushes to the inbox,
 // the worker mostly just writes to the socket.
-//
-// What every protocol has - a connection, a browser, a link to the network
-// thread - lives here rather than behind `impl`, so the shared paths are plain
-// field access. Only what genuinely differs switches on `impl`.
 const Driver = @This();
 
-pub const Impl = union(enum) {
+// Doubles as the metrics label
+pub const Protocol = enum { cdp, bidi };
+
+const Impl = union(Protocol) {
     cdp: *CDP,
     bidi: *BiDi,
 };
 
 impl: Impl,
-conn: *Connection,
+
 browser: *Browser,
-link: *Server.Link,
+
+// The worker's mailbox, owned by the loop's connection slot (it outlives
+// the link). The loop pushes, the worker's HttpClient drains through us.
+inbox: *Inbox,
 
 // The protocol's log scope, so shared code still logs as .cdp / .bidi.
 scope: log.Scope,
 
-// Called from CDP.init / BiDi.init, where conn, link and browser are all
-// still undefined: we only take their addresses, which the impl's own
-// allocation already fixed.
-pub fn init(impl: Impl) Driver {
+pub fn init(impl: Impl, inbox: *Inbox) Driver {
     return switch (impl) {
-        // The tag names line up with the log scopes of the same name.
         inline else => |d, tag| .{
             .impl = impl,
-            .conn = &d.conn,
-            .link = &d.link,
-            .browser = &d.browser,
-            .scope = @field(log.Scope, @tagName(tag)),
+            .inbox = inbox,
+            .browser = &d.browser, // browser will still be undefined at this point, but its address is known
+            .scope = @field(log.Scope, @tagName(tag)), // The tag names line up with the log scopes of the same name.
         },
     };
 }
 
-// Server run loop. Received data, driver returns false to signal it should
-// disconnect.
-pub fn onData(self: *const Driver, data: []const u8) anyerror!bool {
-    return self.conn.feed(data);
+// server loop. Whether losing the link ends the worker.
+pub fn connectionScoped(self: *const Driver) bool {
+    return switch (self.impl) {
+        .cdp => true, // always true for CDP; CDP is WebSocket only
+        .bidi => |bidi| bidi.mode == .bidi_only, // depends if this is BiDi-only WebDriver session
+    };
 }
 
-// Server run loop. Called when it drops the link unsolicited (peer EOF, ...)
-pub fn onLinkDisconnect(self: *const Driver, err: ?anyerror) void {
-    const arena = self.browser.arena_pool.acquire(.tiny, "driver disconnect") catch |e| switch (e) {
-        error.OutOfMemory => @panic("OOM"),
+// server loop. The loop shuts the link's read side itself (Server.Worker
+// owns that pointer); this only stops the JS.
+pub fn shutdown(self: *const Driver) void {
+    self.browser.env.terminate();
+}
+
+// server loop. Something was pushed to the inbox; wake the worker from its poll.
+pub fn wakeup(self: *const Driver) void {
+    self.browser.http_client.handles.wakeup() catch |err| {
+        log.err(self.scope, "wakeup", .{ .err = err });
     };
-    // order matters, this ensures that the disconnect message is in the inbox
-    // when tick() discovers the terminatePending flag is set.
-    self.browser.http_client.inbox.push(arena, .{ .disconnect = err });
-    self.browser.env.requestTerminate();
+}
+
+// Worker thread. Note that (for bidi at least) the link can come and go
+fn link(self: *const Driver) ?*Link {
+    return switch (self.impl) {
+        .cdp => |cdp| &cdp.link,
+        .bidi => |bidi| bidi.link,
+    };
 }
 
 // Worker thread. We're processing messages from the inbox.
@@ -96,32 +104,67 @@ pub fn onMessage(self: *const Driver, msg: *Inbox.Message) anyerror!void {
 
 // Worker Thread. We're processing messages from the inbox.
 pub fn onPing(self: *const Driver, body: []const u8) void {
-    self.conn.sendPong(body) catch |err| {
+    const l = self.link() orelse return;
+    l.sendPong(body) catch |err| {
         log.warn(self.scope, "pong", .{ .err = err });
     };
 }
 
-// Worker Thread. We're processing messages from the inbox.
-pub fn onClose(self: *const Driver) void {
-    self.conn.send(&WS.CLOSE_NORMAL) catch |err| {
-        log.warn(self.scope, "close reply", .{ .err = err });
-    };
-    self.onDisconnect(null);
+// Worker Thread. The worker is being given a link
+pub fn onLink(self: *const Driver, l: *Link) void {
+    switch (self.impl) {
+        .bidi => |bidi| bidi.adoptLink(l),
+        .cdp => {
+            // a CDP worker is born with its link and never offered another
+            log.err(self.scope, "unexpected link", .{});
+            l.destroy();
+        },
+    }
 }
 
-// Worker Thread. We're processing messages from the inbox.
-pub fn onDisconnect(self: *const Driver, err: ?anyerror) void {
+// Worker Thread. The websocket is closing. Should we kill the worker? That's
+// up to the implementation (hint: for CDP, it's always "yes" and for WebDriver
+// it's "yes" for a BiDi-only session)
+pub fn onClose(self: *const Driver) bool {
+    if (self.link()) |l| {
+        l.send(&WS.CLOSE_NORMAL) catch |err| {
+            log.warn(self.scope, "close reply", .{ .err = err });
+        };
+    }
+    return self.onDisconnect(null);
+}
+
+// Worker Thread. Unlike onClose, this is an unconditional termination.
+// (Currently only comes from WebDriver endpoints (HTTP or WS))
+pub fn onQuit(self: *const Driver) void {
+    if (self.link()) |l| {
+        l.send(&WS.CLOSE_NORMAL) catch |err| {
+            log.warn(self.scope, "quit close", .{ .err = err });
+        };
+    }
+    log.info(self.scope, "session ended", .{});
+}
+
+// Worker Thread. Returns true when the worker is done.
+pub fn onDisconnect(self: *const Driver, err: ?anyerror) bool {
     if (err) |e| {
         if (WS.errorReply(e)) |close_frame| {
-            self.conn.send(close_frame) catch {};
+            if (self.link()) |l| {
+                l.send(close_frame) catch {};
+            }
         }
     }
     log.info(self.scope, "disconnect", .{ .err = err });
+    return switch (self.impl) {
+        .cdp => true,
+        .bidi => |bidi| bidi.onLinkGone(),
+    };
 }
 
-// Worker thread. Once the websocket connection is established, the server
-// calls this (from the worker thread) and it becomes the driving loop.
+// Worker thread.
 pub fn run(self: *const Driver) void {
+    self.attach(); // make HttpClient aware of our inbox
+    defer self.detach(); // make HttpClient forget our inbox
     while (true) {
         const alive = self.tick() catch |err| {
             log.err(self.scope, "tick", .{ .err = err });
@@ -133,21 +176,37 @@ pub fn run(self: *const Driver) void {
     }
 }
 
+// Worker thread. Tell the http_client about us (so it can monitor our inbox)
+pub fn attach(self: *const Driver) void {
+    self.browser.http_client.driver = self.*;
+}
+
+// Worker thread.
+pub fn detach(self: *const Driver) void {
+    self.browser.http_client.driver = null;
+}
+
 // One iteration of the worker loop. Returns false to disconnect.
 fn tick(self: *const Driver) !bool {
     if (self.browser.env.terminatePending()) {
-        // Maybe something bad happened (e.g. watchdog) or maybe the client
-        // just disconnected. Check the inbox to see if there's a disconnect
-        // message and, if so, it'll handle it directly.
+        // Our own requestTerminate from Server.dropWebSocket: the peer is gone or
+        // sent garbage. Report it with its own close code, nothing to warn
+        // about. Pops close/disconnect only: nothing else may be dispatched
+        // in a shutting-down state.
         self.browser.http_client.drainTerminal() catch |err| switch (err) {
             error.ClientDisconnected => return false,
         };
+
+        // Anything else means someone decided this browser must die (e.g.
+        // shutdown, or the heap limit was reached).
         log.warn(self.scope, "closing connection", .{ .reason = "pending terminate" });
         // The worker thread is the sole writer of this socket, so sending
         // the close frame here can't interleave with another write.
-        self.conn.send(&WS.CLOSE_GOING_AWAY) catch |err| {
-            log.warn(self.scope, "terminate close", .{ .err = err });
-        };
+        if (self.link()) |l| {
+            l.send(&WS.CLOSE_GOING_AWAY) catch |err| {
+                log.warn(self.scope, "terminate close", .{ .err = err });
+            };
+        }
         return false;
     }
 
@@ -194,15 +253,4 @@ fn pageWait(self: *const Driver) ?PageWait {
             return .{ .session = bidi.user_context.session, .frame_id = context.frame_id };
         },
     }
-}
-
-// signal handler thread
-pub fn shutdown(self: *const Driver) void {
-    if (self.conn.state == .live) {
-        self.browser.env.terminate();
-        // We use to send a nice WS close frame here but (a) it isn't
-        // strictly required and (b) we'd have to protect against an interleaved
-        // write from the worker thread.
-    }
-    self.conn.shutdown();
 }

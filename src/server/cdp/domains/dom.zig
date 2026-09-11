@@ -25,14 +25,15 @@ const NodeRegistry = @import("../../../NodeRegistry.zig");
 
 const dump = @import("../../../browser/dump.zig");
 const js = @import("../../../browser/js/js.zig");
-const DOMNode = @import("../../../browser/webapi/Node.zig");
-const Selector = @import("../../../browser/webapi/selector/Selector.zig");
-const xpath = @import("../../../browser/xpath/Evaluator.zig");
-const Input = @import("../../../browser/webapi/element/html/Input.zig");
+const Page = @import("../../../browser/Page.zig");
+const Frame = @import("../../../browser/Frame.zig");
 const File = @import("../../../browser/webapi/File.zig");
 const Blob = @import("../../../browser/webapi/Blob.zig");
 const Factory = @import("../../../browser/Factory.zig");
-const Page = @import("../../../browser/Page.zig");
+const xpath = @import("../../../browser/xpath/Evaluator.zig");
+const DOMNode = @import("../../../browser/webapi/Node.zig");
+const Input = @import("../../../browser/webapi/element/html/Input.zig");
+const Selector = @import("../../../browser/webapi/selector/Selector.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -56,6 +57,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         getOuterHTML,
         requestNode,
         setFileInputFiles,
+        focus,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -76,6 +78,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
         .getOuterHTML => return getOuterHTML(cmd),
         .requestNode => return requestNode(cmd),
         .setFileInputFiles => return setFileInputFiles(cmd),
+        .focus => return focus(cmd),
     }
 }
 
@@ -343,39 +346,23 @@ fn resolveNode(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
-
-    var ls: js.Local.Scope = undefined;
-    var ls_open = false;
-    defer if (ls_open) {
-        ls.deinit();
-    };
-
-    if (params.executionContextId) |context_id| blk: {
-        frame.js.localScope(&ls);
-        ls_open = true;
-        if (ls.local.debugContextId() == context_id) {
-            break :blk;
-        }
-        // not the default scope, check the other ones
-        for (bc.isolated_worlds.items) |isolated_world| {
-            ls.deinit();
-            ls_open = false;
-
-            const ctx = (isolated_world.context orelse return error.ContextNotFound);
-            ctx.localScope(&ls);
-            ls_open = true;
-            if (ls.local.debugContextId() == context_id) {
-                break :blk;
-            }
-        } else return error.ContextNotFound;
-    } else {
-        frame.js.localScope(&ls);
-        ls_open = true;
-    }
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.UnknownNode;
+
+    // Chrome resolves into the named context, else into the main world of the
+    // node's own document's frame. Drivers adopt a handle found in a child's
+    // utility world into that child's main world this way, so the root's
+    // contexts are not enough.
+    const js_context = if (params.executionContextId) |context_id|
+        findContext(bc, root, context_id) orelse return error.ContextNotFound
+    else
+        nodeFrame(node.dom, root).js;
+
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
 
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
@@ -394,6 +381,51 @@ fn resolveNode(cmd: *CDP.Command) !void {
         .description = try remote_object.getDescription(arena),
         .objectId = try remote_object.getObjectId(arena),
     } }, .{});
+}
+
+// The frame owning the node's document. Synthetic documents (DOMParser,
+// DOMImplementation) have no frame and fall back to the root.
+fn nodeFrame(dom_node: *DOMNode, root: *Frame) *Frame {
+    const document = if (dom_node._type == .document)
+        dom_node.subtype(DOMNode.Document)
+    else
+        dom_node.ownerDocument(root) orelse return root;
+    return document._frame orelse root;
+}
+
+// The context the inspector announced under `context_id`: any frame's main
+// world, then any isolated world's per-frame contexts.
+fn findContext(bc: *CDP.BrowserContext, root: *Frame, context_id: u32) ?*js.Context {
+    if (findMainWorldContext(root, context_id)) |js_context| {
+        return js_context;
+    }
+    for (bc.isolated_worlds.items) |isolated_world| {
+        for (isolated_world.contexts.items) |fc| {
+            if (contextIdOf(fc.context) == context_id) {
+                return fc.context;
+            }
+        }
+    }
+    return null;
+}
+
+fn findMainWorldContext(frame: *Frame, context_id: u32) ?*js.Context {
+    if (contextIdOf(frame.js) == context_id) {
+        return frame.js;
+    }
+    for (frame.child_frames.items) |child| {
+        if (findMainWorldContext(child, context_id)) |js_context| {
+            return js_context;
+        }
+    }
+    return null;
+}
+
+fn contextIdOf(js_context: *js.Context) i32 {
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
+    return ls.local.debugContextId();
 }
 
 fn describeNode(cmd: *CDP.Command) !void {
@@ -652,6 +684,26 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
+fn focus(cmd: *CDP.Command) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?NodeRegistry.Id = null,
+        backendNodeId: ?NodeRegistry.Id = null,
+        objectId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+    const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
+    if (element.isFocusable(frame) == false) {
+        return cmd.sendError(-32000, "Element is not focusable", .{});
+    }
+    try element.focus(frame);
+
+    return cmd.sendResult(null, .{});
+}
+
 fn fileFromDiskPath(path: []const u8, page: *Page) !*File {
     // Mirror File.init: a Blob and File sharing one reference-counted arena,
     // but read the bytes straight off disk into it (single copy, no JS parts).
@@ -820,6 +872,86 @@ test "cdp.dom: performSearch with XPath" {
         .params = .{ .query = "div p" },
     });
     try ctx.expectSentResult(.{ .searchId = "4", .resultCount = 2 }, .{ .id = 24 });
+}
+
+test "cdp.dom: focus makes the node activeElement and routes key events to it" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "#keyTarget" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 1 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{1} }, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.focus", .params = .{ .nodeId = 1 } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+
+    var result = try ls.local.compileAndRun("document.activeElement.id === 'keyTarget'", null);
+    try testing.expect(result.isTrue());
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .text = "a" },
+    });
+    result = try ls.local.compileAndRun("window.keyPressed === 'a' && document.getElementById('keyTarget').value === 'a'", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.dom: focus errors on an element that can't take focus" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // #btn not rendered, #inp disabled, #hoverTarget a plain <div>.
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('btn').style.display = 'none';
+        \\document.getElementById('inp').disabled = true;
+    , null);
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.performSearch", .params = .{ .query = "#btn, #inp, #hoverTarget" } });
+    try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 3 }, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.getSearchResults",
+        .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 3 },
+    });
+    try ctx.expectSentResult(.{ .nodeIds = &.{ 1, 2, 3 } }, .{ .id = 2 });
+
+    try ctx.processMessage(.{ .id = 3, .method = "DOM.focus", .params = .{ .nodeId = 1 } });
+    try ctx.expectSentError(-32000, "Element is not focusable", .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "DOM.focus", .params = .{ .nodeId = 2 } });
+    try ctx.expectSentError(-32000, "Element is not focusable", .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "DOM.focus", .params = .{ .nodeId = 3 } });
+    try ctx.expectSentError(-32000, "Element is not focusable", .{ .id = 5 });
+
+    const result = try ls.local.compileAndRun("document.activeElement === document.body", null);
+    try testing.expect(result.isTrue());
 }
 
 test "cdp.dom: setFileInputFiles on file input" {
@@ -1129,6 +1261,85 @@ test "cdp.dom: querySelector Nodes found" {
     });
     try ctx.expectSentEvent("DOM.setChildNodes", null, .{});
     try ctx.expectSentResult(.{ .nodeIds = &.{7} }, .{ .id = 5 });
+}
+
+// Drivers find an element in a child frame's utility world, then adopt the
+// handle into that child's main world with DOM.resolveNode. Both the named
+// context and the default (the node's own frame) must be the child's, not the
+// root's.
+test "cdp.dom: resolveNode into a child frame's context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const child_main = try mainWorldContextId(bc, child);
+    try testing.expect(child_main != try mainWorldContextId(bc, root));
+
+    // Register the child's <html> the way DOM.describeNode(objectId) would.
+    const html = child.document.getDocumentElement() orelse unreachable;
+    const node = try bc.node_registry.register(html.asNode());
+
+    try ctx.processMessage(.{ .id = 10, .method = "Runtime.enable", .sessionId = "SID-X" });
+
+    // Into the context the client names.
+    try ctx.processMessage(.{ .id = 11, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+        .executionContextId = child_main,
+    } });
+    const named = try sentObjectId(&ctx, 11);
+    try ctx.processMessage(.{ .id = 12, .method = "Runtime.callFunctionOn", .sessionId = "SID-X", .params = .{
+        .objectId = named,
+        .functionDeclaration = "function() { return globalThis.document.title + '|' + (this.ownerDocument === globalThis.document); }",
+        .returnByValue = true,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one|true" } }, .{ .id = 12 });
+
+    // Into the node's own frame when no context is named.
+    try ctx.processMessage(.{ .id = 13, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+    } });
+    const default = try sentObjectId(&ctx, 13);
+    try ctx.processMessage(.{ .id = 14, .method = "Runtime.callFunctionOn", .sessionId = "SID-X", .params = .{
+        .objectId = default,
+        .functionDeclaration = "function() { return globalThis.document.title; }",
+        .returnByValue = true,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 14 });
+
+    try ctx.processMessage(.{ .id = 15, .method = "DOM.resolveNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = node.id,
+        .executionContextId = 9999,
+    } });
+    try ctx.expectSentError(-31998, "ContextNotFound", .{ .id = 15 });
+}
+
+fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    return bc.inspector_session.inspector.getContextId(&ls.local);
+}
+
+// The result.object.objectId of the response to command `msg_id`.
+fn sentObjectId(ctx: *testing.TestContext, msg_id: i64) ![]const u8 {
+    var i: usize = 0;
+    while (try ctx.getSentMessage(i)) |msg| : (i += 1) {
+        const obj = switch (msg) {
+            .object => |o| o,
+            else => continue,
+        };
+        const id_value = obj.get("id") orelse continue;
+        if (id_value != .integer or id_value.integer != msg_id) {
+            continue;
+        }
+        const result = obj.get("result") orelse return error.NoResult;
+        const object = result.object.get("object") orelse return error.NoObject;
+        const object_id = object.object.get("objectId") orelse return error.NoObjectId;
+        return object_id.string;
+    }
+    return error.MessageNotFound;
 }
 
 test "cdp.dom: getBoxModel" {

@@ -27,8 +27,8 @@ pub const EMPTY_PONG = [_]u8{ 138, 0 };
 // CLOSE, 2 length, code
 pub const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
 pub const CLOSE_GOING_AWAY = [_]u8{ 136, 2, 3, 233 }; // code: 1001
-pub const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
-pub const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
+const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
+const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
 
 const Fragments = struct {
     type: Message.Type,
@@ -50,7 +50,7 @@ pub const Message = struct {
 };
 
 // These are the only websocket types that we're currently sending
-pub const OpCode = enum(u8) {
+const OpCode = enum(u8) {
     text = 128 | 1,
     close = 128 | 8,
     pong = 128 | 10,
@@ -108,12 +108,17 @@ pub fn fillHeader(buf: std.ArrayList(u8)) []const u8 {
 const RECLAIM_TO = 256 * 1024;
 const RECLAIM_AFTER = 8;
 
-// WebSocket message reader. Given websocket message, acts as an iterator that
-// can return zero or more Messages. When next returns null, any incomplete
-// message will remain in reader.data
-pub fn Reader(comptime EXPECT_MASK: bool) type {
+pub const Reader = ReaderM(true);
+pub const ReaderNoMask = ReaderM(false);
+
+// WebSocket and HTTP aware reader. EXPECT_MASK is always true, (since this is
+// only used to read server mesages) except for testing, where we setup test
+// clients.
+fn ReaderM(comptime EXPECT_MASK: bool) type {
     return struct {
         allocator: Allocator,
+
+        buf: []u8,
 
         // position in buf of the start of the next message
         pos: usize = 0,
@@ -123,8 +128,6 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
         len: usize = 0,
 
         max_message_size: usize,
-
-        buf: []u8,
 
         fragments: ?Fragments = null,
 
@@ -220,7 +223,9 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                     buf = self.buf[0..len];
                     // we need more data
                     return null;
-                } else if (buf.len < message_len) {
+                }
+
+                if (buf.len < message_len) {
                     // we need more data
                     return null;
                 }
@@ -308,11 +313,19 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
                 return null;
             }
 
-            const message_len = switch (length_of_len) {
-                2 => @as(u16, @intCast(buf[3])) | @as(u16, @intCast(buf[2])) << 8,
-                8 => @as(u64, @intCast(buf[9])) | @as(u64, @intCast(buf[8])) << 8 | @as(u64, @intCast(buf[7])) << 16 | @as(u64, @intCast(buf[6])) << 24 | @as(u64, @intCast(buf[5])) << 32 | @as(u64, @intCast(buf[4])) << 40 | @as(u64, @intCast(buf[3])) << 48 | @as(u64, @intCast(buf[2])) << 56,
+            const payload_len: usize = switch (length_of_len) {
+                2 => std.mem.readInt(u16, buf[2..4], .big),
+                8 => std.mem.readInt(u64, buf[2..10], .big),
                 else => buf[1] & 127,
-            } + length_of_len + 2 + if (comptime EXPECT_MASK) 4 else 0; // +2 for header prefix, +4 for mask;
+            };
+
+            // +2 for the header prefix,
+            // +length_of_len for the extended length,
+            // +4 for the mask.
+            const overhead: usize = length_of_len + 2 + if (comptime EXPECT_MASK) 4 else 0;
+            // Prefer saturating addition to clamp to largest usize.
+            // `max_message_size` check in next() rejects it as `TooLarge`.
+            const message_len = payload_len +| overhead;
 
             return .{ length_of_len, message_len };
         }
@@ -393,7 +406,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
 // don't need to narrow it first; unrecognized errors return null.
 pub fn errorReply(err: anyerror) ?[]const u8 {
     return switch (err) {
-        error.TooLarge => &CLOSE_TOO_BIG,
+        error.TooLarge, error.InboxBacklog => &CLOSE_TOO_BIG,
         error.Masked,
         error.NotMasked,
         error.ReservedFlags,
@@ -537,7 +550,7 @@ fn feedAndDrain(reader: anytype, frame: []const u8) !void {
 
 test "reader: reclaims buffer after a run of small messages" {
     const allocator = testing.allocator;
-    var reader = try Reader(false).init(allocator, 4 * 1024 * 1024);
+    var reader = try ReaderNoMask.init(allocator, 4 * 1024 * 1024);
     defer reader.deinit();
 
     // A large message forces the buffer to grow well past RECLAIM_TO.
@@ -576,4 +589,32 @@ test "reader: reclaims buffer after a run of small messages" {
     try feedAndDrain(&reader, big.items);
     try testing.expect(reader.buf.len > RECLAIM_TO);
     try testing.expectEqual(@as(usize, 0), reader.small_message_streak);
+}
+
+test "reader: control frame arriving in pieces" {
+    const allocator = testing.allocator;
+    var reader = try ReaderNoMask.init(allocator, 1024 * 1024);
+    defer reader.deinit();
+
+    // A ping with a 114 byte payload; only the header and 50 bytes of it
+    // have arrived. The control branch skips the "is the whole frame here"
+    // check that the data branches do, so next() used to slice past len.
+    var frame: [2 + 114]u8 = undefined;
+    frame[0] = 128 | 9; // FIN + ping
+    frame[1] = 114;
+    @memset(frame[2..], 'a');
+
+    const partial = frame[0 .. 2 + 50];
+    @memcpy(reader.readBuf()[0..partial.len], partial);
+    reader.len += partial.len;
+    try testing.expectEqual(@as(?Message, null), try reader.next());
+
+    // the rest arrives
+    const rest = frame[2 + 50 ..];
+    @memcpy(reader.readBuf()[0..rest.len], rest);
+    reader.len += rest.len;
+
+    const msg = (try reader.next()) orelse return error.NoMessage;
+    try testing.expectEqual(.ping, msg.type);
+    try testing.expectEqual(114, msg.data.len);
 }

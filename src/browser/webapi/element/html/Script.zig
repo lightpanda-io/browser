@@ -54,15 +54,15 @@ pub fn getSrc(self: *Script, frame: *Frame) ![]const u8 {
     return self.asNode().resolveURLReflect(self._src, frame, .{});
 }
 
-pub fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Script, src: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }
 
-pub fn getAsync(self: *const Script) bool {
-    return self._force_async or self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
+fn getAsync(self: *const Script) bool {
+    return self._force_async or self.asConstElement().getAttributeInterned("async") != null;
 }
 
-pub fn setAsync(self: *Script, value: bool, frame: *Frame) !void {
+fn setAsync(self: *Script, value: bool, frame: *Frame) !void {
     self._force_async = false;
     if (value) {
         try self.asElement().setAttributeSafe(comptime .wrap("async"), .wrap(""), frame);
@@ -127,7 +127,7 @@ pub const Build = struct {
     pub fn complete(node: *Node, _: *Frame) !void {
         const self = node.as(Script);
         const element = self.asElement();
-        self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+        self._src = element.getAttributeInterned("src") orelse "";
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
@@ -136,7 +136,7 @@ pub const Build = struct {
         }
 
         const self = element.as(Script);
-        self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+        self._src = element.getAttributeInterned("src") orelse "";
         if (self._src.len > 0 and element.asNode().isConnected()) {
             try frame.scriptAddedCallback(false, self);
         }

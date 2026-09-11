@@ -54,10 +54,10 @@ pub fn getContent(self: *Template) *DocumentFragment {
 }
 
 pub fn setInnerHTML(self: *Template, html: []const u8, frame: *Frame) !void {
-    return self._content.setInnerHTML(html, frame);
+    return self._content.asNode().setHTML(html, .{ .context = self.asElement() }, frame);
 }
 
-pub fn getShadowRootMode(self: *const Template) []const u8 {
+fn getShadowRootMode(self: *const Template) []const u8 {
     const value = self.asConstElement().getAttributeSafe(.wrap("shadowrootmode")) orelse return "";
 
     if (std.ascii.eqlIgnoreCase(value, "open")) {
@@ -71,7 +71,7 @@ pub fn getShadowRootMode(self: *const Template) []const u8 {
     return "";
 }
 
-pub fn setShadowRootMode(self: *Template, value: []const u8, frame: *Frame) !void {
+fn setShadowRootMode(self: *Template, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("shadowrootmode"), .wrap(value), frame);
 }
 

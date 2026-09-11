@@ -19,6 +19,8 @@
 const std = @import("std");
 
 const CDP = @import("CDP.zig");
+const Inbox = @import("../../Inbox.zig");
+const Driver = @import("../Driver.zig");
 
 pub const base = @import("../../testing.zig");
 
@@ -43,13 +45,19 @@ pub const TestContext = struct {
     read_buf: [1024 * 32]u8 = undefined,
     cdp_: CDP = undefined,
     cdp_initialized: bool = false,
+    inbox: Inbox = .{},
+    driver: Driver = undefined,
     cdp_socket: posix.socket_t,
     socket: posix.socket_t,
     received: std.ArrayList(json.Value) = .empty,
     received_raw: std.ArrayList([]const u8) = .empty,
 
     pub fn deinit(self: *TestContext) void {
-        if (self.cdp_initialized) self.cdp_.deinit();
+        if (self.cdp_initialized) {
+            self.driver.detach();
+            self.cdp_.deinit();
+        }
+        self.inbox.deinit();
         _ = std.c.close(self.socket);
         _ = std.c.close(self.cdp_socket);
         base.reset();
@@ -57,8 +65,10 @@ pub const TestContext = struct {
 
     pub fn cdp(self: *TestContext) *CDP {
         if (!self.cdp_initialized) {
-            self.cdp_.init(base.test_app, self.cdp_socket) catch |err| @panic(@errorName(err));
+            self.cdp_.init(base.test_app, self.cdp_socket, &self.inbox) catch |err| @panic(@errorName(err));
             self.cdp_initialized = true;
+            self.driver = .init(.{ .cdp = &self.cdp_ }, &self.inbox);
+            self.driver.attach();
         }
         return &self.cdp_;
     }

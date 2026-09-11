@@ -33,7 +33,6 @@ const parseDeltaSeconds = Cache.parseDeltaSeconds;
 const Http = @import("../http.zig");
 const Blob = @import("../../storage/sqlite/Sqlite.zig").Blob;
 const Pool = @import("../../storage/sqlite/Pool.zig");
-const Conn = @import("../../storage/sqlite/Sqlite.zig").Conn;
 const Migration = @import("../../storage/sqlite/Sqlite.zig").Migration;
 const Migrations = @import("../../storage/sqlite/Sqlite.zig").Migrations;
 
@@ -82,7 +81,7 @@ const purge_expired_sql =
     \\     and stored_at + max_age - age_at_store <= $1
 ;
 
-pub const SqliteCachePath = union(enum) {
+const SqliteCachePath = union(enum) {
     path: []const u8,
     memory,
 

@@ -54,70 +54,66 @@ pub fn constructor(start_time: f64, end_time: f64, text: []const u8, frame: *Fra
     return cue;
 }
 
-pub fn asTextTrackCue(self: *VTTCue) *TextTrackCue {
-    return self._proto;
-}
-
 pub fn getText(self: *const VTTCue) []const u8 {
     return self._text;
 }
 
-pub fn setText(self: *VTTCue, value: []const u8, frame: *Frame) !void {
+fn setText(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     self._text = try frame.dupeString(value);
 }
 
-pub fn getRegion(self: *const VTTCue) ?js.Object.Global {
+fn getRegion(self: *const VTTCue) ?js.Object.Global {
     return self._region;
 }
 
-pub fn setRegion(self: *VTTCue, value: ?js.Object.Global) !void {
+fn setRegion(self: *VTTCue, value: ?js.Object.Global) !void {
     self._region = value;
 }
 
-pub fn getVertical(self: *const VTTCue) []const u8 {
+fn getVertical(self: *const VTTCue) []const u8 {
     return self._vertical;
 }
 
-pub fn setVertical(self: *VTTCue, value: []const u8, frame: *Frame) !void {
+fn setVertical(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     // Valid values: "", "rl", "lr"
     self._vertical = try frame.dupeString(value);
 }
 
-pub fn getSnapToLines(self: *const VTTCue) bool {
+fn getSnapToLines(self: *const VTTCue) bool {
     return self._snap_to_lines;
 }
 
-pub fn setSnapToLines(self: *VTTCue, value: bool) void {
+fn setSnapToLines(self: *VTTCue, value: bool) void {
     self._snap_to_lines = value;
 }
 
-pub const LineAndPositionSetting = union(enum) {
+const LineAndPositionSetting = union(enum) {
     number: f64,
     auto: []const u8,
 };
 
-pub fn getLine(self: *const VTTCue) LineAndPositionSetting {
+fn getLine(self: *const VTTCue) LineAndPositionSetting {
     if (self._line) |num| {
         return .{ .number = num };
     }
     return .{ .auto = "auto" };
 }
 
-pub fn setLine(self: *VTTCue, value: LineAndPositionSetting) void {
+fn setLine(self: *VTTCue, value: LineAndPositionSetting) void {
     switch (value) {
         .number => |num| self._line = num,
         .auto => self._line = null,
     }
 }
 
-pub fn getPosition(self: *const VTTCue) LineAndPositionSetting {
+fn getPosition(self: *const VTTCue) LineAndPositionSetting {
     if (self._position) |num| {
         return .{ .number = num };
     }
     return .{ .auto = "auto" };
 }
 
-pub fn setPosition(self: *VTTCue, value: LineAndPositionSetting) void {
+fn setPosition(self: *VTTCue, value: LineAndPositionSetting) void {
     switch (value) {
         .number => |num| self._position = num,
         .auto => self._position = null,
@@ -128,20 +124,20 @@ pub fn getSize(self: *const VTTCue) f64 {
     return self._size;
 }
 
-pub fn setSize(self: *VTTCue, value: f64) void {
+fn setSize(self: *VTTCue, value: f64) void {
     self._size = value;
 }
 
-pub fn getAlign(self: *const VTTCue) []const u8 {
+fn getAlign(self: *const VTTCue) []const u8 {
     return self._align;
 }
 
-pub fn setAlign(self: *VTTCue, value: []const u8, frame: *Frame) !void {
+fn setAlign(self: *VTTCue, value: []const u8, frame: *Frame) !void {
     // Valid values: "start", "center", "end", "left", "right"
     self._align = try frame.dupeString(value);
 }
 
-pub fn getCueAsHTML(self: *const VTTCue) !js.Object {
+fn getCueAsHTML(self: *const VTTCue) !js.Object {
     // Minimal implementation: return a document fragment
     // In a full implementation, this would parse the VTT text into HTML nodes
     _ = self;

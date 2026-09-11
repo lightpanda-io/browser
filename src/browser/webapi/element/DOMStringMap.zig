@@ -41,6 +41,11 @@ fn setProperty(self: *DOMStringMap, name: String, value: String, frame: *Frame) 
     return self._element.setAttributeSafe(attr_name, value, frame);
 }
 
+fn hasProperty(self: *DOMStringMap, name: String, frame: *Frame) !bool {
+    const attr_name = try camelToKebab(frame.local_arena, name);
+    return self._element.hasAttribute(attr_name, frame);
+}
+
 fn deleteProperty(self: *DOMStringMap, name: String, frame: *Frame) !void {
     const attr_name = try camelToKebab(frame.local_arena, name);
     try self._element.removeAttribute(attr_name, frame);
@@ -135,7 +140,31 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, null, .{ .null_as_undefined = true, .ce_reactions = true });
+    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, hasProperty, .{ .null_as_undefined = true, .ce_reactions = true });
+
+    // v8 routes dataset[9] and dataset["9"] to the indexed interceptor
+    pub const @"[int]" = bridge.indexedReadWrite(_getByIndex, _setByIndex, _deleteByIndex, _queryByIndex, null, .{ .null_as_undefined = true, .ce_reactions = true });
+
+    fn _getByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !?String {
+        return self._element.getAttribute(try indexName(idx, frame), frame);
+    }
+
+    fn _setByIndex(self: *DOMStringMap, idx: u32, value: String, frame: *Frame) !void {
+        return self._element.setAttributeSafe(try indexName(idx, frame), value, frame);
+    }
+
+    fn _deleteByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !void {
+        return self._element.removeAttribute(try indexName(idx, frame), frame);
+    }
+
+    fn _queryByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !bool {
+        return self._element.hasAttribute(try indexName(idx, frame), frame);
+    }
+    fn indexName(idx: u32, frame: *Frame) !String {
+        var buf: [15]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, "data-{d}", .{idx}) catch unreachable;
+        return String.init(frame.local_arena, name, .{});
+    }
 
     // The supported property names are the camel-cased names of the
     // element's data-* attributes, in attribute order.

@@ -172,6 +172,11 @@ pub const ArrayBuffer = struct {
     }
 };
 
+// An ArrayBuffer or any typed array kind or a, exposed as its raw bytes.
+pub const BufferSource = struct {
+    bytes: []const u8,
+};
+
 pub const ArrayType = enum(u8) {
     int8,
     uint8,

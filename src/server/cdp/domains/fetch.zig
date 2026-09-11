@@ -524,7 +524,7 @@ pub const InterceptState = struct {
         return switch (resource_type) {
             .document => .Document,
             .xhr => .XHR,
-            .script => .Script,
+            .script, .worker => .Script,
             .fetch => .Fetch,
             .stylesheet => .Stylesheet,
             .eventsource => .EventSource,

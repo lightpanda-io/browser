@@ -32,7 +32,7 @@ See [benchmark details](https://github.com/lightpanda-io/demo/blob/main/BENCHMAR
 
 | Metric | Lightpanda | Headless Chrome | Difference |
 | :---- | :---- | :---- | :---- |
-| Memory (peak, 100 pages) | 123MB | 2GB | ~16 less |
+| Memory (peak, 100 pages) | 123MB | 2GB | ~16x less |
 | Execution time (100 pages) | 5s | 46s | ~9x faster |
 
 ## Quick start
@@ -151,6 +151,15 @@ await browser.disconnect();
 ```
 </details>
 
+#### Start a webdriver Bidi server
+
+Use `--protocol webdriver` to enable Bidi support.
+You can start both, CDP and Bidi, with `--protocol webdriver --protocol cdp`
+
+```console
+./lightpanda serve --obey-robots --log-format pretty  --log-level info --host 127.0.0.1 --port 9222 --protocol webdriver
+```
+
 ### Agent mode
 
 `lightpanda agent` lets you drive the browser with a native agent. Describe what
@@ -243,12 +252,10 @@ Set `LIGHTPANDA_DISABLE_CORE_DUMP` (to any value) to suppress crash core dumps b
 
 ## Status
 
-Lightpanda is in Beta and currently a work in progress. Stability and coverage are improving and many websites now work.
-You may still encounter errors or crashes. Please open an issue with specifics if so.
+Here are the key features we have implemented.
+For full details, see our [Web Platform Tests results](https://perf.lightpanda.io/wpt).
 
-Here are the key features we have implemented:
-
-- [ ] CORS [#2015](https://github.com/lightpanda-io/browser/issues/2015)
+- [x] CORS (enable with `--experimental-features cors`)
 - [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
 - [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
 - [x] DOM tree
@@ -257,7 +264,7 @@ Here are the key features we have implemented:
 - [x] Ajax
   - [x] XHR API
   - [x] Fetch API
-- [x] DOM dump
+- [x] DOM and Markdown dump
 - [x] CDP/websockets server
 - [x] Click
 - [x] Input form
@@ -266,8 +273,8 @@ Here are the key features we have implemented:
 - [x] Proxy support
 - [x] Network interception
 - [x] Respect `robots.txt` with option `--obey-robots`
-
-NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
+- [x] CDP and Webdriver Bidi
+- [x] Adblocker
 
 ## Build from sources
 

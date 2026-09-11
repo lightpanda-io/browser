@@ -29,7 +29,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const InteractivityType = enum {
+const InteractivityType = enum {
     native,
     aria,
     contenteditable,
@@ -37,7 +37,7 @@ pub const InteractivityType = enum {
     focusable,
 };
 
-pub const InteractiveElement = struct {
+const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -149,7 +149,7 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
-pub const FindFilter = struct {
+const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
     /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
@@ -180,14 +180,13 @@ fn walkInteractive(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
-    var css_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
     if (root.is(Element)) |root_el| {
         // root is outside of the tree walk, so check its visibility upfront.
-        if (!root_el.checkVisibilityCached(null, frame, .scan)) {
+        if (!root_el.isVisible(frame)) {
             return &.{};
         }
     }
@@ -206,14 +205,14 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+        if (frame._style_manager.hasDisplayNone(el)) {
             tw.skipChildren();
             continue;
         }
 
         const html_el = el.is(Element.Html) orelse continue;
 
-        const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
+        const itype = classifyInteractivity(frame, el, html_el, listener_targets) orelse continue;
 
         const axn = AXNode.fromNode(node);
         const role = axRole(axn);
@@ -242,16 +241,16 @@ fn walkInteractive(
             .listener_types = listener_types,
             .disabled = el.isDisabled(),
             .tab_index = html_el.getTabIndex(),
-            .id = el.getAttributeSafe(comptime .wrap("id")),
-            .class = el.getAttributeSafe(comptime .wrap("class")),
-            .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
+            .id = el.getId(),
+            .class = el.getClassName(),
+            .href = if (el.getAttributeInterned("href")) |href|
                 URL.resolve(arena, frame.base(), href, .{ .encoding = frame.charset }) catch href
             else
                 null,
             .input_type = getInputType(el),
             .value = getInputValue(el),
-            .element_name = el.getAttributeSafe(comptime .wrap("name")),
-            .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+            .element_name = el.getName(),
+            .placeholder = el.getAttributeInterned("placeholder"),
         });
 
         if (filter.max) |m| {
@@ -298,15 +297,14 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
-    cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(cache, frame)) return null;
+    if (el.hasPointerEventsNone(frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
         .anchor, .area => {
-            if (el.getAttributeSafe(comptime .wrap("href")) != null) return .native;
+            if (el.getAttributeInterned("href") != null) return .native;
         },
         .input => {
             if (el.is(Element.Html.Input)) |input| {
@@ -334,7 +332,7 @@ pub fn classifyInteractivity(
     // Only count elements with an EXPLICIT tabindex attribute,
     // since getTabIndex() returns 0 for all interactive tags by default
     // (including anchors without href and hidden inputs).
-    if (el.getAttributeSafe(comptime .wrap("tabindex"))) |_| {
+    if (el.getAttributeInterned("tabindex")) |_| {
         if (html_el.getTabIndex() >= 0) return .focusable;
     }
 
@@ -391,7 +389,7 @@ pub fn isContentRole(role: []const u8) bool {
 
 // ARIA `role` is a space-separated fallback list; the first token wins.
 pub fn explicitRole(el: *Element) ?[]const u8 {
-    const attr = el.getAttributeSafe(comptime .wrap("role")) orelse return null;
+    const attr = el.getAttributeInterned("role") orelse return null;
     var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
     return it.next();
 }

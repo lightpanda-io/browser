@@ -22,9 +22,28 @@ const v8 = js.v8;
 const Platform = @This();
 handle: *v8.Platform,
 
-pub fn init(v8_flags: ?[]const u8) !Platform {
-    if (v8_flags) |flags| {
+pub const Options = struct {
+    v8_flags: ?[]const u8 = null,
+    // BCP 47 tag; becomes ICU's default locale (Intl, toLocaleString).
+    locale: ?[:0]const u8 = null,
+    // IANA id; becomes ICU's default time zone. Null keeps the host zone.
+    timezone: ?[:0]const u8 = null,
+};
+
+/// ICU reads LC_ALL and TZ lazily on first use, so the environment must be
+/// set here, before InitializeICU and before the platform starts its thread
+/// pool (setenv is not safe once other threads may call getenv). ICU
+/// canonicalizes a BCP 47 tag itself, script subtag included.
+pub fn init(opts: Options) !Platform {
+    if (opts.v8_flags) |flags| {
         v8.v8__V8__SetFlagsFromString(flags.ptr, flags.len);
+    }
+
+    if (opts.locale) |tag| {
+        _ = setenv("LC_ALL", tag, 1);
+    }
+    if (opts.timezone) |id| {
+        _ = setenv("TZ", id, 1);
     }
 
     if (v8.v8__V8__InitializeICU() == false) {
@@ -43,3 +62,5 @@ pub fn deinit(self: Platform) void {
     v8.v8__V8__DisposePlatform();
     v8.v8__Platform__DELETE(self.handle);
 }
+
+extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, override: c_int) c_int;

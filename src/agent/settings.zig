@@ -378,7 +378,7 @@ pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
     return .auto;
 }
 
-pub const ReconciledModel = union(enum) {
+const ReconciledModel = union(enum) {
     /// Owned by the allocator passed to reconcileModel.
     use: []u8,
     abort,

@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
 const log = lp.log;
+const string = @import("string.zig");
 
 /// Comptime CLI builder that generates a tagged union parser from a
 /// declarative command recipe. Each command becomes a union variant whose
@@ -41,6 +42,10 @@ const log = lp.log;
 ///   - Legacy fallback: if the first argument starts with `--` and matches a
 ///     known fetch/serve flag, the parser sniffs the command from it and
 ///     re-parses argv. Only exists for backwards compatibility.
+///   - An unknown `--flag` returns `error.UnknownOption`, and a bare first
+///     argument within two edits of a command name returns
+///     `error.UnknownCommand` instead of being fetched as a url. The fatal
+///     log line names the closest match as `did_you_mean`.
 ///
 /// ## Command descriptor fields
 ///
@@ -99,7 +104,7 @@ const log = lp.log;
 ///   - Enums — parsed via `std.meta.stringToEnum`. Returns
 ///     `error.InvalidArgument` on a bad value. Requires `default` unless `?`.
 ///   - Packed structs of `bool` fields — parsed from a comma-separated list
-///     (e.g. `--strip-mode js,css`). The literal `"full"` sets every field.
+///     (e.g. `--strip-mode js,css`).
 ///     Unknown names return `error.InvalidArgument`. Requires `default`.
 ///     `multiple` is not supported.
 ///   - Optional types default to `null` when `default` is omitted.
@@ -185,6 +190,16 @@ const log = lp.log;
 ///     .help => |tag| printHelp(tag),
 /// }
 /// ```
+pub fn tagNames(comptime E: type) []const []const u8 {
+    return comptime blk: {
+        const fields = @typeInfo(E).@"enum".fields;
+        var names: [fields.len][]const u8 = undefined;
+        for (fields, &names) |f, *n| n.* = f.name;
+        const frozen = names;
+        break :blk &frozen;
+    };
+}
+
 pub fn Builder(comptime commands: anytype) type {
     return struct {
         const Self = @This();
@@ -205,6 +220,8 @@ pub fn Builder(comptime commands: anytype) type {
 
             break :blk @Enum(Tag, .exhaustive, &names, &std.simd.iota(Tag, len));
         };
+
+        const command_names = tagNames(Enum);
 
         /// Creates an array of `StructField` out of given options.
         fn optionsToStructFields(comptime options: anytype) [options.len]std.builtin.Type.StructField {
@@ -421,8 +438,12 @@ pub fn Builder(comptime commands: anytype) type {
                     return .{ exec_name, @unionInit(Union, "help", .help) };
                 }
 
-                log.fatal(.app, "unknown command", .{ .arg = command_name });
-                return error.UnknownCommand;
+                return unknownCommand(command_name);
+            }
+
+            // A bare word close to a command name is a typo, not a fetch url.
+            if (std.mem.startsWith(u8, cmd_str, "--") == false and string.closest(cmd_str, command_names, 2) != null) {
+                return unknownCommand(cmd_str);
             }
 
             // Last resort, try sniffing.
@@ -449,6 +470,16 @@ pub fn Builder(comptime commands: anytype) type {
             }
 
             unreachable;
+        }
+
+        fn unknownCommand(name: []const u8) error{UnknownCommand} {
+            const arg = log.red(name);
+            if (string.closest(name, command_names, 2)) |near| {
+                log.fatal(.app, "unknown command", .{ .arg = arg, .did_you_mean = log.green(near) });
+            } else {
+                log.fatal(.app, "unknown command", .{ .arg = arg });
+            }
+            return error.UnknownCommand;
         }
 
         /// Try to sniff the command out of given option.
@@ -491,15 +522,6 @@ pub fn Builder(comptime commands: anytype) type {
             return error.UnknownCommand;
         }
 
-        /// Returns the type for validator function.
-        pub fn ValidatorFn(comptime T: type, comptime is_multiple: bool) type {
-            if (is_multiple) {
-                return *const fn (Allocator, *std.process.Args.Iterator, *std.ArrayList(T)) anyerror!void;
-            }
-
-            return *const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void;
-        }
-
         /// Turns a snake_case string to kebab-case in comptime.
         fn toKebabCase(comptime str: []const u8) [str.len]u8 {
             var output: [str.len]u8 = str[0..str.len].*;
@@ -507,6 +529,25 @@ pub fn Builder(comptime commands: anytype) type {
                 c.* = '-';
             };
             return output;
+        }
+
+        /// Short aliases are left out: a one-letter candidate sits within two
+        /// edits of nearly any typo.
+        fn optionNames(comptime options: anytype) []const []const u8 {
+            return comptime blk: {
+                // toKebabCase walks every byte of every name.
+                @setEvalBranchQuota(50_000);
+                var names: []const []const u8 = &.{};
+                for (options) |option| {
+                    names = names ++ &[_][]const u8{"--" ++ toKebabCase(option.name)};
+                    if (@hasField(@TypeOf(option), "variants")) {
+                        for (option.variants) |variant| {
+                            names = names ++ &[_][]const u8{"--" ++ toKebabCase(variant.name)};
+                        }
+                    }
+                }
+                break :blk names;
+            };
         }
 
         fn parseValue(
@@ -522,7 +563,8 @@ pub fn Builder(comptime commands: anytype) type {
             ///     .field_name = "struct_field_name",
             ///     .type = T, // or .{ .cli = T, .memory = T }
             ///     .multiple = ?bool,
-            ///     .validator = ?ValidatorFn(T, is_multiple),
+            ///     // *ArrayList(T) instead of *T when `.multiple`
+            ///     .validator = ?*const fn (Allocator, *std.process.Args.Iterator, *T) anyerror!void,
             /// };
             /// ```
             option: anytype,
@@ -619,32 +661,25 @@ pub fn Builder(comptime commands: anytype) type {
 
                     const str = args.next() orelse return error.MissingArgument;
 
-                    if (std.mem.eql(u8, str, "full")) {
-                        // "full" sets all the fields of packed struct.
-                        const Int = _struct.backing_integer orelse @compileError("packed struct must provide a backing integer");
-                        target.* = @bitCast(@as(Int, std.math.maxInt(Int)));
-                    } else {
-                        // Parse given args.
-                        var it = std.mem.tokenizeScalar(u8, str, ',');
-                        outer: while (it.next()) |part| {
-                            const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+                    var it = std.mem.tokenizeScalar(u8, str, ',');
+                    outer: while (it.next()) |part| {
+                        const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
 
-                            inline for (_struct.fields) |f| {
-                                lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
-                                    .option = option.name,
-                                    .field = f.name,
-                                });
+                        inline for (_struct.fields) |f| {
+                            lp.assert(f.type == bool, "all fields of packed struct must be boolean", .{
+                                .option = option.name,
+                                .field = f.name,
+                            });
 
-                                if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
-                                    @field(target, f.name) = true;
-                                    continue :outer;
-                                }
+                            if (std.mem.eql(u8, trimmed, @as([]const u8, f.name))) {
+                                @field(target, f.name) = true;
+                                continue :outer;
                             }
-
-                            // Invalid option choice.
-                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
-                            return error.InvalidArgument;
                         }
+
+                        // Invalid option choice.
+                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = trimmed });
+                        return error.InvalidArgument;
                     }
                 },
                 .@"enum" => {
@@ -655,7 +690,12 @@ pub fn Builder(comptime commands: anytype) type {
 
                     const str = args.next() orelse return error.MissingArgument;
                     const v = std.meta.stringToEnum(E, str) orelse {
-                        log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = str });
+                        const value = log.red(str);
+                        if (string.closest(str, tagNames(E), 2)) |near| {
+                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = value, .did_you_mean = log.green(near) });
+                        } else {
+                            log.fatal(.app, "invalid option choice", .{ .arg = kebab_cased, .value = value });
+                        }
                         return error.InvalidArgument;
                     };
 
@@ -760,7 +800,13 @@ pub fn Builder(comptime commands: anytype) type {
 
                 // Encountered an option we don't know of.
                 if (std.mem.startsWith(u8, option_name, "--")) {
-                    log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = option_name });
+                    const names = comptime optionNames(options) ++ &[_][]const u8{"--help"};
+                    const arg = log.red(option_name);
+                    if (string.closest(option_name, names, 2)) |near| {
+                        log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg, .did_you_mean = log.green(near) });
+                    } else {
+                        log.fatal(.app, "unknown argument", .{ .mode = command.name, .arg = arg });
+                    }
                     return error.UnknownOption;
                 }
 
@@ -833,4 +879,23 @@ pub fn Builder(comptime commands: anytype) type {
             return @unionInit(Union, command.name, c);
         }
     };
+}
+
+test "cli: optionNames" {
+    const options = .{
+        .{ .name = "dump", .type = bool },
+        .{
+            .name = "wait_script",
+            .type = ?[]const u8,
+            .variants = .{
+                .{ .name = "wait_script_file" },
+            },
+        },
+    };
+    const Cli = Builder(.{
+        .{ .name = "fetch", .options = options },
+    });
+
+    const expected = [_][]const u8{ "--dump", "--wait-script", "--wait-script-file" };
+    try std.testing.expectEqualDeep(&expected, Cli.optionNames(options));
 }

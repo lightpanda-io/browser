@@ -23,27 +23,25 @@ const App = @import("../../App.zig");
 const Inbox = @import("../../Inbox.zig");
 const Notification = @import("../../Notification.zig");
 
-const WS = @import("../../network/WS.zig");
+const sys_net = @import("../../sys/net.zig");
 const http = @import("../../network/http.zig");
-const Server = @import("../Server.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 
-const js = @import("../../browser/js/js.zig");
-const Browser = @import("../../browser/Browser.zig");
-const Session = @import("../../browser/Session.zig");
-const Frame = @import("../../browser/Frame.zig");
 const Page = @import("../../browser/Page.zig");
 const Mime = @import("../../browser/Mime.zig");
-const Element = @import("../../browser/webapi/Element.zig");
+const Frame = @import("../../browser/Frame.zig");
+const Browser = @import("../../browser/Browser.zig");
+const Session = @import("../../browser/Session.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
-const Connection = @import("../Connection.zig");
-const Driver = @import("../Driver.zig");
+const WS = @import("../WS.zig");
+const Link = @import("../Link.zig");
 const Incrementing = @import("id.zig").Incrementing;
 
 const fetch = @import("domains/fetch.zig");
 const network_domain = @import("domains/network.zig");
 
+const js = lp.js;
 const log = lp.log;
 const json = std.json;
 const posix = std.posix;
@@ -62,14 +60,9 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 const CDP = @This();
 
 app: *App,
-conn: Connection,
+link: Link,
 browser: Browser,
 allocator: Allocator,
-
-// Server run-loop read-side handle for the CDP socket. Populated in
-// init; Server.serve calls registerLink(&cdp.link) after the
-// worker-side handshake completes, and unregisterLink before teardown.
-link: Server.Link,
 
 // when true, any target creation must be attached.
 target_auto_attach: bool = false,
@@ -103,41 +96,32 @@ browser_context_arena: std.heap.ArenaAllocator,
 // Files handed out as IO stream handles (Page.printToPDF ReturnAsStream).
 streams: @import("domains/io.zig").Streams,
 
-pub fn init(
-    self: *CDP,
-    app: *App,
-    socket: posix.socket_t,
-) !void {
+pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void {
     const allocator = app.allocator;
+    {
+        // this is documentation, and future-proofing, to show exactly where
+        // the socket's ownership is
+        errdefer sys_net.close(socket);
 
-    self.* = .{
-        .app = app,
-        .link = undefined,
-        .conn = undefined,
-        .browser = undefined,
-        .allocator = allocator,
-        .browser_context = null,
-        .frame_arena = std.heap.ArenaAllocator.init(allocator),
-        .message_arena = std.heap.ArenaAllocator.init(allocator),
-        .notification_arena = std.heap.ArenaAllocator.init(allocator),
-        .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
-        .streams = .{ .allocator = allocator },
-    };
+        self.* = .{
+            .app = app,
+            .link = undefined,
+            .browser = undefined,
+            .allocator = allocator,
+            .browser_context = null,
+            .frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .message_arena = std.heap.ArenaAllocator.init(allocator),
+            .notification_arena = std.heap.ArenaAllocator.init(allocator),
+            .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+            .streams = .{ .allocator = allocator },
+        };
+    }
 
-    const driver: Driver = .init(.{ .cdp = self });
+    // takes ownership of the socket
+    try self.link.init(app, socket, .cdp, inbox);
+    errdefer self.link.deinit();
 
-    try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, driver);
-    const http_client = &self.browser.http_client;
-
-    try self.conn.init(app, socket, .cdp, &http_client.inbox);
-    errdefer self.conn.deinit();
-
-    self.link = .{
-        .driver = driver,
-        .state = .live,
-        .socket = socket,
-        .handles = http_client.handles,
-    };
+    try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
 }
 
 pub fn deinit(self: *CDP) void {
@@ -150,7 +134,7 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
-    self.conn.deinit();
+    self.link.deinit();
 }
 // Called by the Server run loop when readable bytes arrive on the CDP
 // socket. Feeds them through the WS framer and pushes each parsed frame
@@ -185,7 +169,7 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
+    try self.link.sendJSON(message, .{ .emit_null_optional_fields = false });
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -426,7 +410,7 @@ pub const BrowserContext = struct {
         id: u32,
     };
 
-    pub const AttachedSession = struct {
+    const AttachedSession = struct {
         id: []const u8,
         parent_id: ?[]const u8,
     };
@@ -586,6 +570,7 @@ pub const BrowserContext = struct {
         try notification.register(.frame_navigated_within_document, self, onFrameNavigatedWithinDocument);
         try notification.register(.frame_navigate_failed, self, onFrameNavigateFailed);
         try notification.register(.frame_child_frame_created, self, onFrameChildFrameCreated);
+        try notification.register(.frame_destroyed, self, onFrameDestroyed);
         try notification.register(.frame_dom_content_loaded, self, onFrameDOMContentLoaded);
         try notification.register(.frame_loaded, self, onFrameLoaded);
         try notification.register(.javascript_dialog_opening, self, onJavascriptDialogOpening);
@@ -636,6 +621,9 @@ pub const BrowserContext = struct {
         self.node_registry.deinit();
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
+
+        // Session.deinit (called via closeSession above) already cleared this
+        // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
@@ -648,6 +636,7 @@ pub const BrowserContext = struct {
         if (self.user_agent_changed) {
             browser.http_client.clearUserAgentOverride();
         }
+        browser.http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
     }
 
@@ -657,35 +646,35 @@ pub const BrowserContext = struct {
         self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
-    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-        // The name is the world's identity (matching Chrome). Clients re-issue
-        // this call after every navigation; appending a duplicate each time
-        // would grow the per-page context count without bound.
+    const GetOrPutIsolatedWorld = struct {
+        world: *IsolatedWorld,
+        found_existing: bool,
+    };
+
+    pub fn findIsolatedWorld(self: *const BrowserContext, world_name: []const u8) ?*IsolatedWorld {
         for (self.isolated_worlds.items) |world| {
             if (std.mem.eql(u8, world.name, world_name)) {
-                if (world.grant_universal_access != grant_universal_access) {
-                    log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
-                }
                 return world;
             }
+        }
+        return null;
+    }
+
+    pub fn createIsolatedWorld(self: *BrowserContext, world_name: []const u8, grant_universal_access: bool) !GetOrPutIsolatedWorld {
+        if (self.findIsolatedWorld(world_name)) |world| {
+            if (world.grant_universal_access != grant_universal_access) {
+                log.warn(.cdp, "isolated world mismatch", .{ .name = world_name, .gua = grant_universal_access });
+            }
+            return .{ .world = world, .found_existing = true };
         }
 
         const browser = &self.cdp.browser;
         const arena = try browser.arena_pool.acquire(.small, "IsolatedWorld");
         errdefer arena.release();
 
-        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
-        errdefer call_arena.release();
-
-        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
-        errdefer local_arena.release();
-
         const world = try arena.create(IsolatedWorld);
         world.* = .{
             .arena = arena,
-            .call_arena = call_arena,
-            .local_arena = local_arena,
-            .context = null,
             .browser = browser,
             .name = try arena.dupe(u8, world_name),
             .grant_universal_access = grant_universal_access,
@@ -693,7 +682,19 @@ pub const BrowserContext = struct {
 
         try self.isolated_worlds.append(self.arena, world);
 
-        return world;
+        return .{ .world = world, .found_existing = false };
+    }
+
+    // only called when we fail to fully create a world (e.g. errdefer in
+    // Page.createIsolatedWorld).
+    pub fn removeIsolatedWorld(self: *BrowserContext, world: *IsolatedWorld) void {
+        for (self.isolated_worlds.items, 0..) |w, i| {
+            if (w == world) {
+                _ = self.isolated_worlds.swapRemove(i);
+                world.deinit();
+                return;
+            }
+        }
     }
 
     pub fn nodeWriter(self: *BrowserContext, root: *const NodeRegistry.Node, opts: Node.Writer.Opts) Node.Writer {
@@ -712,15 +713,12 @@ pub const BrowserContext = struct {
         // cross-frame queries produces names/visibility from the wrong document.
         const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(fallback);
-        const cache = try frame.call_arena.create(Element.VisibilityCache);
-        cache.* = .empty;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{
             .frame = frame,
             .root = root,
             .registry = &self.node_registry,
-            .visibility_cache = cache,
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
@@ -844,7 +842,7 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn fetchDisable(self: *BrowserContext) void {
+    fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
         self.intercept_state.clearPatterns();
@@ -891,12 +889,12 @@ pub const BrowserContext = struct {
         self.notification.unregister(.download_progress, self);
     }
 
-    pub fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
+    fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadWillBegin(self, msg);
     }
 
-    pub fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
+    fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadProgress(self, msg);
     }
@@ -911,63 +909,68 @@ pub const BrowserContext = struct {
         self.notification.unregister(.model_context_tool_removed, self);
     }
 
-    pub fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+    fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/webmcp.zig").onToolAdded(self, event);
     }
 
-    pub fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+    fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/webmcp.zig").onToolRemoved(self, event);
     }
 
-    pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
+    fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
     }
 
-    pub fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
+    fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameCreated(self, frame);
     }
 
-    pub fn onFrameNavigate(ctx: *anyopaque, msg: *const Notification.FrameNavigate) !void {
+    fn onFrameNavigate(ctx: *anyopaque, msg: *const Notification.FrameNavigate) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigate(self, msg);
     }
 
-    pub fn onFrameNavigated(ctx: *anyopaque, msg: *const Notification.FrameNavigated) !void {
+    fn onFrameNavigated(ctx: *anyopaque, msg: *const Notification.FrameNavigated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/page.zig").frameNavigated(self.notification_arena, self, msg);
     }
 
-    pub fn onFrameNavigateFailed(ctx: *anyopaque, msg: *const Notification.FrameNavigateFailed) !void {
+    fn onFrameNavigateFailed(ctx: *anyopaque, msg: *const Notification.FrameNavigateFailed) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigateFailed(self, msg);
     }
 
-    pub fn onFrameNavigatedWithinDocument(ctx: *anyopaque, msg: *const Notification.FrameNavigatedWithinDocument) !void {
+    fn onFrameNavigatedWithinDocument(ctx: *anyopaque, msg: *const Notification.FrameNavigatedWithinDocument) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigatedWithinDocument(self, msg);
     }
 
-    pub fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
+    fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        @import("domains/page.zig").frameDestroyed(self, frame);
+    }
+
+    fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
     }
 
-    pub fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
+    fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNetworkIdle(self, msg);
     }
 
-    pub fn onFrameNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkAlmostIdle) !void {
+    fn onFrameNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkAlmostIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNetworkAlmostIdle(self, msg);
     }
 
-    pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
+    fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         {
             // capture the request
@@ -985,28 +988,28 @@ pub const BrowserContext = struct {
         try network_domain.httpRequestStart(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
+    fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
+    fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpRequestFail(self, msg);
     }
 
-    pub fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
+    fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameDOMContentLoaded(self, msg);
     }
 
-    pub fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
+    fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameLoaded(self, msg);
     }
 
-    pub fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
+    fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
@@ -1018,7 +1021,7 @@ pub const BrowserContext = struct {
             .{ .kind = .request, .id = transfer.id };
     }
 
-    pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
+    fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
 
@@ -1028,11 +1031,11 @@ pub const BrowserContext = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .data = blk: {
-                    const cl = msg.transfer.getContentLength() orelse break :blk .empty;
-                    if (cl > self.network_limits.resource) {
+                    const body_len = msg.transfer.bodyLen();
+                    if (body_len > self.network_limits.resource) {
                         break :blk null;
                     }
-                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, cl);
+                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, body_len);
                 },
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
@@ -1056,7 +1059,7 @@ pub const BrowserContext = struct {
         return network_domain.httpResponseHeaderDone(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
+    fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpRequestDone(self, msg);
     }
@@ -1082,24 +1085,24 @@ pub const BrowserContext = struct {
         self.captured_responses_size += chunk.len;
     }
 
-    pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
+    fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
     }
 
-    pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
+    fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpServedFromCache(self, msg);
     }
 
-    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/console.zig").consoleMessage(self.notification_arena, self, msg);
     }
 
-    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(self.notification_arena, self, msg);
@@ -1148,7 +1151,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.conn.send_arena.allocator();
+        const allocator = cdp.link.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -1174,7 +1177,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.conn.sendJSONRaw(buf);
+        try cdp.link.sendJSONRaw(buf);
     }
 };
 
@@ -1186,66 +1189,132 @@ pub const BrowserContext = struct {
 const ScriptOnNewDocument = struct {
     identifier: u32,
     source: []const u8,
+    // Page.addScriptToEvaluateOnNewDocument's worldName. null means the main
+    // world. A named world is seeded into every frame (see IsolatedWorld).
+    world_name: ?[]const u8,
 };
 
-/// in the isolated world by using its Context ID or the worldName.
-/// grantUniversalAccess Indicates whether the isolated world can reference objects like the DOM or other JS Objects.
-/// An isolated world has it's own instance of globals like Window.
-/// Generally the client needs to resolve a node into the isolated world to be able to work with it.
-/// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
-const IsolatedWorld = struct {
+/// An isolated world is identified by its name and has one V8::Context per
+/// frame it has been seeded into. A world enters a frame on an explicit
+/// trigger: Page.createIsolatedWorld or, or a preload script which is seeded
+/// into every frame. Once seeded, the frame's context is rebuilt on every
+/// navigation with no further client involvement.
+/// Frame ids are stable across a child frame's re-navigation (the Frame is
+/// torn down and re-initialized in place), so a per-frame context is removed
+/// on frame_destroyed and created again on the frame's next frame_navigated.
+pub const IsolatedWorld = struct {
     arena: *lp.Arena,
-    call_arena: *lp.Arena,
-    local_arena: *lp.Arena,
     browser: *Browser,
     name: []const u8,
-    context: ?*js.Context = null,
     grant_universal_access: bool,
+    contexts: std.ArrayList(FrameContext) = .empty,
+
+    // Frames this world has been seeded into, by frame id.
+    seeded_frames: std.ArrayList(u32) = .empty,
 
     // Identity tracking for this isolated world (separate from main world).
-    // This ensures CDP inspector contexts don't share v8::Globals with main world.
+    // Shared by all of the world's frame contexts, like the main world shares
+    // Page.identity across frames, and reset with them on root teardown.
     identity: js.Identity = .{},
 
+    const FrameContext = struct {
+        frame: *const Frame,
+        context: *js.Context,
+        // Per-context, not per-world: the call_arena is reset when a context's
+        // call depth returns to 0, which would free the data of another frame's
+        // in-flight call if they shared one.
+        call_arena: *lp.Arena,
+        local_arena: *lp.Arena,
+    };
+
     pub fn deinit(self: *IsolatedWorld) void {
-        self.removeContext();
-        self.call_arena.release();
-        self.local_arena.release();
+        self.removeAllContexts();
         self.arena.release();
     }
 
-    pub fn removeContext(self: *IsolatedWorld) void {
-        if (self.context) |ctx| {
-            self.browser.env.destroyContext(ctx);
-            self.context = null;
+    pub fn seed(self: *IsolatedWorld, frame_id: u32) !void {
+        if (self.isSeeded(frame_id)) {
+            return;
         }
-        // I don't think it's possible to have any identity without a context,
-        // but there's no harm in being safe.
+        return self.seeded_frames.append(self.arena.allocator(), frame_id);
+    }
+
+    pub fn isSeeded(self: *const IsolatedWorld, frame_id: u32) bool {
+        return std.mem.indexOfScalar(u32, self.seeded_frames.items, frame_id) != null;
+    }
+
+    // Keyed by Frame, not frame id: a retired root Page keeps its frame id
+    // while its deferred teardown is pending, and that teardown must not
+    // touch the live page's context.
+    pub fn contextFor(self: *const IsolatedWorld, frame: *const Frame) ?*js.Context {
+        for (self.contexts.items) |fc| {
+            if (fc.frame == frame) {
+                return fc.context;
+            }
+        }
+        return null;
+    }
+
+    // Callers must register the returned context with the inspector
+    pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
+        lp.assert(self.contextFor(frame) == null, "IsolatedWorld.createContext duplicate", .{ .frame_id = frame._frame_id });
+
+        const browser = self.browser;
+        const call_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.call_arena");
+        errdefer call_arena.release();
+
+        const local_arena = try browser.arena_pool.acquire(.tiny, "IsolatedWorld.local_arena");
+        errdefer local_arena.release();
+
+        const ctx = try browser.env.createContext(frame, .{
+            .identity = &self.identity,
+            .identity_arena = self.arena.allocator(),
+            .call_arena = call_arena.allocator(),
+            .local_arena = local_arena.allocator(),
+            .debug_name = "IsolatedContext",
+        });
+        errdefer browser.env.destroyContext(ctx);
+        try ctx.setOrigin(frame.origin);
+
+        try self.contexts.append(self.arena.allocator(), .{
+            .frame = frame,
+            .context = ctx,
+            .call_arena = call_arena,
+            .local_arena = local_arena,
+        });
+        return ctx;
+    }
+
+    pub fn removeContext(self: *IsolatedWorld, frame: *const Frame) void {
+        for (self.contexts.items, 0..) |fc, i| {
+            if (fc.frame == frame) {
+                self.destroyFrameContext(fc);
+                _ = self.contexts.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    pub fn removeAllContexts(self: *IsolatedWorld) void {
+        for (self.contexts.items) |fc| {
+            self.destroyFrameContext(fc);
+        }
+        self.contexts.clearRetainingCapacity();
+
+        // The page's objects are going away with the root frame; wrappers
+        // keyed by their addresses must not survive to alias a new page's.
         self.identity.deinit();
         self.identity = .{};
     }
 
-    // The isolate world must share at least some of the state with the related frame, specifically the DocumentHTML
-    // (assuming grantUniversalAccess will be set to True!).
-    // We just created the world and the frame. The frame's state lives in the session, but is update on navigation.
-    // This also means this pointer becomes invalid after removePage until a new frame is created.
-    // Currently we have only 1 frame and thus also only 1 state in the isolate world.
-    pub fn createContext(self: *IsolatedWorld, frame: *Frame) !*js.Context {
-        if (self.context == null) {
-            const ctx = try self.browser.env.createContext(frame, .{
-                .identity = &self.identity,
-                .identity_arena = self.arena.allocator(),
-                .call_arena = self.call_arena.allocator(),
-                .local_arena = self.local_arena.allocator(),
-                .debug_name = "IsolatedContext",
-            });
-            self.context = ctx;
-        } else {
-            log.warn(.cdp, "not implemented", .{
-                .feature = "createContext: Not implemented second isolated context creation",
-                .info = "reuse existing context",
-            });
-        }
-        return self.context.?;
+    fn destroyFrameContext(self: *IsolatedWorld, fc: FrameContext) void {
+        // A re-navigating child frame keeps its Window, and the identity map
+        // keeps the window's global proxy; detach it from this context so the
+        // frame's next context can reattach it (as the main world does).
+        fc.context.detachGlobal();
+        self.browser.env.destroyContext(fc.context);
+        fc.call_arena.release();
+        fc.local_arena.release();
     }
 };
 
@@ -1376,7 +1445,7 @@ pub const Command = struct {
 
 // When we parse a JSON message from the client, this is the structure
 // we always expect. Parsed on the Network thread inside
-// Connection.handleMessage; the slices reference the raw JSON bytes
+// Link.handleMessage; the slices reference the raw JSON bytes
 // (or arena allocations for fields that needed unescaping). Both
 // outlive the InputMessage for the inbox message's lifetime.
 pub const InputMessage = struct {
@@ -1390,7 +1459,7 @@ pub const InputMessage = struct {
 // capture the raw json object (including the opening and closing braces).
 // Then, when we're processing the message, and we know what type it is, we
 // can parse it (in Disaptch(T).params).
-pub const InputParams = struct {
+const InputParams = struct {
     raw: []const u8,
 
     pub fn jsonParse(
@@ -1502,7 +1571,7 @@ test "cdp: disconnect latches so the worker keeps exiting" {
     // since #2510, on shutdown via shutdownLinks.
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
-        client.inbox.push(arena, .{ .disconnect = null });
+        ctx.inbox.push(arena, .{ .disconnect = null });
     }
 
     // First tick drains the .disconnect and tears the link down.
@@ -1528,8 +1597,7 @@ test "cdp: run sends a close frame on pending terminate" {
     defer cdp.browser.env.cancelTerminate();
 
     // The pending terminate makes the first tick the last one, so run returns.
-    const driver: Driver = .init(.{ .cdp = cdp });
-    driver.run();
+    ctx.driver.run();
 
     // The client should receive a close frame (code 1001, going away), not
     // just an abrupt socket close.
@@ -1544,10 +1612,10 @@ test "cdp: syncRequest short-circuits after disconnect" {
 
     const client = &ctx.cdp().browser.http_client;
 
-    // Latch terminated via a drained disconnect (as above).
+    // Latch disconnected via a drained disconnect (as above).
     {
         const arena = try client.arena_pool.acquire(.tiny, "test disconnect");
-        client.inbox.push(arena, .{ .disconnect = null });
+        ctx.inbox.push(arena, .{ .disconnect = null });
     }
     try testing.expectError(error.ClientDisconnected, client.tick(0));
 
@@ -1559,6 +1627,9 @@ test "cdp: syncRequest short-circuits after disconnect" {
     const transfer = try client.newRequest(.{
         .method = .GET,
         .url = "http://127.0.0.1:9582/",
+        .origin = null,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
         .resource_type = .fetch,
         .shutdown_callback = HttpClient.noopShutdown,
     }, null);

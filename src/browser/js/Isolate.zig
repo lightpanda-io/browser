@@ -124,10 +124,6 @@ pub fn initInteger(self: Isolate, val: anytype) js.Integer {
     return js.Integer.init(self.handle, val);
 }
 
-pub fn initBigInt(self: Isolate, val: anytype) js.BigInt {
-    return js.BigInt.init(self.handle, val);
-}
-
 pub fn initNumber(self: Isolate, val: anytype) js.Number {
     return js.Number.init(self.handle, val);
 }

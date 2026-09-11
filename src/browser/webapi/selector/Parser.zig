@@ -604,62 +604,73 @@ fn pseudoClass(self: *Parser, arena: Allocator) !Selector.PseudoClass {
     }
 
     switch (name.len) {
-        4 => {
-            if (fastEql(name, "root")) return .root;
-            if (fastEql(name, "link")) return .link;
+        4 => switch (@as(u32, @bitCast(name[0..4].*))) {
+            asUint("root") => return .root,
+            asUint("link") => return .link,
+            else => {},
         },
-        5 => {
-            if (fastEql(name, "modal")) return .modal;
-            if (fastEql(name, "hover")) return .hover;
-            if (fastEql(name, "focus")) return .focus;
-            if (fastEql(name, "scope")) return .scope;
-            if (fastEql(name, "empty")) return .empty;
-            if (fastEql(name, "valid")) return .valid;
+        5 => switch (@as(u40, @bitCast(name[0..5].*))) {
+            asUint("modal") => return .modal,
+            asUint("hover") => return .hover,
+            asUint("focus") => return .focus,
+            asUint("scope") => return .scope,
+            asUint("empty") => return .empty,
+            asUint("valid") => return .valid,
+            else => {},
         },
-        6 => {
-            if (fastEql(name, "active")) return .active;
-            if (fastEql(name, "target")) return .target;
+        6 => switch (@as(u48, @bitCast(name[0..6].*))) {
+            asUint("active") => return .active,
+            asUint("target") => return .target,
+            else => {},
         },
-        7 => {
-            if (fastEql(name, "checked")) return .checked;
-            if (fastEql(name, "visited")) return .visited;
-            if (fastEql(name, "enabled")) return .enabled;
-            if (fastEql(name, "invalid")) return .invalid;
-            if (fastEql(name, "default")) return .default;
-            if (fastEql(name, "defined")) return .defined;
+        7 => switch (@as(u56, @bitCast(name[0..7].*))) {
+            asUint("checked") => return .checked,
+            asUint("visited") => return .visited,
+            asUint("enabled") => return .enabled,
+            asUint("invalid") => return .invalid,
+            asUint("default") => return .default,
+            asUint("defined") => return .defined,
+            else => {},
         },
-        8 => {
-            if (fastEql(name, "disabled")) return .disabled;
-            if (fastEql(name, "required")) return .required;
-            if (fastEql(name, "optional")) return .optional;
-            if (fastEql(name, "any-link")) return .any_link;
-            if (fastEql(name, "in-range")) return .in_range;
+        8 => switch (@as(u64, @bitCast(name[0..8].*))) {
+            asUint("disabled") => return .disabled,
+            asUint("required") => return .required,
+            asUint("optional") => return .optional,
+            asUint("any-link") => return .any_link,
+            asUint("in-range") => return .in_range,
+            else => {},
         },
-        9 => {
-            if (fastEql(name, "read-only")) return .read_only;
+        9 => switch (@as(u72, @bitCast(name[0..9].*))) {
+            asUint("read-only") => return .read_only,
+            else => {},
         },
-        10 => {
-            if (fastEql(name, "only-child")) return .only_child;
-            if (fastEql(name, "last-child")) return .last_child;
-            if (fastEql(name, "read-write")) return .read_write;
+        10 => switch (@as(u80, @bitCast(name[0..10].*))) {
+            asUint("only-child") => return .only_child,
+            asUint("last-child") => return .last_child,
+            asUint("read-write") => return .read_write,
+            else => {},
         },
-        11 => {
-            if (fastEql(name, "first-child")) return .first_child;
+        11 => switch (@as(u88, @bitCast(name[0..11].*))) {
+            asUint("first-child") => return .first_child,
+            else => {},
         },
-        12 => {
-            if (fastEql(name, "only-of-type")) return .only_of_type;
-            if (fastEql(name, "last-of-type")) return .last_of_type;
-            if (fastEql(name, "focus-within")) return .focus_within;
-            if (fastEql(name, "out-of-range")) return .out_of_range;
-            if (fastEql(name, "popover-open")) return .popover_open;
+        12 => switch (@as(u96, @bitCast(name[0..12].*))) {
+            asUint("only-of-type") => return .only_of_type,
+            asUint("last-of-type") => return .last_of_type,
+            asUint("focus-within") => return .focus_within,
+            asUint("out-of-range") => return .out_of_range,
+            asUint("popover-open") => return .popover_open,
+            else => {},
         },
-        13 => {
-            if (fastEql(name, "first-of-type")) return .first_of_type;
-            if (fastEql(name, "focus-visible")) return .focus_visible;
-            if (fastEql(name, "indeterminate")) return .indeterminate;
+        13 => switch (@as(u104, @bitCast(name[0..13].*))) {
+            asUint("first-of-type") => return .first_of_type,
+            asUint("focus-visible") => return .focus_visible,
+            asUint("indeterminate") => return .indeterminate,
+            else => {},
         },
-        17 => {
-            if (fastEql(name, "placeholder-shown")) return .placeholder_shown;
+        17 => switch (@as(u136, @bitCast(name[0..17].*))) {
+            asUint("placeholder-shown") => return .placeholder_shown,
+            else => {},
         },
         else => {},
     }
@@ -1163,13 +1174,6 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
-}
-
-fn fastEql(a: []const u8, comptime b: []const u8) bool {
-    for (a, b) |a_byte, b_byte| {
-        if (a_byte != b_byte) return false;
-    }
-    return true;
 }
 
 const EscapeResult = struct {

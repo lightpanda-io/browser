@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=parser_loaded_script>
+  // testing.js itself was fetched by the parser.
+  const url = testing.BASE_URL + 'testing.js';
+  const entries = performance.getEntriesByName(url);
+  testing.expectEqual(1, entries.length);
+  const e = entries[0];
+  testing.expectEqual(true, e instanceof PerformanceResourceTiming);
+  testing.expectEqual(true, e instanceof PerformanceEntry);
+  testing.expectEqual('resource', e.entryType);
+  testing.expectEqual(url, e.name);
+  testing.expectEqual('script', e.initiatorType);
+  testing.expectEqual(200, e.responseStatus);
+  testing.expectEqual(true, e.decodedBodySize > 1000);
+  testing.expectEqual(e.decodedBodySize, e.encodedBodySize);
+  testing.expectEqual(true, e.transferSize > e.encodedBodySize);
+  testing.expectEqual(1, performance.getEntriesByType('resource').length);
+  testing.expectEqual(e, performance.getEntries()[0]);
+</script>
+
+<script id=fetch_entry type=module>
+  {
+    const state = await testing.async();
+    const url = testing.ORIGIN + '/xhr';
+    const before = performance.now();
+    await (await fetch(url)).text();
+    const after = performance.now();
+    state.resolve();
+    await state.done(() => {
+      const list = performance.getEntriesByName(url, 'resource');
+      testing.expectEqual(1, list.length);
+      const e = list[0];
+      testing.expectEqual('fetch', e.initiatorType);
+      testing.expectEqual('http/1.1', e.nextHopProtocol);
+      testing.expectEqual('', e.deliveryType);
+      testing.expectEqual(0, e.workerStart);
+      testing.expectEqual(0, e.redirectStart);
+      testing.expectEqual(0, e.redirectEnd);
+      testing.expectEqual(true, e.startTime >= before);
+      testing.expectEqual(e.startTime, e.fetchStart);
+      testing.expectEqual(true, e.fetchStart <= e.domainLookupStart);
+      testing.expectEqual(true, e.domainLookupStart <= e.domainLookupEnd);
+      testing.expectEqual(true, e.domainLookupEnd <= e.connectStart);
+      testing.expectEqual(true, e.connectStart <= e.connectEnd);
+      testing.expectEqual(true, e.connectEnd <= e.requestStart);
+      testing.expectEqual(true, e.requestStart <= e.responseStart);
+      testing.expectEqual(true, e.responseStart <= e.responseEnd);
+      testing.expectEqual(true, e.responseEnd <= after);
+      testing.expectEqual(0, e.secureConnectionStart);
+      testing.expectEqual(e.responseEnd - e.startTime, e.duration);
+      testing.expectEqual(100, e.encodedBodySize);
+      testing.expectEqual(100, e.decodedBodySize);
+      testing.expectEqual(true, e.transferSize > 100);
+      testing.expectEqual(200, e.responseStatus);
+      testing.expectEqual('text/html', e.contentType);
+      testing.expectEqual('', e.contentEncoding);
+      testing.expectEqual(0, e.firstInterimResponseStart);
+      testing.expectEqual(e.responseStart, e.finalResponseHeadersStart);
+
+      const json = e.toJSON();
+      testing.expectEqual(url, json.name);
+      testing.expectEqual('resource', json.entryType);
+      testing.expectEqual('fetch', json.initiatorType);
+      testing.expectEqual(e.responseEnd, json.responseEnd);
+      testing.expectEqual(true, JSON.stringify(e).includes('"encodedBodySize":100'));
+    });
+  }
+</script>
+
+<script id=xhr_entry type=module>
+  {
+    const state = await testing.async();
+    const url = testing.ORIGIN + '/xhr/json';
+    await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.onload = resolve;
+      xhr.open('GET', url);
+      xhr.send();
+    });
+    state.resolve();
+    await state.done(() => {
+      const e = performance.getEntriesByName(url)[0];
+      testing.expectEqual('xmlhttprequest', e.initiatorType);
+      testing.expectEqual('application/json', e.contentType);
+      testing.expectEqual(true, JSON.stringify(e).includes('"contentEncoding":""'));
+      testing.expectEqual(200, e.responseStatus);
+    });
+  }
+</script>
+
+<script id=redirect type=module>
+  {
+    const state = await testing.async();
+    const url = testing.ORIGIN + '/resource-timing/redirect';
+    const res = await fetch(url);
+    await res.text();
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(testing.ORIGIN + '/resource-timing/plain', res.url);
+      // Named after the URL as requested, not the one it landed on.
+      testing.expectEqual(0, performance.getEntriesByName(res.url).length);
+      const list = performance.getEntriesByName(url);
+      testing.expectEqual(1, list.length);
+      const e = list[0];
+      testing.expectEqual(e.startTime, e.redirectStart);
+      testing.expectEqual(true, e.redirectEnd >= e.redirectStart);
+      testing.expectEqual(e.redirectEnd, e.fetchStart);
+      testing.expectEqual(true, e.responseStart >= e.fetchStart);
+      testing.expectEqual(true, e.responseEnd >= e.responseStart);
+      testing.expectEqual(200, e.responseStatus);
+      testing.expectEqual('window.__rt_plain = true;'.length, e.decodedBodySize);
+    });
+  }
+</script>
+
+<script id=cross_origin_opaque type=module>
+  {
+    const state = await testing.async();
+    // localhost is a different origin than the 127.0.0.1 test page; without
+    // Timing-Allow-Origin only the start, end and duration are exposed.
+    const url = 'http://localhost:9582/resource-timing/plain';
+    const before = performance.now();
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = url;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, window.__rt_plain);
+      const e = performance.getEntriesByName(url)[0];
+      testing.expectEqual('script', e.initiatorType);
+      testing.expectEqual(true, e.startTime >= before);
+      testing.expectEqual(true, e.responseEnd > e.startTime);
+      testing.expectEqual(e.responseEnd - e.startTime, e.duration);
+      testing.expectEqual(e.startTime, e.fetchStart);
+      testing.expectEqual(0, e.domainLookupStart);
+      testing.expectEqual(0, e.domainLookupEnd);
+      testing.expectEqual(0, e.connectStart);
+      testing.expectEqual(0, e.connectEnd);
+      testing.expectEqual(0, e.requestStart);
+      testing.expectEqual(0, e.responseStart);
+      testing.expectEqual(0, e.transferSize);
+      testing.expectEqual(0, e.encodedBodySize);
+      testing.expectEqual(0, e.decodedBodySize);
+      testing.expectEqual(0, e.responseStatus);
+      testing.expectEqual('', e.nextHopProtocol);
+      testing.expectEqual('', e.contentType);
+    });
+  }
+</script>
+
+<script id=cross_origin_timing_allow type=module>
+  {
+    const state = await testing.async();
+    const url = 'http://localhost:9582/resource-timing/tao';
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = url;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, window.__rt_tao);
+      const e = performance.getEntriesByName(url)[0];
+      testing.expectEqual(true, e.requestStart >= e.fetchStart);
+      testing.expectEqual(true, e.responseStart >= e.requestStart);
+      testing.expectEqual(true, e.transferSize > e.encodedBodySize);
+      testing.expectEqual('window.__rt_tao = true;'.length, e.decodedBodySize);
+      testing.expectEqual(200, e.responseStatus);
+      testing.expectEqual('http/1.1', e.nextHopProtocol);
+      testing.expectEqual('text/javascript', e.contentType);
+    });
+  }
+</script>
+
+<script id=failed_fetch type=module>
+  {
+    const state = await testing.async();
+    // Nothing listens on port 1: the fetch fails without a response.
+    const url = 'http://127.0.0.1:1/nope';
+    let failed = false;
+    try {
+      await fetch(url);
+    } catch (err) {
+      failed = true;
+    }
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, failed);
+      const list = performance.getEntriesByName(url);
+      testing.expectEqual(1, list.length);
+      const e = list[0];
+      testing.expectEqual('fetch', e.initiatorType);
+      testing.expectEqual(true, e.startTime > 0);
+      testing.expectEqual(true, e.responseEnd >= e.startTime);
+      testing.expectEqual(e.startTime, e.fetchStart);
+      testing.expectEqual(0, e.responseStatus);
+      testing.expectEqual(0, e.transferSize);
+      testing.expectEqual(0, e.responseStart);
+      testing.expectEqual('', e.contentType);
+    });
+  }
+</script>
+
+<script id=iframe_entry type=module>
+  {
+    const state = await testing.async();
+    const url = testing.ORIGIN + '/redirect-target';
+    const frame = document.createElement('iframe');
+    await new Promise((resolve) => {
+      frame.src = url;
+      frame.onload = resolve;
+      document.body.appendChild(frame);
+    });
+    state.resolve();
+    await state.done(() => {
+      // A frame's document fetch is a resource of its parent, not of itself.
+      const e = performance.getEntriesByName(url)[0];
+      testing.expectEqual('iframe', e.initiatorType);
+      testing.expectEqual('text/html', e.contentType);
+      testing.expectEqual(200, e.responseStatus);
+      testing.expectEqual(0, frame.contentWindow.performance.getEntriesByType('resource').length);
+    });
+  }
+</script>
+
+<script id=observer type=module>
+  {
+    const state = await testing.async();
+    const url = testing.ORIGIN + '/xhr/xml';
+    const observed = [];
+    const po = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        observed.push(e);
+      }
+    });
+    po.observe({ type: 'resource' });
+
+    const buffered = [];
+    const po2 = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        buffered.push(e);
+      }
+    });
+    po2.observe({ type: 'resource', buffered: true });
+
+    await (await fetch(url)).text();
+    // Observers are notified from a queued task.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    state.resolve();
+    await state.done(() => {
+      po.disconnect();
+      po2.disconnect();
+      testing.expectEqual(true, PerformanceObserver.supportedEntryTypes.includes('resource'));
+      testing.expectEqual(true, observed.some((e) => e.name === url && e.entryType === 'resource'));
+      // The wire type is application/xml; the API reports the minimized essence.
+      testing.expectEqual('application/xml', performance.getEntriesByName(url)[0].contentType);
+      testing.expectEqual(false, observed.some((e) => e.name.endsWith('/testing.js')));
+      testing.expectEqual(true, buffered.some((e) => e.name.endsWith('/testing.js')));
+      testing.expectEqual(true, buffered.some((e) => e.name === url));
+    });
+  }
+</script>

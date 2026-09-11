@@ -34,7 +34,6 @@ const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const RobotsGate = @This();
 
@@ -116,6 +115,9 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .document_frame_id = transfer.req.document_frame_id,
         .loader_id = transfer.req.loader_id,
         .notification = transfer.req.notification,
+        .origin = null,
+        .credentials_mode = .omit,
+        .request_mode = .no_cors,
         .ctx = robots_ctx,
         .header_callback = RobotsContext.headerCallback,
         .data_callback = RobotsContext.dataCallback,
@@ -180,9 +182,7 @@ const RobotsContext = struct {
             self.status = hdr.status;
         }
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
-        if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), cl);
-        }
+        try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
     }
 

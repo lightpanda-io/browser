@@ -17,18 +17,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
-const Factory = @import("../../../Factory.zig");
+
 const js = @import("../../../js/js.zig");
+const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
 
 const Node = @import("../../Node.zig");
-const Element = @import("../../Element.zig");
-const HtmlElement = @import("../Html.zig");
-const collections = @import("../../collections.zig");
-const Form = @import("Form.zig");
 const Event = @import("../../Event.zig");
-const ValidityState = @import("ValidityState.zig");
+const Element = @import("../../Element.zig");
+const collections = @import("../../collections.zig");
+
+const HtmlElement = @import("../Html.zig");
+const reflection = @import("../reflection.zig");
+
+const Form = @import("Form.zig");
 pub const Option = @import("Option.zig");
+const ValidityState = @import("ValidityState.zig");
 
 const Select = @This();
 
@@ -98,6 +102,41 @@ pub fn deselectOthers(self: *const Select, keep: *const Option) void {
     }
 }
 
+// A non-multiple select with a display size < 2 always has 1 item selected.
+pub fn resetToDefaultSelection(self: *const Select) void {
+    if (self.getMultiple() or self.displaySize() > 1) {
+        return;
+    }
+
+    var first_enabled: ?*Option = null;
+    var last_selected: ?*Option = null;
+    var it = OptionIterator.init(self);
+    while (it.next()) |option| {
+        if (option._selected) {
+            if (last_selected) |prev| prev._selected = false;
+            last_selected = option;
+        }
+        if (first_enabled == null and !option.asElement().isDisabled()) {
+            first_enabled = option;
+        }
+    }
+
+    if (last_selected == null) {
+        if (first_enabled) |option| {
+            option._selected = true;
+        }
+    }
+}
+
+// The size attribute, as the size IDL attribute parses it (0 when absent or
+// invalid). Whether the select renders as a menu list or a list box hinges on
+// this, and with it whether an option can be deselected outright.
+fn displaySize(self: *const Select) i64 {
+    const value = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 0;
+    const parsed = reflection.parseInteger(value) orelse return 0;
+    return @max(parsed, 0);
+}
+
 // Resolves the option whose selectedness contributes to the select's value
 // per HTML §form-elements§selectedness-setting-algorithm: an explicitly
 // selected non-disabled option, falling back to the first non-disabled
@@ -137,6 +176,7 @@ pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
     while (it.next()) |option| {
         option._selected = std.mem.eql(u8, option.getValue(frame), value);
     }
+    frame.domChanged();
 }
 
 pub fn getSelectedIndex(self: *Select) i32 {
@@ -158,7 +198,7 @@ pub fn getSelectedIndex(self: *Select) i32 {
     return if (has_options) 0 else -1;
 }
 
-pub fn setSelectedIndex(self: *Select, index: i32) !void {
+pub fn setSelectedIndex(self: *Select, index: i32, frame: *Frame) !void {
     // Mark that selectedIndex has been explicitly set
     self._selected_index_set = true;
 
@@ -176,6 +216,7 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
         }
         current_index += 1;
     }
+    frame.domChanged();
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#dom-select-type
@@ -185,7 +226,7 @@ pub fn getType(self: *const Select) []const u8 {
     return if (self.getMultiple()) "select-multiple" else "select-one";
 }
 
-pub fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollection {
+fn getOptions(self: *Select, frame: *Frame) !*collections.HTMLOptionsCollection {
     // select_options mode is the select's list of options: option children
     // plus the option children of optgroup children.
     const node_live = collections.NodeLive(.select_options).init(self.asNode(), {}, frame);
@@ -268,7 +309,7 @@ pub fn getForm(self: *Select, frame: *Frame) ?*Form {
     return null;
 }
 
-pub fn getLabels(self: *Select, frame: *Frame) !js.Array {
+fn getLabels(self: *Select, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
@@ -279,14 +320,14 @@ pub fn getWillValidate(self: *const Select) bool {
     return !self.asConstElement().isDisabled();
 }
 
-pub fn getValidity(self: *Select, frame: *Frame) !*ValidityState {
+fn getValidity(self: *Select, frame: *Frame) !*ValidityState {
     if (self._validity) |v| return v;
     const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
     self._validity = v;
     return v;
 }
 
-pub fn getValidationMessage(self: *const Select) []const u8 {
+fn getValidationMessage(self: *const Select) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing()) return "Please select an item in the list.";
@@ -303,11 +344,11 @@ pub fn checkValidity(self: *Select, frame: *Frame) !bool {
     return false;
 }
 
-pub fn reportValidity(self: *Select, frame: *Frame) !bool {
+fn reportValidity(self: *Select, frame: *Frame) !bool {
     return self.checkValidity(frame);
 }
 
-pub fn setCustomValidity(self: *Select, message: []const u8, frame: *Frame) !void {
+fn setCustomValidity(self: *Select, message: []const u8, frame: *Frame) !void {
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
@@ -333,16 +374,12 @@ pub fn suffersValueMissing(self: *const Select) bool {
     return false;
 }
 
-pub fn getDisabled(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
-}
-
 pub fn getMultiple(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
+    return self.asConstElement().getAttributeInterned("multiple") != null;
 }
 
 pub fn getRequired(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+    return self.asConstElement().getAttributeInterned("required") != null;
 }
 
 pub const JsApi = struct {

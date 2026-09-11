@@ -89,7 +89,7 @@ pub fn getOldValue(self: *const StorageEvent) ?[]const u8 {
     return self._old_value;
 }
 
-pub fn getNewValue(self: *const StorageEvent) ?[]const u8 {
+fn getNewValue(self: *const StorageEvent) ?[]const u8 {
     return self._new_value;
 }
 
@@ -98,11 +98,11 @@ pub fn getUrl(self: *const StorageEvent) []const u8 {
 }
 
 // The initiating Storage object is not tracked; always null.
-pub fn getStorageArea(_: *const StorageEvent) ?bool {
+fn getStorageArea(_: *const StorageEvent) ?bool {
     return null;
 }
 
-pub fn initStorageEvent(
+fn initStorageEvent(
     self: *StorageEvent,
     typ: []const u8,
     bubbles: ?bool,

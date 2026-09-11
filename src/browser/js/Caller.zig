@@ -585,6 +585,9 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
     }
 
     const err_local = errorLocal(T, local, info);
+    const env = local.ctx.env;
+    const message = env.error_message orelse "";
+    env.error_message = null;
 
     const js_err: *const v8.Value = blk: {
         // Error constructors use the isolate's current context: enter the
@@ -595,7 +598,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 
         break :blk switch (err) {
             error.InvalidArgument => isolate.createTypeError("invalid argument"),
-            error.TypeError => isolate.createTypeError(""),
+            error.TypeError => isolate.createTypeError(message),
             error.RangeError => isolate.createRangeError(""),
             error.OutOfMemory => isolate.createError("out of memory"),
             error.IllegalConstructor => isolate.createError("Illegal Constructor"),
@@ -782,7 +785,7 @@ const ReturnValue = struct {
         }
     }
 
-    pub fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
+    fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
         v8.v8__ReturnValue__Set(self.handle, handle);
     }
 };

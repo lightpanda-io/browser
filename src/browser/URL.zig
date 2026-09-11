@@ -22,7 +22,7 @@ const U = @import("../sys/url.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const ResolveOptions = struct {
+const ResolveOptions = struct {
     /// null = don't encode, "UTF-8" = standard percent encoding,
     /// other charset = encode query string using that charset with NCR fallback.
     encoding: ?[]const u8 = null,
@@ -380,7 +380,7 @@ pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
 }
 
 // Helper function to build a URL from components
-pub fn buildUrl(
+fn buildUrl(
     allocator: Allocator,
     protocol: []const u8,
     host: []const u8,
@@ -1011,6 +1011,58 @@ test "URL: resolve validates ASCII punycode (xn--) labels" {
     // Malformed punycode must be rejected rather than passed through verbatim.
     try testing.expectError(error.TypeError, resolve(testing.arena_allocator, "https://example.com/", "https://xn--0.pt/x", .{}));
     try testing.expectError(error.TypeError, resolve(testing.arena_allocator, "https://example.com/", "https://xn--a.pt/x", .{}));
+}
+
+test "URL: resolve pops drive-letter lookalike segment for non-file schemes (#2794)" {
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        // A "C:" segment is only a Windows drive letter for file: URLs; for any
+        // other scheme ".." must pop it as an ordinary segment.
+        .{
+            .base = "abc://x/y/z/C:/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // Special (but non-file) scheme hits the same path.
+        .{
+            .base = "http://x/y/z/C:/",
+            .path = "..",
+            .expected = "http://x/y/z/",
+        },
+        // The "C|" (pipe) form is affected too.
+        .{
+            .base = "abc://x/y/z/C|/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // Controls: ordinary segments pop regardless of the letter casing.
+        .{
+            .base = "abc://x/y/z/w/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        .{
+            .base = "abc://x/y/z/Ca/",
+            .path = "..",
+            .expected = "abc://x/y/z/",
+        },
+        // A drive-letter lookalike WITHOUT a trailing slash pops fine already.
+        .{
+            .base = "abc://x/y/z/C:",
+            .path = "..",
+            .expected = "abc://x/y/",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
 }
 
 test "URL: resolve with encoding" {

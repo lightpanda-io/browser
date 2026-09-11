@@ -16,8 +16,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
-
 const js = @import("../../js/js.zig");
 
 const Execution = js.Execution;
@@ -31,7 +29,7 @@ pub fn init(exec: *const Execution) !*CanvasGradient {
     return exec._factory.create(CanvasGradient{});
 }
 
-pub fn addColorStop(self: *CanvasGradient, offset: f64, _: []const u8) !void {
+fn addColorStop(self: *CanvasGradient, offset: f64, _: []const u8) !void {
     if (!(offset >= 0 and offset <= 1)) return error.IndexSizeError;
     self._stops += 1;
 }

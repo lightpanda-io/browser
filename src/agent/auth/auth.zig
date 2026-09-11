@@ -160,14 +160,14 @@ fn storeDelete(allocator: std.mem.Allocator, id: []const u8) !void {
 }
 
 /// Load the stored token for `id`, or null when absent/unreadable/no data dir.
-pub fn storeLoad(allocator: std.mem.Allocator, id: []const u8) !?TokenSet {
+fn storeLoad(allocator: std.mem.Allocator, id: []const u8) !?TokenSet {
     var da: std.heap.ArenaAllocator = .init(allocator);
     defer da.deinit();
     const dir = dataDir(da.allocator()) orelse return null;
     return storeLoadAt(allocator, dir, id);
 }
 
-pub fn storeSave(allocator: std.mem.Allocator, id: []const u8, tokens: TokenSet) !void {
+fn storeSave(allocator: std.mem.Allocator, id: []const u8, tokens: TokenSet) !void {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const a = arena.allocator();

@@ -105,7 +105,10 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         .url = resolved_url,
         .frame_id = self._frame_id,
         .loader_id = self._loader_id,
-        .resource_type = .script,
+        .resource_type = if (self._type == .module) .script else .worker,
+        .origin = frame.origin,
+        .request_mode = .same_origin,
+        .credentials_mode = .same_origin,
         .header_callback = httpHeaderCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -160,9 +163,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), cl);
-    }
+    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
 
     return .proceed;
 }
@@ -265,10 +266,16 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._http_transfer = null;
     self.releaseScriptArena();
 
-    log.err(.browser, "worker fetch error", .{
-        .url = self._url,
-        .err = err,
-    });
+    // TransferCanceled is not a load failure: terminate() (or worker teardown)
+    // cancelled a still-inflight script fetch. We shouldn't fireErrorEvent
+    // (or bother logging)
+    const canceled = err == error.TransferCanceled;
+    if (!canceled) {
+        log.err(.browser, "worker fetch error", .{
+            .url = self._url,
+            .err = err,
+        });
+    }
 
     // The worker will never load and onmessage will never be registered.
     // Drain any buffered messages so they get dispatched (and silently
@@ -277,7 +284,9 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    if (!canceled) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {
@@ -360,27 +369,27 @@ pub fn receiveMessage(self: *Worker, data: js.Value) !void {
     });
 }
 
-pub fn getOnMessage(self: *const Worker) ?js.Function.Global {
+fn getOnMessage(self: *const Worker) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessage(self: *Worker, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
-pub fn getOnMessageError(self: *const Worker) ?js.Function.Global {
+fn getOnMessageError(self: *const Worker) ?js.Function.Global {
     return self._on_messageerror;
 }
 
-pub fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnMessageError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_messageerror = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const Worker) ?js.Function.Global {
+fn getOnError(self: *const Worker) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
+fn setOnError(self: *Worker, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
@@ -478,7 +487,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Worker" {
-    testing.silenceLog(&.{.http});
+    testing.silenceLog(&.{ .http, .browser, .browser });
 
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can
