@@ -1031,11 +1031,11 @@ pub const BrowserContext = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .data = blk: {
-                    const cl = msg.transfer.getContentLength() orelse break :blk .empty;
-                    if (cl > self.network_limits.resource) {
+                    const body_len = msg.transfer.bodyLen();
+                    if (body_len > self.network_limits.resource) {
                         break :blk null;
                     }
-                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, cl);
+                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, body_len);
                 },
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.

@@ -163,9 +163,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), cl);
-    }
+    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
 
     return .proceed;
 }
