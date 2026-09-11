@@ -92,6 +92,16 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     }
 }
 
+/// dispatch() drops its reference, and with it the event, before returning;
+/// this keeps the event alive so the caller can learn whether a listener
+/// called preventDefault().
+pub fn dispatchCancelable(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!bool {
+    event.acquireRef();
+    defer event.releaseRef(self.frame._page);
+    try self.dispatch(target, event);
+    return event.getDefaultPrevented();
+}
+
 // Resolves the Window's property event handler for the given event type.
 fn windowInlineHandler(window: *Window, typ: lp.String) ?js.Function.Global {
     const global_event_handlers = @import("webapi/global_event_handlers.zig");

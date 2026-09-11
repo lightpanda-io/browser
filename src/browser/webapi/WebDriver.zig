@@ -585,12 +585,10 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
         log.warn(.app, "webdriver mouse event", .{ .err = err, .type = typ });
         return false;
     };
-    const base_event = event.asEvent();
-    base_event.acquireRef();
-    defer base_event.releaseRef(frame._page);
-
-    dispatch(el.asEventTarget(), base_event, frame, typ);
-    return base_event.getDefaultPrevented();
+    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event.asEvent()) catch |err| {
+        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ });
+        return false;
+    };
 }
 
 fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {

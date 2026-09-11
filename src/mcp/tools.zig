@@ -1062,41 +1062,8 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
-    {
-        const btn = frame.document.getElementById("btnPreventDefault", frame).?.asNode();
-        const btn_id = (try server.active_session.registry.register(btn)).id;
-        var btn_id_buf: [12]u8 = undefined;
-        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
-        const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
-        try router.handleMessage(server, aa, click_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
-        out.clearRetainingCapacity();
-    }
-
-    {
-        const btn = frame.document.getElementById("btnDisabled", frame).?.asNode();
-        const btn_id = (try server.active_session.registry.register(btn)).id;
-        var btn_id_buf: [12]u8 = undefined;
-        const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
-        const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
-        try router.handleMessage(server, aa, click_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
-        out.clearRetainingCapacity();
-    }
-
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"click","arguments":{"selector":"#focusTarget"}}}
-        ;
-        try router.handleMessage(server, aa, msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
-        out.clearRetainingCapacity();
-    }
-
-    {
-        const msg =
-            \\{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"click","arguments":{"selector":"#plain"}}}
-        ;
+    for ([_][]const u8{ "#btnPreventDefault", "#btnDisabled", "#focusTarget", "#plain" }) |selector| {
+        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
         try router.handleMessage(server, aa, msg);
         try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
         out.clearRetainingCapacity();

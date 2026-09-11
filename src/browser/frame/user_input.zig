@@ -194,13 +194,7 @@ fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u
         .button = button,
         .detail = detail,
     }, frame);
-
-    const base_event = event.asEvent();
-    base_event.acquireRef();
-    defer base_event.releaseRef(frame._page);
-
-    try frame._event_manager.dispatch(target.asEventTarget(), base_event);
-    return base_event.getDefaultPrevented();
+    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
@@ -332,12 +326,7 @@ fn deltaToScroll(d: f64) i32 {
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
 
-    const html_element = element.is(Element.Html) orelse {
-        if (element.is(Element.Svg.Graphics.A) != null) {
-            return svgAnchorHref(element) != null;
-        }
-        return false;
-    };
+    const html_element = element.is(Element.Html) orelse return isSvgLink(element);
 
     return switch (html_element._type) {
         .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
@@ -350,6 +339,23 @@ fn hasClickActivationBehavior(node: *Node) bool {
 // SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
 fn svgAnchorHref(element: *Element) ?[]const u8 {
     return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
+}
+
+fn isSvgLink(element: *Element) bool {
+    return element.is(Element.Svg.Graphics.A) != null and svgAnchorHref(element) != null;
+}
+
+/// Focusable without a tabindex attribute.
+fn isNativelyFocusable(el: *Element) bool {
+    if (el.is(Element.Html) == null) {
+        return isSvgLink(el);
+    }
+    return switch (el.getTag()) {
+        .button, .select, .textarea, .iframe => true,
+        .input => el.as(Element.Html.Input)._input_type != .hidden,
+        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
+        else => false,
+    };
 }
 
 // Clicks on editable content are for editing: they don't activate the
@@ -383,42 +389,19 @@ fn outermostEditingHost(target: *Element) ?*Element {
     return host.is(Element);
 }
 
-/// Unlike sequential focus, any explicit, parseable tabindex value, including
-/// a negative one, is mouse-focusable — on any element, not just HTML ones, so
-/// this is checked before the HTML-only guard below. An unparsable tabindex is
-/// treated as if the attribute were absent (HTML §6.6.3), so native
-/// focusability still applies — mirrors HtmlElement.getTabIndex's
-/// parse-failure fallthrough.
+/// Unlike sequential focus, a negative tabindex is still mouse-focusable, and
+/// an unparsable one counts as absent (HTML §6.6.3), not as "not focusable".
 fn isMouseFocusable(el: *Element) bool {
     if (el.isDisabled()) return false;
 
     if (el.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
-        if (Element.Html.parseInteger(attr)) |_| {
-            return true;
-        }
+        if (Element.Html.parseInteger(attr) != null) return true;
     }
-
-    if (el.is(Element.Html) == null) {
-        // Mirrors hasClickActivationBehavior: an SVG link is focusable by the
-        // same href it activates on.
-        if (el.is(Element.Svg.Graphics.A) != null) {
-            return svgAnchorHref(el) != null;
-        }
-        return false;
-    }
-
-    return switch (el.getTag()) {
-        .button, .select, .textarea, .iframe => true,
-        .input => el.as(Element.Html.Input)._input_type != .hidden,
-        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
-        else => false,
-    };
+    return isNativelyFocusable(el);
 }
 
-/// Mousedown default action: focus the editing host if the click is inside
-/// one, otherwise the nearest mouse-focusable element (self or ancestor). If
-/// no ancestor is mouse-focusable, blur whatever was previously focused —
-/// a mousedown outside any focusable element moves focus to the body.
+/// Mousedown default action. A mousedown outside any focusable element moves
+/// focus to the body.
 pub fn focusForMouseDown(frame: *Frame, target: *Element) !void {
     if (outermostEditingHost(target)) |host| {
         try host.focus(frame);
@@ -907,17 +890,9 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
                 break :blk 0;
             }
 
-            // no tab index, maybe this item isn't focusable..
-            const focusable = switch (candidate.getTag()) {
-                .button, .select, .textarea, .iframe => true,
-                .input => candidate.as(Element.Html.Input)._input_type != .hidden,
-                .anchor, .area => candidate.getAttributeSafe(comptime .wrap("href")) != null,
-                else => false,
-            };
-            if (focusable == false) {
+            if (!isNativelyFocusable(candidate)) {
                 continue;
             }
-
             break :blk 0;
         };
 

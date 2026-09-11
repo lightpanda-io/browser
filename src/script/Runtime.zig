@@ -1441,12 +1441,8 @@ test "agent script runtime: tool errors throw and stop execution" {
     );
 }
 
-// Complements the fixture-driven MCP test in tools.zig: here the nodes are
-// created at runtime. Covers the ancestor walk, blur-to-body on a non-focusable
-// node, tabindex=-1 still mouse-focusable, an unparsable tabindex on a plain div
-// not focusable but on a button falling through to native focusability,
-// preventDefault() on mousedown preserving focus, editing hosts winning over
-// their contents, and an explicit tabindex on a non-HTML (SVG) element.
+// Complements the fixture-driven MCP test in tools.zig with nodes created at
+// runtime.
 test "agent script runtime: mousedown focus follows mouse-focusability rules" {
     defer testing.test_session.closeAllPages();
 
@@ -1459,44 +1455,51 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
     try runTestScript(runtime,
         \\const page = new Page();
         \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
-        \\page.evaluate("const p=document.createElement('div');p.id='dynFocus';p.setAttribute('tabindex','0');const s=document.createElement('span');s.id='dynChild';s.textContent='x';p.appendChild(s);document.body.appendChild(p);const n=document.createElement('div');n.id='dynNeg';n.setAttribute('tabindex','-1');n.textContent='neg';document.body.appendChild(n);const b=document.createElement('div');b.id='dynBad';b.setAttribute('tabindex','abc');b.textContent='bad';document.body.appendChild(b);const btn=document.createElement('button');btn.id='dynBadBtn';btn.setAttribute('tabindex','abc');btn.textContent='badbtn';btn.addEventListener('mouseup',function(){window.badBtnFocusAtMouseup=document.activeElement.id;});document.body.appendChild(btn)");
+        \\const active = () => page.evaluate("document.activeElement === document.body ? 'body' : document.activeElement.id");
+        \\const expectActive = (id, what) => { const got = active(); if (got !== id) throw new Error(what + " (active: " + got + ")"); };
+        \\page.evaluate(`
+        \\  const add = (tag, id, attrs = {}, parent = document.body, ns = null) => {
+        \\    const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
+        \\    e.id = id;
+        \\    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+        \\    parent.appendChild(e);
+        \\    return e;
+        \\  };
+        \\  add('span', 'dynChild', {}, add('div', 'dynFocus', { tabindex: '0' })).textContent = 'x';
+        \\  add('div', 'dynNeg', { tabindex: '-1' }).textContent = 'neg';
+        \\  add('div', 'dynBad', { tabindex: 'abc' }).textContent = 'bad';
+        \\  add('button', 'dynBadBtn', { tabindex: 'abc' }).addEventListener('mouseup', () => { window.badBtnFocusAtMouseup = document.activeElement.id; });
+        \\  add('div', 'toolbarBtn').addEventListener('mousedown', (e) => e.preventDefault());
+        \\  add('span', 'dynHostSpan', {}, add('div', 'dynHost', { contenteditable: 'true' })).textContent = 'hs';
+        \\  add('span', 'dynInnerSpan', {}, add('div', 'dynInner', { contenteditable: 'true' }, add('div', 'dynOuter', { contenteditable: 'true' }))).textContent = 'is';
+        \\  const SVG = 'http://www.w3.org/2000/svg';
+        \\  add('rect', 'dynSvgRect', { tabindex: '0', width: '100', height: '40' }, add('svg', 'dynSvg', {}, document.body, SVG), SVG);
+        \\`);
         \\page.click("#dynChild");
-        \\if (page.evaluate("document.activeElement.id") !== "dynFocus") throw new Error("child click did not focus tabindex ancestor: " + page.evaluate("document.activeElement && document.activeElement.id"));
-        \\page.click("#plain");
-        \\if (page.evaluate("String(document.activeElement === document.body)") !== "true") throw new Error("plain click did not blur to body: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\expectActive("dynFocus", "child click did not focus tabindex ancestor");
         \\page.click("#dynNeg");
-        \\if (page.evaluate("document.activeElement.id") !== "dynNeg") throw new Error("tabindex=-1 was not mouse-focusable: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\expectActive("dynNeg", "tabindex=-1 was not mouse-focusable");
         \\page.click("#dynBad");
-        \\if (page.evaluate("String(document.activeElement === document.body)") !== "true") throw new Error("unparsable tabindex was mouse-focusable: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\expectActive("body", "unparsable tabindex was mouse-focusable");
         \\page.click("#dynBadBtn");
-        \\// Sampled at mouseup, not after the click: a button's click activation
-        \\// behavior focuses it unconditionally, which would mask what mousedown did.
-        \\if (page.evaluate("window.badBtnFocusAtMouseup") !== "dynBadBtn") throw new Error("unparsable tabindex on a native button lost native mousedown focusability: " + page.evaluate("String(window.badBtnFocusAtMouseup)"));
-        \\// Toolbar idiom: preventDefault() on mousedown preserves existing focus
-        \\page.evaluate("const t=document.createElement('div');t.id='toolbarBtn';t.addEventListener('mousedown',function(e){e.preventDefault();});document.body.appendChild(t)");
+        \\// Sampled at mouseup: click activation focuses a button regardless of
+        \\// what mousedown decided, which would mask the native focusability.
+        \\if (page.evaluate("window.badBtnFocusAtMouseup") !== "dynBadBtn") throw new Error("unparsable tabindex on a native button lost native mousedown focusability");
+        \\// Toolbar idiom: preventDefault() on mousedown preserves existing focus.
         \\page.click("#inp");
-        \\if (page.evaluate("document.activeElement.id") !== "inp") throw new Error("setup failed: activeElement not inp");
+        \\expectActive("inp", "setup failed");
         \\page.click("#toolbarBtn");
-        \\if (page.evaluate("document.activeElement.id") !== "inp") throw new Error("preventDefault on mousedown did not protect focus (toolbar idiom): " + page.evaluate("document.activeElement && document.activeElement.id"));
-        \\// Editing hosts: the click focuses the host, not what is inside it.
-        \\// Verified against Chrome 152 with trusted CDP input: a plain span, a
-        \\// button, a [tabindex] div and an <a href> inside a contenteditable all
-        \\// leave focus on the host, and a nested host resolves to the OUTER one.
-        \\page.evaluate("const h=document.createElement('div');h.id='dynHost';h.setAttribute('contenteditable','true');const hs=document.createElement('span');hs.id='dynHostSpan';hs.textContent='hs';h.appendChild(hs);document.body.appendChild(h)");
+        \\expectActive("inp", "preventDefault on mousedown did not protect focus");
+        \\// Verified against Chrome: a click inside a contenteditable focuses the
+        \\// host, and a nested host resolves to the outer one.
         \\page.click("#dynHostSpan");
-        \\if (page.evaluate("document.activeElement.id") !== "dynHost") throw new Error("span inside contenteditable did not focus host: " + page.evaluate("document.activeElement && document.activeElement.id"));
-        \\// Nested contenteditable: the OUTER host wins, not the inner one.
-        \\page.evaluate("const out=document.createElement('div');out.id='dynOuter';out.setAttribute('contenteditable','true');const inn=document.createElement('div');inn.id='dynInner';inn.setAttribute('contenteditable','true');const is=document.createElement('span');is.id='dynInnerSpan';is.textContent='is';inn.appendChild(is);out.appendChild(inn);document.body.appendChild(out)");
+        \\expectActive("dynHost", "span inside contenteditable did not focus host");
         \\page.click("#dynInnerSpan");
-        \\if (page.evaluate("document.activeElement.id") !== "dynOuter") throw new Error("nested contenteditable did not focus the outer host: " + page.evaluate("document.activeElement && document.activeElement.id"));
-        \\// An explicit tabindex is focusable on a non-HTML element too: the
-        \\// HTML-only guard must not shadow it, or the new blur fallback would
-        \\// drop focus to body on a click Chrome focuses.
-        \\page.evaluate("const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');const r=document.createElementNS('http://www.w3.org/2000/svg','rect');r.id='dynSvgRect';r.setAttribute('tabindex','0');r.setAttribute('width','100');r.setAttribute('height','40');svg.appendChild(r);document.body.appendChild(svg)");
+        \\expectActive("dynOuter", "nested contenteditable did not focus the outer host");
+        \\// An explicit tabindex is focusable on a non-HTML element too.
         \\page.click("#inp");
-        \\if (page.evaluate("document.activeElement.id") !== "inp") throw new Error("setup failed: activeElement not inp");
         \\page.click("#dynSvgRect");
-        \\if (page.evaluate("document.activeElement.id") !== "dynSvgRect") throw new Error("svg [tabindex] click did not focus the svg element: " + page.evaluate("document.activeElement && document.activeElement.id"));
+        \\expectActive("dynSvgRect", "svg [tabindex] click did not focus the svg element");
     );
 }
 

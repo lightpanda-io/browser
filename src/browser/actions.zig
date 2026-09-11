@@ -39,14 +39,13 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame) !void {
-    frame._event_manager.dispatch(el.asEventTarget(), event) catch |err| {
+fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame) !bool {
+    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event) catch |err| {
         lp.log.err(.app, "click " ++ typ ++ " failed", .{ .err = err });
         return error.ActionFailed;
     };
 }
 
-/// Dispatches a trusted pointer event and reports whether it was cancelled.
 fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail: u32, frame: *Frame) !bool {
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
@@ -59,15 +58,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail:
         .isPrimary = true,
         .pressure = if (buttons != 0) 0.5 else 0.0,
     }, frame);
-
-    // Keep the event alive past dispatch (which runs handlers/microtasks) so
-    // we can read _prevent_default afterwards.
-    const base_event = event.asEvent();
-    base_event.acquireRef();
-    defer base_event.releaseRef(frame._page);
-
-    try dispatch(el, base_event, typ, frame);
-    return base_event.getDefaultPrevented();
+    return dispatch(el, event.asEvent(), typ, frame);
 }
 
 fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !bool {
@@ -78,17 +69,11 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *F
         .buttons = buttons,
         .detail = 1,
     }, frame);
-
-    const base_event = event.asEvent();
-    base_event.acquireRef();
-    defer base_event.releaseRef(frame._page);
-
-    try dispatch(el, base_event, typ, frame);
-    return base_event.getDefaultPrevented();
+    return dispatch(el, event.asEvent(), typ, frame);
 }
 
-/// A full trusted primary-button click sequence, as a real user click would
-/// produce: pointerdown, mousedown, pointerup, mouseup, click.
+/// The trusted primary-button gesture a real user click produces; widgets key
+/// off pointerdown/mousedown, not click alone.
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
