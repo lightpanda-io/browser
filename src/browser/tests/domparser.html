@@ -115,6 +115,19 @@
 }
 </script>
 
+<script id=truncatedMetaCharset>
+{
+  // html5ever < 0.40 indexed past the end of a content attribute that stops
+  // right after "charset", aborting the process.
+  const parser = new DOMParser();
+  for (const content of ['charset', 'charset ', 'text/html;charset', 'text/html; charset', 'text/html;charset=', 'text/html;charset="']) {
+    const markup = '<meta http-equiv="Content-Type" content="' + content.replace(/"/g, '&quot;') + '">';
+    const doc = parser.parseFromString(markup, 'text/html');
+    testing.expectEqual(content, doc.querySelector('meta').getAttribute('content'));
+  }
+}
+</script>
+
 <script id=getElementById>
 {
   const doc = new DOMParser().parseFromString('<div id="new-node">new-node</div>', 'text/html');
