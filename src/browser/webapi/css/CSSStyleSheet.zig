@@ -15,7 +15,7 @@ const log = lp.log;
 
 const CSSStyleSheet = @This();
 
-pub const CSSError = error{
+const CSSError = error{
     OutOfMemory,
     IndexSizeError,
     WriteFailed,
@@ -50,15 +50,15 @@ pub fn getTitle(self: *const CSSStyleSheet) []const u8 {
     return self._title;
 }
 
-pub fn getDisabled(self: *const CSSStyleSheet) bool {
+fn getDisabled(self: *const CSSStyleSheet) bool {
     return self._disabled;
 }
 
-pub fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
+fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
     self._disabled = disabled;
 }
 
-pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
+fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
     if (self._css_rules) |rules| return rules;
 
     const rules = try CSSRuleList.init(frame);
@@ -75,7 +75,7 @@ pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
     return rules;
 }
 
-pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
+fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
     return self._owner_rule;
 }
 
@@ -150,7 +150,7 @@ fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     return .unknown;
 }
 
-pub fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
+fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
     const rules = try self.getCssRules(frame);
     try rules.remove(index);
 

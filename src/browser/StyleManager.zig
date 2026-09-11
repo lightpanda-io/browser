@@ -39,10 +39,6 @@ const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-pub const ChainCache = std.AutoHashMapUnmanaged(*Element, bool);
-pub const VisibilityCache = ChainCache;
-pub const PointerEventsCache = ChainCache;
-
 // Tracks visibility-relevant CSS rules from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
@@ -64,6 +60,9 @@ other_rules: RuleList = .empty, // universal, attribute, pseudo-class endings
 // Own-element results, valid while Page.style_version == memo_version.
 memo: Memo = .empty,
 memo_version: usize = 0,
+
+// Keyed by property name, pruning to what is (hopefully) one or few rules
+custom_rules: std.StringHashMapUnmanaged(CustomProperty) = .empty,
 
 /// The thing to remember about layers is that we can't determine priority's
 /// layer_rank until everything is parsed. So we need to build up meta data when
@@ -128,7 +127,7 @@ fn parseSheet(self: *StyleManager, build_arena: Allocator, sheet: *CSSStyleSheet
         var it = CssParser.parseStylesheet(text);
         while (it.next()) |parsed_rule| {
             switch (parsed_rule) {
-                .style => |s| try self.addRawRule(s.selector, s.block, NO_LAYER),
+                .style => |s| try self.addRawRule(build_arena, s.selector, s.block, NO_LAYER),
                 .at_rule => |a| {
                     // Only `@media` and `@layer` participate in the cascade
                     // here. Other at-rules (`@keyframes`, `@supports`,
@@ -228,7 +227,7 @@ fn applyInnerRules(self: *StyleManager, build_arena: Allocator, inner: []const u
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
-            .style => |s| try self.addRawRule(s.selector, s.block, layer),
+            .style => |s| try self.addRawRule(build_arena, s.selector, s.block, layer),
             .at_rule => |nested| {
                 if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
                     try self.applyMediaAtRule(build_arena, nested.text, depth, layer);
@@ -447,31 +446,123 @@ fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Err
     while (tag_it.next()) |rules| {
         self.stampRuleList(rules);
     }
+
+    // Custom rules parse their selectors lazily, but the layer ranks are only
+    // known now that every sheet has been read
+    var custom_it = self.custom_rules.valueIterator();
+    while (custom_it.next()) |property| {
+        for (property.rules.items) |*rule| {
+            rule.priority |= self.layerRank(rule.priority) << RANK_SHIFT;
+        }
+    }
 }
 
 fn stampRuleList(self: *StyleManager, rules: *RuleList) void {
-    const layers = self.layers.items;
-    const rule_layers = self.rule_layers.items;
     for (rules.items(.priority)) |*priority| {
-        const doc_order: u32 = @as(u22, @truncate(priority.*));
-        const layer = rule_layers[doc_order - 1];
-        if (layer == NO_LAYER) {
-            continue;
-        }
-        priority.* |= @as(u64, layers[layer].rank) << RANK_SHIFT;
+        priority.* |= self.layerRank(priority.*) << RANK_SHIFT;
     }
 }
 
-fn addRawRule(self: *StyleManager, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
-    if (selector_text.len == 0) return;
-
-    const props = foldVisibilityDeclarations(block_text);
-    if (!props.isRelevant()) return;
-
-    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return;
-    for (selectors) |selector| {
-        try self.addVisibilityRule(selector, props, layer);
+/// The rank finalizeLayerRanks still has to stamp for a packed priority, via
+/// its doc_order: 0 for an unlayered rule, which packed UNLAYERED_RANK at
+/// creation.
+fn layerRank(self: *const StyleManager, priority: u64) u64 {
+    const doc_order: u32 = @as(u22, @truncate(priority));
+    const layer = self.rule_layers.items[doc_order - 1];
+    if (layer == NO_LAYER) {
+        return 0;
     }
+    return self.layers.items[layer].rank;
+}
+
+fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []const u8, block_text: []const u8, layer: u16) !void {
+    if (selector_text.len == 0) {
+        return;
+    }
+    var customs: CustomSink = .{ .allocator = build_arena };
+    const props = try foldDeclarations(block_text, &customs);
+    _ = try self.addSelectorRules(selector_text, props, customs.map.values(), layer);
+}
+
+// Visibility rules get one VisibilityRule per selector (not per selector list)
+// so each has correct specificity, bucketed by their rightmost selector part.
+// Custom properties are keyed by name instead, and lazily parse the selector.
+// Returns whether the rule set any tracked property.
+fn addSelectorRules(
+    self: *StyleManager,
+    selector_text: []const u8,
+    props: VisibilityProperties,
+    customs: []const CustomDeclaration,
+    layer: u16,
+) !bool {
+    const relevant = props.isRelevant();
+    if (relevant == false and customs.len == 0) {
+        return false;
+    }
+
+    const arena = self.arena.allocator();
+    const before = self.next_doc_order;
+
+    if (customs.len > 0) {
+        const priority = try self.nextPriority(layer);
+        for (customs) |custom| {
+            const gop = try self.custom_rules.getOrPut(arena, custom.name);
+            if (gop.found_existing == false) {
+                gop.value_ptr.* = .{};
+            }
+            // An appended rule joins a property that may already be parsed
+            gop.value_ptr.parsed = null;
+            try gop.value_ptr.rules.append(arena, .{
+                .value = custom.value,
+                .priority = priority,
+                .selector_text = selector_text,
+            });
+        }
+    }
+
+    if (relevant) {
+        const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
+        for (selectors) |selector| {
+            try self.addVisibilityRule(selector, props, layer);
+        }
+    }
+    return self.next_doc_order != before;
+}
+
+fn addVisibilityRule(self: *StyleManager, selector: Selector.Selector, props: VisibilityProperties, layer: u16) !void {
+    const key = getBucketKey(selector.rightmost()) orelse return;
+    const priority = try self.nextPriority(layer);
+    try self.bucket(key, .{
+        .props = props,
+        .selector = selector,
+        .priority = priority | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT),
+    });
+}
+
+/// Rank and document-order bits of the next rule. A rule outside any layer
+/// carries UNLAYERED_RANK from the start; finalizeLayerRanks stamps the
+/// layered ones once every layer is known.
+fn nextPriority(self: *StyleManager, layer: u16) !u64 {
+    try self.rule_layers.append(self.arena.allocator(), layer);
+    const rank: u64 = if (layer == NO_LAYER) UNLAYERED_RANK else 0;
+    const priority = (rank << RANK_SHIFT) | @min(self.next_doc_order, MAX_DOC_ORDER);
+    self.next_doc_order += 1;
+    return priority;
+}
+
+fn bucket(self: *StyleManager, key: BucketKey, rule: VisibilityRule) !void {
+    const allocator = self.arena.allocator();
+    const list: *RuleList = switch (key) {
+        .id => |id| (try self.id_rules.getOrPutValue(allocator, id, .empty)).value_ptr,
+        .class => |class| (try self.class_rules.getOrPutValue(allocator, class, .empty)).value_ptr,
+        .tag => |tag| (try self.tag_rules.getOrPutValue(allocator, tag, .empty)).value_ptr,
+        .other => &self.other_rules,
+    };
+    try list.append(allocator, rule);
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 pub fn sheetModified(self: *StyleManager) void {
@@ -509,6 +600,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     const tag_rules_count = self.tag_rules.count();
     const other_rules_count = self.other_rules.len;
     const memo_count = self.memo.count();
+    const custom_rules_count = self.custom_rules.count();
 
     self.arena.resetRetain();
 
@@ -531,6 +623,9 @@ fn rebuildIfDirty(self: *StyleManager) !void {
     self.other_rules = .{};
     try self.other_rules.ensureTotalCapacity(self.arena.allocator(), other_rules_count);
 
+    self.custom_rules = .empty;
+    try self.custom_rules.ensureTotalCapacity(self.arena.allocator(), custom_rules_count);
+
     const sheets = self.frame.document._style_sheets orelse return;
     for (sheets._sheets.items) |sheet| {
         const before = self.next_doc_order;
@@ -548,7 +643,7 @@ fn rebuildIfDirty(self: *StyleManager) !void {
 
 /// Own-element cascade result, resolved for every property at once so one
 /// entry serves any probe.
-pub const Props = packed struct(u8) {
+const Props = packed struct(u8) {
     // Author value (inline or sheet). Without `author_display` it's the UA
     // fallback: .none when matchesUaDisplayNoneRule, else .other.
     display: Display = .other,
@@ -573,30 +668,30 @@ const Probe = enum { hidden, visibility, pointer_events };
 
 const Memo = std.AutoHashMapUnmanaged(*Element, Props);
 
-pub fn isHidden(self: *StyleManager, el: *Element, cache: ?*VisibilityCache, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
+pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, cache, access, .hidden, options);
+    return self.anyInChain(el, .hidden, options);
 }
 
 /// Computed display:none for a single element (own property, no ancestor walk).
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
-pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
-    return self.display(el, access) == .none;
+pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
+    return self.display(el) == .none;
 }
 
 /// Own property, no ancestor walk; honors the UA hidden-element rules.
-pub fn display(self: *StyleManager, el: *Element, comptime access: InlineAccess) Display {
+pub fn display(self: *StyleManager, el: *Element) Display {
     self.rebuildIfDirty() catch return .other;
-    return self.ownProps(el, access).display;
+    return self.ownProps(el).display;
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
 /// rule — the UA stylesheet's hidden elements (<head>, <script>, [hidden], …)
 /// are NOT counted, so document scaffolding is preserved. Used by the HTML
 /// dump's "invisible" strip mode.
-pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
+pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    const p = self.ownProps(el, access);
+    const p = self.ownProps(el);
     return p.author_display and p.display == .none;
 }
 
@@ -606,33 +701,18 @@ pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: 
 /// rendered, but its computed `visibility` still reflects inherited visibility.
 pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, null, .materialize, .visibility, .{});
+    return self.anyInChain(el, .visibility, .{});
 }
 
-pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, cache: ?*PointerEventsCache, comptime access: InlineAccess) bool {
+pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, cache, access, .pointer_events, .{});
+    return self.anyInChain(el, .pointer_events, .{});
 }
 
-fn anyInChain(self: *StyleManager, el: *Element, cache: ?*ChainCache, comptime access: InlineAccess, comptime what: Probe, options: CheckVisibilityOptions) bool {
+fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
-        if (cache) |c| {
-            if (c.get(elem)) |matched| {
-                if (matched) {
-                    return true;
-                }
-                continue;
-            }
-        }
-
-        const matched = self.ownProps(elem, access).probe(what, options);
-        if (cache) |c| {
-            c.put(self.frame.call_arena, elem, matched) catch |err| {
-                log.warn(.browser, "StyleManager cache", .{ .err = err });
-            };
-        }
-        if (matched) {
+        if (self.ownProps(elem).probe(what, options)) {
             return true;
         }
     }
@@ -641,7 +721,7 @@ fn anyInChain(self: *StyleManager, el: *Element, cache: ?*ChainCache, comptime a
 
 /// The memoized own-element result. Callers must have run rebuildIfDirty,
 /// which resets the memo.
-fn ownProps(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+fn ownProps(self: *StyleManager, el: *Element) Props {
     const version = self.frame._page.style_version;
     if (self.memo_version != version) {
         self.memo.clearRetainingCapacity();
@@ -650,17 +730,12 @@ fn ownProps(self: *StyleManager, el: *Element, comptime access: InlineAccess) Pr
 
     const gop = self.memo.getOrPut(self.arena.allocator(), el) catch |err| {
         log.warn(.browser, "StyleManager memo", .{ .err = err });
-        return self.compute(el, access);
+        return self.compute(el);
     };
     if (gop.found_existing) {
-        // Layout reads the inline style object directly, so a hit must still
-        // create what a scan-mode miss left unparsed.
-        if (access == .materialize and el._flags.has_inline_style) {
-            _ = inlineStyle(el, .materialize, self.frame);
-        }
         return gop.value_ptr.*;
     }
-    gop.value_ptr.* = self.compute(el, access);
+    gop.value_ptr.* = self.compute(el);
     return gop.value_ptr.*;
 }
 
@@ -683,12 +758,12 @@ const Priorities = struct {
     }
 };
 
-fn compute(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+fn compute(self: *StyleManager, el: *Element) Props {
     const frame = self.frame;
     var p: Props = .{};
     var priorities: Priorities = .{};
 
-    const inline_props = inlineProps(el, access, frame);
+    const inline_props = inlineProps(el, frame);
     inline for (property_fields) |field| {
         if (@field(inline_props, field)) |value| {
             @field(p, field) = value;
@@ -791,7 +866,8 @@ fn matchesUaDisplayNoneRule(el: *Element) bool {
     return false;
 }
 
-/// Buckets a CSSOM style rule; returns whether it set any tracked property.
+/// The CSSOM twin of addRawRule; returns whether the rule set any tracked
+/// property.
 fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     const selector_text = style_rule._selector_text;
     if (selector_text.len == 0) {
@@ -799,16 +875,14 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
     }
     const style = style_rule._style orelse return false;
     const props = extractVisibilityProperties(style);
-    if (!props.isRelevant()) {
-        return false;
-    }
-    const selectors = SelectorParser.parseList(self.arena.allocator(), selector_text) catch return false;
+    const customs = try self.extractCustomDeclarations(style);
 
-    const before = self.next_doc_order;
-    for (selectors) |selector| {
-        try self.addVisibilityRule(selector, props, NO_LAYER);
-    }
-    return self.next_doc_order != before;
+    // A custom rule holds selector_text until the property is looked up, but it
+    // doesn't need a copy: setSelectorText allocates the replacement from the
+    // frame arena and never frees the old one. Worst case we match a stale
+    // selector, which is what the rest of this file already does when a rule is
+    // mutated without going through sheetModified().
+    return self.addSelectorRules(selector_text, props, customs, NO_LAYER);
 }
 
 /// A style rule appended at or after the sheet that emitted the last rule is
@@ -853,36 +927,30 @@ fn appendable(self: *const StyleManager, sheet: *CSSStyleSheet, rule: *CSSRule) 
     return false;
 }
 
-/// A rule outside any layer carries UNLAYERED_RANK from the start;
-/// finalizeLayerRanks stamps the layered ones once every layer is known.
-fn addVisibilityRule(self: *StyleManager, selector: Selector.Selector, props: VisibilityProperties, layer: u16) !void {
-    const key = getBucketKey(selector.rightmost()) orelse return;
-    try self.rule_layers.append(self.arena.allocator(), layer);
-    try self.bucket(key, .{
-        .props = props,
-        .selector = selector,
-        .priority = self.rulePriority(selector, layer),
-    });
-}
+/// The CSSOM counterpart to foldDeclarations' `--*` branch. Names within one
+/// declaration block are already unique, so there is nothing to dedup here.
+///
+/// Unlike the selector text, both strings have to be copied: they can point
+/// into the Property itself (small string optimization), and setProperty /
+/// removeProperty destroy it without going through sheetModified(). We'd be
+/// left reading freed memory rather than something merely stale.
+fn extractCustomDeclarations(self: *StyleManager, style: *CSSStyleProperties) ![]const CustomDeclaration {
+    const arena = self.arena.allocator();
 
-fn rulePriority(self: *StyleManager, selector: Selector.Selector, layer: u16) u64 {
-    const rank: u64 = if (layer == NO_LAYER) UNLAYERED_RANK else 0;
-    const priority = (rank << RANK_SHIFT) |
-        (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT) |
-        @min(self.next_doc_order, MAX_DOC_ORDER);
-    self.next_doc_order += 1;
-    return priority;
-}
-
-fn bucket(self: *StyleManager, key: BucketKey, rule: VisibilityRule) !void {
-    const allocator = self.arena.allocator();
-    const list: *RuleList = switch (key) {
-        .id => |id| (try self.id_rules.getOrPutValue(allocator, id, .empty)).value_ptr,
-        .class => |class| (try self.class_rules.getOrPutValue(allocator, class, .empty)).value_ptr,
-        .tag => |tag| (try self.tag_rules.getOrPutValue(allocator, tag, .empty)).value_ptr,
-        .other => &self.other_rules,
-    };
-    try list.append(allocator, rule);
+    var customs: std.ArrayList(CustomDeclaration) = .empty;
+    var it = style.asCSSStyleDeclaration().iterator();
+    while (it.next()) |property| {
+        const name = property._name.str();
+        if (isCustomProperty(name) == false) {
+            continue;
+        }
+        try customs.append(arena, .{
+            .name = try arena.dupe(u8, name),
+            .value = try arena.dupe(u8, property._value.str()),
+            .important = property._important,
+        });
+    }
+    return customs.items;
 }
 
 const BucketKey = union(enum) {
@@ -1058,6 +1126,36 @@ const VisibilityRule = struct {
     priority: u64,
 };
 
+// custom_rules map is property_name -> CustomProperty, loosely:
+//    --color => [(:root, "#ff0"), (.card, "#000")]
+// So when code says "getComputedStyle(el).getPropertyValue("--color")
+// We end up with a relatively small number of rules
+const CustomProperty = struct {
+    rules: std.ArrayList(CustomRule) = .empty,
+    parsed: ?[]const ParsedCustomRule = null, // lazily parsed
+};
+
+const CustomRule = struct {
+    selector_text: []const u8,
+    value: []const u8,
+    priority: u64,
+};
+
+/// Some frameworks define hundreds+ of custom properties, 99% of which are
+/// never accessed via JS. So we don't parse them until something asks for it.
+const ParsedCustomRule = struct {
+    selector: Selector.Selector,
+    value: []const u8,
+    priority: u64, // packed the same way as VisibilityRule.priority
+};
+
+/// A `--*` declaration on its way from a rule block into custom_rules.
+const CustomDeclaration = struct {
+    name: []const u8,
+    value: []const u8,
+    important: bool,
+};
+
 const Layer = struct {
     // dotted path from the root
     path: []const u8,
@@ -1100,52 +1198,20 @@ const CheckVisibilityOptions = struct {
 // its field max, so a real rule can never pack to all-ones.
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
-/// How a probe reads an element's inline `style=` attribute.
-pub const InlineAccess = enum {
-    /// Parse the attribute into the element's CSSStyleProperties (the object
-    /// `el.style` hands out) and keep it, so repeat probes on the same element
-    /// cost a list lookup. Layout reads that object directly (getElementAxis,
-    /// horizontalPosition), so every JS-reachable path must materialize.
-    materialize,
-    /// Fold the attribute text on each call; allocates nothing. For
-    /// Zig-initiated tooling that walks the whole document once per turn
-    /// (markdown, dump, tree), where pinning a parsed declaration list in the
-    /// page arena for every inline-styled element outlives its use. An
-    /// object JS already created is still read.
-    scan,
-};
-
-fn inlineProps(el: *Element, comptime access: InlineAccess, frame: *Frame) VisibilityProperties {
+// `frame` must be el's owner frame (el.ownerFrame): that is the map where a
+// parsed inline style lives. Without one the attribute text is folded in
+// place; layout materializes the object itself when it needs it.
+fn inlineProps(el: *Element, frame: *Frame) VisibilityProperties {
     if (!el._flags.has_inline_style) {
         // Neither a style object nor a style attribute; skip both lookups.
         return .{};
     }
-    if (inlineStyle(el, access, frame)) |style| {
+    if (el.existingStyle(frame)) |style| {
         return extractVisibilityProperties(style);
     }
-    // A JS-created object is read by both modes; `scan` folds the attribute
-    // text instead of parsing it into the page arena.
-    if (access == .scan) {
-        if (el.getAttributeInterned("style")) |attr| {
-            return foldVisibilityDeclarations(attr);
-        }
-    }
-    return .{};
-}
-
-/// `frame` must be el's owner frame (el.ownerFrame): that is the map where
-/// the materialized style lives.
-fn inlineStyle(el: *Element, comptime access: InlineAccess, frame: *Frame) ?*CSSStyleProperties {
-    if (el.getStyle(frame)) |style| {
-        return style;
-    }
-    if (access == .scan or el.getAttributeInterned("style") == null) {
-        return null;
-    }
-    return el.getOrCreateStyle(frame) catch |err| {
-        log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-        return null;
-    };
+    const attr = el.getAttributeInterned("style") orelse return .{};
+    // Without a sink nothing allocates
+    return foldDeclarations(attr, null) catch unreachable;
 }
 
 fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
@@ -1153,10 +1219,19 @@ fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
     return property._value.str();
 }
 
+/// `--*` declarations of one block, keyed by name so a block declaring the same
+/// custom property twice keeps only the winner.
+const CustomSink = struct {
+    allocator: Allocator,
+    map: std.StringArrayHashMapUnmanaged(CustomDeclaration) = .empty,
+};
+
 // Must agree with CSSStyleDeclaration.applyDeclarations, which is what the
 // materialized object was built from: a normal declaration never overrides an
-// earlier !important one, and an empty value removes the property.
-fn foldVisibilityDeclarations(attr: []const u8) VisibilityProperties {
+// earlier !important one, and an empty value removes the property. The tracked
+// properties are matched case-insensitively; a custom property's name is
+// case-sensitive and goes to `customs` when there is one.
+fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !VisibilityProperties {
     const Slot = struct {
         value: ?[]const u8 = null,
         important: bool = false,
@@ -1175,8 +1250,17 @@ fn foldVisibilityDeclarations(attr: []const u8) VisibilityProperties {
     };
 
     var slots = [_]Slot{.{}} ** property_names.len;
-    var it = CssParser.parseDeclarationsList(attr);
+    var it = CssParser.parseDeclarationsList(block);
     while (it.next()) |declaration| {
+        if (isCustomProperty(declaration.name)) {
+            const sink = customs orelse continue;
+            const gop = try sink.map.getOrPut(sink.allocator, declaration.name);
+            if (gop.found_existing and gop.value_ptr.important and !declaration.important) {
+                continue;
+            }
+            gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
+            continue;
+        }
         for (property_names, &slots) |name, *slot| {
             if (std.ascii.eqlIgnoreCase(declaration.name, name)) {
                 slot.apply(declaration);
@@ -1199,8 +1283,81 @@ fn foldVisibilityDeclarations(attr: []const u8) VisibilityProperties {
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
-    const style = inlineStyle(el, .materialize, self.frame) orelse return null;
+    const style = el.inlineStyle(self.frame) orelse return null;
     return styleValue(style, property_name);
+}
+
+/// Computed value of a custom property (`--x`) on `el`, or null when nothing
+/// declares it. The value is returned as-is, no var substitution
+pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    self.rebuildIfDirty() catch return null;
+
+    // Only the rules declaring this name; usually a handful, often none. An
+    // element can still shadow them with an inline declaration, so a miss here
+    // means walking for inline styles, not returning early.
+    const rules = self.parsedCustomRules(property_name.str()) catch |err| blk: {
+        log.err(.browser, "StyleManager customProperty", .{ .err = err });
+        break :blk &.{};
+    };
+
+    var current: ?*Element = el;
+    while (current) |elem| : (current = elem.parentElement()) {
+        if (self.inlineStyleValue(elem, property_name)) |value| {
+            return value;
+        }
+
+        var winner: ?[]const u8 = null;
+        var priority: u64 = 0;
+        for (rules) |rule| {
+            if (rule.priority <= priority) {
+                continue;
+            }
+            if (matchesSelector(elem, rule.selector, self.frame) == false) {
+                continue;
+            }
+            winner = rule.value;
+            priority = rule.priority;
+        }
+
+        if (winner) |value| {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+/// Gets the parsed rule for a custom property name
+fn parsedCustomRules(self: *StyleManager, name: []const u8) ![]const ParsedCustomRule {
+    const property = self.custom_rules.getPtr(name) orelse return &.{};
+    if (property.parsed) |parsed| {
+        // the custom property exists, and we already parsed it.
+        return parsed;
+    }
+
+    const arena = self.arena.allocator();
+    var parsed: std.ArrayList(ParsedCustomRule) = .empty;
+
+    for (property.rules.items) |rule| {
+        const selectors = SelectorParser.parseList(arena, rule.selector_text) catch continue;
+        for (selectors) |selector| {
+            {
+                // we don't use buckets for custom properties (are property name
+                // lookup is more efficient), but we still want to skip dynamic
+                // pseudo-classes just like visibility does
+                _ = getBucketKey(selector.rightmost()) orelse continue;
+            }
+
+            try parsed.append(arena, .{
+                .selector = selector,
+                .value = rule.value,
+                .priority = rule.priority | (@as(u64, computeSpecificity(selector)) << SPEC_SHIFT),
+            });
+        }
+    }
+
+    property.parsed = parsed.items;
+    return parsed.items;
 }
 
 /// Bounds computedFontSize's ancestor recursion (the parent walk and
@@ -1254,6 +1411,10 @@ fn parseFontSize(self: *StyleManager, raw: []const u8, parent: ?*Element, depth:
 }
 
 const testing = @import("../testing.zig");
+test "StyleManager: custom properties" {
+    try testing.htmlRunner("css/custom_properties.html", .{});
+}
+
 test "StyleManager: computeSpecificity: element selector" {
     // div -> (0, 0, 1)
     const selector = Selector.Selector{
@@ -1423,7 +1584,7 @@ test "StyleManager: packed priority bounds" {
     try testing.expect(MAX_LAYERS < UNLAYERED_RANK);
 }
 
-test "StyleManager: inlineProps: scan matches materialize" {
+test "StyleManager: inlineProps: scan matches the parsed style object" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1457,10 +1618,10 @@ test "StyleManager: inlineProps: scan matches materialize" {
     var child = div.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
-        const scanned = inlineProps(el, .scan, frame);
+        const scanned = inlineProps(el, frame);
         // scanning never creates the style object
-        try testing.expectEqual(null, el.getStyle(frame));
-        const materialized = inlineProps(el, .materialize, frame);
+        try testing.expectEqual(null, el.existingStyle(frame));
+        const materialized = extractVisibilityProperties(try el.getOrCreateStyle(frame));
         inline for (property_fields) |field| {
             try testing.expectEqual(@field(expected[i], field), @field(scanned, field));
             try testing.expectEqual(@field(expected[i], field), @field(materialized, field));
@@ -1483,42 +1644,39 @@ test "StyleManager: memo: reuse and invalidation" {
     const b = p.asNode().firstChild().?.as(Element);
 
     // The walk memoizes the element and every ancestor
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.memo.count());
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.memo.count());
 
-    // A scan never creates the style object; a materialize hit does
-    try testing.expectEqual(null, b.getStyle(frame));
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .materialize));
-    try testing.expect(b.getStyle(frame) != null);
-    try testing.expectEqual(3, sm.memo.count());
+    // Probes never create the style object
+    try testing.expectEqual(null, b.existingStyle(frame));
 
     // An attribute change anywhere invalidates the memo
     try p.setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
-    try testing.expectEqual(true, sm.isHidden(b, null, .{}, .scan));
-    try testing.expectEqual(false, sm.hasDisplayNone(b, .scan));
-    try testing.expectEqual(true, sm.hasDisplayNone(p, .scan));
-    try testing.expectEqual(false, sm.hasAuthorDisplayNone(p, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, .{}));
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasAuthorDisplayNone(p));
 
     p.removeAttributeSafe(comptime .wrap("hidden"), frame);
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
 
     try b.setStyle("display: none; pointer-events: none", frame);
-    try testing.expectEqual(true, sm.hasAuthorDisplayNone(b, .scan));
-    try testing.expectEqual(true, sm.hasPointerEventsNone(b, null, .scan));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(p, null, .scan));
+    try testing.expectEqual(true, sm.hasAuthorDisplayNone(b));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(b));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p));
 
     try b.setStyle("display: flex; visibility: hidden", frame);
-    try testing.expectEqual(.flex, sm.display(b, .scan));
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
-    try testing.expectEqual(true, sm.isHidden(b, null, .{ .check_visibility = true }, .scan));
+    try testing.expectEqual(.flex, sm.display(b));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
+    try testing.expectEqual(true, sm.isHidden(b, .{ .check_visibility = true }));
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(b, null, .scan));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(b));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
-    try testing.expectEqual(false, sm.isHidden(p, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(p, .{}));
     try testing.expectEqual(2, sm.memo.count());
 }
 
@@ -1533,35 +1691,42 @@ test "StyleManager: ruleInserted: append joins the buckets without a rebuild" {
     const body = (try doc.createElement("body", null, frame)).asNode();
     _ = try html.appendChild(body, frame);
     // No whitespace between the elements: they must be adjacent siblings
-    try Frame.parse.htmlAsChildren(frame, body, "<style>.a { display: none }</style><div class=\"a\"></div><div class=\"b\"></div><div class=\"c\"></div>");
-    const style_el = body.firstChild().?.as(Element).as(Element.Html.Style);
-    const b = style_el.asNode().nextSibling().?.nextSibling().?.as(Element);
+    try Frame.parse.htmlAsChildren(frame, body, "<div class=\"a\"></div><div class=\"b\"></div><div class=\"c\"></div>");
+    const a = body.firstChild().?.as(Element);
+    const b = a.asNode().nextSibling().?.as(Element);
     const c = b.asNode().nextSibling().?.as(Element);
-    const sheet = (try style_el.getSheet(frame)) orelse return error.NoSheet;
 
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    // The fragment parser skips a <style>'s ready work, which is what creates
+    // and registers its sheet; a connected insert runs it.
+    const style_el = (try doc.createElement("style", null, frame)).as(Element.Html.Style);
+    try style_el.asNode().setTextContent(".a { display: none }", frame);
+    _ = try body.insertBefore(style_el.asNode(), a.asNode(), frame);
+    const sheet = style_el._sheet orelse return error.NoSheet;
+
+    try testing.expectEqual(true, sm.isHidden(a, .{}));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(false, sm.dirty);
 
     // Appended to the last sheet: no rebuild, but the memo is stale
     _ = try sheet.insertRule(".b { display: none }", 1, frame);
     try testing.expectEqual(false, sm.dirty);
-    try testing.expectEqual(true, sm.isHidden(b, null, .{}, .scan));
-    try testing.expectEqual(false, sm.isHidden(c, null, .{}, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, .{}));
+    try testing.expectEqual(false, sm.isHidden(c, .{}));
 
     // A later append wins over the earlier one at equal specificity
     _ = try sheet.insertRule(".b { display: block }", 2, frame);
     try testing.expectEqual(false, sm.dirty);
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
 
     // Inserting in the middle rebuilds; the cascade must agree either way
     _ = try sheet.insertRule(".c { display: none }", 0, frame);
     try testing.expectEqual(true, sm.dirty);
-    try testing.expectEqual(true, sm.isHidden(c, null, .{}, .scan));
-    try testing.expectEqual(false, sm.isHidden(b, null, .{}, .scan));
+    try testing.expectEqual(true, sm.isHidden(c, .{}));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(false, sm.dirty);
 
     // At-rules always rebuild
     _ = try sheet.insertRule("@media (min-width: 1px) { .c { display: block } }", 4, frame);
     try testing.expectEqual(true, sm.dirty);
-    try testing.expectEqual(false, sm.isHidden(c, null, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(c, .{}));
 }

@@ -38,7 +38,7 @@ _meta_key: bool = false,
 _ctrl_key: bool = false,
 _shift_key: bool = false,
 
-pub const TouchEventOptions = struct {
+const TouchEventOptions = struct {
     altKey: bool = false,
     ctrlKey: bool = false,
     metaKey: bool = false,
@@ -84,15 +84,15 @@ pub fn asEvent(self: *TouchEvent) *Event {
     return self._proto.asEvent();
 }
 
-pub fn getTouches(_: *const TouchEvent) []const bool {
+fn getTouches(_: *const TouchEvent) []const bool {
     return &.{};
 }
 
-pub fn getTargetTouches(_: *const TouchEvent) []const bool {
+fn getTargetTouches(_: *const TouchEvent) []const bool {
     return &.{};
 }
 
-pub fn getChangedTouches(_: *const TouchEvent) []const bool {
+fn getChangedTouches(_: *const TouchEvent) []const bool {
     return &.{};
 }
 

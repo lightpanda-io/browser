@@ -71,19 +71,19 @@ pub fn asEvent(self: *DeviceOrientationEvent) *Event {
     return self._proto;
 }
 
-pub fn getAlpha(self: *const DeviceOrientationEvent) ?f64 {
+fn getAlpha(self: *const DeviceOrientationEvent) ?f64 {
     return self._alpha;
 }
 
-pub fn getBeta(self: *const DeviceOrientationEvent) ?f64 {
+fn getBeta(self: *const DeviceOrientationEvent) ?f64 {
     return self._beta;
 }
 
-pub fn getGamma(self: *const DeviceOrientationEvent) ?f64 {
+fn getGamma(self: *const DeviceOrientationEvent) ?f64 {
     return self._gamma;
 }
 
-pub fn getAbsolute(self: *const DeviceOrientationEvent) bool {
+fn getAbsolute(self: *const DeviceOrientationEvent) bool {
     return self._absolute;
 }
 

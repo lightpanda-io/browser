@@ -66,7 +66,7 @@ pub fn parseDeclarationsList(input: []const u8) DeclarationsIterator {
     return DeclarationsIterator.init(input);
 }
 
-pub const DeclarationsIterator = struct {
+const DeclarationsIterator = struct {
     input: []const u8,
     stream: TokenStream,
 
@@ -294,7 +294,7 @@ fn isBang(token: Tokenizer.Token) bool {
     };
 }
 
-pub const StyleRule = struct {
+const StyleRule = struct {
     selector: []const u8,
     block: []const u8,
 };
@@ -308,7 +308,7 @@ pub const StyleRule = struct {
 /// `cssRules` after `insertRule` -- if the rule is missing they fall back to
 /// per-render `<style>` element injection, which leaks unboundedly. See
 /// lightpanda-io/browser#2459.
-pub const AtRule = struct {
+const AtRule = struct {
     /// At-keyword without the leading `@` (e.g., `"keyframes"`, `"media"`,
     /// `"-webkit-keyframes"`). Borrowed from the input slice; copy if you
     /// need to outlive the input.
@@ -319,7 +319,7 @@ pub const AtRule = struct {
     text: []const u8,
 };
 
-pub const Rule = union(enum) {
+const Rule = union(enum) {
     style: StyleRule,
     at_rule: AtRule,
 };

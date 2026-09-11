@@ -46,7 +46,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Method = http.Method;
 pub const Header = http.Header;
-pub const HeaderIterator = http.HeaderIterator;
+const HeaderIterator = http.HeaderIterator;
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -152,6 +152,10 @@ test_fail_submit: if (lp.IS_TEST) ?anyerror else void = if (lp.IS_TEST) null els
 // When set, takes precedence over the config's http_headers value.
 // Allocated from self.allocator when set, null otherwise.
 user_agent_override: ?[:0]const u8 = null,
+
+// Accept-Language override set via CDP Emulation.setUserAgentOverride.
+// Drives both the request header and navigator.languages.
+accept_language_override: ?lp.Config.HttpHeaders.AcceptLanguage = null,
 
 // The driver (CDP / BiDi) attached to us. If there's a driver, then there's
 // an inbox for us to process (and there's someone to wake us up from a poll)
@@ -263,6 +267,7 @@ pub fn deinit(self: *Client) void {
     self.handles.deinit();
 
     self.clearUserAgentOverride();
+    self.clearAcceptLanguageOverride();
     if (self.http_proxy_owned) |owned| {
         self.allocator.free(owned);
     }
@@ -300,6 +305,19 @@ pub fn clearUserAgentOverride(self: *Client) void {
     if (self.user_agent_override) |ua| {
         self.allocator.free(ua);
         self.user_agent_override = null;
+    }
+}
+
+// Set an Accept-Language override, allocated from self.allocator.
+pub fn setAcceptLanguageOverride(self: *Client, value: []const u8) !void {
+    self.clearAcceptLanguageOverride();
+    self.accept_language_override = try .init(self.allocator, value);
+}
+
+pub fn clearAcceptLanguageOverride(self: *Client) void {
+    if (self.accept_language_override) |override| {
+        override.deinit(self.allocator);
+        self.accept_language_override = null;
     }
 }
 
@@ -428,6 +446,14 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
+pub fn getAcceptLanguage(self: *const Client) [:0]const u8 {
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).header;
+}
+
+pub fn getLanguages(self: *const Client) []const []const u8 {
+    return (self.accept_language_override orelse self.network.config.http_headers.accept_language).languages;
+}
+
 // Headers _all_ requests include.
 pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
     return .{
@@ -436,7 +462,7 @@ pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
         .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
-        .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
+        .{ .name = "Accept-Language", .value = self.getAcceptLanguage() },
     };
 }
 
@@ -544,7 +570,7 @@ pub fn cancelRequests(self: *Client, owner: *Owner) void {
 }
 
 // Point-in-time snapshot of the client's outstanding work
-pub const Activity = struct {
+const Activity = struct {
     // in-flight + buffered-awaiting-dispatch + parked-for-CDP-interception
     http: usize,
 
@@ -1030,6 +1056,10 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
                 return transfer.failAsync(error.UrlBlocked);
             }
 
+            if (transfer.req.internal == false) {
+                try setOriginHeader(transfer);
+            }
+
             if (self.obey_cors and !transfer.req.internal) {
                 if (!isCrossOriginModeAllowed(transfer)) {
                     log.warn(.http, "blocked by mode", .{
@@ -1085,6 +1115,40 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
         },
         .network => try self.processTransfer(transfer),
     }
+}
+
+// A cors request always carries an Origin. Everything else only carries one
+// for an unsafe method - same origin or not. Can't go in CorsGate since it can
+// be disabled.
+fn setOriginHeader(transfer: *Transfer) !void {
+    const req = &transfer.req;
+
+    const cross_origin = transfer._cors_origin_tainted or blk: {
+        const origin = req.origin orelse break :blk true;
+        break :blk URL.isSameOrigin(req.url, origin) == false;
+    };
+
+    const cors_tainted = cross_origin and switch (req.request_mode) {
+        .cors, .same_origin => true,
+        // A navigation is never cors-tainted. Chrome only sends an Origin on
+        // an unsafe one (a form POST), which the method check below covers.
+        .no_cors, .navigate => false,
+    };
+
+    const unsafe_method = req.method != .GET and req.method != .HEAD;
+    if (cors_tainted == false and unsafe_method == false) {
+        // A 301/302/303 rewrites the method to GET, leaving the previous hop's
+        // Origin behind. Only drop one we put there ourselves.
+        for (transfer.req_headers.items, 0..) |hdr, i| {
+            if (hdr.source == .user_agent and std.ascii.eqlIgnoreCase(hdr.name, "origin")) {
+                _ = transfer.req_headers.orderedRemove(i);
+                break;
+            }
+        }
+        return;
+    }
+
+    try transfer.setHeader("Origin", transfer.effectiveOrigin(), .{});
 }
 
 // RobotsGate resumption.
@@ -1310,8 +1374,9 @@ const SyncContext = struct {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
-        if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(cl), cl);
+        const body_len = transfer.bodyLen();
+        if (body_len > 0) {
+            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
         }
         return .proceed;
     }
@@ -1435,23 +1500,33 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 
         defer msg.deinit();
 
-        switch (msg.payload) {
-            .cdp, .bidi => driver.onMessage(msg) catch |err| {
-                // A single malformed/failed dispatch shouldn't poison
-                // the rest of the batch — log and continue.
-                log.err(.app, "client dispatch", .{ .err = err });
+        const done = switch (msg.payload) {
+            .cdp, .bidi => blk: {
+                driver.onMessage(msg) catch |err| {
+                    // A single malformed/failed dispatch shouldn't poison
+                    // the rest of the batch — log and continue.
+                    log.err(.app, "client dispatch", .{ .err = err });
+                };
+                break :blk false;
             },
-            .ping => |body| driver.onPing(body),
-            .close => {
-                driver.onClose();
-                self.disconnected = true;
-                return error.ClientDisconnected;
+            .ping => |body| blk: {
+                driver.onPing(body);
+                break :blk false;
             },
-            .disconnect => |err| {
-                driver.onDisconnect(err);
-                self.disconnected = true;
-                return error.ClientDisconnected;
+            .link => |link| blk: {
+                driver.onLink(link);
+                break :blk false;
             },
+            .quit => blk: {
+                driver.onQuit();
+                break :blk true; // quit always shutsdown
+            },
+            .close => driver.onClose(), // close is up to the driver if it shutsdown
+            .disconnect => |err| driver.onDisconnect(err), // same with disconnect
+        };
+        if (done) {
+            self.disconnected = true;
+            return error.ClientDisconnected;
         }
     }
 }
@@ -1470,7 +1545,7 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 // eval frame above us will dereference.
 fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .ping, .close, .disconnect => true,
+        .ping, .close, .disconnect, .quit, .link => true,
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
@@ -1480,8 +1555,8 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
 
 fn isTerminal(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .close, .disconnect => true,
-        .ping, .cdp, .bidi => false,
+        .close, .disconnect, .quit => true,
+        .ping, .cdp, .bidi, .link => false,
     };
 }
 
@@ -1498,8 +1573,8 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 // teardown command sits undispatched behind the sync_wait allowlist.
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .close, .disconnect => true,
-        .ping => false,
+        .close, .disconnect, .quit => true,
+        .ping, .link => false,
         .cdp => |c| isTeardownMethod(c.input.method),
         // Frames aren't parsed on the Network thread for BiDi, so we
         // can't spot a teardown command without re-parsing here.
@@ -1786,12 +1861,12 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
-    pub const StartCallback = *const fn (transfer: *Transfer) anyerror!void;
-    pub const HeaderCallback = *const fn (transfer: *Transfer) anyerror!Transfer.HeaderResult;
-    pub const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
-    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
-    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+    const StartCallback = *const fn (transfer: *Transfer) anyerror!void;
+    const HeaderCallback = *const fn (transfer: *Transfer) anyerror!Transfer.HeaderResult;
+    const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
+    const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
+    const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     pub const ResourceType = enum {
         document,
@@ -1823,7 +1898,7 @@ pub const Request = struct {
 
     // Fetch request redirect mode. `.follow` keeps navigations, XHR and
     // internal requests transparently following redirects.
-    pub const RedirectMode = enum { follow, manual, @"error" };
+    const RedirectMode = enum { follow, manual, @"error" };
 
     // How much of a headers_only body we'll read rather than abort. Draining
     // costs bandwidth but keeps the connection poolable; aborting saves
@@ -1932,7 +2007,7 @@ pub const Request = struct {
     }
 };
 
-pub const SyncResponse = struct {
+const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
 
@@ -2143,11 +2218,11 @@ pub const Owner = struct {
         return .{ .url = own_url };
     }
 
-    pub fn addTransfer(self: *Owner, t: *Transfer) void {
+    fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);
     }
 
-    pub fn removeTransfer(self: *Owner, t: *Transfer) void {
+    fn removeTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.remove(&t.owner_node);
     }
 
@@ -2249,6 +2324,10 @@ pub const Transfer = struct {
 
     // Content length reported on the CDP loadingFinished event.
     _content_length: usize = 0,
+
+    // Length of the body data_callback will receive. Can be different than
+    // Content-Length if the content was compressed
+    _body_len: usize = 0,
 
     _conn_id: i64 = 0,
     _conn_reused: bool = false,
@@ -2994,6 +3073,7 @@ pub const Transfer = struct {
             lp.metrics.http_response_size_bytes.observe(body.len);
         }
 
+        self._body_len = body.len;
         try self._events.ensureUnusedCapacity(self.arena.allocator(), 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
@@ -3145,6 +3225,16 @@ pub const Transfer = struct {
         for (self.req_headers.items) |hdr| {
             try conn.addHeader(arena, hdr.name, hdr.value);
         }
+        if (req.body != null and self.findRequestHeader("content-type") == null) {
+            // Prevent libcurl from always setting application/x-www-form-urlencoded
+            try conn.addRawHeader("Content-Type:");
+        }
+        if (req.body == null and (req.method == .POST or req.method == .PUT) and
+            self.findRequestHeader("content-length") == null)
+        {
+            // https://fetch.spec.whatwg.org/#http-network-or-cache-fetch step 10
+            try conn.addRawHeader("Content-Length: 0");
+        }
         if (req.body != null) {
             // Browsers never send Expect: 100-continue; libcurl generates it
             // for HTTP/1.1 requests whose body exceeds 1MB
@@ -3231,7 +3321,7 @@ pub const Transfer = struct {
     }
 
     // `url` must have transfer-arena lifetime: it's stored as-is, not duped.
-    pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
+    fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         self.req.url = url;
     }
 
@@ -3371,7 +3461,7 @@ pub const Transfer = struct {
         self.req.basic_auth_credentials = userpwd;
     }
 
-    pub const RequestHeader = struct {
+    const RequestHeader = struct {
         name: []const u8,
         value: []const u8,
         source: HeaderSource = .user_agent,
@@ -3381,9 +3471,9 @@ pub const Transfer = struct {
     // setHeader/appendHeader let a source overwrite headers from its own or
     // a lower layer, never a higher one. .fixed is hardcoded and can't be
     // changed (Sec-Ch-Ua). For CORS, only script-set headers cause a preflight.
-    pub const HeaderSource = enum { user_agent, author, cdp, cli, fixed };
+    const HeaderSource = enum { user_agent, author, cdp, cli, fixed };
 
-    pub const HeaderOpts = struct {
+    const HeaderOpts = struct {
         source: HeaderSource = .user_agent,
     };
 
@@ -3556,6 +3646,13 @@ pub const Transfer = struct {
                         res.callback_error = error.ResponseTooLarge;
                         return http.writefunc_error;
                     }
+                    // TODO: Because of compression, Content-Length is the wire
+                    // length, not necessarily the final length. The chunks
+                    // are read into the transfer.*ARENA* so growth doesn't free
+                    // previous allocations. We could look at Content-Encoding
+                    // and `cl * 3` or something, but that's just a guess.
+                    // I prefer to leave this simple; easier for someone to come
+                    // up with a good solution.
                     res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
                 }
             }
@@ -3678,6 +3775,14 @@ pub const Transfer = struct {
     pub fn getContentLength(self: *const Transfer) ?usize {
         const cl = self.getContentLengthRawValue() orelse return null;
         return std.fmt.parseInt(usize, cl, 10) catch null;
+    }
+
+    // Unless streaming, we've read the entire body before calling
+    // header_callback. Code that needs to own the body (most callers) should
+    // use the body length NOT the Content-Length (which would be the compressed
+    // on-the-wire size, not the actual final length). 0 for streaming.
+    pub fn bodyLen(self: *const Transfer) usize {
+        return self._body_len;
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
@@ -4203,6 +4308,7 @@ fn initTestClient(client: *Client, pool: *ArenaPool) void {
         .single_flight = .init(testing.allocator),
     };
     client.url_blocklist = null;
+    client.accept_language_override = null;
     client.test_fail_submit = null;
     // isUrlBlocked reaches through here for the adblocker; tests that want
     // one assign it to `client.network` after this returns.
@@ -4229,6 +4335,27 @@ test "HttpClient: setBlockedUrls owns, replaces, and clears patterns" {
 
     try client.setBlockedUrls(&.{});
     try testing.expectEqual(null, client.url_blocklist);
+}
+
+test "HttpClient: setAcceptLanguageOverride owns, replaces, and clears" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    defer client.clearAcceptLanguageOverride();
+
+    var first = "de-DE,de;q=0.9".*;
+    try client.setAcceptLanguageOverride(&first);
+    @memset(&first, 'x');
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9", client.getAcceptLanguage());
+    try testing.expectEqual(2, client.getLanguages().len);
+
+    try client.setAcceptLanguageOverride("fr-FR");
+    try std.testing.expectEqualStrings("fr-FR", client.getLanguages()[0]);
+
+    client.clearAcceptLanguageOverride();
+    try testing.expectEqual(null, client.accept_language_override);
 }
 
 const TestRequest = struct {
@@ -4294,11 +4421,26 @@ test "HttpClient: adblock verdicts apply per request" {
         \\||typed.example.com^$script
         \\||partied.example.com^$third-party
         \\||framed.example.com^$subdocument
+        \\/\/[a-z]{4}\.js$/$match-case,script
     );
     try blocker.parse(&list);
     try blocker.build();
     client.network.adblocker = blocker;
     defer client.network.adblocker = null;
+
+    // A regex filter reads the URL as requested: case kept, fragment gone.
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://cdn.example.com/abcd.js",
+        .resource_type = .script,
+    }));
+    try testing.expect(testIsUrlBlocked(&client, .{
+        .url = "https://cdn.example.com/abcd.js#v2",
+        .resource_type = .script,
+    }));
+    try testing.expect(!testIsUrlBlocked(&client, .{
+        .url = "https://cdn.example.com/ABCD.js",
+        .resource_type = .script,
+    }));
 
     try testing.expect(testIsUrlBlocked(&client, .{ .url = "https://ads.example.com/pixel.gif" }));
     // Hostnames are matched case-insensitively and without the port.
@@ -4828,6 +4970,70 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
     try testing.expectEqual(false, ctx.done_called);
 
     try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: bodyLen is the buffered body, not Content-Length" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner = testOwner(null, null);
+
+    const Ctx = struct {
+        body_len: usize = 0,
+        content_length: ?usize = null,
+
+        fn headerCallback(transfer: *Transfer) !Transfer.HeaderResult {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            self.body_len = transfer.bodyLen();
+            self.content_length = transfer.getContentLength();
+            return .proceed;
+        }
+    };
+    var ctx = Ctx{};
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .method = .GET,
+            .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .shutdown_callback = noopShutdown,
+            .ctx = &ctx,
+            .header_callback = Ctx.headerCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{
+        .{ .name = "Content-Length", .value = "323838382838" },
+    }, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expectEqual(323838382838, ctx.content_length);
+    try testing.expectEqual(5, ctx.body_len);
+
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
 }

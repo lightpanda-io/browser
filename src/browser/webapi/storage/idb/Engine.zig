@@ -200,7 +200,7 @@ pub fn databaseVersion(self: *const Engine, name: []const u8) !?i64 {
     return self.conn.scalar(i64, "select version from idb_databases where name = ?1", .{name});
 }
 
-pub const DatabaseInfo = struct {
+const DatabaseInfo = struct {
     name: []const u8,
     version: i64,
 };
@@ -246,7 +246,7 @@ pub fn objectStoreId(self: *const Engine, database_id: i64, name: []const u8) !?
     );
 }
 
-pub const StoreInfo = struct {
+const StoreInfo = struct {
     id: i64,
     key_path: ?Key.KeyPath,
     auto_increment: bool,
@@ -591,7 +591,7 @@ pub fn indexGetAllRows(self: *const Engine, object_store_id: i64, index_id: i64,
     return self.conn.rows(sql, .{ object_store_id, index_id, b.lower, b.upper, limit });
 }
 
-pub const IndexCursorRecord = struct {
+const IndexCursorRecord = struct {
     key: []u8,
     primary_key: []u8,
     value: ?[]u8,
@@ -733,7 +733,7 @@ fn rangeOps(b: Bounds) struct { lo: []const u8, hi: []const u8 } {
 }
 
 // What a ranged getAll/getAllKeys returns: the value or key column.
-pub const Column = enum {
+const Column = enum {
     value,
     key,
 };
@@ -741,7 +741,7 @@ pub const Column = enum {
 // Open a getAll/getAllKeys cursor. The JS layer streams rows straight into a JS
 // array, avoiding a copy of the whole result set out of sqlite. (The SQL text is
 // copied into the prepared statement, so the stack `buf` can be discarded.)
-pub fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
+fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
     var buf: [256]u8 = undefined;
     const head = if (column == .value) "select value" else "select key";
     const sql = try rangeSql(&buf, head, b, " order by key limit ?4");
@@ -760,7 +760,7 @@ pub fn getAllRows(self: *const Engine, object_store_id: i64, b: Bounds, reverse:
     return self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });
 }
 
-pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
+fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
     var rows = try self.getAllRangeRows(object_store_id, b, column, limit_);
     defer rows.deinit();
 
@@ -771,7 +771,7 @@ pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, 
     return list.items;
 }
 
-pub const CursorRecord = struct {
+const CursorRecord = struct {
     key: []u8,
     // null for a key-only cursor (the value column isn't selected or duped).
     value: ?[]u8,

@@ -89,11 +89,19 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
 }
 
 pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
-    return frame._factory.node(Attribute{
-        ._element = self._element,
+    const cloned = try frame._factory.node(Attribute{
+        ._element = null,
         ._name = self._name,
         ._value = self._value,
     });
+
+    if (self._element) |el| {
+        // cloned has no element, we need to store its document
+        if (el.asNode().ownerDocument(frame)) |doc| {
+            try frame.setNodeOwnerDocument(cloned.asNode(), doc);
+        }
+    }
+    return cloned;
 }
 
 pub const JsApi = struct {
@@ -142,7 +150,7 @@ pub const List = struct {
     pub const Lookup = std.AutoHashMapUnmanaged(LookupKey, *Attribute);
 
     // for Frame._attribute_lookup which is our identity map for attributes
-    pub const LookupKey = struct {
+    const LookupKey = struct {
         list: *const List,
         // canonical (see canonicalizeName), so identity is the address
         name: [*]const u8,
@@ -352,7 +360,10 @@ pub const List = struct {
 
         // remove this BEFORE triggering anything, incase that re-enters delete
         // or some other callback.
-        _ = owner._attribute_lookup.remove(.{ .list = self, .name = entry._name_ptr });
+        if (owner._attribute_lookup.fetchRemove(.{ .list = self, .name = entry._name_ptr })) |kv| {
+            // The attribute can still be alive
+            kv.value._element = null;
+        }
         const index = (@intFromPtr(entry) - @intFromPtr(self._entries)) / @sizeOf(Entry);
         const list_entries = self._entries[0..self._len];
         std.mem.copyForwards(Entry, list_entries[index .. list_entries.len - 1], list_entries[index + 1 ..]);
@@ -493,7 +504,7 @@ pub const List = struct {
             return formatAttribute(self.name(), self.value(), writer);
         }
 
-        pub fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
+        fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
             return frame._factory.node(Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
@@ -519,6 +530,9 @@ fn shouldAddToIdMap(normalized_name: String, element: *Element) bool {
     return node.isConnected();
 }
 
+// names and things that would break serialization aren't allowed.
+const invalid_name_chars = "\x00\t\n\x0C\r />=";
+
 pub fn validateAttributeName(name: String) !void {
     const name_str = name.str();
 
@@ -526,22 +540,8 @@ pub fn validateAttributeName(name: String) !void {
         return error.InvalidCharacterError;
     }
 
-    const first = name_str[0];
-    if ((first >= '0' and first <= '9') or first == '-' or first == '.') {
+    if (std.mem.indexOfAny(u8, name_str, invalid_name_chars) != null) {
         return error.InvalidCharacterError;
-    }
-
-    for (name_str) |c| {
-        if (c == 0 or c == '/' or c == '=' or c == '>' or std.ascii.isWhitespace(c)) {
-            return error.InvalidCharacterError;
-        }
-
-        const is_valid = std.ascii.isAlphanumeric(c) or
-            c == '_' or c == '-' or c == '.' or c == ':';
-
-        if (!is_valid) {
-            return error.InvalidCharacterError;
-        }
     }
 }
 
@@ -624,11 +624,10 @@ pub const NamedNodeMap = struct {
     }
 
     pub fn set(self: *const NamedNodeMap, attribute: *Attribute, frame: *Frame) !?*Attribute {
-        attribute._element = null; // just a requirement of list.putAttribute, it'll re-set it.
-        return self.list().putAttribute(attribute, self._element, frame);
+        return self._element.setAttributeNode(attribute, frame);
     }
 
-    pub fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
+    fn removeByName(self: *const NamedNodeMap, name: String, frame: *Frame) !?*Attribute {
         // this 2-step process (get then delete) isn't efficient. But we don't
         // expect this to be called often, and this lets us keep delete straightforward.
         const attr = (try self.getByName(name, frame)) orelse return null;
@@ -661,26 +660,36 @@ pub const NamedNodeMap = struct {
         };
 
         pub const length = bridge.accessor(NamedNodeMap.length, null, .{});
-        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, getIndexes, .{ .null_as_undefined = true });
-        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, getNames, null, .{ .null_as_undefined = true });
-
-        fn getIndexes(self: *const NamedNodeMap, frame: *Frame) !js.Array {
-            const len = self.length();
-            var arr = frame.js.local.?.newArray(len);
-            for (0..len) |i| {
-                _ = try arr.set(@intCast(i), i, .{});
+        pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, struct {
+            fn wrap(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+                const len = self.length();
+                var arr = frame.js.local.?.newArray(len);
+                for (0..len) |i| {
+                    _ = try arr.set(@intCast(i), i, .{});
+                }
+                return arr;
             }
-            return arr;
-        }
+        }.wrap, .{ .null_as_undefined = true });
 
-        fn getNames(self: *const NamedNodeMap, frame: *Frame) !js.Array {
-            const names = try self.list().getNames(frame.local_arena);
-            var arr = frame.js.local.?.newArray(@intCast(names.len));
-            for (names, 0..) |name, i| {
-                _ = try arr.set(@intCast(i), name, .{});
+        pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, struct {
+            fn wrap(self: *const NamedNodeMap, frame: *Frame) !js.Array {
+                const names = try self.list().getNames(frame.local_arena);
+                var arr = frame.js.local.?.newArray(@intCast(names.len));
+                for (names, 0..) |name, i| {
+                    _ = try arr.set(@intCast(i), name, .{});
+                }
+                return arr;
             }
-            return arr;
-        }
+        }.wrap, struct {
+            fn wrap(self: *const NamedNodeMap, name: String, frame: *Frame) !u32 {
+                if ((try self.list().get(name, frame)) != null) {
+                    // Named properties are [LegacyUnenumerableNamedProperties]
+                    return js.v8.DontEnum;
+                }
+                return error.NotHandled;
+            }
+        }.wrap, .{ .null_as_undefined = true });
+
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
         pub const setNamedItem = bridge.function(NamedNodeMap.set, .{ .ce_reactions = true });
         pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{ .ce_reactions = true });

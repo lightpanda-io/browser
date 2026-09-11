@@ -167,7 +167,7 @@ pub const Attribute = struct {
     value: []const u8,
 };
 
-pub const NodeValue = struct {
+const NodeValue = struct {
     node_type: u8,
     shared_id: []const u8,
     child_node_count: usize,
@@ -604,12 +604,6 @@ fn bareType(value: js.Value) ?[]const u8 {
 
     return null;
 }
-
-pub const LocalError = error{
-    NoSuchNode,
-    NoSuchHandle,
-    UnsupportedLocalValue,
-};
 
 // script.LocalValue -> JS, for callFunction's `arguments` and `this`.
 pub fn toJs(

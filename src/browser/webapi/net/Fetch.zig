@@ -160,9 +160,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const arena = self._response._arena;
     if (!is_opaque) {
-        if (transfer.getContentLength()) |cl| {
-            try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
-        }
+        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
     const res = self._response;
@@ -317,7 +315,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
-    testing.expectLog(&.{ .http, .http });
+    testing.expectLog(&.{.http});
     try testing.htmlRunner("net/fetch.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
 }

@@ -186,7 +186,7 @@ pub fn groupCollapsed(values: []js.Value) void {
     logger.info(.js, "console.groupCollapsed", .{ValueWriter{ .values = values }});
 }
 
-pub fn groupEnd() void {}
+fn groupEnd() void {}
 const ValueWriter = struct {
     values: []js.Value,
     stack: ?[]const u8 = null,

@@ -103,3 +103,25 @@
     testing.expectEqual(false, !!document.all);
   }
 </script>
+
+<script id=all_named_presence>
+  {
+    const all = document.all;
+
+    testing.expectEqual(true, 'a' in all);
+    testing.expectEqual(true, 'field' in all);
+    testing.expectEqual(true, 'anchor' in all);
+    testing.expectEqual(true, Object.hasOwn(all, 'b'));
+
+    testing.expectEqual(false, 'nonExistent' in all);
+    testing.expectEqual(false, Object.hasOwn(all, 'nonExistent'));
+
+    // name= only counts for the elements document.all exposes by name,
+    // so a named div is reachable by id but not by name
+    testing.expectEqual(false, 'alpha' in all);
+
+    // [LegacyUnenumerableNamedProperties]
+    testing.expectEqual(false, Object.keys(all).includes('a'));
+    testing.expectEqual(false, Object.getOwnPropertyDescriptor(all, 'a').enumerable);
+  }
+</script>

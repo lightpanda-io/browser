@@ -169,7 +169,7 @@ fn decodeBytes(allocator: Allocator, bytes: []const u8, pos: *usize) ![]u8 {
 // Build a Key.Value from a JS value, validating that it is a structurally valid
 // IDB key. Invalid keys (booleans, null/undefined, plain objects, NaN, and
 // invalid Dates) produce error.DataError.
-pub fn fromJs(value: js.Value, allocator: Allocator) !Value {
+fn fromJs(value: js.Value, allocator: Allocator) !Value {
     return fromJsDepth(value, allocator, 0);
 }
 
@@ -212,7 +212,7 @@ fn fromJsDepth(value: js.Value, allocator: Allocator, depth: usize) !Value {
 
 // Build a JS value (in `local`) from a decoded Key.Value. Binary keys surface as
 // ArrayBuffer, arrays as Array, matching the spec's key-to-value conversion.
-pub fn toJs(value: Value, local: *const Local) !js.Value {
+fn toJs(value: Value, local: *const Local) !js.Value {
     switch (value) {
         .number => |n| return local.zigValueToJs(n, .{}),
         .date => |n| return local.newDate(n),
@@ -228,7 +228,7 @@ pub fn toJs(value: Value, local: *const Local) !js.Value {
     }
 }
 
-pub fn isValidKeyPath(path: []const u8) bool {
+fn isValidKeyPath(path: []const u8) bool {
     if (path.len == 0) {
         // empty is valid
         return true;
@@ -335,7 +335,7 @@ pub fn keyPathToJs(local: *const Local, kp: ?KeyPath) !js.Value {
 // of that many ','-joined components (a valid component can't contain a ',').
 // The count both disambiguates a one-element list from a string and lets decode
 // allocate the exact slice.
-pub const ColumnKeyPath = struct { text: []const u8, component_length: usize };
+const ColumnKeyPath = struct { text: []const u8, component_length: usize };
 
 pub fn encodeKeyPathColumn(arena: Allocator, kp: KeyPath) !ColumnKeyPath {
     return switch (kp) {
@@ -357,7 +357,7 @@ pub fn decodeKeyPathColumn(arena: Allocator, text: []const u8, component_length:
 }
 
 // Given a key path , "manager.id", extract that from an object
-pub fn evaluatePath(value: js.Value, key_path: []const u8) ?js.Value {
+fn evaluatePath(value: js.Value, key_path: []const u8) ?js.Value {
     if (key_path.len == 0) {
         return value;
     }

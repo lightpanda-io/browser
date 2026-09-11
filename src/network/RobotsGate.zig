@@ -182,9 +182,7 @@ const RobotsContext = struct {
             self.status = hdr.status;
         }
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
-        if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), cl);
-        }
+        try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
     }
 

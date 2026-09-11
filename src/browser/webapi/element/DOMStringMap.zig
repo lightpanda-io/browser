@@ -142,6 +142,30 @@ pub const JsApi = struct {
 
     pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, getNames, hasProperty, .{ .null_as_undefined = true, .ce_reactions = true });
 
+    // v8 routes dataset[9] and dataset["9"] to the indexed interceptor
+    pub const @"[int]" = bridge.indexedReadWrite(_getByIndex, _setByIndex, _deleteByIndex, _queryByIndex, null, .{ .null_as_undefined = true, .ce_reactions = true });
+
+    fn _getByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !?String {
+        return self._element.getAttribute(try indexName(idx, frame), frame);
+    }
+
+    fn _setByIndex(self: *DOMStringMap, idx: u32, value: String, frame: *Frame) !void {
+        return self._element.setAttributeSafe(try indexName(idx, frame), value, frame);
+    }
+
+    fn _deleteByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !void {
+        return self._element.removeAttribute(try indexName(idx, frame), frame);
+    }
+
+    fn _queryByIndex(self: *DOMStringMap, idx: u32, frame: *Frame) !bool {
+        return self._element.hasAttribute(try indexName(idx, frame), frame);
+    }
+    fn indexName(idx: u32, frame: *Frame) !String {
+        var buf: [15]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, "data-{d}", .{idx}) catch unreachable;
+        return String.init(frame.local_arena, name, .{});
+    }
+
     // The supported property names are the camel-cased names of the
     // element's data-* attributes, in attribute order.
     fn getNames(self: *DOMStringMap, frame: *Frame) !js.Array {

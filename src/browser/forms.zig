@@ -25,7 +25,7 @@ const Node = @import("webapi/Node.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const SelectOption = struct {
+const SelectOption = struct {
     value: []const u8,
     text: []const u8,
 
@@ -39,7 +39,7 @@ pub const SelectOption = struct {
     }
 };
 
-pub const FormField = struct {
+const FormField = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -101,7 +101,7 @@ pub const FormField = struct {
     }
 };
 
-pub const FormInfo = struct {
+const FormInfo = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     action: ?[]const u8,

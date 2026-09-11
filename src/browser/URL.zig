@@ -22,7 +22,7 @@ const U = @import("../sys/url.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const ResolveOptions = struct {
+const ResolveOptions = struct {
     /// null = don't encode, "UTF-8" = standard percent encoding,
     /// other charset = encode query string using that charset with NCR fallback.
     encoding: ?[]const u8 = null,
@@ -380,7 +380,7 @@ pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
 }
 
 // Helper function to build a URL from components
-pub fn buildUrl(
+fn buildUrl(
     allocator: Allocator,
     protocol: []const u8,
     host: []const u8,

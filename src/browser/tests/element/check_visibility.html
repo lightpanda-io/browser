@@ -725,3 +725,78 @@
     el.remove();
   }
 </script>
+
+<script id="memo_focus">
+  {
+    const style = document.createElement("style");
+    style.textContent = "#memo_focus_input:focus + span { display: none; }";
+    document.head.appendChild(style);
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<input id="memo_focus_input"><span>s</span>';
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector("input");
+    const span = wrap.querySelector("span");
+
+    testing.expectEqual(true, span.checkVisibility());
+    input.focus();
+    testing.expectEqual(false, span.checkVisibility());
+    input.blur();
+    testing.expectEqual(true, span.checkVisibility());
+
+    wrap.remove();
+    style.remove();
+  }
+</script>
+
+<script id="memo_checked_rollback">
+  {
+    const style = document.createElement("style");
+    style.textContent = "#memo_checked_input:checked + span { display: none; }";
+    document.head.appendChild(style);
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<input type="checkbox" id="memo_checked_input"><span>s</span>';
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector("input");
+    const span = wrap.querySelector("span");
+
+    let during = null;
+    input.addEventListener("click", (e) => {
+      during = span.checkVisibility();
+      e.preventDefault();
+    });
+
+    testing.expectEqual(true, span.checkVisibility());
+    input.click();
+    // the toggle is visible to listeners, then rolled back by preventDefault
+    testing.expectEqual(false, during);
+    testing.expectEqual(false, input.checked);
+    testing.expectEqual(true, span.checkVisibility());
+
+    wrap.remove();
+    style.remove();
+  }
+</script>
+
+<script id="memo_target">
+  {
+    const style = document.createElement("style");
+    style.textContent = "#memo_target_anchor:target + span { display: none; }";
+    document.head.appendChild(style);
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<div id="memo_target_anchor"></div><span>s</span>';
+    document.body.appendChild(wrap);
+    const span = wrap.querySelector("span");
+
+    testing.expectEqual(true, span.checkVisibility());
+    location.hash = "#memo_target_anchor";
+    testing.expectEqual(false, span.checkVisibility());
+    location.hash = "#memo_target_other";
+    testing.expectEqual(true, span.checkVisibility());
+
+    wrap.remove();
+    style.remove();
+  }
+</script>

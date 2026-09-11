@@ -82,7 +82,7 @@ _on_open: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 
-pub const ReadyState = enum(u8) {
+const ReadyState = enum(u8) {
     connecting = 0,
     open = 1,
     closed = 2,
@@ -570,41 +570,41 @@ pub fn getUrl(self: *const EventSource) []const u8 {
     return self._url;
 }
 
-pub fn getReadyState(self: *const EventSource) u16 {
+fn getReadyState(self: *const EventSource) u16 {
     return @intFromEnum(self._ready_state);
 }
 
-pub fn getWithCredentials(self: *const EventSource) bool {
+fn getWithCredentials(self: *const EventSource) bool {
     return self._with_credentials;
 }
 
-pub fn getOnOpen(self: *const EventSource) ?js.Function.Global {
+fn getOnOpen(self: *const EventSource) ?js.Function.Global {
     return self._on_open;
 }
 
-pub fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_open) |old| {
         old.release();
     }
     self._on_open = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnMessage(self: *const EventSource) ?js.Function.Global {
+fn getOnMessage(self: *const EventSource) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_message) |old| {
         old.release();
     }
     self._on_message = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnError(self: *const EventSource) ?js.Function.Global {
+fn getOnError(self: *const EventSource) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_error) |old| {
         old.release();
     }

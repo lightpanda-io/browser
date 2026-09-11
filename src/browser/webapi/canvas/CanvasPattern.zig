@@ -29,7 +29,7 @@ pub fn init(repetition: []const u8, exec: *const Execution) !*CanvasPattern {
     return exec._factory.create(CanvasPattern{ ._repetition = repetition });
 }
 
-pub fn setTransform(_: *const CanvasPattern, _: ?js.Value) void {}
+fn setTransform(_: *const CanvasPattern, _: ?js.Value) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasPattern);

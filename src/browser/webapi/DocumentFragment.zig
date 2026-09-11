@@ -93,7 +93,7 @@ pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, frame: *Fram
     return Selector.querySelectorAll(self.asNode(), input, frame) catch |err| Selector.mapErrorToDOM(err);
 }
 
-pub fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
+fn getChildren(self: *DocumentFragment, frame: *Frame) !collections.NodeLive(.child_elements) {
     return collections.NodeLive(.child_elements).init(self.asNode(), {}, frame);
 }
 
@@ -106,7 +106,7 @@ pub fn firstElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn lastElementChild(self: *DocumentFragment) ?*Element {
+fn lastElementChild(self: *DocumentFragment) ?*Element {
     var maybe_child = self.asNode().lastChild();
     while (maybe_child) |child| {
         if (child.is(Element)) |el| return el;
@@ -115,7 +115,7 @@ pub fn lastElementChild(self: *DocumentFragment) ?*Element {
     return null;
 }
 
-pub fn getChildElementCount(self: *DocumentFragment) usize {
+fn getChildElementCount(self: *DocumentFragment) usize {
     var count: usize = 0;
     var it = self.asNode().childrenIterator();
     while (it.next()) |node| {

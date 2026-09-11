@@ -52,7 +52,7 @@ pub fn getBaseVal(self: *AnimatedPreserveAspectRatio) *PreserveAspectRatio {
     return self._base_val;
 }
 
-pub fn getAnimVal(self: *AnimatedPreserveAspectRatio) *PreserveAspectRatio {
+fn getAnimVal(self: *AnimatedPreserveAspectRatio) *PreserveAspectRatio {
     return self._anim_val;
 }
 

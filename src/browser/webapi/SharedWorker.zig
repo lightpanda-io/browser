@@ -101,11 +101,11 @@ pub fn getPort(self: *const SharedWorker) *MessagePort {
     return self._port;
 }
 
-pub fn getOnError(self: *const SharedWorker) ?js.Function.Global {
+fn getOnError(self: *const SharedWorker) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *SharedWorker, setter: ?FunctionSetter) void {
+fn setOnError(self: *SharedWorker, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 

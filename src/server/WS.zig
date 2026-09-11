@@ -27,8 +27,8 @@ pub const EMPTY_PONG = [_]u8{ 138, 0 };
 // CLOSE, 2 length, code
 pub const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
 pub const CLOSE_GOING_AWAY = [_]u8{ 136, 2, 3, 233 }; // code: 1001
-pub const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
-pub const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
+const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
+const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
 
 const Fragments = struct {
     type: Message.Type,
@@ -50,7 +50,7 @@ pub const Message = struct {
 };
 
 // These are the only websocket types that we're currently sending
-pub const OpCode = enum(u8) {
+const OpCode = enum(u8) {
     text = 128 | 1,
     close = 128 | 8,
     pong = 128 | 10,

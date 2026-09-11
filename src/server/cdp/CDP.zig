@@ -23,6 +23,7 @@ const App = @import("../../App.zig");
 const Inbox = @import("../../Inbox.zig");
 const Notification = @import("../../Notification.zig");
 
+const sys_net = @import("../../sys/net.zig");
 const http = @import("../../network/http.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
 
@@ -31,7 +32,6 @@ const Mime = @import("../../browser/Mime.zig");
 const Frame = @import("../../browser/Frame.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
-const Element = @import("../../browser/webapi/Element.zig");
 const Label = @import("../../browser/webapi/element/html/Label.zig");
 
 const WS = @import("../WS.zig");
@@ -60,7 +60,7 @@ pub const InvocationIdGen = Incrementing(u32, "INV");
 const CDP = @This();
 
 app: *App,
-conn: Link,
+link: Link,
 browser: Browser,
 allocator: Allocator,
 
@@ -98,24 +98,30 @@ streams: @import("domains/io.zig").Streams,
 
 pub fn init(self: *CDP, app: *App, socket: posix.socket_t, inbox: *Inbox) !void {
     const allocator = app.allocator;
+    {
+        // this is documentation, and future-proofing, to show exactly where
+        // the socket's ownership is
+        errdefer sys_net.close(socket);
 
-    self.* = .{
-        .app = app,
-        .conn = undefined,
-        .browser = undefined,
-        .allocator = allocator,
-        .browser_context = null,
-        .frame_arena = std.heap.ArenaAllocator.init(allocator),
-        .message_arena = std.heap.ArenaAllocator.init(allocator),
-        .notification_arena = std.heap.ArenaAllocator.init(allocator),
-        .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
-        .streams = .{ .allocator = allocator },
-    };
+        self.* = .{
+            .app = app,
+            .link = undefined,
+            .browser = undefined,
+            .allocator = allocator,
+            .browser_context = null,
+            .frame_arena = std.heap.ArenaAllocator.init(allocator),
+            .message_arena = std.heap.ArenaAllocator.init(allocator),
+            .notification_arena = std.heap.ArenaAllocator.init(allocator),
+            .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
+            .streams = .{ .allocator = allocator },
+        };
+    }
+
+    // takes ownership of the socket
+    try self.link.init(app, socket, .cdp, inbox);
+    errdefer self.link.deinit();
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } });
-    errdefer self.browser.deinit();
-
-    try self.conn.init(app, socket, .cdp, inbox);
 }
 
 pub fn deinit(self: *CDP) void {
@@ -128,7 +134,7 @@ pub fn deinit(self: *CDP) void {
     self.notification_arena.deinit();
     self.browser_context_arena.deinit();
     self.streams.deinit();
-    self.conn.deinit();
+    self.link.deinit();
 }
 // Called by the Server run loop when readable bytes arrive on the CDP
 // socket. Feeds them through the WS framer and pushes each parsed frame
@@ -163,7 +169,7 @@ pub fn processMessage(self: *CDP, msg: []const u8) !void {
 }
 
 pub fn sendJSON(self: *CDP, message: anytype) !void {
-    try self.conn.sendJSON(message, .{ .emit_null_optional_fields = false });
+    try self.link.sendJSON(message, .{ .emit_null_optional_fields = false });
 }
 
 // Parse-then-dispatch entry point. Used by:
@@ -404,7 +410,7 @@ pub const BrowserContext = struct {
         id: u32,
     };
 
-    pub const AttachedSession = struct {
+    const AttachedSession = struct {
         id: []const u8,
         parent_id: ?[]const u8,
     };
@@ -615,6 +621,9 @@ pub const BrowserContext = struct {
         self.node_registry.deinit();
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
+
+        // Session.deinit (called via closeSession above) already cleared this
+        // notification off any ownerless CorsGate/RobotsGate transfers.
         self.notification.deinit();
 
         if (self.http_proxy_changed) {
@@ -627,6 +636,7 @@ pub const BrowserContext = struct {
         if (self.user_agent_changed) {
             browser.http_client.clearUserAgentOverride();
         }
+        browser.http_client.clearAcceptLanguageOverride();
         self.intercept_state.deinit();
     }
 
@@ -636,7 +646,7 @@ pub const BrowserContext = struct {
         self.set_child_nodes_sent.clearRetainingCapacity();
     }
 
-    pub const GetOrPutIsolatedWorld = struct {
+    const GetOrPutIsolatedWorld = struct {
         world: *IsolatedWorld,
         found_existing: bool,
     };
@@ -703,15 +713,12 @@ pub const BrowserContext = struct {
         // cross-frame queries produces names/visibility from the wrong document.
         const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
         const frame = root.dom.ownerFrame(fallback);
-        const cache = try frame.call_arena.create(Element.VisibilityCache);
-        cache.* = .empty;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{
             .frame = frame,
             .root = root,
             .registry = &self.node_registry,
-            .visibility_cache = cache,
             .label_index = label_index,
             .temp_arena = temp_arena,
             .filter = opts.filter,
@@ -835,7 +842,7 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn fetchDisable(self: *BrowserContext) void {
+    fn fetchDisable(self: *BrowserContext) void {
         self.notification.unregister(.http_request_intercept, self);
         self.notification.unregister(.http_request_auth_required, self);
         self.intercept_state.clearPatterns();
@@ -882,12 +889,12 @@ pub const BrowserContext = struct {
         self.notification.unregister(.download_progress, self);
     }
 
-    pub fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
+    fn onDownloadWillBegin(ctx: *anyopaque, msg: *const Notification.DownloadWillBegin) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadWillBegin(self, msg);
     }
 
-    pub fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
+    fn onDownloadProgress(ctx: *anyopaque, msg: *const Notification.DownloadProgress) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/browser.zig").downloadProgress(self, msg);
     }
@@ -902,68 +909,68 @@ pub const BrowserContext = struct {
         self.notification.unregister(.model_context_tool_removed, self);
     }
 
-    pub fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+    fn onModelContextToolAdded(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/webmcp.zig").onToolAdded(self, event);
     }
 
-    pub fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
+    fn onModelContextToolRemoved(ctx: *anyopaque, event: *const Notification.ModelContextToolEvent) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/webmcp.zig").onToolRemoved(self, event);
     }
 
-    pub fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
+    fn onFrameRemove(ctx: *anyopaque, _: Notification.FrameRemove) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameRemove(self);
     }
 
-    pub fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
+    fn onFrameCreated(ctx: *anyopaque, frame: *Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameCreated(self, frame);
     }
 
-    pub fn onFrameNavigate(ctx: *anyopaque, msg: *const Notification.FrameNavigate) !void {
+    fn onFrameNavigate(ctx: *anyopaque, msg: *const Notification.FrameNavigate) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigate(self, msg);
     }
 
-    pub fn onFrameNavigated(ctx: *anyopaque, msg: *const Notification.FrameNavigated) !void {
+    fn onFrameNavigated(ctx: *anyopaque, msg: *const Notification.FrameNavigated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/page.zig").frameNavigated(self.notification_arena, self, msg);
     }
 
-    pub fn onFrameNavigateFailed(ctx: *anyopaque, msg: *const Notification.FrameNavigateFailed) !void {
+    fn onFrameNavigateFailed(ctx: *anyopaque, msg: *const Notification.FrameNavigateFailed) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigateFailed(self, msg);
     }
 
-    pub fn onFrameNavigatedWithinDocument(ctx: *anyopaque, msg: *const Notification.FrameNavigatedWithinDocument) !void {
+    fn onFrameNavigatedWithinDocument(ctx: *anyopaque, msg: *const Notification.FrameNavigatedWithinDocument) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNavigatedWithinDocument(self, msg);
     }
 
-    pub fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
+    fn onFrameDestroyed(ctx: *anyopaque, frame: *const Frame) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         @import("domains/page.zig").frameDestroyed(self, frame);
     }
 
-    pub fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
+    fn onFrameChildFrameCreated(ctx: *anyopaque, msg: *const Notification.FrameChildFrameCreated) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameChildFrameCreated(self, msg);
     }
 
-    pub fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
+    fn onFrameNetworkIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNetworkIdle(self, msg);
     }
 
-    pub fn onFrameNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkAlmostIdle) !void {
+    fn onFrameNetworkAlmostIdle(ctx: *anyopaque, msg: *const Notification.FrameNetworkAlmostIdle) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameNetworkAlmostIdle(self, msg);
     }
 
-    pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
+    fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         {
             // capture the request
@@ -981,28 +988,28 @@ pub const BrowserContext = struct {
         try network_domain.httpRequestStart(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
+    fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
+    fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpRequestFail(self, msg);
     }
 
-    pub fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
+    fn onFrameDOMContentLoaded(ctx: *anyopaque, msg: *const Notification.FrameDOMContentLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameDOMContentLoaded(self, msg);
     }
 
-    pub fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
+    fn onFrameLoaded(ctx: *anyopaque, msg: *const Notification.FrameLoaded) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").frameLoaded(self, msg);
     }
 
-    pub fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
+    fn onJavascriptDialogOpening(ctx: *anyopaque, msg: *const Notification.JavascriptDialogOpening) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return @import("domains/page.zig").javascriptDialogOpening(self, msg);
     }
@@ -1014,7 +1021,7 @@ pub const BrowserContext = struct {
             .{ .kind = .request, .id = transfer.id };
     }
 
-    pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
+    fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
 
@@ -1024,11 +1031,11 @@ pub const BrowserContext = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .data = blk: {
-                    const cl = msg.transfer.getContentLength() orelse break :blk .empty;
-                    if (cl > self.network_limits.resource) {
+                    const body_len = msg.transfer.bodyLen();
+                    if (body_len > self.network_limits.resource) {
                         break :blk null;
                     }
-                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, cl);
+                    break :blk try std.ArrayList(u8).initCapacity(self.cdp.allocator, body_len);
                 },
                 // Encode the data in base64 by default, but don't encode
                 // for well known content-type.
@@ -1052,7 +1059,7 @@ pub const BrowserContext = struct {
         return network_domain.httpResponseHeaderDone(self.notification_arena, self, msg);
     }
 
-    pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
+    fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpRequestDone(self, msg);
     }
@@ -1078,24 +1085,24 @@ pub const BrowserContext = struct {
         self.captured_responses_size += chunk.len;
     }
 
-    pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
+    fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
     }
 
-    pub fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
+    fn onHttpRequestServedFromCache(ctx: *anyopaque, msg: *const Notification.RequestServedFromCache) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         return network_domain.httpServedFromCache(self, msg);
     }
 
-    pub fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    fn onConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/console.zig").consoleMessage(self.notification_arena, self, msg);
     }
 
-    pub fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
+    fn onRuntimeConsoleMessage(ctx: *anyopaque, msg: *const Notification.ConsoleMessage) !void {
         const self: *BrowserContext = @ptrCast(@alignCast(ctx));
         defer self.resetNotificationArena();
         return @import("domains/runtime.zig").consoleMessage(self.notification_arena, self, msg);
@@ -1144,7 +1151,7 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.conn.send_arena.allocator();
+        const allocator = cdp.link.send_arena.allocator();
 
         const field = ",\"sessionId\":\"";
 
@@ -1170,7 +1177,7 @@ pub const BrowserContext = struct {
             std.debug.assert(buf.items.len == message_len);
         }
 
-        try cdp.conn.sendJSONRaw(buf);
+        try cdp.link.sendJSONRaw(buf);
     }
 };
 
@@ -1431,7 +1438,7 @@ pub const InputMessage = struct {
 // capture the raw json object (including the opening and closing braces).
 // Then, when we're processing the message, and we know what type it is, we
 // can parse it (in Disaptch(T).params).
-pub const InputParams = struct {
+const InputParams = struct {
     raw: []const u8,
 
     pub fn jsonParse(

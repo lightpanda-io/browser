@@ -69,7 +69,7 @@ pub fn fromError(err: anyerror) ?DOMException {
     };
 }
 
-pub fn getCode(self: *const DOMException) u8 {
+fn getCode(self: *const DOMException) u8 {
     return switch (self._code) {
         // no legacy numeric code
         .operation_error, .data_error, .constraint_error, .version_error, .transaction_inactive_error, .read_only_error => 0,
@@ -115,7 +115,7 @@ pub fn getName(self: *const DOMException) []const u8 {
     };
 }
 
-pub fn getMessage(self: *const DOMException) []const u8 {
+fn getMessage(self: *const DOMException) []const u8 {
     if (self._custom_message) |msg| {
         return msg;
     }
@@ -204,7 +204,7 @@ const Code = enum(u8) {
 
     /// Maps a standard error name to its legacy code
     /// Returns .none (code 0) for non-legacy error names
-    pub fn fromName(name: []const u8) Code {
+    fn fromName(name: []const u8) Code {
         const lookup = std.StaticStringMap(Code).initComptime(.{
             .{ "IndexSizeError", .index_size_error },
             .{ "HierarchyRequestError", .hierarchy_error },

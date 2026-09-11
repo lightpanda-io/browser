@@ -47,7 +47,7 @@ pub const Item = union(enum) {
     dropped: Dropped,
 };
 
-pub const Dropped = struct {
+const Dropped = struct {
     line: []const u8,
     /// Why the filter parser refused it. Null when the line never reached it
     /// (AdGuard `$$` syntax).

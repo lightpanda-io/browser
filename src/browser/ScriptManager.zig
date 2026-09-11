@@ -35,7 +35,7 @@ const ScriptManager = @This();
 
 // Re-exports so Frame / Context callers don't need to import Base directly.
 pub const Script = ScriptManagerBase.Script;
-pub const ModuleSource = ScriptManagerBase.ModuleSource;
+const ModuleSource = ScriptManagerBase.ModuleSource;
 
 base: ScriptManagerBase,
 frame: *Frame,
@@ -82,7 +82,7 @@ fn freePreloads(self: *ScriptManager) void {
 
 // Frame wrapper uses this to fire documentIsLoaded and scriptsCompletedLoading
 // once Base has finished processing its ready / defer queues.
-pub fn tailHook(base: *ScriptManagerBase) void {
+fn tailHook(base: *ScriptManagerBase) void {
     const self: *ScriptManager = @fieldParentPtr("base", base);
     const frame = self.frame;
 

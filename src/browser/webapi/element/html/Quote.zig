@@ -24,13 +24,13 @@ pub fn asNode(self: *Quote) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getCite(self: *Quote, frame: *Frame) ![]const u8 {
+fn getCite(self: *Quote, frame: *Frame) ![]const u8 {
     const attr = self.asElement().getAttributeSafe(comptime .wrap("cite")) orelse return "";
     if (attr.len == 0) return "";
     return self.asNode().resolveURLReflect(attr, frame, .{});
 }
 
-pub fn setCite(self: *Quote, value: []const u8, frame: *Frame) !void {
+fn setCite(self: *Quote, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("cite"), .wrap(value), frame);
 }
 
