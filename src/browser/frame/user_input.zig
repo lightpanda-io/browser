@@ -295,12 +295,7 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
         .deltaY = delta_y,
     }, frame);
 
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    wheel_event.asEvent().acquireRef();
-    defer _ = wheel_event.asEvent().releaseRef(frame._page);
-    try frame._event_manager.dispatch(target.asEventTarget(), wheel_event.asEvent());
-
-    if (wheel_event.asEvent()._prevent_default) {
+    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), wheel_event.asEvent())) {
         return;
     }
 
@@ -320,9 +315,8 @@ fn deltaToScroll(d: f64) i32 {
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
-// callback when the "click" event reaches the frame.
-// Whether the element has a click activation behavior that handleClick
-// implements.
+/// Whether the element has a click activation behavior that handleClick
+/// implements.
 fn hasClickActivationBehavior(node: *Node) bool {
     const element = node.is(Element) orelse return false;
 
@@ -353,7 +347,7 @@ fn isNativelyFocusable(el: *Element) bool {
     return switch (el.getTag()) {
         .button, .select, .textarea, .iframe => true,
         .input => el.as(Element.Html.Input)._input_type != .hidden,
-        .anchor, .area => el.getAttributeSafe(comptime .wrap("href")) != null,
+        .anchor, .area => el.getAttributeInterned("href") != null,
         else => false,
     };
 }
@@ -368,8 +362,6 @@ fn isEditingHost(node: *Node) bool {
     return std.ascii.eqlIgnoreCase(value, "false") == false;
 }
 
-/// Find the outermost element of the contiguous editable chain containing the
-/// target.
 fn outermostEditingHost(target: *Element) ?*Element {
     var node: ?*Node = target.asNode();
     var editable: ?*Node = null;
@@ -394,7 +386,7 @@ fn outermostEditingHost(target: *Element) ?*Element {
 fn isMouseFocusable(el: *Element) bool {
     if (el.isDisabled()) return false;
 
-    if (el.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
+    if (el.getAttributeInterned("tabindex")) |attr| {
         if (Element.Html.parseInteger(attr) != null) return true;
     }
     return isNativelyFocusable(el);
@@ -815,12 +807,7 @@ fn dispatchKeypress(frame: *Frame, target: *Node, keydown: *KeyboardEvent) !bool
         .metaKey = keydown.getMetaKey(),
     }, frame)).asEvent();
 
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
-
-    try frame._event_manager.dispatch(target.asEventTarget(), event);
-    return event._prevent_default;
+    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event);
 }
 
 // keydown+enter or keyup+space trigger this syntthetic pointer event (under

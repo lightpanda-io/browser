@@ -1490,8 +1490,7 @@ test "agent script runtime: mousedown focus follows mouse-focusability rules" {
         \\expectActive("inp", "setup failed");
         \\page.click("#toolbarBtn");
         \\expectActive("inp", "preventDefault on mousedown did not protect focus");
-        \\// Verified against Chrome: a click inside a contenteditable focuses the
-        \\// host, and a nested host resolves to the outer one.
+        \\// Verified against Chrome.
         \\page.click("#dynHostSpan");
         \\expectActive("dynHost", "span inside contenteditable did not focus host");
         \\page.click("#dynInnerSpan");

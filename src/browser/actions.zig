@@ -143,16 +143,12 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    // Keep the event alive past dispatch so we can read defaultPrevented.
-    keydown_event.asEvent().acquireRef();
-    defer _ = keydown_event.asEvent().releaseRef(frame._page);
-
-    frame._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
+    const prevented = frame._event_manager.dispatchCancelable(target, keydown_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };
 
-    if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
+    if (std.mem.eql(u8, canonical, "Enter") and !prevented) {
         if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
             // Don't skip keyup on a submit-listener throw — UIs that gate
             // state on keyup (e.g. clearing a "submitting" flag) would hang.
