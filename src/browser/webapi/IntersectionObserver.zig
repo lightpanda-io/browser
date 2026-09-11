@@ -45,6 +45,7 @@ _observing: std.ArrayList(*Element) = .empty,
 _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
 _threshold: []const f64 = &.{0.0},
+// these are RC'd (by us, and v8)
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
 // tracked targets that aren't reported yet
 _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
@@ -107,11 +108,7 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
 
 pub fn deinit(self: *IntersectionObserver, page: *Page) void {
     self._callback.release();
-    for (self._pending_entries.items) |entry| {
-        // These were never handed to v8, they do not have a corresponding
-        // FinalizerCallback. We 100% own them.
-        entry.deinit(page);
-    }
+    releaseAll(self._pending_entries.items, page);
     self._arena.release();
 }
 
@@ -153,12 +150,11 @@ fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void 
             _ = self._tracked.remove(target);
 
             // Remove any pending entries for this target.
-            // Entries will be cleaned up by V8 GC via the finalizer.
             var j: usize = 0;
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(frame._page);
+                    entry.releaseRef(frame._page);
                 } else {
                     j += 1;
                 }
@@ -174,9 +170,7 @@ fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void 
 
 // Drops every observation without touching the frame's observer list
 pub fn reset(self: *IntersectionObserver, page: *Page) void {
-    for (self._pending_entries.items) |entry| {
-        entry.deinit(page);
-    }
+    releaseAll(self._pending_entries.items, page);
     self._pending_entries.clearRetainingCapacity();
     self._tracked.clearRetainingCapacity();
     self._observing.clearRetainingCapacity();
@@ -190,10 +184,24 @@ pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
     }
 }
 
-pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
-    const entries = try frame.local_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
+fn takeRecords(self: *IntersectionObserver, frame: *Frame) !js.Value {
+    const local = frame.js.local orelse return error.NotHandled;
+    const entries = try self.takePendingEntries(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(entries, frame._page);
+    return local.zigValueToJs(entries, .{});
+}
+
+fn takePendingEntries(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
+    const entries = try frame.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
     self._pending_entries.clearRetainingCapacity();
     return entries;
+}
+
+fn releaseAll(entries: []const *IntersectionObserverEntry, page: *Page) void {
+    for (entries) |entry| {
+        entry.releaseRef(page);
+    }
 }
 
 fn calculateIntersection(
@@ -274,6 +282,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
 
     const entry = try arena.create(IntersectionObserverEntry);
     entry.* = .{
+        ._rc = .init(1),
         ._arena = arena,
         ._target = target,
         ._time = frame.window._performance.now(),
@@ -306,7 +315,10 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
         return;
     }
 
-    const entries = try self.takeRecords(frame);
+    const entries = try self.takePendingEntries(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(entries, frame._page);
+
     var caught: js.TryCatch.Caught = .{};
 
     var ls: js.Local.Scope = undefined;

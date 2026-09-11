@@ -42,8 +42,8 @@ _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _callback: js.Function.Global,
 _observing: std.ArrayList(Observing) = .empty,
+// these are RC'd (by us, and v8)
 _pending_records: std.ArrayList(*MutationRecord) = .empty,
-
 /// Intrusively linked to next element (see Frame.zig).
 node: std.DoublyLinkedList.Node = .{},
 
@@ -85,11 +85,7 @@ pub fn init(callback: js.Function.Global, frame: *Frame) !*MutationObserver {
 }
 
 pub fn deinit(self: *MutationObserver, page: *Page) void {
-    for (self._pending_records.items) |record| {
-        // These were never handed to v8, they do not have a corresponding
-        // FinalizerCallback. We 100% own them.
-        record.deinit(page);
-    }
+    releaseAll(self._pending_records.items, page);
     self._callback.release();
     self._arena.release();
 }
@@ -175,9 +171,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 }
 
 pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
-    for (self._pending_records.items) |record| {
-        record.deinit(frame._page);
-    }
+    releaseAll(self._pending_records.items, frame._page);
     self._pending_records.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
@@ -186,10 +180,24 @@ pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
     self._observing.clearRetainingCapacity();
 }
 
-pub fn takeRecords(self: *MutationObserver, frame: *Frame) ![]*MutationRecord {
-    const records = try frame.local_arena.dupe(*MutationRecord, self._pending_records.items);
+fn takeRecords(self: *MutationObserver, frame: *Frame) !js.Value {
+    const local = frame.js.local orelse return error.NotHandled;
+    const records = try self.takePendingRecords(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(records, frame._page);
+    return local.zigValueToJs(records, .{});
+}
+
+fn takePendingRecords(self: *MutationObserver, frame: *Frame) ![]*MutationRecord {
+    const records = try frame.call_arena.dupe(*MutationRecord, self._pending_records.items);
     self._pending_records.clearRetainingCapacity();
     return records;
+}
+
+fn releaseAll(records: []const *MutationRecord, page: *Page) void {
+    for (records) |record| {
+        record.releaseRef(page);
+    }
 }
 
 // Called when an attribute changes on any element
@@ -227,6 +235,7 @@ pub fn notifyAttributeChange(
         const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
+            ._rc = .init(1),
             ._arena = arena,
             ._type = .attributes,
             ._target = target_node,
@@ -271,6 +280,7 @@ pub fn notifyCharacterDataChange(
         const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
+            ._rc = .init(1),
             ._arena = arena,
             ._type = .characterData,
             ._target = target,
@@ -318,6 +328,7 @@ pub fn notifyChildListChange(
         const arena = try frame.getArena(.tiny, "MutationRecord");
         const record = try arena.create(MutationRecord);
         record.* = .{
+            ._rc = .init(1),
             ._arena = arena,
             ._type = .childList,
             ._target = target,
@@ -343,7 +354,10 @@ pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
 
     // Take a copy of the records and clear the list before calling callback
     // This ensures mutations triggered during the callback go into a fresh list
-    const records = try self.takeRecords(frame);
+    const records = try self.takePendingRecords(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(records, frame._page);
+
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -570,6 +584,45 @@ test "WebApi: MutationObserver requested termination unwinds delivery" {
     try local.eval("window.__wedge = false; window.__target.setAttribute('x', '2');", null);
     env.runMicrotasks();
     try testing.expectEqual(2, try (try local.exec("window.__delivered", null)).toI32());
+}
+
+test "WebApi: MutationObserver terminate requested between observers releases records" {
+    testing.expectLog(&.{ .frame, .frame });
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    const env = frame.js.env;
+    defer env.cancelTerminate();
+
+    const State = struct {
+        env: *js.Env,
+
+        fn kill(self: *@This()) void {
+            self.env.requestTerminate();
+        }
+    };
+    var state = State{ .env = env };
+    const kill_cb = local.newCallback(State.kill, &state);
+
+    const setup = try local.exec(
+        \\(function(kill) {
+        \\  const target = document.createElement('div');
+        \\  new MutationObserver(() => { kill(); }).observe(target, { attributes: true });
+        \\  new MutationObserver(() => {}).observe(target, { attributes: true });
+        \\  target.setAttribute('x', '1');
+        \\})
+    , null);
+    const setup_fn = js.Function{ .local = local, .handle = @ptrCast(setup.handle) };
+    try setup_fn.call(void, .{kill_cb});
+
+    env.runMicrotasks();
+    try testing.expectEqual(true, env.terminatePending());
 }
 
 test "WebApi: MutationObserver terminated page tears down" {
