@@ -31,6 +31,7 @@ const Base64Writer = @import("../Base64Writer.zig");
 
 const Frame = @import("Frame.zig");
 const screenshot = @import("screenshot.zig");
+const RenderTree = @import("RenderTree.zig");
 
 const Node = @import("webapi/Node.zig");
 
@@ -95,8 +96,8 @@ fn parsePageNumber(s: []const u8) ?u32 {
 }
 
 /// Prints `node` as a paginated, text PDF.
-pub fn print(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    const prepared = try prepare(arena, node, opts, frame);
+pub fn print(arena: Allocator, state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    const prepared = try prepare(arena, state, opts, frame);
     return prepared.write(writer);
 }
 
@@ -105,7 +106,7 @@ pub fn print(arena: Allocator, node: *Node, opts: Opts, writer: *std.Io.Writer, 
 /// that can fail does so here, before any output: options, and a page
 /// selection that hits no page (that one costs a layout pass, only paid
 /// when ranges are given).
-pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepared {
+pub fn prepare(arena: Allocator, state: RenderTree.State, opts: Opts, frame: *Frame) !Prepared {
     const content_w = opts.paper_width - opts.margin_left - opts.margin_right;
     const content_h = opts.paper_height - opts.margin_top - opts.margin_bottom;
     if (!(opts.paper_width > 0 and opts.paper_height > 0) or
@@ -121,7 +122,7 @@ pub fn prepare(arena: Allocator, node: *Node, opts: Opts, frame: *Frame) !Prepar
     const prepared: Prepared = .{
         .arena = arena,
         .opts = opts,
-        .blocks = try screenshot.collect(arena, node, frame),
+        .blocks = try screenshot.collect(arena, state, frame),
         .renderer = try screenshot.rendererFor(frame),
     };
     if (opts.page_ranges.len > 0) {
@@ -1037,7 +1038,7 @@ test "browser.pdf: structure, pagination and links" {
     try Frame.parse.htmlAsChildren(frame, div.asNode(), "<h1>Title</h1><p>Hello <b>world</b> <a href='/x'>link</a></p><pre>code</pre>");
 
     var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
-    try print(testing.arena_allocator, div.asNode(), .{}, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = div.asNode() }, .{}, &aw.writer, frame);
     const out = aw.written();
     try testing.expectEqual("%PDF-1.4\n", out[0..9]);
     try testing.expectEqual("%%EOF\n", out[out.len - 6 ..]);
@@ -1062,28 +1063,28 @@ test "browser.pdf: structure, pagination and links" {
     try Frame.parse.htmlAsChildren(frame, long.asNode(), html.items);
 
     aw.clearRetainingCapacity();
-    try print(testing.arena_allocator, long.asNode(), .{}, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = long.asNode() }, .{}, &aw.writer, frame);
     const pages = std.mem.count(u8, aw.written(), "/Type /Page ");
     try testing.expectEqual(true, pages >= 5 and pages <= 8);
 
     aw.clearRetainingCapacity();
-    try print(testing.arena_allocator, long.asNode(), .{ .page_ranges = try parsePageRanges(testing.arena_allocator, "2-3, 5") }, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .page_ranges = try parsePageRanges(testing.arena_allocator, "2-3, 5") }, &aw.writer, frame);
     try testing.expectEqual(3, std.mem.count(u8, aw.written(), "/Type /Page "));
 
     // Document order, once each, the tail past the end ignored.
     aw.clearRetainingCapacity();
-    try print(testing.arena_allocator, long.asNode(), .{ .page_ranges = try parsePageRanges(testing.arena_allocator, "5, 2-3, 3, 4000-") }, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .page_ranges = try parsePageRanges(testing.arena_allocator, "5, 2-3, 3, 4000-") }, &aw.writer, frame);
     try testing.expectEqual(3, std.mem.count(u8, aw.written(), "/Type /Page "));
 
     // Halving the scale roughly halves the pages; landscape is the caller's
     // swap, and margins shrink the content box.
     aw.clearRetainingCapacity();
-    try print(testing.arena_allocator, long.asNode(), .{ .scale = 0.5 }, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .scale = 0.5 }, &aw.writer, frame);
     const half = std.mem.count(u8, aw.written(), "/Type /Page ");
     try testing.expectEqual(true, half < pages and half >= pages / 3);
 
     aw.clearRetainingCapacity();
-    try print(testing.arena_allocator, long.asNode(), .{ .paper_width = 1056, .paper_height = 816, .margin_top = 300, .margin_bottom = 300 }, &aw.writer, frame);
+    try print(testing.arena_allocator, .{ .root = long.asNode() }, .{ .paper_width = 1056, .paper_height = 816, .margin_top = 300, .margin_bottom = 300 }, &aw.writer, frame);
     try testing.expectEqual(true, std.mem.indexOf(u8, aw.written(), "/MediaBox [0 0 792.000 612.000]") != null);
     try testing.expectEqual(true, std.mem.count(u8, aw.written(), "/Type /Page ") > pages);
 }
@@ -1100,17 +1101,17 @@ test "browser.pdf: rejects bad options" {
     var discard: std.Io.Writer.Discarding = .init(&.{});
     const w = &discard.writer;
     const a = testing.arena_allocator;
-    try testing.expectError(error.InvalidPdfOptions, print(a, div.asNode(), .{ .scale = 3 }, w, frame));
-    try testing.expectError(error.InvalidPdfOptions, print(a, div.asNode(), .{ .paper_width = 0 }, w, frame));
-    try testing.expectError(error.InvalidPdfOptions, print(a, div.asNode(), .{ .margin_left = 500, .margin_right = 500 }, w, frame));
-    try testing.expectError(error.InvalidPdfOptions, print(a, div.asNode(), .{ .page_ranges = &.{.{ .from = 3, .to = 1 }} }, w, frame));
+    try testing.expectError(error.InvalidPdfOptions, print(a, .{ .root = div.asNode() }, .{ .scale = 3 }, w, frame));
+    try testing.expectError(error.InvalidPdfOptions, print(a, .{ .root = div.asNode() }, .{ .paper_width = 0 }, w, frame));
+    try testing.expectError(error.InvalidPdfOptions, print(a, .{ .root = div.asNode() }, .{ .margin_left = 500, .margin_right = 500 }, w, frame));
+    try testing.expectError(error.InvalidPdfOptions, print(a, .{ .root = div.asNode() }, .{ .page_ranges = &.{.{ .from = 3, .to = 1 }} }, w, frame));
     // Well-formed, but this is a one-page document.
-    try testing.expectError(error.PageRangeExceedsPageCount, print(a, div.asNode(), .{ .page_ranges = &.{.{ .from = 7, .to = 9 }} }, w, frame));
+    try testing.expectError(error.PageRangeExceedsPageCount, print(a, .{ .root = div.asNode() }, .{ .page_ranges = &.{.{ .from = 7, .to = 9 }} }, w, frame));
 
     // Far too small for the file, so the sink refuses partway through.
     var buf: [64]u8 = undefined;
     var fixed = std.Io.Writer.fixed(&buf);
-    try testing.expectError(error.WriteFailed, print(a, div.asNode(), .{}, &fixed, frame));
+    try testing.expectError(error.WriteFailed, print(a, .{ .root = div.asNode() }, .{}, &fixed, frame));
 }
 
 test "browser.pdf: parsePageRanges follows the CDP grammar" {

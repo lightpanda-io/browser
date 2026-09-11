@@ -57,7 +57,7 @@ const ResourceStreamingResult = struct {
                     log.err(.mcp, "html dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },
-                .markdown => lp.markdown.dump(self.frame.document.asNode(), .{}, &escaped.writer, self.frame) catch |err| {
+                .markdown => lp.markdown.dump(.{ .root = self.frame.document.asNode() }, .{}, &escaped.writer, self.frame) catch |err| {
                     log.err(.mcp, "markdown dump failed", .{ .err = err });
                     return error.WriteFailed;
                 },
