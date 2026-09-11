@@ -160,9 +160,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const arena = self._response._arena;
     if (!is_opaque) {
-        if (transfer.getContentLength()) |cl| {
-            try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
-        }
+        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
     const res = self._response;

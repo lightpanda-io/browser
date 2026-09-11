@@ -1374,8 +1374,9 @@ const SyncContext = struct {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
-        if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(cl), cl);
+        const body_len = transfer.bodyLen();
+        if (body_len > 0) {
+            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
         }
         return .proceed;
     }
@@ -2324,6 +2325,10 @@ pub const Transfer = struct {
     // Content length reported on the CDP loadingFinished event.
     _content_length: usize = 0,
 
+    // Length of the body data_callback will receive. Can be different than
+    // Content-Length if the content was compressed
+    _body_len: usize = 0,
+
     _conn_id: i64 = 0,
     _conn_reused: bool = false,
     _timing: ResourceTiming = .{},
@@ -3068,6 +3073,7 @@ pub const Transfer = struct {
             lp.metrics.http_response_size_bytes.observe(body.len);
         }
 
+        self._body_len = body.len;
         try self._events.ensureUnusedCapacity(self.arena.allocator(), 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
@@ -3640,6 +3646,13 @@ pub const Transfer = struct {
                         res.callback_error = error.ResponseTooLarge;
                         return http.writefunc_error;
                     }
+                    // TODO: Because of compression, Content-Length is the wire
+                    // length, not necessarily the final length. The chunks
+                    // are read into the transfer.*ARENA* so growth doesn't free
+                    // previous allocations. We could look at Content-Encoding
+                    // and `cl * 3` or something, but that's just a guess.
+                    // I prefer to leave this simple; easier for someone to come
+                    // up with a good solution.
                     res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
                 }
             }
@@ -3762,6 +3775,14 @@ pub const Transfer = struct {
     pub fn getContentLength(self: *const Transfer) ?usize {
         const cl = self.getContentLengthRawValue() orelse return null;
         return std.fmt.parseInt(usize, cl, 10) catch null;
+    }
+
+    // Unless streaming, we've read the entire body before calling
+    // header_callback. Code that needs to own the body (most callers) should
+    // use the body length NOT the Content-Length (which would be the compressed
+    // on-the-wire size, not the actual final length). 0 for streaming.
+    pub fn bodyLen(self: *const Transfer) usize {
+        return self._body_len;
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
@@ -4949,6 +4970,70 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
     try testing.expectEqual(false, ctx.done_called);
 
     try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: bodyLen is the buffered body, not Content-Length" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner = testOwner(null, null);
+
+    const Ctx = struct {
+        body_len: usize = 0,
+        content_length: ?usize = null,
+
+        fn headerCallback(transfer: *Transfer) !Transfer.HeaderResult {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            self.body_len = transfer.bodyLen();
+            self.content_length = transfer.getContentLength();
+            return .proceed;
+        }
+    };
+    var ctx = Ctx{};
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .method = .GET,
+            .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .shutdown_callback = noopShutdown,
+            .ctx = &ctx,
+            .header_callback = Ctx.headerCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{
+        .{ .name = "Content-Length", .value = "323838382838" },
+    }, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expectEqual(323838382838, ctx.content_length);
+    try testing.expectEqual(5, ctx.body_len);
+
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
 }
