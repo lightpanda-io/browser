@@ -57,6 +57,10 @@ session: *Session,
 // a cached lookup on Frame 2. We picked the latter.
 dom_version: usize = 0,
 
+// Superset of dom_version that also moves for non-tree state (see
+// Frame.styleChanged); validates the StyleManager memo.
+style_version: usize = 0,
+
 // Monotonic creation counter for BroadcastChannels in this Page. A postMessage
 // captures the current value so delivery targets only channels that existed
 // when it was called
@@ -157,6 +161,14 @@ destroying: bool = false,
 // every viewport consumer.
 pub fn getViewport(self: *const Page) Viewport {
     return self.session.browser.getViewport();
+}
+
+pub fn viewportChanged(self: *Page) void {
+    self.frame.viewportChanged();
+    var i: usize = 0;
+    while (i < self.popups.items.len) : (i += 1) {
+        self.popups.items[i].viewportChanged();
+    }
 }
 
 // Initialize a Page and its root Frame.

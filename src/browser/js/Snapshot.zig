@@ -592,14 +592,15 @@ fn collectExternalReferences() [countExternalReferences()]isize {
         }
     }
 
-    if (comptime lp.IS_DEBUG) {
-        inline for (JsApis) |JsApi| {
-            if (!hasNamedIndexedGetter(JsApi)) {
-                references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
-                idx += 1;
-            }
-        }
-    }
+    // @LOG-UNKNOWN-PROPERTY
+    // if (comptime lp.IS_DEBUG) {
+    //     inline for (JsApis) |JsApi| {
+    //         if (!hasNamedIndexedGetter(JsApi)) {
+    //             references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
+    //             idx += 1;
+    //         }
+    //     }
+    // }
 
     return references;
 }
@@ -704,7 +705,7 @@ fn protoIndexLookup(comptime JsApi: type) ?u16 {
 }
 
 // Generate a constructor template for a JsApi type (public for reuse)
-pub fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
+fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *const v8.FunctionTemplate {
     const callback, const arity = comptime blk: {
         if (@hasDecl(JsApi, "constructor")) {
             break :blk .{ JsApi.constructor.func, JsApi.constructor.arity };
@@ -907,22 +908,23 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontEnum);
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (!has_named_index_getter) {
-            var configuration: v8.NamedPropertyHandlerConfiguration = .{
-                .getter = bridge.unknownObjectPropertyCallback(JsApi),
-                .setter = null,
-                .query = null,
-                .deleter = null,
-                .enumerator = null,
-                .definer = null,
-                .descriptor = null,
-                .data = null,
-                .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-            };
-            v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
-        }
-    }
+    // @LOG-UNKNOWN-PROPERTY
+    // if (comptime lp.IS_DEBUG) {
+    //     if (!has_named_index_getter) {
+    //         var configuration: v8.NamedPropertyHandlerConfiguration = .{
+    //             .getter = bridge.unknownObjectPropertyCallback(JsApi),
+    //             .setter = null,
+    //             .query = null,
+    //             .deleter = null,
+    //             .enumerator = null,
+    //             .definer = null,
+    //             .descriptor = null,
+    //             .data = null,
+    //             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+    //         };
+    //         v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
+    //     }
+    // }
 }
 
 // The chain of interface types reachable from a [Global] interface via WebIDL

@@ -45,9 +45,22 @@
     \\  --host <HOST>
     \\          Host of the CDP server.
     \\          Defaults to "127.0.0.1".
+    \\  --http-session-timeout <INT>
+    \\          Seconds before an idle HTTP session times-out. Only meaningful
+    \\          when connecting using the WebDriver protocol.
+    \\          Defaults to 60, disable by setting to 0 (a session then lives
+    \\          until the driver deletes it).
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.
+    \\  --protocol <PROTOCOL>
+    \\          Automation protocol to serve. Can be passed multiple times to
+    \\          serve several on the same port.
+    \\          Defaults to cdp.
+    \\          Allowed values:
+    \\              cdp        Chrome DevTools Protocol (WebSocket on /).
+    \\              webdriver  WebDriver BiDi (WebSocket on /session) plus the
+    \\                         classic WebDriver session endpoints.
     ,
     .fetch =
     \\usage: {0s} fetch <url>... [OPTIONS] [COMMON_OPTIONS]
@@ -105,15 +118,18 @@
     \\          Defaults to false.
     \\  --strip-mode <STRIP>
     \\          Tag group to remove from dump. Can be passed multiple times.
-    \\          In markdown only 'ui' changes the output: scripts, styles and
-    \\          hidden elements are never rendered.
-    \\          Defaults to no-strip.
+    \\          Defaults to stripping nothing.
     \\          Allowed values:
-    \\              js        Script and link[as=script, rel=preload].
-    \\              ui        Includes img, picture, video, CSS and SVG.
+    \\              clutter   Heuristic to keep only the main content, in the
+    \\                        manner of reader modes. May fallback to `shell`
+    \\                        (which may itself fall back to a full dump).
     \\              css       Includes style and link[rel=stylesheet].
+    \\              js        Script and link[as=script, rel=preload].
     \\              invisible Best-effort (e.g. display:none) hidden elements
-    \\              full      Strip everything.
+    \\              shell     Page chrome by markup: nav, aside, dialog,
+    \\                        page-level header and footer. Full dump when
+    \\                        `shell` would remove most of the text.
+    \\              ui        Includes img, picture, video, CSS and SVG.
     \\  --terminate-ms <INT>
     \\          Hard deadline in milliseconds. After this time elapses, JavaScript
     \\          execution is forcibly terminated (e.g. for pages with endless scripts).
@@ -320,7 +336,8 @@
     \\common options:
     \\  --adblock-lists <LIST>
     \\          EasyList-syntax filter files to load. Can be passed multiple times.
-    \\          Requests to a hostname blocked by any list are failed before they leave.
+    \\          Requests a list blocks are failed before they leave; the URL,
+    \\          resource type, party and $domain= of each one decide.
     \\          e.g. --adblock-lists easylist.txt --adblock-lists easyprivacy.txt
     \\  --block-cidrs <CIDR>
     \\          Additional CIDR ranges to block. Can be passed multiple times.
@@ -351,6 +368,14 @@
     \\  --cookie-jar <PATH>
     \\          Path to a JSON file to save cookies to on exit (write-only).
     \\          Defaults to no cookie saving.
+    \\  --experimental-features <FEATURE>
+    \\          Enable an experimental, unstable feature. Can be passed multiple times.
+    \\          Behavior may change or be removed without notice.
+    \\          Defaults to none enabled.
+    \\          Allowed values:
+    \\              cors      Obey CORS (cross-origin resource sharing) checks
+    \\                        on fetch/XHR requests instead of allowing them
+    \\                        unconditionally.
     \\  --load-resources <RESOURCE>
     \\          Sub-resource to actually request. Can be passed multiple times.
     \\          Defaults to requesting none of them.
@@ -383,7 +408,7 @@
     \\  --http-connect-timeout <INT>
     \\          Time in ms to establish an HTTP connection before timing out. 0 means
     \\          never.
-    \\          Defaults to 0.
+    \\          Defaults to 8000.
     \\  --http-header <HEADER>
     \\          Extra custom header added to every outgoing HTTP request, including redirections,
     \\          in "Name: Value" form. Can be passed multiple times. The last one is used.
@@ -417,10 +442,19 @@
     \\          Defaults to none.
     \\  --http-timeout <INT>
     \\          Maximum time in ms the transfer is allowed to complete. 0 means never.
-    \\          Defaults to 10000.
+    \\          Defaults to 15000.
+    \\  --http-version <VERSION>
+    \\          HTTP version to negotiate. "1.1" never offers HTTP/2. "auto"
+    \\          picks the best available option.
+    \\          Defaults to "auto".
+    \\          Allowed values: "auto", "1.1".
     \\  --insecure-disable-tls-host-verification
     \\          Disables host verification on all HTTP requests.
     \\          Only set this if you understand and accept the risk.
+    \\  --locale <TAG>
+    \\          BCP 47 language tag driving navigator.language, the
+    \\          Accept-Language header and the default locale of Intl and
+    \\          toLocaleString. Defaults to en-US.
     \\  --log-filter <SCOPE>
     \\          Filter logs per scope, applied first-to-last. Can be passed multiple times.
     \\          "-X" (or bare "X") filters out a scope, "+X" filters it in, and
@@ -450,6 +484,9 @@
     \\  --storage-sqlite-path <PATH>
     \\          Path to the SQLite database file for persistent storage.
     \\          Use ":memory:" for in-memory storage.
+    \\  --timezone <IANA>
+    \\          Time zone used by Date and Intl, e.g. Europe/Paris or UTC.
+    \\          Defaults to the host time zone.
     \\  --user-agent <STRING>
     \\          Override the User-Agent header entirely. Must not impersonate other
     \\          browsers; any value containing "Mozilla" is forbidden. The browser

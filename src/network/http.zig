@@ -30,9 +30,8 @@ const Certificates = @import("Certificates.zig");
 const log = lp.log;
 const posix = std.posix;
 
-pub const ENABLE_DEBUG = false;
+const ENABLE_DEBUG = false;
 
-pub const WaitFd = libcurl.CurlWaitFd;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
@@ -96,7 +95,7 @@ pub const Header = struct {
         return null;
     }
 
-    pub const ParamIterator = struct {
+    const ParamIterator = struct {
         rest: []const u8,
 
         pub fn next(self: *ParamIterator) ?Param {
@@ -530,6 +529,14 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self._easy, .proxy, if (proxy) |p| p.ptr else null);
     }
 
+    pub fn setHttpVersion(self: *const Connection, version: Config.HttpVersion) !void {
+        const v: libcurl.CurlHttpVersion = switch (version) {
+            .auto => .none,
+            .@"1.1" => .v1_1,
+        };
+        try libcurl.curl_easy_setopt(self._easy, .http_version, v);
+    }
+
     pub fn setFollowLocation(self: *const Connection, follow: bool) !void {
         try libcurl.curl_easy_setopt(self._easy, .follow_location, @as(c_long, if (follow) 2 else 0));
     }
@@ -567,12 +574,6 @@ pub const Connection = struct {
         return @intCast(status);
     }
 
-    pub fn getRedirectCount(self: *const Connection) !u32 {
-        var count: c_long = undefined;
-        try libcurl.curl_easy_getinfo(self._easy, .redirect_count, &count);
-        return @intCast(count);
-    }
-
     // -1 when the transfer used no connection.
     pub fn getConnId(self: *const Connection) !c_long {
         var conn_id: c_long = undefined;
@@ -591,6 +592,48 @@ pub const Connection = struct {
         var micros: c_long = undefined;
         try libcurl.curl_easy_getinfo(self._easy, .total_time_t, &micros);
         return micros;
+    }
+
+    // microseconds from the moment the transfer started. Reused connections
+    // will report zero (or almost zero) for namelookup/connect/appconnect.
+    pub const Timing = struct {
+        queue: u64,
+        namelookup: u64,
+        connect: u64,
+        appconnect: u64,
+        pretransfer: u64,
+        starttransfer: u64,
+        total: u64,
+    };
+
+    pub fn getTiming(self: *const Connection) !Timing {
+        return .{
+            .queue = try self.getInfoMicros(.queue_time_t),
+            .namelookup = try self.getInfoMicros(.namelookup_time_t),
+            .connect = try self.getInfoMicros(.connect_time_t),
+            .appconnect = try self.getInfoMicros(.appconnect_time_t),
+            .pretransfer = try self.getInfoMicros(.pretransfer_time_t),
+            .starttransfer = try self.getInfoMicros(.starttransfer_time_t),
+            .total = try self.getInfoMicros(.total_time_t),
+        };
+    }
+
+    fn getInfoMicros(self: *const Connection, comptime info: libcurl.CurlInfo) !u64 {
+        var micros: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, info, &micros);
+        return @intCast(@max(0, micros));
+    }
+
+    pub fn getDownloadSize(self: *const Connection) !u64 {
+        var size: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .size_download_t, &size);
+        return @intCast(@max(0, size));
+    }
+
+    pub fn getHttpVersion(self: *const Connection) !libcurl.CurlHttpVersion {
+        var version: c_long = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .http_version, &version);
+        return @enumFromInt(version);
     }
 
     pub fn getConnectHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
@@ -660,6 +703,9 @@ pub const Handles = struct {
         errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
         try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
+        // Default is 4x the attached easy handles, i.e. ~0 between page loads,
+        // so keepalive connections were evicted on every cross-site navigation.
+        try libcurl.curl_multi_setopt(multi, .max_connects, 4 * @as(u32, config.httpMaxConcurrent()));
 
         return .{ .multi = multi };
     }
@@ -852,6 +898,7 @@ pub fn errorReason(err: anyerror) ErrorReason {
         => .tls,
         error.ResponseTooLarge => .too_large,
         error.Abort,
+        error.TransferCanceled,
         error.AbortedByCallback,
         error.AbortAuthChallenge,
         error.SyncWaitInterrupted,

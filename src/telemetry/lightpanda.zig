@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const build_config = @import("build_config");
 
 const App = @import("../App.zig");
-const Config = @import("../Config.zig");
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
@@ -46,7 +45,7 @@ writer: std.Io.Writer.Allocating,
 
 iid: ?[36]u8 = null,
 mode: []const u8,
-proxy: u8,
+cli: Header.CLI,
 
 // `mutex` guards the ring buffer (head/tail/dropped), `running`, and the lazy
 // `thread` creation. The sender thread blocks on `cond` while idle.
@@ -70,17 +69,22 @@ running: bool = true,
 pending: std.ArrayList(telemetry.Event) = .empty,
 dropped: u32 = 0,
 
-pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8, run_mode: Config.RunMode, interactive: bool) !void {
+pub fn init(self: *LightPanda, app: *App, iid: ?[36]u8) !void {
+    const config = app.config;
+    const allocator = app.allocator;
     self.* = .{
         .iid = iid,
-        .allocator = app.allocator,
+        .allocator = allocator,
         .network = &app.network,
-        .proxy = if (app.config.httpProxy() != null) 1 else 0,
-        .writer = std.Io.Writer.Allocating.init(app.allocator),
-        .mode = switch (run_mode) {
+        .cli = .{
+            .proxy = config.httpProxy() != null,
+            .robots = config.obeyRobots(),
+        },
+        .writer = std.Io.Writer.Allocating.init(allocator),
+        .mode = switch (config.command) {
             .fetch => "F",
             .serve => "S",
-            .agent => if (interactive == false) "AR" else "A",
+            .agent => if (config.interactive()) "A" else "AR",
             .run => "R",
             .mcp => "M",
             .version => "V",
@@ -266,7 +270,7 @@ fn writeHeader(self: *LightPanda) !bool {
     return self.writeLine(&Header{
         .iid = if (self.iid) |*iid| iid else "00000000-0000-0000-0000-000000000000",
         .mode = self.mode,
-        .proxy = self.proxy,
+        .cli = self.cli,
     });
 }
 
@@ -316,14 +320,20 @@ const EventRow = struct {
 const Header = struct {
     iid: []const u8,
     mode: []const u8,
-    proxy: u8,
+    cli: CLI,
+
+    const CLI = packed struct(u32) {
+        proxy: bool,
+        robots: bool,
+        _reserved: u30 = 0,
+    };
 
     pub fn jsonStringify(self: *const Header, writer: anytype) !void {
         try writer.beginArray();
         try writer.write(self.iid);
         try writer.write("H");
         try writer.write(self.mode);
-        try writer.write(self.proxy);
+        try writer.write(@as(u32, @bitCast(self.cli)));
         try writer.write(OS_CODE);
         try writer.write(ARCH_CODE);
         try writer.write(build_config.version);
@@ -377,7 +387,7 @@ test "Telemetry: header wire format" {
     const header = Header{
         .iid = "the-iid",
         .mode = "S",
-        .proxy = 1,
+        .cli = .{ .proxy = true, .robots = false },
     };
     try std.json.Stringify.value(&header, .{}, &w.writer);
 

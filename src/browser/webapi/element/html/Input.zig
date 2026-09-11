@@ -88,6 +88,8 @@ _default_checked: bool = false,
 _value: ?[]const u8 = null,
 _checked: bool = false,
 _checked_dirty: bool = false,
+// Only user edits count for tooLong/tooShort; script and attribute values don't.
+_user_edited: bool = false,
 _input_type: Type = .text,
 _indeterminate: bool = false,
 _custom_validity: ?[]const u8 = null,
@@ -101,11 +103,11 @@ _selection_direction: Selection.SelectionDirection = .none,
 
 _on_selectionchange: ?js.Function.Global = null,
 
-pub fn getOnSelectionChange(self: *Input) ?js.Function.Global {
+fn getOnSelectionChange(self: *Input) ?js.Function.Global {
     return self._on_selectionchange;
 }
 
-pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
+fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
     if (listener) |listen| {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
@@ -127,7 +129,7 @@ pub fn getType(self: *const Input) []const u8 {
     return self._input_type.toString();
 }
 
-pub fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
+fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
     // Reflected verbatim; attributeChange derives the state from it
     try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), frame);
 }
@@ -155,14 +157,39 @@ pub fn setValue(self: *Input, value: []const u8, frame: *Frame) !void {
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
-    self._value = try self.sanitizeValue(true, value, frame);
+    const sanitized = try self.sanitizeValue(false, value, frame);
+    const changed = std.mem.eql(u8, self.getValue(), sanitized) == false;
+    if (changed == false and self._value != null) {
+        // _value itself isn't changing (not to be mixed up with setValue
+        // being called with the same as the default value, which would need
+        // to dupe)
+        self._user_edited = false;
+        return;
+    }
+    self._value = try frame.dupeString(sanitized);
+    self._user_edited = false;
+    if (changed) {
+        frame.styleChanged();
+    }
+
+    // move the text entry cursor position to the end of the text control
+    if (changed and self.selectionAvailable()) {
+        self._selection_start = @intCast(sanitized.len);
+        self._selection_end = @intCast(sanitized.len);
+        self._selection_direction = .none;
+    }
+}
+
+pub fn setUserValue(self: *Input, value: []const u8, frame: *Frame) !void {
+    try self.setValue(value, frame);
+    self._user_edited = true;
 }
 
 pub fn getDefaultValue(self: *const Input) []const u8 {
     return self._default_value orelse "";
 }
 
-pub fn setDefaultValue(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setDefaultValue(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
@@ -178,21 +205,23 @@ pub fn setChecked(self: *Input, checked: bool, frame: *Frame) !void {
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
     self._checked_dirty = true;
+    frame.styleChanged();
 }
 
 pub fn getIndeterminate(self: *const Input) bool {
     return self._indeterminate;
 }
 
-pub fn setIndeterminate(self: *Input, value: bool) !void {
+fn setIndeterminate(self: *Input, value: bool, frame: *Frame) !void {
     self._indeterminate = value;
+    frame.styleChanged();
 }
 
-pub fn getDefaultChecked(self: *const Input) bool {
+fn getDefaultChecked(self: *const Input) bool {
     return self._default_checked;
 }
 
-pub fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
+fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
     if (checked) {
         try self.asElement().setAttributeSafe(comptime .wrap("checked"), .wrap(""), frame);
     } else {
@@ -207,7 +236,7 @@ pub fn getWillValidate(self: *const Input) bool {
     // - element has a datalist ancestor
     return switch (self._input_type) {
         .hidden, .button, .reset => false,
-        else => !self.getDisabled() and !self.hasDatalistAncestor(),
+        else => !self.asConstElement().isDisabled() and !self.hasDatalistAncestor(),
     };
 }
 
@@ -223,7 +252,7 @@ fn hasDatalistAncestor(self: *const Input) bool {
 // Constraint validation API
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
-pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
+fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
     if (self._validity) |v| return v;
     const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
     self._validity = v;
@@ -245,7 +274,7 @@ fn ensureFileList(self: *Input, frame: *Frame) !*FileList {
 
 /// Returns the FileList for a `type="file"` input (lazily allocated, identity preserved).
 /// Non-file inputs return null per HTMLInputElement IDL.
-pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
+fn getFiles(self: *Input, frame: *Frame) !?*FileList {
     if (self._input_type != .file) {
         return null;
     }
@@ -289,7 +318,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
 
 /// The `files` IDL setter. Unlike a user picking files (selectFiles), an
 /// assignment fires no input/change event.
-pub fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
+fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
     if (self._input_type != .file) {
         return;
     }
@@ -302,7 +331,7 @@ pub fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
 
 /// JS-binding wrapper for the `value` getter: for type=file, return the spec
 /// "C:\\fakepath\\<name>" string; otherwise delegate to plain getValue().
-pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
+fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     if (self._input_type != .file) {
         return self.getValue();
     }
@@ -314,7 +343,7 @@ pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     return try std.fmt.allocPrint(frame.local_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
-pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
+fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing(frame)) return "Please fill out this field.";
@@ -341,12 +370,12 @@ pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     return false;
 }
 
-pub fn reportValidity(self: *Input, frame: *Frame) !bool {
+fn reportValidity(self: *Input, frame: *Frame) !bool {
     // Headless: no UI to draw, so reportValidity matches checkValidity exactly.
     return self.checkValidity(frame);
 }
 
-pub fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void {
+fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void {
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
@@ -393,8 +422,8 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
     }
     const value = self._value orelse return false;
     if (value.len == 0) return false;
+    // An empty pattern is still a pattern: ^(?:)$ matches only "".
     const pattern = self.asConstElement().getAttributeSafe(comptime .wrap("pattern")) orelse return false;
-    if (pattern.len == 0) return false;
 
     // Per HTML spec, anchor the pattern with ^(?:...)$ and compile under the
     // "v" (Unicode sets) flag. An invalid pattern is ignored — V8 throws and
@@ -416,9 +445,7 @@ pub fn suffersPatternMismatch(self: *const Input, frame: *Frame) bool {
 }
 
 pub fn suffersTooLong(self: *const Input) bool {
-    // Per spec, only the dirty value flag triggers tooLong / tooShort. We treat
-    // the presence of an explicit _value (vs. attribute-derived _default_value)
-    // as an approximation of dirty.
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     const max = self.getMaxLength();
     if (max < 0) return false;
@@ -426,6 +453,7 @@ pub fn suffersTooLong(self: *const Input) bool {
 }
 
 pub fn suffersTooShort(self: *const Input) bool {
+    if (!self._user_edited) return false;
     const value = self._value orelse return false;
     if (value.len == 0) return false;
     const min = self.getMinLength();
@@ -442,32 +470,16 @@ pub fn suffersRangeOverflow(self: *const Input) bool {
 }
 
 fn numericRangeBreach(self: *const Input, comptime kind: enum { underflow, overflow }) bool {
-    // Only number/range use floating-point comparison. date/time/month/week/
-    // datetime-local also have range constraints per spec, but their values
-    // require type-specific conversion (date → days since epoch, time → ms
-    // since midnight, etc.) before comparison — not yet implemented.
-    // TODO: implement range checks for date/time/month/week/datetime-local.
-    switch (self._input_type) {
-        .number, .range => {},
-        else => return false,
-    }
-
-    const value = self._value orelse return false;
-    if (value.len == 0) return false;
-    if (!isValidFloatingPoint(value)) return false;
-    const v = std.fmt.parseFloat(f64, value) catch return false;
-
-    const attr = switch (kind) {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return false;
+    const value = valueToNumber(typ, self.getValue()) orelse return false;
+    const bound = valueToNumber(typ, switch (kind) {
         .underflow => self.getMin(),
         .overflow => self.getMax(),
-    };
-    if (attr.len == 0) return false;
-    if (!isValidFloatingPoint(attr)) return false;
-    const bound = std.fmt.parseFloat(f64, attr) catch return false;
-
+    }) orelse return false;
     return switch (kind) {
-        .underflow => v < bound,
-        .overflow => v > bound,
+        .underflow => value < bound,
+        .overflow => value > bound,
     };
 }
 
@@ -494,7 +506,7 @@ const RadioGroupIterator = struct {
             const other_element = node.is(Element) orelse continue;
             const other_input = other_element.is(Input) orelse continue;
             if (other_input._input_type != .radio) continue;
-            const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+            const other_name = other_element.getName() orelse continue;
             if (!std.mem.eql(u8, self.name, other_name)) continue;
             return other_input;
         }
@@ -508,7 +520,7 @@ const RadioGroupIterator = struct {
 /// because nothing in the iteration mutates the tree.
 fn radioGroupIterator(self: *const Input) ?RadioGroupIterator {
     const element = self.asConstElement();
-    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return null;
+    const name = element.getName() orelse return null;
     if (name.len == 0) return null;
     const root = @constCast(element.asConstNode()).getRootNode(.{});
     return .{
@@ -581,13 +593,11 @@ fn codepointCount(value: []const u8) usize {
     return std.unicode.utf8CountCodepoints(value) catch value.len;
 }
 
-pub fn getDisabled(self: *const Input) bool {
-    // TODO: Also check for disabled fieldset ancestors
-    // (but not if we're inside a <legend> of that fieldset)
-    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
+fn getDisabled(self: *const Input) bool {
+    return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
-pub fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
+fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
     if (disabled) {
         try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
@@ -604,11 +614,11 @@ pub fn getMinLength(self: *const Input) i32 {
 }
 
 pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
-    const src = self.asConstElement().getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = self.asConstElement().getAttributeInterned("src") orelse return "";
     return self.asConstElement().asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
     const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), frame);
 }
@@ -618,6 +628,8 @@ const entry = text_entry.TextEntry(Input);
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
 pub const innerDelete = entry.innerDelete;
+pub const moveCaret = entry.moveCaret;
+pub const CaretMove = entry.CaretMove;
 pub const getSelectionDirection = entry.getSelectionDirection;
 pub const setSelectionStart = entry.setSelectionStart;
 pub const setSelectionEnd = entry.setSelectionEnd;
@@ -631,24 +643,24 @@ pub fn selectionAvailable(self: *const Input) bool {
 }
 
 // Nullable here, unlike <textarea>'s, which is why these two aren't shared.
-pub fn getSelectionStart(self: *const Input) !?u32 {
+fn getSelectionStart(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_start;
 }
 
-pub fn getSelectionEnd(self: *const Input) !?u32 {
+fn getSelectionEnd(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_end;
 }
 
-pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
+fn getLabels(self: *Input, frame: *Frame) !js.Array {
     if (self._input_type == .hidden) {
         return frame.js.local.?.newArray(0);
     }
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
+fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
     switch (self._input_type) {
         .hidden, .password, .checkbox, .radio, .file, .submit, .image, .reset, .button => return null,
         else => {},
@@ -694,7 +706,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-0
 // Mirrors Button's overrides — same spec semantics.
 
-pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
+fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
@@ -704,23 +716,23 @@ pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
-pub fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formaction"), .wrap(value), frame);
 }
 
-pub fn getFormEnctype(self: *const Input) []const u8 {
+fn getFormEnctype(self: *const Input) []const u8 {
     return Form.normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")), "");
 }
 
-pub fn setFormEnctype(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormEnctype(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formenctype"), .wrap(value), frame);
 }
 
-pub fn getFormMethod(self: *const Input) []const u8 {
+fn getFormMethod(self: *const Input) []const u8 {
     return Form.normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")), "");
 }
 
-pub fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
 }
 
@@ -728,7 +740,7 @@ pub fn getFormNoValidate(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(.wrap("formnovalidate")) != null;
 }
 
-pub fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
+fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
     if (value) {
         try self.asElement().setAttributeSafe(.wrap("formnovalidate"), .wrap(""), frame);
     } else {
@@ -770,7 +782,7 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .@"datetime-local" => return try sanitizeDatetimeLocal(dupe, value, frame.arena),
         .number => return if (isValidFloatingPoint(value)) if (comptime dupe) try frame.dupeString(value) else value else "",
         .range => {
-            const value_attr = self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
+            const value_attr = self.asConstElement().getAttributeInterned("value") orelse "";
             return try sanitizeRange(dupe, value, self.getMin(), self.getMax(), self.getStep(), value_attr, frame);
         },
         .color => {
@@ -801,6 +813,270 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, frame: *F
         .file => return "", // File: always empty
         .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return if (comptime dupe) try frame.dupeString(value) else value, // no sanitization
     }
+}
+
+const ms_per_day: f64 = 86_400_000;
+// ECMAScript time value range; beyond it Date is invalid.
+const max_time_value: f64 = 8.64e15;
+
+fn hasNumericValue(typ: Type) bool {
+    return switch (typ) {
+        .number, .range, .date, .month, .week, .time, .@"datetime-local" => true,
+        else => false,
+    };
+}
+
+fn getValueAsNumber(self: *const Input) f64 {
+    return valueToNumber(self._input_type, self.getValue()) orelse std.math.nan(f64);
+}
+
+fn setValueAsNumber(self: *Input, number: f64, frame: *Frame) !void {
+    if (!hasNumericValue(self._input_type)) return error.InvalidStateError;
+    if (std.math.isInf(number)) return error.TypeError;
+    var buf: [64]u8 = undefined;
+    const text = numberToValue(self._input_type, number, &buf) orelse "";
+    return self.setValue(text, frame);
+}
+
+fn getValueAsDate(self: *const Input, exec: *const js.Execution) !?js.Value {
+    const ms = switch (self._input_type) {
+        .date, .week, .time => valueToNumber(self._input_type, self.getValue()),
+        .month => if (valueToNumber(.month, self.getValue())) |months| monthsToMs(months) else null,
+        else => null,
+    } orelse return null;
+    return try exec.js.local.?.newDate(ms);
+}
+
+fn setValueAsDate(self: *Input, value: js.Value, frame: *Frame) !void {
+    switch (self._input_type) {
+        .date, .month, .week, .time => {},
+        else => return error.InvalidStateError,
+    }
+    if (value.isNull()) return self.setValue("", frame);
+    if (!value.isDate()) return error.TypeError;
+    const ms = value.dateValue();
+    const number = if (self._input_type == .month and !std.math.isNan(ms)) msToMonths(ms) else ms;
+    return self.setValueAsNumber(number, frame);
+}
+
+fn stepUp(self: *Input, n_: ?i32, frame: *Frame) !void {
+    return self.stepBy(n_ orelse 1, frame);
+}
+
+fn stepDown(self: *Input, n_: ?i32, frame: *Frame) !void {
+    return self.stepBy(-(n_ orelse 1), frame);
+}
+
+fn stepBy(self: *Input, n: i32, frame: *Frame) !void {
+    const typ = self._input_type;
+    if (!hasNumericValue(typ)) return error.InvalidStateError;
+    const step = self.allowedValueStep() orelse return error.InvalidStateError;
+
+    // A range with no value sits at its sanitized default, not at 0.
+    const current = try self.sanitizeValue(false, self.getValue(), frame);
+    const before = valueToNumber(typ, current) orelse 0;
+    if (n == 0) return;
+    const base = self.stepBase();
+    const rungs = (before - base) / step;
+    const steps: f64 = @floatFromInt(n);
+    var value = if (@abs(rungs - @round(rungs)) > 1e-9)
+        // Off the ladder: the snap to the next rung counts as the first step
+        // (what browsers do; the spec text ignores n here).
+        base + (if (n < 0) @floor(rungs) + steps + 1 else @ceil(rungs) + steps - 1) * step
+    else
+        before + steps * step;
+    if (valueToNumber(typ, self.getMin())) |min| {
+        if (value < min) value = base + @ceil((min - base) / step - 1e-9) * step;
+    }
+    if (valueToNumber(typ, self.getMax())) |max| {
+        if (value > max) value = base + @floor((max - base) / step + 1e-9) * step;
+    }
+    // Clamping never moves against the direction of travel.
+    if ((n < 0 and value > before) or (n > 0 and value < before)) return;
+    return self.setValueAsNumber(value, frame);
+}
+
+/// HTML "step base": min, else the value content attribute, else the type's default.
+fn stepBase(self: *const Input) f64 {
+    const typ = self._input_type;
+    if (valueToNumber(typ, self.getMin())) |min| return min;
+    if (valueToNumber(typ, self.asConstElement().getAttributeInterned("value") orelse "")) |v| return v;
+    return if (typ == .week) -259_200_000 else 0;
+}
+
+/// The step in value-as-number units; null for step="any".
+fn allowedValueStep(self: *const Input) ?f64 {
+    const typ = self._input_type;
+    const attr = self.getStep();
+    if (std.ascii.eqlIgnoreCase(attr, "any")) return null;
+    const default: f64 = switch (typ) {
+        .time, .@"datetime-local" => 60,
+        else => 1,
+    };
+    const scale: f64 = switch (typ) {
+        .date => ms_per_day,
+        .week => 7 * ms_per_day,
+        .time, .@"datetime-local" => 1000,
+        else => 1,
+    };
+    const parsed = if (isValidFloatingPoint(attr)) std.fmt.parseFloat(f64, attr) catch default else default;
+    return (if (parsed > 0) parsed else default) * scale;
+}
+
+/// HTML "value as number": floats for number/range; for the date types,
+/// milliseconds (months for type=month) since the epoch or midnight.
+fn valueToNumber(typ: Type, value: []const u8) ?f64 {
+    if (value.len == 0) return null;
+    switch (typ) {
+        .number, .range => return if (isValidFloatingPoint(value)) std.fmt.parseFloat(f64, value) catch null else null,
+        .date => {
+            if (!isValidDate(value)) return null;
+            return dateToDays(value) * ms_per_day;
+        },
+        .month => {
+            if (!isValidMonth(value)) return null;
+            const year: i64 = parseAllDigits(value[0 .. value.len - 3]).?;
+            const month: i64 = parseAllDigits(value[value.len - 2 ..]).?;
+            return @floatFromInt((year - 1970) * 12 + month - 1);
+        },
+        .week => {
+            if (!isValidWeek(value)) return null;
+            const year: i64 = parseAllDigits(value[0 .. value.len - 4]).?;
+            const week: i64 = parseAllDigits(value[value.len - 2 ..]).?;
+            return @as(f64, @floatFromInt(isoWeekMonday(year, week))) * ms_per_day;
+        },
+        .time => {
+            if (!isValidTime(value)) return null;
+            return timeToMs(value);
+        },
+        .@"datetime-local" => {
+            const sep = std.mem.indexOfAny(u8, value, "T ") orelse return null;
+            const date = value[0..sep];
+            const time = value[sep + 1 ..];
+            if (!isValidDate(date) or !isValidTime(time)) return null;
+            return dateToDays(date) * ms_per_day + timeToMs(time);
+        },
+        else => return null,
+    }
+}
+
+fn numberToValue(typ: Type, number: f64, buf: []u8) ?[]const u8 {
+    if (std.math.isNan(number) or @abs(number) > max_time_value) return null;
+    switch (typ) {
+        .number, .range => return std.fmt.bufPrint(buf, "{d}", .{number}) catch null,
+        .date => {
+            const days: i64 = @floor(number / ms_per_day);
+            return formatDate(civilFromDays(days), buf);
+        },
+        .month => {
+            const months: i64 = @floor(number);
+            const year = 1970 + @divFloor(months, 12);
+            if (year < 1) return null;
+            return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(@mod(months, 12) + 1)) }) catch null;
+        },
+        .week => {
+            const days: i64 = @floor(number / ms_per_day);
+            // The ISO week-year is the year of the week's Thursday.
+            const thursday = days - @mod(days + 3, 7) + 3;
+            const year = civilFromDays(thursday).year;
+            if (year < 1) return null;
+            const week = @divFloor(thursday - isoWeekMonday(year, 1), 7) + 1;
+            return std.fmt.bufPrint(buf, "{d:0>4}-W{d:0>2}", .{ @as(u64, @intCast(year)), @as(u64, @intCast(week)) }) catch null;
+        },
+        .time => return formatTime(@mod(number, ms_per_day), buf),
+        .@"datetime-local" => {
+            const days: i64 = @floor(number / ms_per_day);
+            const date = formatDate(civilFromDays(days), buf) orelse return null;
+            buf[date.len] = 'T';
+            const time = formatTime(number - @as(f64, @floatFromInt(days)) * ms_per_day, buf[date.len + 1 ..]) orelse return null;
+            return buf[0 .. date.len + 1 + time.len];
+        },
+        else => return null,
+    }
+}
+
+fn monthsToMs(months: f64) f64 {
+    const m: i64 = @floor(months);
+    return daysFromCivil(1970 + @divFloor(m, 12), @mod(m, 12) + 1, 1) * ms_per_day;
+}
+
+fn msToMonths(ms: f64) f64 {
+    const days: i64 = @floor(ms / ms_per_day);
+    const civil = civilFromDays(days);
+    return @floatFromInt((civil.year - 1970) * 12 + civil.month - 1);
+}
+
+/// Days since 1970-01-01 of a valid date string (any year length).
+fn dateToDays(value: []const u8) f64 {
+    const year: i64 = parseAllDigits(value[0 .. value.len - 6]).?;
+    const month: i64 = parseAllDigits(value[value.len - 5 .. value.len - 3]).?;
+    const day: i64 = parseAllDigits(value[value.len - 2 ..]).?;
+    return daysFromCivil(year, month, day);
+}
+
+/// Milliseconds since midnight of a valid time string.
+fn timeToMs(value: []const u8) f64 {
+    var ms: f64 = @floatFromInt(parseAllDigits(value[0..2]).? * 3_600_000 + parseAllDigits(value[3..5]).? * 60_000);
+    if (value.len >= 8) ms += @floatFromInt(parseAllDigits(value[6..8]).? * 1000);
+    if (value.len > 9) {
+        var frac: u32 = parseAllDigits(value[9..]).?;
+        var digits = value.len - 9;
+        while (digits < 3) : (digits += 1) frac *= 10;
+        ms += @floatFromInt(frac);
+    }
+    return ms;
+}
+
+const Civil = struct { year: i64, month: i64, day: i64 };
+
+fn formatDate(civil: Civil, buf: []u8) ?[]const u8 {
+    if (civil.year < 1) return null;
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u64, @intCast(civil.year)), @as(u64, @intCast(civil.month)), @as(u64, @intCast(civil.day)) }) catch null;
+}
+
+/// Normalized time string: seconds only when needed, fraction always 3 digits.
+fn formatTime(ms_in_day: f64, buf: []u8) ?[]const u8 {
+    const total: u64 = @floor(ms_in_day);
+    const hour = total / 3_600_000;
+    const minute = (total / 60_000) % 60;
+    const second = (total / 1000) % 60;
+    const millis = total % 1000;
+    if (second == 0 and millis == 0) {
+        return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ hour, minute }) catch null;
+    }
+    if (millis == 0) {
+        return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour, minute, second }) catch null;
+    }
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}", .{ hour, minute, second, millis }) catch null;
+}
+
+// Howard Hinnant's civil-from-days and days-from-civil.
+fn daysFromCivil(year: i64, month: i64, day: i64) f64 {
+    const y = if (month <= 2) year - 1 else year;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const mp = @mod(month + 9, 12);
+    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return @floatFromInt(era * 146_097 + doe - 719_468);
+}
+
+fn civilFromDays(days: i64) Civil {
+    const z = days + 719_468;
+    const era = @divFloor(z, 146_097);
+    const doe = z - era * 146_097;
+    const yoe = @divFloor(doe - @divFloor(doe, 1460) + @divFloor(doe, 36_524) - @divFloor(doe, 146_096), 365);
+    const doy = doe - (365 * yoe + @divFloor(yoe, 4) - @divFloor(yoe, 100));
+    const mp = @divFloor(5 * doy + 2, 153);
+    const day = doy - @divFloor(153 * mp + 2, 5) + 1;
+    const month = if (mp < 10) mp + 3 else mp - 9;
+    return .{ .year = yoe + era * 400 + @intFromBool(month <= 2), .month = month, .day = day };
+}
+
+/// Days since the epoch of the Monday starting ISO week `week` of `year`.
+fn isoWeekMonday(year: i64, week: i64) i64 {
+    const jan4: i64 = @intFromFloat(daysFromCivil(year, 1, 4));
+    return jan4 - @mod(jan4 + 3, 7) + (week - 1) * 7;
 }
 
 /// WHATWG "valid floating-point number" grammar check + overflow detection.
@@ -1133,11 +1409,11 @@ fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
     }
 }
 
-pub fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
+fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
     return popover.invokerTarget(self.asNode(), self._popover_target, frame);
 }
 
-pub fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
+fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
     self._popover_target = value;
     if (value == null) {
         try self.asElement().removeAttribute(.wrap("popovertarget"), frame);
@@ -1146,27 +1422,27 @@ pub fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !v
     }
 }
 
-pub fn getPopoverTargetAction(self: *Input) []const u8 {
+fn getPopoverTargetAction(self: *Input) []const u8 {
     return @tagName(popover.getInvokerAction(self.asElement()));
 }
 
-pub fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
 }
 
-pub fn getMax(self: *const Input) []const u8 {
+fn getMax(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
 }
 
-pub fn getMin(self: *const Input) []const u8 {
+fn getMin(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
 }
 
 pub fn getRequired(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
+    return self.asConstElement().getAttributeInterned("required") != null;
 }
 
-pub fn getStep(self: *const Input) []const u8 {
+fn getStep(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
 }
 
@@ -1195,6 +1471,10 @@ pub const JsApi = struct {
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{ .ce_reactions = true });
     pub const value = bridge.accessor(Input.getValueForJS, setValueFromJS, .{ .ce_reactions = true });
+    pub const valueAsNumber = bridge.accessor(Input.getValueAsNumber, Input.setValueAsNumber, .{});
+    pub const valueAsDate = bridge.accessor(Input.getValueAsDate, Input.setValueAsDate, .{});
+    pub const stepUp = bridge.function(Input.stepUp, .{});
+    pub const stepDown = bridge.function(Input.stepDown, .{});
     pub const files = bridge.accessor(Input.getFiles, Input.setFiles, .{});
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{ .ce_reactions = true });
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
@@ -1247,12 +1527,12 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Store initial values from attributes
-        self._default_value = element.getAttributeSafe(comptime .wrap("value"));
-        self._default_checked = element.getAttributeSafe(comptime .wrap("checked")) != null;
+        self._default_value = element.getAttributeInterned("value");
+        self._default_checked = element.getAttributeInterned("checked") != null;
 
         self._checked = self._default_checked;
 
-        self._input_type = if (element.getAttributeSafe(comptime .wrap("type"))) |type_attr|
+        self._input_type = if (element.getAttributeInterned("type")) |type_attr|
             Type.fromString(type_attr)
         else
             .text;
@@ -1325,6 +1605,7 @@ pub const Build = struct {
         clone._value = source._value;
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
+        clone._user_edited = source._user_edited;
         clone._selection_direction = source._selection_direction;
         clone._selection_start = source._selection_start;
         clone._selection_end = source._selection_end;
@@ -1341,6 +1622,7 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input-attrs.html", .{});
     try testing.htmlRunner("element/html/input-validity.html", .{});
     try testing.htmlRunner("element/html/input_file.html", .{});
+    try testing.htmlRunner("element/html/input-value-as.html", .{});
 }
 
 test "isValidFloatingPoint" {

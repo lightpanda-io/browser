@@ -29,7 +29,7 @@ const DOMImplementation = @This();
 // it are owned by that document, not necessarily the frame's main document.
 _document: *Document,
 
-pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
     // Per spec, qualifiedName must match the doctype name production: any
     // characters except ASCII whitespace or '>'.
     for (qualified_name) |c| {
@@ -46,7 +46,7 @@ pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []cons
     return doctype;
 }
 
-pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
+fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
     const document = (try frame._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
     document._url = "about:blank";
@@ -81,7 +81,7 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString
     return document;
 }
 
-pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([]const u8), qualified_name_: js.Value, doctype: ?*DocumentType, frame: *Frame) !*Document {
+fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([]const u8), qualified_name_: js.Value, doctype: ?*DocumentType, frame: *Frame) !*Document {
     // Both namespace (nullable) and qualifiedName are required arguments.
     const namespace_ = namespace_nullable.value;
 
@@ -136,7 +136,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullab
     return document;
 }
 
-pub fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) bool {
+fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) bool {
     // Modern DOM spec says this should always return true
     // This method is deprecated and kept for compatibility only
     return true;

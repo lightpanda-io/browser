@@ -22,14 +22,15 @@ const lp = @import("lightpanda");
 const js = @import("../../../js/js.zig");
 const Factory = @import("../../../Factory.zig");
 const Frame = @import("../../../Frame.zig");
+const Reaction = @import("../../../CustomElementReactions.zig").Reaction;
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
-const TreeWalker = @import("../../TreeWalker.zig");
 const Document = @import("../../Document.zig");
-const HtmlElement = @import("../Html.zig");
+const TreeWalker = @import("../../TreeWalker.zig");
 const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
-const Reaction = @import("../../../CustomElementReactions.zig").Reaction;
+
+const HtmlElement = @import("../Html.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -58,7 +59,6 @@ pub fn asNode(self: *Custom) *Node {
 // we queue a reaction so that a redundant enqueue (already-in-this-state)
 // is dropped, and a remove+re-insert in the same scope queues both reactions
 // in order. Fire-time is unconditional.
-
 pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) error{OutOfMemory}!void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
@@ -67,6 +67,16 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
             if (custom._upgrade_failed) {
                 return;
             }
+
+            {
+                // a document without a browsing context (DOMParser et al.) has
+                // no custom element.
+                const document = element.asNode().ownerDocument(frame) orelse return;
+                if (document._frame == null) {
+                    return;
+                }
+            }
+
             const name = custom._tag_name.str();
             if (frame.window._custom_elements._definitions.get(name)) |definition| {
                 const CustomElementRegistry = @import("../../CustomElementRegistry.zig");

@@ -24,7 +24,7 @@ pub fn asNode(self: *Base) *Node {
 
 pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = element.getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -50,7 +50,7 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
         owner.base_url = null;
         return;
     };
-    const href = first.getAttributeSafe(comptime .wrap("href")) orelse {
+    const href = first.getAttributeInterned("href") orelse {
         owner.base_url = null;
         return;
     };

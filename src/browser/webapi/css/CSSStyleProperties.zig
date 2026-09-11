@@ -45,7 +45,7 @@ pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {
     return self._proto;
 }
 
-pub fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, frame: *Frame) !void {
+fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, frame: *Frame) !void {
     if (method_names.has(name)) {
         return error.NotHandled;
     }
@@ -53,7 +53,7 @@ pub fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, 
     try self._proto.setProperty(dash_case, value, null, frame);
 }
 
-pub fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const u8 {
+fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]const u8 {
     if (method_names.has(name)) {
         return error.NotHandled;
     }

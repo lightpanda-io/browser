@@ -43,7 +43,7 @@ pub fn create(rect: Data, factory: *Factory) !*DOMRect {
     return factory.domRect(rect);
 }
 
-pub fn fromRect(other_: ?Data, exec: *const js.Execution) !*DOMRect {
+fn fromRect(other_: ?Data, exec: *const js.Execution) !*DOMRect {
     return create(other_ orelse .{}, exec._factory);
 }
 
@@ -74,16 +74,16 @@ pub fn getHeight(self: *const DOMRect) f64 {
     return self._proto._height;
 }
 
-pub fn setX(self: *DOMRect, v: f64) void {
+fn setX(self: *DOMRect, v: f64) void {
     self._proto._x = v;
 }
-pub fn setY(self: *DOMRect, v: f64) void {
+fn setY(self: *DOMRect, v: f64) void {
     self._proto._y = v;
 }
-pub fn setWidth(self: *DOMRect, v: f64) void {
+fn setWidth(self: *DOMRect, v: f64) void {
     self._proto._width = v;
 }
-pub fn setHeight(self: *DOMRect, v: f64) void {
+fn setHeight(self: *DOMRect, v: f64) void {
     self._proto._height = v;
 }
 

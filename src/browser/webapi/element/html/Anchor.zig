@@ -44,7 +44,7 @@ pub fn asNode(self: *Anchor) *Node {
 }
 
 pub fn getHref(self: *Anchor, frame: *Frame) ![]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = self.asElement().getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -82,7 +82,7 @@ pub fn getHost(self: *Anchor, frame: *Frame) ![]const u8 {
     return host;
 }
 
-pub fn setHost(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setHost(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHost(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -93,7 +93,7 @@ pub fn getHostname(self: *Anchor, frame: *Frame) ![]const u8 {
     return URL.getHostname(href);
 }
 
-pub fn setHostname(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setHostname(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHostname(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -116,7 +116,7 @@ pub fn getPort(self: *Anchor, frame: *Frame) ![]const u8 {
     return port;
 }
 
-pub fn setPort(self: *Anchor, value: ?[]const u8, frame: *Frame) !void {
+fn setPort(self: *Anchor, value: ?[]const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPort(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -127,7 +127,7 @@ pub fn getSearch(self: *Anchor, frame: *Frame) ![]const u8 {
     return URL.getSearch(href);
 }
 
-pub fn setSearch(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setSearch(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setSearch(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -138,7 +138,7 @@ pub fn getHash(self: *Anchor, frame: *Frame) ![]const u8 {
     return URL.getHash(href);
 }
 
-pub fn setHash(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setHash(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHash(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -160,29 +160,29 @@ pub fn getProtocol(self: *Anchor, frame: *Frame) ![]const u8 {
     return URL.getProtocol(href);
 }
 
-pub fn setProtocol(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setProtocol(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setProtocol(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getUsername(self: *Anchor, frame: *Frame) ![]const u8 {
+fn getUsername(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getUsername(href);
 }
 
-pub fn setUsername(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setUsername(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setUsername(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getPassword(self: *Anchor, frame: *Frame) ![]const u8 {
+fn getPassword(self: *Anchor, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getPassword(href);
 }
 
-pub fn setPassword(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setPassword(self: *Anchor, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPassword(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -192,12 +192,12 @@ pub fn getText(self: *Anchor, frame: *Frame) ![:0]const u8 {
     return self.asNode().getTextContentAlloc(frame.local_arena);
 }
 
-pub fn setText(self: *Anchor, value: []const u8, frame: *Frame) !void {
+fn setText(self: *Anchor, value: []const u8, frame: *Frame) !void {
     try self.asNode().setTextContent(value, frame);
 }
 
 fn getResolvedHref(self: *Anchor, frame: *Frame) !?[:0]const u8 {
-    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
+    const href = self.asElement().getAttributeInterned("href") orelse return null;
     if (href.len == 0) {
         return null;
     }
@@ -210,7 +210,7 @@ fn getResolvedHref(self: *Anchor, frame: *Frame) !?[:0]const u8 {
 }
 
 pub fn getTarget(self: *Anchor) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
+    return self.asElement().getAttributeInterned("target") orelse "";
 }
 
 pub const JsApi = struct {

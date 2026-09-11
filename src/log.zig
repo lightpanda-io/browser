@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 pub const Scope = enum {
     app,
+    bidi,
     browser,
     bug,
     cache,
@@ -33,15 +34,18 @@ pub const Scope = enum {
     http,
     js,
     mcp,
+    note,
     not_implemented,
     scheduler,
+    serve,
     storage,
     telemetry,
     unknown_prop,
     websocket,
+    cors,
 };
 
-pub const num_scopes = @typeInfo(Scope).@"enum".fields.len;
+const num_scopes = @typeInfo(Scope).@"enum".fields.len;
 
 /// A single `--log-filter-scopes` directive. `scope == null` targets every
 /// scope (the `all` keyword). `enable` is true for `+X` (filter in), false
@@ -177,6 +181,19 @@ pub fn warnDisabledIFrame() void {
 }
 
 pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".fields.len]KV = undefined;
+    initKVs(data, &kvs);
+    logKVs(scope, level, msg, &kvs);
+}
+
+inline fn initKVs(data: anytype, kvs: []KV) void {
+    inline for (@typeInfo(@TypeOf(data)).@"struct".fields, 0..) |f, i| {
+        const value = @field(data, f.name);
+        kvs[i] = .{ .key = f.name, .value = Value.init(&value) };
+    }
+}
+
+pub fn logKVs(scope: Scope, level: Level, msg: []const u8, kvs: []const KV) void {
     if (enabled(scope, level) == false) {
         return;
     }
@@ -192,7 +209,7 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     if (sink) |s| {
         var buf: [4096]u8 = undefined;
         var w: std.Io.Writer = .fixed(&buf);
-        logTo(scope, level, msg, data, &w) catch |log_err| {
+        logToErased(scope, level, msg, kvs, &w) catch |log_err| {
             std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @tagName(scope), @errorName(log_err), msg });
             return;
         };
@@ -204,20 +221,16 @@ pub fn log(scope: Scope, level: Level, msg: []const u8, data: anytype) void {
     const stderr = std.debug.lockStderr(&buf);
     defer std.debug.unlockStderr();
 
-    logTo(scope, level, msg, data, &stderr.file_writer.interface) catch |log_err| {
-        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @errorName(log_err), @tagName(scope), msg });
+    logToErased(scope, level, msg, kvs, &stderr.file_writer.interface) catch |log_err| {
+        std.debug.print("$time={d} $level=fatal $scope={s} $msg=\"log err\" err={s} log_msg=\"{s}\"\n", .{ timestamp(.real), @tagName(scope), @errorName(log_err), msg });
     };
 }
 
-// Converts each field of `data` into a runtime Value so that a single copy of
-// the formatting code (logToErased and below) can do the actual writing.
+// Like `log`, but to an explicit writer and without the enabled/sink
+// gating. Only used by tests.
 fn logTo(scope: Scope, level: Level, msg: []const u8, data: anytype, out: *std.Io.Writer) !void {
-    const fields = @typeInfo(@TypeOf(data)).@"struct".fields;
-    var kvs: [fields.len]KV = undefined;
-    inline for (fields, 0..) |f, i| {
-        const value = @field(data, f.name);
-        kvs[i] = .{ .key = f.name, .value = Value.init(&value) };
-    }
+    var kvs: [@typeInfo(@TypeOf(data)).@"struct".fields.len]KV = undefined;
+    initKVs(data, &kvs);
     return logToErased(scope, level, msg, &kvs, out);
 }
 
@@ -319,10 +332,43 @@ fn logPrettyPrefix(scope: Scope, level: Level, msg: []const u8, writer: *std.Io.
     }
 }
 
-const KV = struct {
+pub const KV = struct {
     key: []const u8,
     value: Value,
+
+    // `vp` is a pointer, as with Value.init. A string literal is already one;
+    // for anything else pass `&value` and keep it alive until the log call.
+    pub fn init(key: []const u8, vp: anytype) KV {
+        return .{
+            .key = key,
+            .value = .init(vp),
+        };
+    }
 };
+
+/// A string the pretty format paints; logfmt writes it plainly.
+const Colored = struct {
+    code: []const u8,
+    text: []const u8,
+
+    pub fn logFmt(self: Colored, key: []const u8, writer: LogFormatWriter) !void {
+        return writer.write(key, self.text);
+    }
+
+    pub fn format(self: Colored, writer: *std.Io.Writer) !void {
+        try writer.writeAll(self.code);
+        try writer.writeAll(self.text);
+        return writer.writeAll("\x1b[0m");
+    }
+};
+
+pub fn red(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;31m", .text = text };
+}
+
+pub fn green(text: []const u8) Colored {
+    return .{ .code = "\x1b[0;32m", .text = text };
+}
 
 const Value = union(enum) {
     null,
@@ -520,7 +566,7 @@ fn writeString(format: Format, value: []const u8, writer: *std.Io.Writer) !void 
     return writer.writeByte('"');
 }
 
-pub const LogFormatWriter = struct {
+const LogFormatWriter = struct {
     writer: *std.Io.Writer,
 
     pub fn write(self: LogFormatWriter, key: []const u8, value: anytype) !void {
@@ -555,6 +601,21 @@ fn timestamp(comptime clock: std.Io.Clock) u64 {
 }
 
 const testing = @import("testing.zig");
+test "log: colored" {
+    opts.format = .logfmt;
+    defer opts.format = .pretty;
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+
+    try logTo(.app, .err, "test", .{ .arg = red("--wait mss") }, &aw.writer);
+    try testing.expectEqual("$time=1739795092929 $scope=app $level=error $msg=\"test\" arg=\"--wait mss\"\n", aw.written());
+
+    aw.clearRetainingCapacity();
+    try writeValue(.pretty, green("--wait-ms"), &aw.writer);
+    try testing.expectEqual("\x1b[0;32m--wait-ms\x1b[0m", aw.written());
+}
+
 test "log: data" {
     opts.format = .logfmt;
     defer opts.format = .pretty;

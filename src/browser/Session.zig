@@ -86,6 +86,10 @@ _nav_cursor: usize = 0,
 // `commitPendingPage`).
 _tool_frame_override: ?u32 = null,
 
+// A popup the last tool action opened (target=_blank). Tools act on it, as
+// a user whose click opened a tab would, until it goes away.
+_followed_popup: ?u32 = null,
+
 // Loader IDs are scoped to the Session: each new BrowserContext gets a
 // fresh counter. Frame IDs (`frame_id_gen`) live on `Browser` instead so
 // CDP target IDs stay unique across BrowserContext lifecycle on a single
@@ -127,7 +131,7 @@ pub const DownloadBehavior = enum {
     deny,
 };
 
-pub const CancelHook = struct {
+const CancelHook = struct {
     context: *anyopaque,
     check: *const fn (*anyopaque) bool,
 };
@@ -174,9 +178,29 @@ pub fn deinit(self: *Session) void {
 
     self.closeAllPages();
 
+    // CorsGate/RobotsGate fetches are ownerless, so page/frame teardown above
+    // never reaches them.
+    //
+    // They still carry this notification and can outlive it, so clear the pointer here or
+    // Transfer.kill's later notify() dispatches through a freed Notification
+    // once the caller runs notification.deinit() after this returns.
+    var transfer_it = self.browser.http_client.transfers.valueIterator();
+    while (transfer_it.next()) |t| {
+        if (t.*.req.notification == self.notification) {
+            t.*.req.notification = null;
+        }
+    }
+
     self.cookie_jar.deinit();
 
-    self.browser.env.memoryPressureNotification(.critical);
+    {
+        // Every context is disposed; this GC must not arm a termination.
+        const env = &self.browser.env;
+        const was_tearing_down = env.tearing_down;
+        env.tearing_down = true;
+        defer env.tearing_down = was_tearing_down;
+        env.memoryPressureNotification(.critical);
+    }
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.idb.deinit();
@@ -324,8 +348,8 @@ fn tearDownPage(self: *Session, page: *Page) void {
 }
 
 // Allocate a Page in a free slot, publish it as the active page, and
-// dispatch `frame_created` so CDP creates fresh isolated-world V8
-// contexts. Used by createPage and by the synthetic-nav path. Does NOT
+// dispatch `frame_created` so CDP can bind its page handle to the new
+// frame. Used by createPage and by the synthetic-nav path. Does NOT
 // dispatch `frame_navigate` — the caller does that (or doesn't, for a
 // blank initial page).
 //
@@ -340,8 +364,8 @@ fn installNewActivePage(self: *Session, frame_id: u32) !*Frame {
     errdefer _ = self.pages.pop();
 
     const frame = &page.frame;
-    // Inform CDP the main frame has been created such that additional
-    // context for other Worlds can be created as well.
+    // Inform CDP the main frame has been created so it can point its page
+    // handle at the new frame.
     self.notification.dispatch(.frame_created, frame);
     return frame;
 }
@@ -355,7 +379,20 @@ pub fn createPage(self: *Session) !PageHandle {
     }
 
     const frame_id = self.nextFrameId();
-    _ = try self.installNewActivePage(frame_id);
+    const frame = try self.installNewActivePage(frame_id);
+
+    // https://html.spec.whatwg.org/multipage/document-sequences.html --
+    // Creating a new browsing context always produces an initial about:blank
+    // Document with its own session history entry, even before any real
+    // navigation happens. Without this, navigation.currentEntry crashes on
+    // a page that hasn't navigated yet.
+    _ = try self.navigation.pushEntry(
+        frame.url,
+        .{ .source = .navigation, .value = null },
+        frame,
+        false,
+    );
+    self.navigation._initial_entry = true;
 
     return .{ .session = self, .frame_id = frame_id };
 }
@@ -395,7 +432,14 @@ pub fn getPinnedArena(self: *Session, size_or_bucket: anytype, debug: []const u8
     return self.arena_pool.acquirePinned(&self.browser.arena_account, size_or_bucket, debug);
 }
 
-// The live page for a top-level browsing context, by its root frame id.
+pub fn stopLoading(self: *Session, frame_id: u32) void {
+    const live = self.livePage(frame_id) orelse return;
+    if (self.replacementOf(live)) |pending| {
+        pending.frame.stopLoading();
+    }
+    live.frame.stopLoading();
+}
+
 pub fn livePage(self: *Session, frame_id: u32) ?*Page {
     for (self.pages.items) |page| {
         if (page.frame._frame_id == frame_id) {
@@ -457,6 +501,12 @@ pub fn currentFrame(self: *Session) ?*Frame {
         // No pages[0] fallthrough: the override targets one specific page.
         return self.findFrameByFrameId(frame_id);
     }
+    if (self._followed_popup) |frame_id| {
+        if (self.findFrameByFrameId(frame_id)) |frame| {
+            return frame;
+        }
+        self._followed_popup = null;
+    }
     if (self.pages.items.len == 0) {
         return null;
     }
@@ -470,6 +520,11 @@ pub fn currentFrame(self: *Session) ?*Frame {
 /// See `_tool_frame_override`. Pass null to clear.
 pub fn setToolFrameOverride(self: *Session, frame_id: ?u32) void {
     self._tool_frame_override = frame_id;
+}
+
+/// See `_followed_popup`.
+pub fn followPopup(self: *Session, frame_id: u32) void {
+    self._followed_popup = frame_id;
 }
 
 // Multi-page aware: frame ids are globally unique (monotonic on `Browser`).
@@ -861,12 +916,14 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
 //      isolated world contexts plus the node_registry. OLD is still the live
 //      page and its memory is alive (intentional: CDP teardown can walk
 //      old-page state without UAF).
-//   2. frame_created dispatch — CDP creates fresh isolated world contexts
-//      against the new frame. `replacement.replaces` is still set, so the
-//      session still reports an in-flight nav and CDP's frameCreated skips
-//      its frame_arena reset and captured_responses zeroing (the captured
-//      response for the request we are committing was just inserted by
-//      onHttpResponseHeadersDone moments earlier and must survive).
+//   2. frame_created dispatch — CDP rebinds its page handle to the new
+//      frame. `replacement.replaces` is still set, so the session still
+//      reports an in-flight nav and CDP's frameCreated skips its frame_arena
+//      reset and captured_responses zeroing (the captured response for the
+//      request we are committing was just inserted by
+//      onHttpResponseHeadersDone moments earlier and must survive). The
+//      isolated worlds emptied in step 1 are NOT refilled here — CDP rebuilds
+//      their contexts on the frame_navigate the caller dispatches afterwards.
 //   3. Promote: clear `replaces` and unlink OLD from `pages`, so
 //      `currentFrame()` / `livePage()` now resolve to `replacement`. Done AFTER
 //      step 2 so the in-commit signal (replaces != null) survives the dispatch

@@ -65,17 +65,6 @@ pub fn newString(self: *const Local, str: []const u8) js.String {
     };
 }
 
-// Creates a JS string by mapping each input byte 0..255 directly to a JS
-// code unit, with no UTF-8 decoding. Use this when handing back binary data
-// (e.g. atob output) — passing those bytes through `newString` would treat
-// any byte 0x80..0xFF as malformed UTF-8 and replace it with U+FFFD.
-pub fn newOneByteString(self: *const Local, bytes: []const u8) js.String {
-    return .{
-        .local = self,
-        .handle = self.isolate.initOneByteStringHandle(bytes),
-    };
-}
-
 pub fn newObject(self: *const Local) js.Object {
     return .{
         .local = self,
@@ -86,6 +75,14 @@ pub fn newObject(self: *const Local) js.Object {
 pub fn newDate(self: *const Local, time_ms: f64) !js.Value {
     const handle = v8.v8__Date__New(self.handle, time_ms) orelse return error.JsException;
     return .{ .local = self, .handle = handle };
+}
+
+// StringToBigInt semantics: arbitrary precision, sign-aware, and it never
+// consults the page's globals. Fails on non-numeric digits.
+pub fn newBigInt(self: *const Local, digits: []const u8) !js.Value {
+    const str: *const v8.Value = @ptrCast(self.isolate.initStringHandle(digits));
+    const handle = v8.v8__Value__ToBigInt(str, self.handle) orelse return error.JsException;
+    return .{ .local = self, .handle = @ptrCast(handle) };
 }
 
 pub fn newNumber(self: *const Local, f: f64) !js.Value {
@@ -195,7 +192,7 @@ pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Scrip
     return result.script;
 }
 
-pub const CompileResult = struct {
+const CompileResult = struct {
     script: js.Script,
     // True only when `cached_data` was supplied AND V8 rejected it (source,
     // V8 version, or flag mismatch) and recompiled from source. Always false
@@ -774,6 +771,10 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             const arr = (try jsValueToTypedArray(ValueType, js_val)) orelse return null;
             return .{ .values = arr };
         },
+        js.BufferSource => {
+            const bytes = (try jsValueToArrayBufferSlice(u8, true, js_val)) orelse return null;
+            return .{ .bytes = bytes };
+        },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
         js.Object => {
@@ -883,7 +884,13 @@ pub fn assertDictionaryFieldOrder(comptime T: type) void {
 }
 
 fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
-    var force_u8 = false;
+    return jsValueToArrayBufferSlice(T, false, js_val);
+}
+
+// With `any_view`, every ArrayBufferView is accepted as a byte slice regardless
+// of its element type
+fn jsValueToArrayBufferSlice(comptime T: type, any_view: bool, js_val: js.Value) !?[]T {
+    var force_u8 = any_view;
     var array_buffer: ?*const v8.ArrayBuffer = null;
     var byte_len: usize = undefined;
     var byte_offset: usize = undefined;
@@ -1227,7 +1234,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getInt64();
                 }
-                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
+                return jsInt64ToZig(i64, try js_value.toF64());
             },
             else => {},
         },
@@ -1250,7 +1257,7 @@ fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
                     const v = js_value.toBigInt();
                     return v.getUint64();
                 }
-                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
+                return jsInt64ToZig(u64, try js_value.toF64());
             },
             else => {},
         },
@@ -1270,6 +1277,20 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
         return @intCast(maybe);
     }
     return error.InvalidArgument;
+}
+
+// A JS number can't carry a full 64-bit integer, it needs to be represented as
+// a f64 with fractions rounded towards zero.
+fn jsInt64ToZig(comptime T: type, number: f64) !T {
+    if (!std.math.isFinite(number)) {
+        return error.InvalidArgument;
+    }
+    const truncated = @trunc(number);
+    const min: f64 = if (@typeInfo(T).int.signedness == .signed) -std.math.maxInt(i54) else 0;
+    if (truncated < min or truncated > std.math.maxInt(i54)) {
+        return error.InvalidArgument;
+    }
+    return @intFromFloat(truncated);
 }
 
 // Every WebApi type has a class_id as T.JsApi.Meta.class_id. We use this to create
@@ -1294,7 +1315,7 @@ const Resolved = struct {
         release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
-pub fn resolveValue(value: anytype) Resolved {
+fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
     if (!@hasField(T, "_type")) {
         return resolveT(T, value);
@@ -1490,6 +1511,14 @@ pub fn stackTrace(self: *const Local) !?[]const u8 {
     return buf.written();
 }
 
+// We sometimes need to reject with a specific TypeError message. We can't
+// attach an anything to `error.TypeError`, but we can use a pseudo-global.
+// When caller catches the error.TypeError, it'll look into env.error_message
+// for the message.
+pub fn typeError(self: *const Local, message: []const u8) error{TypeError} {
+    return self.ctx.typeError(message);
+}
+
 // == Promise Helpers ==
 pub fn rejectPromise(self: *const Local, err: js.PromiseResolver.RejectError) js.Promise {
     var resolver = js.PromiseResolver.init(self);
@@ -1508,6 +1537,15 @@ pub fn createPromiseResolver(self: *const Local) js.PromiseResolver {
 }
 
 pub fn debugValue(self: *const Local, js_val: js.Value, writer: *std.Io.Writer) !void {
+    // _debugValue walks arbitrary, caller-supplied object graphs (e.g. a
+    // rejected promise's reason) via raw property gets. A getter or Proxy
+    // trap encountered along the way can throw; without a TryCatch here,
+    // that leaves the isolate's exception flag set after we return, and the
+    // next unrelated JS entry point trips V8's has_exception() debug check.
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(self);
+    defer try_catch.deinit();
+
     var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
     return self._debugValue(js_val, &seen, 0, writer) catch error.WriteFailed;
 }
@@ -1621,13 +1659,6 @@ pub fn newException(self: *const Local, ex: anytype) js.Exception {
     return .{
         .local = self,
         .handle = js_val.handle,
-    };
-}
-
-pub fn getGlobal(self: *const Local) js.Object {
-    return .{
-        .local = self,
-        .handle = v8.v8__Context__Global(self.handle).?,
     };
 }
 

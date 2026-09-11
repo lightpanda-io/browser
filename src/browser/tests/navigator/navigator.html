@@ -51,6 +51,16 @@
   }
 </script>
 
+<script id=navigator_plugins_named_presence>
+  // No plugin is exposed, so PluginArray has no named properties at all.
+  testing.expectEqual(false, 'anything' in navigator.plugins);
+  testing.expectEqual(false, Object.hasOwn(navigator.plugins, 'anything'));
+  testing.expectEqual(null, navigator.plugins.namedItem('anything'));
+
+  // inherited members are still found by `in`
+  testing.expectEqual(true, 'refresh' in navigator.plugins);
+</script>
+
 <script id=navigator_plugins_iterable>
   // WebIDL: indexed getter => @@iterator (Chrome: [...navigator.plugins] works)
   testing.expectEqual('function', typeof navigator.plugins[Symbol.iterator]);
@@ -158,3 +168,10 @@
   testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
 
+
+<script id=sendBeacon>
+  // Nothing is sent, but "queued" keeps callers off their sync-XHR fallback.
+  testing.expectEqual(true, navigator.sendBeacon('/analytics'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', 'payload'));
+  testing.expectEqual(true, navigator.sendBeacon('/analytics', new Blob(['x'])));
+</script>

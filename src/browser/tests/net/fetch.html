@@ -459,10 +459,12 @@
     headers.set('Accept-Language', 'fr');
     headers.append('X-Multi', 'a');
     headers.append('X-Multi', 'b');
+    // Cookie and anything sec-* are forbidden request headers: the Request
+    // guard drops them, so our own Sec-Ch-Ua survives.
     headers.append('Cookie', 'a=1');
     headers.append('Cookie', 'b=2');
-    headers.set('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)');
     headers.set('Sec-Ch-Ua', '"Chromium";v="140"');
+    headers.set('User-Agent', 'Mozilla/5.0 (X11; Linux x86_64)');
     const response = await fetch('http://127.0.0.1:9582/echo_headers', { headers });
     const text = await response.text();
     state.resolve();
@@ -475,7 +477,7 @@
       }
       testing.expectEqual('fr', got['accept-language']);
       testing.expectEqual('a, b', got['x-multi']);
-      testing.expectEqual('a=1; b=2', got['cookie']);
+      testing.expectEqual(undefined, got['cookie']);
       testing.expectEqual(true, got['user-agent'].includes('Lightpanda'));
       testing.expectEqual(false, got['user-agent'].includes('Mozilla'));
       testing.expectEqual(true, got['sec-ch-ua'].includes('Lightpanda'));
@@ -515,6 +517,21 @@
     await state.done(() => {
       testing.expectEqual(`<html><body>referer=${location.href}</body></html>`, same);
       testing.expectEqual('<html><body>referer=http://127.0.0.1:9582/</body></html>', cross);
+    });
+  }
+</script>
+
+<script id=fetch_forbidden_response_header type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch('http://127.0.0.1:9582/set_cookie');
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('yes', response.headers.get('x-visible'));
+      testing.expectEqual(null, response.headers.get('set-cookie'));
+      testing.expectEqual(0, response.headers.getSetCookie().length);
+      testing.expectEqual(false, [...response.headers.keys()].includes('set-cookie'));
     });
   }
 </script>

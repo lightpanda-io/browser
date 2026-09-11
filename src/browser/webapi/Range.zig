@@ -52,7 +52,7 @@ pub fn asAbstractRange(self: *Range) *AbstractRange {
     return self._proto;
 }
 
-pub fn getCommonAncestorContainer(self: *const Range) *Node {
+fn getCommonAncestorContainer(self: *const Range) *Node {
     return self._proto.getCommonAncestorContainer();
 }
 
@@ -99,38 +99,38 @@ pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
     }
 }
 
-pub fn setStartBefore(self: *Range, node: *Node) !void {
+fn setStartBefore(self: *Range, node: *Node) !void {
     const parent = node.parentNode() orelse return error.InvalidNodeType;
     const offset = parent.getChildIndex(node) orelse return error.NotFound;
     try self.setStart(parent, offset);
 }
 
-pub fn setStartAfter(self: *Range, node: *Node) !void {
+fn setStartAfter(self: *Range, node: *Node) !void {
     const parent = node.parentNode() orelse return error.InvalidNodeType;
     const offset = parent.getChildIndex(node) orelse return error.NotFound;
     try self.setStart(parent, offset + 1);
 }
 
-pub fn setEndBefore(self: *Range, node: *Node) !void {
+fn setEndBefore(self: *Range, node: *Node) !void {
     const parent = node.parentNode() orelse return error.InvalidNodeType;
     const offset = parent.getChildIndex(node) orelse return error.NotFound;
     try self.setEnd(parent, offset);
 }
 
-pub fn setEndAfter(self: *Range, node: *Node) !void {
+fn setEndAfter(self: *Range, node: *Node) !void {
     const parent = node.parentNode() orelse return error.InvalidNodeType;
     const offset = parent.getChildIndex(node) orelse return error.NotFound;
     try self.setEnd(parent, offset + 1);
 }
 
-pub fn selectNode(self: *Range, node: *Node) !void {
+fn selectNode(self: *Range, node: *Node) !void {
     const parent = node.parentNode() orelse return error.InvalidNodeType;
     const offset = parent.getChildIndex(node) orelse return error.NotFound;
     try self.setStart(parent, offset);
     try self.setEnd(parent, offset + 1);
 }
 
-pub fn selectNodeContents(self: *Range, node: *Node) !void {
+fn selectNodeContents(self: *Range, node: *Node) !void {
     const length = node.getLength();
     try self.setStart(node, 0);
     try self.setEnd(node, length);
@@ -152,7 +152,7 @@ pub fn detach(_: *Range) void {
     // Modern spec: "The detach() method must do nothing."
 }
 
-pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *const Range) !i16 {
+fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *const Range) !i16 {
     // Convert how parameter per WebIDL unsigned short conversion
     // This handles negative numbers and out-of-range values
     const how_mod = @mod(how_raw, 65536);
@@ -244,7 +244,7 @@ pub fn comparePoint(self: *const Range, node: *Node, offset: u32) !i16 {
     return if (cmp_end == .after) 1 else 0;
 }
 
-pub fn isPointInRange(self: *const Range, node: *Node, offset: u32) !bool {
+fn isPointInRange(self: *const Range, node: *Node, offset: u32) !bool {
     // If node's root is different from the context object's root, return false
     const node_root = node.getRootNode(.{});
     const start_root = self._proto._start_container.getRootNode(.{});
@@ -326,7 +326,7 @@ pub fn intersectsNode(self: *const Range, node: *Node) bool {
     return false;
 }
 
-pub fn cloneRange(self: *const Range, frame: *Frame) !*Range {
+fn cloneRange(self: *const Range, frame: *Frame) !*Range {
     const arena = try frame.getArena(.medium, "Range.clone");
     errdefer arena.release();
 
@@ -338,7 +338,7 @@ pub fn cloneRange(self: *const Range, frame: *Frame) !*Range {
     return clone;
 }
 
-pub fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
+fn insertNode(self: *Range, node: *Node, frame: *Frame) !void {
     // Insert node at the start of the range
     const container = self._proto._start_container;
     const offset = self._proto._start_offset;
@@ -478,7 +478,7 @@ fn nodeContained(self: *const Range, node: *Node) bool {
     );
 }
 
-pub fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
+fn cloneContents(self: *const Range, frame: *Frame) !*DocumentFragment {
     const fragment = try DocumentFragment.init(frame);
     if (self._proto.getCollapsed()) return fragment;
 
@@ -559,7 +559,7 @@ fn containedBetween(node: *Node, start_node: *Node, start_offset: u32, end_node:
     return AbstractRange.compareBoundaryPoints(node, node.getLength(), end_node, end_offset) == .before;
 }
 
-pub fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
+fn extractContents(self: *Range, frame: *Frame) !*DocumentFragment {
     const fragment = try DocumentFragment.init(frame);
     if (self._proto.getCollapsed()) return fragment;
 
@@ -667,7 +667,7 @@ fn extractContentsBetween(frame: *Frame, out: *Node, start_node: *Node, start_of
     }
 }
 
-pub fn surroundContents(self: *Range, new_parent: *Node, frame: *Frame) !void {
+fn surroundContents(self: *Range, new_parent: *Node, frame: *Frame) !void {
     // Extract contents
     const contents = try self.extractContents(frame);
 
@@ -681,7 +681,7 @@ pub fn surroundContents(self: *Range, new_parent: *Node, frame: *Frame) !void {
     try self.selectNodeContents(new_parent);
 }
 
-pub fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame) !*DocumentFragment {
+fn createContextualFragment(self: *const Range, html: []const u8, frame: *Frame) !*DocumentFragment {
     var context_node = self._proto._start_container;
 
     // If start container is a text node, use its parent as context
@@ -822,7 +822,7 @@ pub fn getBoundingClientRect(self: *const Range, frame: *Frame) !*DOMRect {
     return element.getBoundingClientRect(frame);
 }
 
-pub fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
+fn getClientRects(self: *const Range, frame: *Frame) ![]*DOMRect {
     if (self._proto.getCollapsed()) {
         return &.{};
     }

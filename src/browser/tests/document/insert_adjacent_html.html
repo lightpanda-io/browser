@@ -91,3 +91,42 @@
   // Clean up
   document.body.removeChild(fuzzWrapper);
 </script>
+
+<table id=iah-table><tbody><tr id=iah-tr><td>a</td></tr></tbody></table>
+<div id=iah-host></div>
+<script id=insertAdjacentHTML_context>
+  // beforeend/afterbegin parse with the element as context, beforebegin/
+  // afterend with its parent, so table bits are kept where a body context
+  // would drop them.
+  const tbody = $('#iah-table tbody');
+  tbody.insertAdjacentHTML('beforeend', '<tr id=iah-tr3><td>c</td></tr>');
+  tbody.insertAdjacentHTML('afterbegin', '<tr id=iah-tr0><td>0</td></tr>');
+  $('#iah-tr').insertAdjacentHTML('beforebegin', '<tr id=iah-tr1><td>1</td></tr>');
+  $('#iah-tr').insertAdjacentHTML('afterend', '<tr id=iah-tr2><td>b</td></tr>');
+  testing.expectEqual(
+    '<tbody><tr id="iah-tr0"><td>0</td></tr><tr id="iah-tr1"><td>1</td></tr><tr id="iah-tr"><td>a</td></tr><tr id="iah-tr2"><td>b</td></tr><tr id="iah-tr3"><td>c</td></tr></tbody>',
+    $('#iah-table').innerHTML);
+
+  // A raw text element as context switches the tokenizer state.
+  const script = document.createElement('script');
+  script.type = 'text/plain';
+  document.body.appendChild(script);
+  script.insertAdjacentHTML('beforeend', '<b>x</b>');
+  testing.expectEqual(0, script.children.length);
+  testing.expectEqual('<b>x</b>', script.textContent);
+  script.remove();
+
+  // A shadow root parent is allowed, and is a body context.
+  const shadow = $('#iah-host').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<span id=iah-in></span>';
+  shadow.firstChild.insertAdjacentHTML('beforebegin', '<i>i</i><tr><td>t</td></tr>');
+  testing.expectEqual('<i>i</i>t<span id="iah-in"></span>', shadow.innerHTML);
+
+  // An <html> context parses as body; a document parent is rejected.
+  document.body.insertAdjacentHTML('beforebegin', '<p id=iah-p>p</p>');
+  testing.expectEqual('HTML', $('#iah-p').parentNode.tagName);
+  $('#iah-p').remove();
+  testing.expectError('NoModificationAllowedError', () => {
+    document.documentElement.insertAdjacentHTML('beforebegin', '<p>p</p>');
+  });
+</script>

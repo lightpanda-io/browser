@@ -74,7 +74,7 @@ _navigator: Navigator = .init,
 _model_context: ModelContext = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
-_performance: Performance,
+_performance: *Performance,
 _cookie_store: ?*CookieStore = null,
 _idb_factory: ?*idb.IDBFactory = null,
 _on_load: ?js.Function.Global = null,
@@ -129,23 +129,19 @@ pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
 }
 
-pub fn getEvent(self: *const Window) ?*Event {
+fn getEvent(self: *const Window) ?*Event {
     return self._current_event;
 }
 
-pub fn setEvent(self: *Window, value: js.Value) void {
+fn setEvent(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "event");
 }
 
-pub fn getSelf(self: *Window) *Window {
+fn getWindow(self: *Window) *Window {
     return self;
 }
 
-pub fn getWindow(self: *Window) *Window {
-    return self;
-}
-
-pub fn getOpener(self: *Window, frame: *Frame) ?Access {
+fn getOpener(self: *Window, frame: *Frame) ?Access {
     const opener = self._opener orelse return null;
     if (opener._closed) return null;
     return Access.init(frame.window, opener);
@@ -154,7 +150,7 @@ pub fn getOpener(self: *Window, frame: *Frame) ?Access {
 // Per the HTML spec's opener setter: null disowns the opener (the accessor
 // stays in place and the getter now returns null); any other value redefines
 // the property as an own data property, like [Replaceable].
-pub fn setOpener(self: *Window, value: js.Value) void {
+fn setOpener(self: *Window, value: js.Value) void {
     if (value.isNull()) {
         self._opener = null;
         return;
@@ -162,7 +158,7 @@ pub fn setOpener(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "opener");
 }
 
-pub fn getClosed(self: *const Window) bool {
+fn getClosed(self: *const Window) bool {
     return self._closed;
 }
 
@@ -183,7 +179,7 @@ pub fn getTop(self: *Window, frame: *Frame) Access {
     return Access.init(frame.window, p.window);
 }
 
-pub fn getParent(self: *Window, frame: *Frame) Access {
+fn getParent(self: *Window, frame: *Frame) Access {
     if (self._frame.parent) |p| {
         return Access.init(frame.window, p.window);
     }
@@ -198,55 +194,55 @@ pub fn getConsole(self: *Window) *Console {
     return &self._console;
 }
 
-pub fn setConsole(self: *Window, value: js.Value) void {
+fn setConsole(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "console");
 }
 
-pub fn setSelf(self: *Window, value: js.Value) void {
+fn setSelf(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "self");
 }
 
-pub fn setFrames(self: *Window, value: js.Value) void {
+fn setFrames(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "frames");
 }
 
-pub fn setParent(self: *Window, value: js.Value) void {
+fn setParent(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "parent");
 }
 
-pub fn setLength(self: *Window, value: js.Value) void {
+fn setLength(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "length");
 }
 
-pub fn setInnerWidth(self: *Window, value: js.Value) void {
+fn setInnerWidth(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "innerWidth");
 }
 
-pub fn setInnerHeight(self: *Window, value: js.Value) void {
+fn setInnerHeight(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "innerHeight");
 }
 
-pub fn setScrollX(self: *Window, value: js.Value) void {
+fn setScrollX(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "scrollX");
 }
 
-pub fn setScrollY(self: *Window, value: js.Value) void {
+fn setScrollY(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "scrollY");
 }
 
-pub fn setPageXOffset(self: *Window, value: js.Value) void {
+fn setPageXOffset(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "pageXOffset");
 }
 
-pub fn setPageYOffset(self: *Window, value: js.Value) void {
+fn setPageYOffset(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "pageYOffset");
 }
 
-pub fn getNavigator(self: *Window) *Navigator {
+fn getNavigator(self: *Window) *Navigator {
     return &self._navigator;
 }
 
-pub fn getScheduler(self: *Window) *Scheduler {
+fn getScheduler(self: *Window) *Scheduler {
     return &self._scheduler;
 }
 
@@ -254,35 +250,35 @@ pub fn getModelContext(self: *Window) *ModelContext {
     return &self._model_context;
 }
 
-pub fn getScreen(self: *Window) *Screen {
+fn getScreen(self: *Window) *Screen {
     return self._screen;
 }
 
-pub fn setScreen(self: *Window, value: js.Value) void {
+fn setScreen(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "screen");
 }
 
-pub fn getVisualViewport(self: *const Window) *VisualViewport {
+fn getVisualViewport(self: *const Window) *VisualViewport {
     return self._visual_viewport;
 }
 
-pub fn setVisualViewport(self: *Window, value: js.Value) void {
+fn setVisualViewport(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "visualViewport");
 }
 
-pub fn getCrypto(self: *Window) *Crypto {
+fn getCrypto(self: *Window) *Crypto {
     return &self._crypto;
 }
 
-pub fn getCSS(self: *Window) *CSS {
+fn getCSS(self: *Window) *CSS {
     return &self._css;
 }
 
-pub fn getPerformance(self: *Window) *Performance {
-    return &self._performance;
+fn getPerformance(self: *Window) *Performance {
+    return self._performance;
 }
 
-pub fn setPerformance(self: *Window, value: js.Value) void {
+fn setPerformance(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "performance");
 }
 
@@ -293,15 +289,15 @@ fn bucketForOrigin(self: *Window) *storage.Bucket {
     ) catch @panic("OOM");
 }
 
-pub fn getLocalStorage(self: *Window) *storage.Lookup {
+fn getLocalStorage(self: *Window) *storage.Lookup {
     return &self.bucketForOrigin().local;
 }
 
-pub fn getSessionStorage(self: *Window) *storage.Lookup {
+fn getSessionStorage(self: *Window) *storage.Lookup {
     return &self.bucketForOrigin().session;
 }
 
-pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
+fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
     if (self._cookie_store) |cs| return cs;
     const cs = try exec._factory.eventTarget(CookieStore{ ._proto = undefined });
     try cs.attach(exec);
@@ -309,7 +305,7 @@ pub fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
     return cs;
 }
 
-pub fn getIndexedDB(self: *Window, exec: *Execution) !*idb.IDBFactory {
+fn getIndexedDB(self: *Window, exec: *Execution) !*idb.IDBFactory {
     if (self._idb_factory) |f| {
         return f;
     }
@@ -326,11 +322,11 @@ pub fn setOrigin(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "origin");
 }
 
-pub fn getSelection(self: *const Window) *Selection {
+fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
-pub fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
+fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
     return self._frame.iframe;
 }
 
@@ -338,7 +334,7 @@ pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
 
-pub fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
+fn setLocation(self: *Window, url: [:0]const u8, frame: *Frame) !void {
     return frame.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._frame });
 }
 
@@ -346,11 +342,11 @@ pub fn getHistory(_: *Window, frame: *Frame) *History {
     return &frame._session.history;
 }
 
-pub fn getNavigation(_: *Window, frame: *Frame) *Navigation {
+fn getNavigation(_: *Window, frame: *Frame) *Navigation {
     return frame._session.navigation;
 }
 
-pub fn setNavigation(self: *Window, value: js.Value) void {
+fn setNavigation(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "navigation");
 }
 
@@ -358,86 +354,86 @@ pub fn getCustomElements(self: *Window) *CustomElementRegistry {
     return &self._custom_elements;
 }
 
-pub fn getOnLoad(self: *const Window) ?js.Function.Global {
+fn getOnLoad(self: *const Window) ?js.Function.Global {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) void {
+fn setOnLoad(self: *Window, setter: ?FunctionSetter) void {
     self._on_load = getFunctionFromSetter(setter);
 }
 
-pub fn getOnPageShow(self: *const Window) ?js.Function.Global {
+fn getOnPageShow(self: *const Window) ?js.Function.Global {
     return self._on_pageshow;
 }
 
-pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) void {
+fn setOnPageShow(self: *Window, setter: ?FunctionSetter) void {
     self._on_pageshow = getFunctionFromSetter(setter);
 }
 
-pub fn getOnPopState(self: *const Window) ?js.Function.Global {
+fn getOnPopState(self: *const Window) ?js.Function.Global {
     return self._on_popstate;
 }
 
-pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) void {
+fn setOnPopState(self: *Window, setter: ?FunctionSetter) void {
     self._on_popstate = getFunctionFromSetter(setter);
 }
 
-pub fn getOnHashChange(self: *const Window) ?js.Function.Global {
+fn getOnHashChange(self: *const Window) ?js.Function.Global {
     return self._on_hashchange;
 }
 
-pub fn setOnHashChange(self: *Window, setter: ?FunctionSetter) void {
+fn setOnHashChange(self: *Window, setter: ?FunctionSetter) void {
     self._on_hashchange = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const Window) ?js.Function.Global {
+fn getOnError(self: *const Window) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Window, setter: ?FunctionSetter) void {
+fn setOnError(self: *Window, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
-pub fn getOnBlur(self: *const Window) ?js.Function.Global {
+fn getOnBlur(self: *const Window) ?js.Function.Global {
     return self._on_blur;
 }
 
-pub fn setOnBlur(self: *Window, setter: ?FunctionSetter) void {
+fn setOnBlur(self: *Window, setter: ?FunctionSetter) void {
     self._on_blur = getFunctionFromSetter(setter);
 }
 
-pub fn getOnFocus(self: *const Window) ?js.Function.Global {
+fn getOnFocus(self: *const Window) ?js.Function.Global {
     return self._on_focus;
 }
 
-pub fn setOnFocus(self: *Window, setter: ?FunctionSetter) void {
+fn setOnFocus(self: *Window, setter: ?FunctionSetter) void {
     self._on_focus = getFunctionFromSetter(setter);
 }
 
-pub fn getOnResize(self: *const Window) ?js.Function.Global {
+fn getOnResize(self: *const Window) ?js.Function.Global {
     return self._on_resize;
 }
 
-pub fn setOnResize(self: *Window, setter: ?FunctionSetter) void {
+fn setOnResize(self: *Window, setter: ?FunctionSetter) void {
     self._on_resize = getFunctionFromSetter(setter);
 }
 
-pub fn getOnScroll(self: *const Window) ?js.Function.Global {
+fn getOnScroll(self: *const Window) ?js.Function.Global {
     return self._on_scroll;
 }
 
-pub fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
+fn setOnScroll(self: *Window, setter: ?FunctionSetter) void {
     self._on_scroll = getFunctionFromSetter(setter);
 }
 
 // Stored in the frame's attribute-listener map (like element and ShadowRoot
 // property handlers), which the dispatch propagation path consults for any
 // event target.
-pub fn getOnClick(self: *Window) ?js.Function.Global {
+fn getOnClick(self: *Window) ?js.Function.Global {
     return self._frame._event_target_attr_listeners.get(.{ .target = self.asEventTarget(), .handler = .onclick });
 }
 
-pub fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
+fn setOnClick(self: *Window, setter: ?FunctionSetter) !void {
     if (getFunctionFromSetter(setter)) |cb| {
         try self._frame._event_target_attr_listeners.put(self._frame.arena, .{ .target = self.asEventTarget(), .handler = .onclick }, cb);
     } else {
@@ -475,27 +471,27 @@ pub fn setWindowReflectingHandlerFromAttribute(self: *Window, name: lp.String, v
     }
 }
 
-pub fn getOnMessage(self: *const Window) ?js.Function.Global {
+fn getOnMessage(self: *const Window) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *Window, setter: ?FunctionSetter) void {
+fn setOnMessage(self: *Window, setter: ?FunctionSetter) void {
     self._on_message = getFunctionFromSetter(setter);
 }
 
-pub fn getOnRejectionHandled(self: *const Window) ?js.Function.Global {
+fn getOnRejectionHandled(self: *const Window) ?js.Function.Global {
     return self._on_rejection_handled;
 }
 
-pub fn setOnRejectionHandled(self: *Window, setter: ?FunctionSetter) void {
+fn setOnRejectionHandled(self: *Window, setter: ?FunctionSetter) void {
     self._on_rejection_handled = getFunctionFromSetter(setter);
 }
 
-pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
+fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
     return self._on_unhandled_rejection;
 }
 
-pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
+fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
@@ -538,19 +534,19 @@ pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, exec: *js.Ex
     });
 }
 
-pub fn queueMicrotask(_: *Window, cb: js.Function, frame: *Frame) void {
+fn queueMicrotask(_: *Window, cb: js.Function, frame: *Frame) void {
     frame.js.queueMicrotaskFunc(cb);
 }
 
-pub fn clearTimeout(self: *Window, id: u32) void {
+fn clearTimeout(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn clearInterval(self: *Window, id: u32) void {
+fn clearInterval(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
-pub fn clearImmediate(self: *Window, id: u32) void {
+fn clearImmediate(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
@@ -572,7 +568,7 @@ pub fn requestIdleCallback(self: *Window, cb: js.Function.Global, opts_: ?Reques
     });
 }
 
-pub fn cancelIdleCallback(self: *Window, id: u32) void {
+fn cancelIdleCallback(self: *Window, id: u32) void {
     self._timers.clear(id);
 }
 
@@ -655,13 +651,10 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 }
 
 pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
-    return frame._factory.eventTarget(MediaQueryList{
-        ._proto = undefined,
-        ._media = try frame.dupeString(query),
-    });
+    return MediaQueryList.init(query, frame);
 }
 
-pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
+fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
     // :before/:after get their own cache entry and no warning: our answer
     // (the element's own computed style) is a reasonable default for the
     // common probes
@@ -704,7 +697,10 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
         std.ascii.eqlIgnoreCase(target, "_parent") or
         std.ascii.eqlIgnoreCase(target, "_top"))
     {
-        const nav_target = frame.resolveTargetFrame(target) orelse frame;
+        const nav_target = switch (frame.resolveTargetFrame(target)) {
+            .frame => |f| f,
+            .blank => unreachable,
+        };
         const nav_url = if (raw_url.len == 0) "about:blank" else raw_url;
         try frame.scheduleNavigation(nav_url, .{
             .reason = .script,
@@ -810,6 +806,10 @@ pub fn close(self: *Window) void {
 pub fn focus(_: *Window) void {}
 pub fn blur(_: *Window) void {}
 
+pub fn stop(self: *Window) void {
+    self._frame.stopLoading();
+}
+
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
@@ -863,11 +863,11 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
 }
 
 const base64 = @import("encoding/base64.zig");
-pub fn btoa(_: *const Window, input: base64.BinInput, frame: *Frame) ![]const u8 {
+fn btoa(_: *const Window, input: base64.BinInput, frame: *Frame) ![]const u8 {
     return base64.encode(frame.local_arena, input);
 }
 
-pub fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.OneByte {
+fn atob(_: *const Window, input: base64.BinInput, frame: *Frame) !js.String.OneByte {
     const decoded = try base64.decode(frame.local_arena, input);
     return .{ .bytes = decoded };
 }
@@ -877,7 +877,7 @@ pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
     return value.structuredClone() catch error.TryCatchRethrow;
 }
 
-pub fn getFrame(self: *Window, idx: usize) !?*Window {
+fn getFrame(self: *Window, idx: usize) !?*Window {
     const frame = self._frame;
     const frames = frame.child_frames.items;
     if (idx >= frames.len) {
@@ -900,7 +900,7 @@ pub fn getFrame(self: *Window, idx: usize) !?*Window {
     return frames[idx].window;
 }
 
-pub fn getFramesLength(self: *const Window) u32 {
+fn getFramesLength(self: *const Window) u32 {
     return @intCast(self._frame.child_frames.items.len);
 }
 
@@ -912,7 +912,7 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
-pub fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
+fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
     return frame._page.getViewport().width;
 }
 
@@ -998,7 +998,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
     );
 }
 
-pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
+fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
     // The scroll is relative to the current position. So compute to new
     // absolute position.
     var absx: i32 = undefined;
@@ -1017,7 +1017,7 @@ pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
 }
 
 // only exposed when the binary is built with the -Dwpt_extensions flag
-pub fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
+fn getWebDriver(_: *const Window) @import("WebDriver.zig") {
     return .{};
 }
 
@@ -1257,6 +1257,7 @@ pub const JsApi = struct {
     pub const close = bridge.function(Window.close, .{});
     pub const focus = bridge.function(Window.focus, .{});
     pub const blur = bridge.function(Window.blur, .{});
+    pub const stop = bridge.function(Window.stop, .{});
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, message: ?[]const u8, frame: *Frame) void {
@@ -1316,23 +1317,23 @@ const CrossOriginWindow = struct {
         return self.window.getParent(frame);
     }
 
-    pub fn getParent(self: *CrossOriginWindow, frame: *Frame) Access {
+    fn getParent(self: *CrossOriginWindow, frame: *Frame) Access {
         return self.window.getParent(frame);
     }
 
-    pub fn getFramesLength(self: *const CrossOriginWindow) u32 {
+    fn getFramesLength(self: *const CrossOriginWindow) u32 {
         return self.window.getFramesLength();
     }
 
-    pub fn getWindow(self: *CrossOriginWindow, frame: *Frame) Access {
+    fn getWindow(self: *CrossOriginWindow, frame: *Frame) Access {
         return Access.init(frame.window, self.window);
     }
 
-    pub fn getOpener(self: *CrossOriginWindow, frame: *Frame) ?Access {
+    fn getOpener(self: *CrossOriginWindow, frame: *Frame) ?Access {
         return self.window.getOpener(frame);
     }
 
-    pub fn getClosed(self: *const CrossOriginWindow) bool {
+    fn getClosed(self: *const CrossOriginWindow) bool {
         return self.window.getClosed();
     }
 
@@ -1374,6 +1375,7 @@ const CrossOriginWindow = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
+    testing.expectLog(&.{.http}); // stop aborts
     try testing.htmlRunner("window", .{});
 }
 

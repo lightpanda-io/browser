@@ -33,7 +33,7 @@ pub const expectEqualSlices = std.testing.expectEqualSlices;
 // in a test. Like, you need a mutable string, so you just want to dupe a
 // string literal. It has nothing to do with the code under test, it's just
 // infrastructure for the test itself.
-pub var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
 pub const arena_allocator = arena_instance.allocator();
 
 pub fn reset() void {
@@ -147,19 +147,19 @@ fn isStringArray(comptime T: type) bool {
     return std.meta.Elem(T) == u8;
 }
 
-pub const TraitFn = fn (type) bool;
+const TraitFn = fn (type) bool;
 pub fn is(comptime id: std.builtin.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             return id == @typeInfo(T);
         }
     };
     return Closure.trait;
 }
 
-pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
+fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             if (!comptime isSingleItemPtr(T)) return false;
             return id == @typeInfo(std.meta.Child(T));
         }
@@ -167,7 +167,7 @@ pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
     return Closure.trait;
 }
 
-pub fn isSingleItemPtr(comptime T: type) bool {
+fn isSingleItemPtr(comptime T: type) bool {
     if (comptime is(.pointer)(T)) {
         return @typeInfo(T).pointer.size == .one;
     }
@@ -188,18 +188,6 @@ pub const Random = struct {
     pub fn fill(buf: []u8) void {
         var r = random();
         r.bytes(buf);
-    }
-
-    pub fn fillAtLeast(buf: []u8, min: usize) []u8 {
-        var r = random();
-        const l = r.intRangeAtMost(usize, min, buf.len);
-        r.bytes(buf[0..l]);
-        return buf;
-    }
-
-    pub fn intRange(comptime T: type, min: T, max: T) T {
-        var r = random();
-        return r.intRangeAtMost(T, min, max);
     }
 
     pub fn random() std.Random {
@@ -334,7 +322,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
-pub var test_notification: *Notification = undefined;
+var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
@@ -507,11 +495,11 @@ pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.Pag
     return page;
 }
 
-const TestHTTPServer = @import("TestHTTPServer.zig");
+const Server = @import("server/Server.zig");
 const TestWSServer = @import("TestWSServer.zig");
+const TestHTTPServer = @import("TestHTTPServer.zig");
 
-const Server = @import("Server.zig");
-var test_cdp_server: ?*Server = null;
+pub var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -524,7 +512,7 @@ var test_ws_server_thread: ?std.Thread = null;
 var sse_flag = std.atomic.Value(bool).init(false);
 var sse_reconnect_hits = std.atomic.Value(usize).init(0);
 
-var test_config: Config = undefined;
+pub var test_config: Config = undefined;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
@@ -532,17 +520,20 @@ test "tests:beforeAll" {
 
     const test_allocator = @import("root").tracking_allocator;
 
-    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
-        .insecure_disable_tls_host_verification = true,
-        .user_agent_suffix = "internal-tester",
-        .ws_max_concurrent = 50,
-        .load_resources = .{ .worker = true, .iframe = true },
-    } });
+    test_config = try Config.init(test_allocator, "test", .{
+        .serve = .{
+            .insecure_disable_tls_host_verification = true,
+            .user_agent_suffix = "internal-tester",
+            .ws_max_concurrent = 50,
+            .load_resources = .{ .worker = true, .iframe = true },
+            .watchdog_ms = 0,
+        },
+    });
 
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    try test_browser.init(test_app, .{}, null);
+    try test_browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
     // Create notification for testing
@@ -613,6 +604,7 @@ fn serveCDP(wg: *lp.WaitGroup) !void {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    test_cdp_server.?.protocols = .{ .cdp = true, .webdriver = true };
     wg.finish();
 
     test_cdp_server.?.run();
@@ -688,6 +680,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             .status = .found,
             .extra_headers = &.{
                 .{ .name = "Location", .value = "http://127.0.0.1:9582/xhr" },
+            },
+        });
+    }
+
+    // Scripts, so a cross-origin (localhost) load doesn't depend on CORS.
+    if (std.mem.eql(u8, path, "/resource-timing/tao")) {
+        return req.respond("window.__rt_tao = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+                .{ .name = "Timing-Allow-Origin", .value = "https://example.com, *" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/plain")) {
+        return req.respond("window.__rt_plain = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource-timing/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "/resource-timing/plain" },
             },
         });
     }
@@ -841,6 +860,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/no_content_type")) {
+        return req.respond("untyped", .{});
+    }
+
     if (std.mem.eql(u8, path, "/xhr/binary")) {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
@@ -858,6 +881,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Content-Type", .value = "text/event-stream" },
             },
         });
+    }
+
+    if (std.mem.eql(u8, path, "/stop_loading/streaming.html")) {
+        var send_buffer: [1024]u8 = undefined;
+        var res = try req.respondStreaming(&send_buffer, .{
+            .respond_options = .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        });
+        try res.writer.writeAll("<html><body><p id=first>first</p>");
+        try res.writer.flush();
+        try res.flush();
+        lp.io.sleep(.fromMilliseconds(1500), .awake) catch {};
+        try res.writer.writeAll("<p id=second>second</p></body></html>");
+        try res.writer.flush();
+        return res.end();
     }
 
     if (std.mem.eql(u8, path, "/sse/streaming")) {
@@ -1131,6 +1172,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(buf[0..pos], .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/plain; charset=utf-8" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/set_cookie")) {
+        return req.respond("", .{
+            .extra_headers = &.{
+                .{ .name = "Set-Cookie", .value = "lp_hidden=1; Path=/set_cookie_scope" },
+                .{ .name = "X-Visible", .value = "yes" },
             },
         });
     }

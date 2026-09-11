@@ -45,6 +45,7 @@ _observing: std.ArrayList(*Element) = .empty,
 _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
 _threshold: []const f64 = &.{0.0},
+// these are RC'd (by us, and v8)
 _pending_entries: std.ArrayList(*IntersectionObserverEntry) = .empty,
 // tracked targets that aren't reported yet
 _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
@@ -53,7 +54,7 @@ _tracked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 // into a DOMRect only if it ends up on a delivered entry.
 const zero_rect: DOMRect.Data = .{};
 
-pub const ObserverInit = struct {
+const ObserverInit = struct {
     root: ?*Node = null,
     rootMargin: ?[]const u8 = null,
     threshold: Threshold = .{ .scalar = 0.0 },
@@ -107,11 +108,7 @@ pub fn init(callback: js.Function.Global, options: ?ObserverInit, frame: *Frame)
 
 pub fn deinit(self: *IntersectionObserver, page: *Page) void {
     self._callback.release();
-    for (self._pending_entries.items) |entry| {
-        // These were never handed to v8, they do not have a corresponding
-        // FinalizerCallback. We 100% own them.
-        entry.deinit(page);
-    }
+    releaseAll(self._pending_entries.items, page);
     self._arena.release();
 }
 
@@ -145,7 +142,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, frame: *Frame) !vo
     }
 }
 
-pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
+fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void {
     const original_length = self._observing.items.len;
     for (self._observing.items, 0..) |elem, i| {
         if (elem == target) {
@@ -153,12 +150,11 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
             _ = self._tracked.remove(target);
 
             // Remove any pending entries for this target.
-            // Entries will be cleaned up by V8 GC via the finalizer.
             var j: usize = 0;
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(frame._page);
+                    entry.releaseRef(frame._page);
                 } else {
                     j += 1;
                 }
@@ -172,23 +168,40 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) v
     }
 }
 
-pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
-    for (self._pending_entries.items) |entry| {
-        entry.deinit(frame._page);
-    }
+// Drops every observation without touching the frame's observer list
+pub fn reset(self: *IntersectionObserver, page: *Page) void {
+    releaseAll(self._pending_entries.items, page);
     self._pending_entries.clearRetainingCapacity();
     self._tracked.clearRetainingCapacity();
-
-    if (self._observing.items.len > 0) {
-        Frame.observers.unregisterIntersectionObserver(frame, self);
-    }
     self._observing.clearRetainingCapacity();
 }
 
-pub fn takeRecords(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
-    const entries = try frame.local_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
+pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
+    const registered = self._observing.items.len > 0;
+    self.reset(frame._page);
+    if (registered) {
+        Frame.observers.unregisterIntersectionObserver(frame, self);
+    }
+}
+
+fn takeRecords(self: *IntersectionObserver, frame: *Frame) !js.Value {
+    const local = frame.js.local orelse return error.NotHandled;
+    const entries = try self.takePendingEntries(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(entries, frame._page);
+    return local.zigValueToJs(entries, .{});
+}
+
+fn takePendingEntries(self: *IntersectionObserver, frame: *Frame) ![]*IntersectionObserverEntry {
+    const entries = try frame.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
     self._pending_entries.clearRetainingCapacity();
     return entries;
+}
+
+fn releaseAll(entries: []const *IntersectionObserverEntry, page: *Page) void {
+    for (entries) |entry| {
+        entry.releaseRef(page);
+    }
 }
 
 fn calculateIntersection(
@@ -269,6 +282,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, frame: *Fram
 
     const entry = try arena.create(IntersectionObserverEntry);
     entry.* = .{
+        ._rc = .init(1),
         ._arena = arena,
         ._target = target,
         ._time = frame.window._performance.now(),
@@ -301,7 +315,10 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
         return;
     }
 
-    const entries = try self.takeRecords(frame);
+    const entries = try self.takePendingEntries(frame);
+    // whether we safely deliver these to v8 or not, we're done with these
+    defer releaseAll(entries, frame._page);
+
     var caught: js.TryCatch.Caught = .{};
 
     var ls: js.Local.Scope = undefined;
@@ -341,7 +358,7 @@ pub const IntersectionObserverEntry = struct {
         return self._target;
     }
 
-    pub fn getTime(self: *const IntersectionObserverEntry) f64 {
+    fn getTime(self: *const IntersectionObserverEntry) f64 {
         return self._time;
     }
 
@@ -349,19 +366,19 @@ pub const IntersectionObserverEntry = struct {
         return self._bounding_client_rect;
     }
 
-    pub fn getIntersectionRect(self: *const IntersectionObserverEntry) *DOMRect {
+    fn getIntersectionRect(self: *const IntersectionObserverEntry) *DOMRect {
         return self._intersection_rect;
     }
 
-    pub fn getRootBounds(self: *const IntersectionObserverEntry) ?*DOMRect {
+    fn getRootBounds(self: *const IntersectionObserverEntry) ?*DOMRect {
         return self._root_bounds;
     }
 
-    pub fn getIntersectionRatio(self: *const IntersectionObserverEntry) f64 {
+    fn getIntersectionRatio(self: *const IntersectionObserverEntry) f64 {
         return self._intersection_ratio;
     }
 
-    pub fn getIsIntersecting(self: *const IntersectionObserverEntry) bool {
+    fn getIsIntersecting(self: *const IntersectionObserverEntry) bool {
         return self._is_intersecting;
     }
 
@@ -402,6 +419,101 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+// Infinite scroll: the callback observes a fresh sentinel, which we report as
+// intersecting the moment it is attached, so the page never settles on its own.
+// Old sentinels stay observed (_tracked keeps them from re-firing) so that the
+// observer stays registered on the frame for as long as it is alive. `deferred`
+// re-observes from a timer, one delivery per macrotask tick, the way a
+// fetch-driven pager behaves; otherwise the chain never leaves the microtask
+// checkpoint.
+fn observeSentinelChain(frame: *Frame, comptime deferred: bool) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ls.local.eval(
+        \\(function(deferred) {
+        \\  const list = document.createElement('div');
+        \\  const observe = () => io.observe(list.appendChild(document.createElement('div')));
+        \\  const io = new IntersectionObserver((entries) => {
+        \\    for (const entry of entries) {
+        \\      if (!entry.isIntersecting) continue;
+        \\      if (deferred) setTimeout(observe, 0); else observe();
+        \\    }
+        \\  });
+        \\  observe();
+        \\})(
+    ++ (if (deferred) "true" else "false") ++ ")", null);
+
+    frame.js.env.runMicrotasks();
+    try frame.js.env.runMacrotasks();
+    try testing.expect(frame._intersection.last_delivery_ms != 0);
+}
+
+// Nested zero-delay timers are clamped to 4ms past a nesting depth of five, so
+// a yielding chain needs real time to pass between ticks.
+fn tick(frame: *Frame) !void {
+    lp.io.sleep(.fromMilliseconds(5), .awake) catch {};
+    frame.js.env.runMicrotasks();
+    try frame.js.env.runMacrotasks();
+}
+
+fn tickUntilDisconnected(frame: *Frame) !void {
+    for (0..200) |_| {
+        try tick(frame);
+        if (!Frame.observers.hasIntersectionObservers(frame)) break;
+    }
+}
+
+test "WebApi: synchronous IntersectionObserver chain is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, false);
+    try tickUntilDisconnected(frame);
+
+    try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(true, frame._intersection.runaway);
+    try testing.expect(frame._intersection.burst_deliveries > Frame.observers.INTERSECTION_BURST_LIMIT);
+}
+
+test "WebApi: IntersectionObserver burst older than the limit is disconnected" {
+    testing.silenceLog(&.{.frame});
+
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, true);
+    frame._intersection.burst_start_ms -|= Frame.observers.INTERSECTION_RUNAWAY_MS + 1;
+    try tickUntilDisconnected(frame);
+
+    try testing.expectEqual(false, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(true, frame._intersection.runaway);
+    try testing.expect(frame._intersection.burst_deliveries <= Frame.observers.INTERSECTION_BURST_LIMIT);
+}
+
+test "WebApi: IntersectionObserver delivery after a quiet gap starts a new burst" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    try observeSentinelChain(frame, true);
+
+    // An old burst that went quiet: its age must not count against what follows.
+    frame._intersection.burst_start_ms -|= Frame.observers.INTERSECTION_RUNAWAY_MS + 1;
+    frame._intersection.last_delivery_ms -|= Frame.observers.INTERSECTION_QUIET_MS + 1;
+    const stale_start = frame._intersection.burst_start_ms;
+
+    try tick(frame);
+
+    try testing.expectEqual(true, Frame.observers.hasIntersectionObservers(frame));
+    try testing.expectEqual(false, frame._intersection.runaway);
+    try testing.expectEqual(1, frame._intersection.burst_deliveries);
+    try testing.expect(frame._intersection.burst_start_ms > stale_start);
+}
+
 test "WebApi: IntersectionObserver" {
     try testing.htmlRunner("intersection_observer", .{});
 }

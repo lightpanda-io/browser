@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const AXNode = @import("../cdp/AXNode.zig");
+const AXNode = @import("../server/cdp/AXNode.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 const Frame = @import("Frame.zig");
@@ -62,7 +62,6 @@ pub fn registerNodes(links: []Link, registry: anytype) !void {
 /// semantic tree reports for the node.
 pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
     var links: std.StringArrayHashMapUnmanaged(Link) = .empty;
-    var visibility_cache: Element.VisibilityCache = .empty;
     var labels: Label.LabelByForIndex = .{};
 
     if (Selector.querySelectorAll(root, "a[href]", frame)) |list| {
@@ -71,7 +70,7 @@ pub fn collectLinks(arena: Allocator, root: *Node, frame: *Frame) ![]Link {
         for (list._nodes) |node| {
             const anchor = node.is(Element.Html.Anchor) orelse continue;
             const el = anchor.asElement();
-            if (!el.checkVisibilityCached(&visibility_cache, frame, .scan)) continue;
+            if (!el.isVisible(frame)) continue;
 
             const href = anchor.getHref(frame) catch |err| {
                 log.err(.app, "resolve href failed", .{ .err = err });

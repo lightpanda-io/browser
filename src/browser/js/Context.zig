@@ -38,35 +38,9 @@ const Allocator = std.mem.Allocator;
 // Loosely maps to a Browser Page or Worker.
 const Context = @This();
 
-pub const GlobalScope = union(enum) {
-    frame: *Frame,
-    worker: *WorkerGlobalScope,
-
-    pub fn base(self: GlobalScope) [:0]const u8 {
-        return switch (self) {
-            .frame => |frame| frame.base(),
-            .worker => |worker| worker.base(),
-        };
-    }
-
-    pub fn getJs(self: GlobalScope) *Context {
-        return switch (self) {
-            .frame => |frame| frame.js,
-            .worker => |worker| worker.js,
-        };
-    }
-
-    pub fn setJs(self: GlobalScope, ctx: *Context) void {
-        switch (self) {
-            .frame => |frame| frame.js = ctx,
-            .worker => |worker| worker.js = ctx,
-        }
-    }
-};
-
 id: usize,
 env: *Env,
-global: GlobalScope,
+global: lp.GlobalScope,
 
 // The Page this Context belongs to. For main-world frame contexts, this is
 // the Page of the frame. For worker contexts, this is the Page of the
@@ -171,7 +145,7 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
-pub fn fromC(c_context: *const v8.Context) ?*Context {
+fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
@@ -205,6 +179,12 @@ pub fn deinit(self: *Context) void {
 
     const env = self.env;
     defer self.arena.release();
+
+    // Disposal GCs below can trip the near-heap-limit callback. There's no JS
+    // left in this context to stop, so it must not arm a termination.
+    const was_tearing_down = env.tearing_down;
+    env.tearing_down = true;
+    defer env.tearing_down = was_tearing_down;
 
     // Unlink any IndexedDB gate participants first: the session-scoped engine
     // must never wake a waiter into this scheduler once it's torn down.
@@ -276,7 +256,7 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     }
 }
 
-pub const IdentityResult = struct {
+const IdentityResult = struct {
     value_ptr: *v8.Global,
     found_existing: bool,
 };
@@ -406,7 +386,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 }
 
 fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
-    const evaluated = mod.evaluate() catch {
+    const evaluated = mod.evaluate() catch |err| {
+        if (err == error.InvalidModuleStatus) {
+            log.err(.js, "evaluate module status", .{
+                .specifier = url,
+                .status = @tagName(mod.getStatus()),
+                .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+            });
+            return err;
+        }
         if (comptime lp.IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
         }
@@ -883,8 +871,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 }
             }
 
-            const evaluated = mod.evaluate() catch {
-                if (comptime lp.IS_DEBUG) {
+            const evaluated = mod.evaluate() catch |err| {
+                if (err == error.InvalidModuleStatus) {
+                    log.err(.js, "dynamic module status", .{
+                        .specifier = specifier,
+                        .status = @tagName(mod.getStatus()),
+                        .note = "please report this issue: https://github.com/lightpanda-io/browser/issues",
+                    });
+                } else if (comptime lp.IS_DEBUG) {
                     std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
@@ -927,7 +921,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var ms = module_source_ catch |err| {
         const resolver = local.toLocal(state.resolver);
         switch (err) {
-            error.UrlMalformat, error.Abort => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
+            error.UrlMalformat, error.Abort, error.TransferCanceled => resolver.rejectError("dynamic module source", .{ .type_error = @errorName(err) }),
             else => _ = resolver.reject("dynamic module source", local.newString(@errorName(err))),
         }
         return;
@@ -1089,7 +1083,7 @@ const Entered = struct {
 
     handle_scope: *js.HandleScope,
 
-    global: GlobalScope,
+    global: lp.GlobalScope,
 
     pub fn exit(self: Entered) void {
         self.global.setJs(self.original);
@@ -1194,7 +1188,7 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
 }
 
 // == Profiler ==
-pub fn startCpuProfiler(self: *Context) void {
+fn startCpuProfiler(self: *Context) void {
     if (comptime !lp.IS_DEBUG) {
         // Still testing this out, don't have it properly exposed, so add this
         // guard for the time being to prevent any accidental/weird prod issues.
@@ -1214,7 +1208,7 @@ pub fn startCpuProfiler(self: *Context) void {
     self.cpu_profiler = cpu_profiler;
 }
 
-pub fn stopCpuProfiler(self: *Context) ![]const u8 {
+fn stopCpuProfiler(self: *Context) ![]const u8 {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
@@ -1225,7 +1219,7 @@ pub fn stopCpuProfiler(self: *Context) ![]const u8 {
     return (js.String{ .local = &ls.local, .handle = string_handle }).toSlice();
 }
 
-pub fn startHeapProfiler(self: *Context) void {
+fn startHeapProfiler(self: *Context) void {
     if (comptime !lp.IS_DEBUG) {
         @compileError("Heap Profiling is only available in debug builds");
     }
@@ -1244,7 +1238,7 @@ pub fn startHeapProfiler(self: *Context) void {
     self.heap_profiler = heap_profiler;
 }
 
-pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
+fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
@@ -1272,3 +1266,9 @@ const UnknownPropertyStat = struct {
     count: usize,
     first_stack: []const u8,
 };
+
+// see Local.typeError
+pub fn typeError(self: *const Context, message: []const u8) error{TypeError} {
+    self.env.error_message = message;
+    return error.TypeError;
+}

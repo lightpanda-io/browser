@@ -96,13 +96,6 @@ pub extern "c" fn html5ever_parse_fragment(
 pub extern "c" fn html5ever_attribute_iterator_next(ctx: *anyopaque) Nullable(Attribute);
 pub extern "c" fn html5ever_attribute_iterator_count(ctx: *anyopaque) usize;
 
-pub extern "c" fn html5ever_get_memory_usage() MemoryUsage;
-
-pub const MemoryUsage = extern struct {
-    resident: usize,
-    allocated: usize,
-};
-
 // Streaming parser API
 pub extern "c" fn html5ever_streaming_parser_create(
     doc: *anyopaque,
@@ -139,7 +132,7 @@ pub extern "c" fn html5ever_streaming_parser_destroy(
     parser: *anyopaque,
 ) void;
 
-pub fn Nullable(comptime T: type) type {
+fn Nullable(comptime T: type) type {
     return extern struct {
         tag: u8,
         value: T,
@@ -155,7 +148,7 @@ pub fn Nullable(comptime T: type) type {
 }
 
 pub const StringSlice = Slice(u8);
-pub fn Slice(comptime T: type) type {
+fn Slice(comptime T: type) type {
     return extern struct {
         ptr: [*]const T,
         len: usize,
@@ -231,7 +224,7 @@ pub extern "c" fn xml5ever_parse_document(
 ) void;
 
 // General encoding api
-pub const EncodingInfo = extern struct {
+const EncodingInfo = extern struct {
     found: u8,
     handle: ?*anyopaque,
     name_len: usize,
@@ -249,7 +242,7 @@ pub const EncodingInfo = extern struct {
     }
 };
 
-pub const DecodeResult = extern struct {
+const DecodeResult = extern struct {
     had_errors: u8,
     bytes_read: usize,
     bytes_written: usize,
@@ -293,7 +286,7 @@ pub extern "c" fn encoding_decoder_decode(
 pub extern "c" fn encoding_decoder_free(decoder: *anyopaque) void;
 
 // Encoding API (UTF-8 to legacy encoding with NCR fallback)
-pub const EncodeResult = extern struct {
+const EncodeResult = extern struct {
     status: u8,
     bytes_read: usize,
     bytes_written: usize,

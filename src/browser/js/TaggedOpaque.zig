@@ -96,41 +96,41 @@ pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
         return @constCast(@as(*const T, &.{}));
     }
 
-    const internal_field_count = v8.v8__Object__InternalFieldCount(js_obj_handle);
-    // if it isn't an empty struct, then the v8.Object should have an
-    // InternalFieldCount > 0, since our toa pointer should be embedded
-    // at index 0 of the internal field count.
-    if (internal_field_count == 0) {
-        return error.InvalidArgument;
-    }
+    const tao = fromObject(js_obj_handle) orelse return error.InvalidArgument;
+    return tao.as(T) orelse error.InvalidArgument;
+}
 
-    if (!bridge.JsApiLookup.has(JsApi)) {
-        @compileError("unknown Zig type: " ++ @typeName(R));
+pub fn fromObject(js_obj_handle: *const v8.Object) ?*TaggedOpaque {
+    if (v8.v8__Object__InternalFieldCount(js_obj_handle) == 0) {
+        return null;
     }
-
-    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(js_obj_handle, 0) orelse return error.InvalidArgument;
-    // A wrapped object always embeds an aligned TaggedOpaque pointer. An
-    // unaligned value is a leftover v8 tagged value: the object was created
-    // from our template but never mapped to a Zig instance (e.g. a custom
-    // element whose constructor threw).
+    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(js_obj_handle, 0) orelse return null;
     if (@intFromPtr(tao_ptr) % @alignOf(TaggedOpaque) != 0) {
-        return error.InvalidArgument;
+        return null;
     }
-    const tao: *TaggedOpaque = @ptrCast(@alignCast(tao_ptr));
+    return @ptrCast(@alignCast(tao_ptr));
+}
+
+// The instance as a T: its own type, or one it inherits from. Null otherwise.
+pub fn as(self: *const TaggedOpaque, comptime T: type) ?*T {
+    const JsApi = bridge.Struct(T).JsApi;
+    if (!bridge.JsApiLookup.has(JsApi)) {
+        @compileError("unknown Zig type: " ++ @typeName(T));
+    }
     const expected_type_index = bridge.JsApiLookup.getId(JsApi);
 
-    const prototype_chain = tao.prototype_chain[0..tao.prototype_len];
+    const prototype_chain = self.prototype_chain[0..self.prototype_len];
     if (prototype_chain[0].index == expected_type_index) {
-        return @ptrCast(@alignCast(tao.value));
+        return @ptrCast(@alignCast(self.value));
     }
 
     // Ok, let's walk up the chain
-    var ptr = @intFromPtr(tao.value);
+    var ptr = @intFromPtr(self.value);
     for (prototype_chain[1..]) |proto| {
         ptr -= proto.offset;
         if (proto.index == expected_type_index) {
             return @ptrFromInt(ptr);
         }
     }
-    return error.InvalidArgument;
+    return null;
 }

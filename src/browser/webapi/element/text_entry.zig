@@ -30,7 +30,7 @@ const InputEvent = @import("../event/InputEvent.zig");
 pub fn TextEntry(comptime T: type) type {
     return struct {
         pub fn select(self: *T, frame: *Frame) !void {
-            const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
+            const len: u32 = @intCast(self.getValue().len);
             try setSelectionRange(self, 0, len, null, frame);
             const event = try Event.init("select", .{ .bubbles = true }, frame._page);
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
@@ -43,7 +43,7 @@ pub fn TextEntry(comptime T: type) type {
                 .full => {
                     // fully selected, replace the content.
                     const new_value = try arena.dupe(u8, str);
-                    try self.setValue(new_value, frame);
+                    try self.setUserValue(new_value, frame);
                     self._selection_start = @intCast(new_value.len);
                     self._selection_end = @intCast(new_value.len);
                     self._selection_direction = .none;
@@ -60,7 +60,7 @@ pub fn TextEntry(comptime T: type) type {
                         u8,
                         &.{ before, str, remaining },
                     );
-                    try self.setValue(new_value, frame);
+                    try self.setUserValue(new_value, frame);
 
                     const new_pos = range[0] + str.len;
                     self._selection_start = @intCast(new_pos);
@@ -69,10 +69,20 @@ pub fn TextEntry(comptime T: type) type {
                     try dispatchSelectionChangeEvent(self, frame);
                 },
                 .none => {
-                    // nothing selected, just insert at cursor.
+                    // nothing selected, insert at the caret. Controls without
+                    // selection support keep no caret; append.
                     const current_value = self.getValue();
-                    const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
-                    try self.setValue(new_value, frame);
+                    const caret = if (self.selectionAvailable()) @min(self._selection_start, current_value.len) else current_value.len;
+                    const new_value = try std.mem.concat(arena, u8, &.{ current_value[0..caret], str, current_value[caret..] });
+                    try self.setUserValue(new_value, frame);
+                    if (self.selectionAvailable()) {
+                        // the sanitized value can be shorter than what was inserted
+                        const new_pos: u32 = @intCast(@min(caret + str.len, self.getValue().len));
+                        self._selection_start = new_pos;
+                        self._selection_end = new_pos;
+                        self._selection_direction = .none;
+                        try dispatchSelectionChangeEvent(self, frame);
+                    }
                 },
             }
             try dispatchInputEvent(self, str, "insertText", frame);
@@ -120,12 +130,91 @@ pub fn TextEntry(comptime T: type) type {
                 current_value[0..start],
                 current_value[@min(end, value_len)..],
             });
-            try self.setValue(new_value, frame);
+            try self.setUserValue(new_value, frame);
             self._selection_start = start;
             self._selection_end = start;
             self._selection_direction = .none;
             try dispatchSelectionChangeEvent(self, frame);
             try dispatchInputEvent(self, null, if (forward) "deleteContentForward" else "deleteContentBackward", frame);
+        }
+
+        pub const CaretMove = enum { backward, forward, line_start, line_end };
+
+        // Default action of the caret movement keys (ArrowLeft, ArrowRight,
+        // Home, End). With `extend` (Shift held) the selection's focus moves
+        // and its anchor stays; otherwise the selection collapses. A plain
+        // ArrowLeft/ArrowRight on a non-collapsed selection collapses it to
+        // the corresponding edge without moving, like Chrome.
+        pub fn moveCaret(self: *T, move: CaretMove, extend: bool, frame: *Frame) !void {
+            if (self.selectionAvailable() == false) {
+                return;
+            }
+            const value = self.getValue();
+            const len: u32 = @intCast(value.len);
+            const start = @min(self._selection_start, len);
+            const end = @min(self._selection_end, len);
+
+            var new_start: u32 = undefined;
+            var new_end: u32 = undefined;
+            var new_direction: Selection.SelectionDirection = .none;
+
+            if (extend) {
+                const backward = self._selection_direction == .backward;
+                const anchor = if (backward) end else start;
+                const focus = caretTarget(value, if (backward) start else end, move);
+                if (focus < anchor) {
+                    new_start = focus;
+                    new_end = anchor;
+                    new_direction = .backward;
+                } else {
+                    new_start = anchor;
+                    new_end = focus;
+                    new_direction = if (focus > anchor) .forward else .none;
+                }
+            } else if (start != end and (move == .backward or move == .forward)) {
+                new_start = if (move == .backward) start else end;
+                new_end = new_start;
+            } else {
+                new_start = caretTarget(value, if (move == .backward) start else end, move);
+                new_end = new_start;
+            }
+
+            if (new_start == self._selection_start and new_end == self._selection_end and new_direction == self._selection_direction) {
+                return;
+            }
+            self._selection_start = new_start;
+            self._selection_end = new_end;
+            self._selection_direction = new_direction;
+            try dispatchSelectionChangeEvent(self, frame);
+        }
+
+        // Byte offset the caret lands on when moved from `pos`. Steps over
+        // whole UTF-8 sequences; line moves stop at the enclosing '\n' (an
+        // <input>'s sanitized value has none, so they reach the value's ends).
+        fn caretTarget(value: []const u8, pos: u32, move: CaretMove) u32 {
+            switch (move) {
+                .backward => {
+                    if (pos == 0) return 0;
+                    var p = pos - 1;
+                    while (p > 0 and (value[p] & 0xC0) == 0x80) {
+                        p -= 1;
+                    }
+                    return p;
+                },
+                .forward => {
+                    if (pos >= value.len) return @intCast(value.len);
+                    const next = pos + (std.unicode.utf8ByteSequenceLength(value[pos]) catch 1);
+                    return @intCast(@min(next, value.len));
+                },
+                .line_start => {
+                    const nl = std.mem.lastIndexOfScalar(u8, value[0..pos], '\n') orelse return 0;
+                    return @intCast(nl + 1);
+                },
+                .line_end => {
+                    const nl = std.mem.indexOfScalarPos(u8, value, pos, '\n') orelse return @intCast(value.len);
+                    return @intCast(nl);
+                },
+            }
         }
 
         pub fn getSelectionDirection(self: *const T) []const u8 {
@@ -165,14 +254,7 @@ pub fn TextEntry(comptime T: type) type {
                 } else break :blk .none;
             };
 
-            const value = self._value orelse {
-                self._selection_start = 0;
-                self._selection_end = 0;
-                self._selection_direction = .none;
-                return;
-            };
-
-            const len_u32: u32 = @intCast(value.len);
+            const len_u32: u32 = @intCast(self.getValue().len);
             var start: u32 = if (selection_start > len_u32) len_u32 else selection_start;
             const end: u32 = if (selection_end > len_u32) len_u32 else selection_end;
 
@@ -194,15 +276,17 @@ pub fn TextEntry(comptime T: type) type {
             if (self.selectionAvailable() == false) {
                 return .none;
             }
-            const value = self._value orelse return .none;
+            const value_len: u32 = @intCast(self.getValue().len);
+            const start = @min(self._selection_start, value_len);
+            const end = @min(self._selection_end, value_len);
 
-            if (self._selection_start == self._selection_end) {
+            if (start == end) {
                 return .none;
             }
-            if (self._selection_start == 0 and self._selection_end == value.len) {
+            if (start == 0 and end == value_len) {
                 return .full;
             }
-            return .{ .partial = .{ self._selection_start, self._selection_end } };
+            return .{ .partial = .{ start, end } };
         }
 
         fn dispatchSelectionChangeEvent(self: *T, frame: *Frame) !void {

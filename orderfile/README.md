@@ -27,14 +27,15 @@ below), with no change in run duration.
 - Patterns that match nothing are ignored by LLD, so a stale script degrades
   gracefully: renamed or removed functions simply fall back into cold `.text`.
   Zig's `__anon_NNN` names (~7% of the patterns) renumber on unrelated
-  changes, so the profile decays a little with every commit; regenerate it
-  when CI's VmHWM creeps.
+  changes, so the profile decays a little with every commit; it is
+  regenerated weekly (below).
 - Link-time cost: LLD name-checks every input section against every pattern
   of every input-section description, so the script scopes patterns to their
   object file (`*api.o(...)`). The shipped script covers Zig/Rust/C only
   (~4k patterns, ~2s of link). Once V8's functions are addressable (below) the
-  script grows to ~26k patterns and the release link to ~26s; one pattern per
-  line instead of per file would make that 85s. Debug builds pay nothing.
+  script grows to ~26k patterns and the release link to ~26s; one description
+  per pattern instead of per file would make that 85s (the line breaks inside
+  a description are free, they exist for the diff). Debug builds pay nothing.
 - The prebuilt V8 archive is compiled with `-fno-unique-section-names`
   (Chromium hardcodes it), so all of V8's function sections are named `.text`
   and the script cannot address them. `mark_hot_sections.zig` (run
@@ -55,38 +56,45 @@ below), with no change in run duration.
 
 ## Regenerating the profile
 
-The profile is a list of resident pages captured at 4KB granularity, so
-fault-around has to be disabled while profiling (root):
-
 ```bash
-# 1. Build with the current script (or none) and copy the binary to tmpfs.
-#    Bench from tmpfs: on ext4 with a recent kernel, large page-cache folios
-#    are mapped whole and hide the 64KB-window behaviour that CI sees.
-zig build -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64 \
-    -Dorderfile=orderfile/lightpanda.ld
-cp zig-out/bin/lightpanda /tmp/lightpanda
-
-# 2. Run the workload with fault-around off and dump which pages are resident.
-sudo sh -c 'echo 4096 > /sys/kernel/debug/fault_around_bytes'
-/tmp/lightpanda serve --insecure-disable-tls-host-verification & LP=$!
-(cd ../demo && RUNS=100 node puppeteer/cdp.js)
-sleep 5
-python3 orderfile/tools/pagemap.py $LP resident.json
-kill $LP
-sudo sh -c 'echo 65536 > /sys/kernel/debug/fault_around_bytes'
-
-# 3. Resident pages -> hot symbol lists (address order), then -> linker script.
-#    gen_order.py needs every object/archive of the link to map symbols to
-#    section names: `zig build ... --verbose-link` prints the ld.lld line.
-python3 orderfile/tools/hotlist.py /tmp/lightpanda resident.json hot
-python3 orderfile/tools/gen_order.py hot.text hot.rodata orderfile/lightpanda.ld \
-    <uniq-v8.a> .zig-cache/o/*/lightpanda_zcu.o .zig-cache/o/*/*.a ...
+# root for /sys/kernel/debug/fault_around_bytes; ../demo checked out with
+# `npm install` done; node, go, python3 and binutils on the PATH.
+orderfile/tools/regen.sh -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
 ```
 
-Profiles from several runs can be concatenated before `gen_order.py`
-(duplicates are dropped, first occurrence wins); the shipped script is the
-union of a profile of the unordered binary and one of the ordered binary.
+The script
 
-To check the result without root, compare `VmHWM` from `/proc/<pid>/status`
-after the bench, and look at what is still resident outside the hot sections
-with `pagemap.py` + `nm`.
+1. builds with an empty linker script (the unordered binary; the
+   `--verbose-link` line of that build is where `gen_order.py` gets the
+   objects and archives it maps symbols to sections with);
+2. runs the CDP bench (`demo/puppeteer/cdp.js`, 100 runs) against it with
+   fault-around set to 4KB, dumps the pages that are resident
+   (`pagemap.py`), turns them into hot symbol lists in address order
+   (`hotlist.py`) and into the new `lightpanda.ld` / `v8.txt`
+   (`gen_order.py`);
+3. re-runs that build's `ld.lld` line with the new script to check that it
+   links (the script is a cache input of the whole exe compilation, so
+   building with it would be a second full compile; the relink takes
+   seconds and is the same link, bar V8's hot-marked archive coming from
+   the previous `v8.txt`, which does not affect whether the script parses).
+
+Whether the new profile is any good is not measured here; the e2e bench's
+`MAX_VmHWM` gate is, on the next push to `main`.
+
+The profile is a list of resident pages, so every function sharing a 4KB page
+with a hot one is counted as hot. Profiling the *unordered* binary keeps that
+over-inclusion random: a profile of the ordered binary would re-include every
+function that went cold but still sits in `.text.hot` next to a hot one, and
+the hot set would only ever grow. Over-inclusion is the cheap side of the
+trade anyway (a hot function left out costs a whole 64KB cold window; one
+included needlessly costs its own size), and `.text.hot` is packed in
+address order of the profile, so functions that run together stay together.
+
+The binary is benched from tmpfs (`RAMDIR`, default `/dev/shm`): on ext4 with
+a recent kernel, large page-cache folios are mapped whole and hide the
+64KB-window behaviour that CI sees. The `x86_64` profile is applied to the
+`aarch64` release too; it carries over as far as the section and symbol
+names coincide, nothing is measured on `aarch64`.
+
+To look at what is still resident outside the hot sections, run the bench by
+hand and use `pagemap.py` + `nm` on the live process.

@@ -259,6 +259,26 @@
   }
 </script>
 
+<script id=buffer_source_bodies type=module>
+  const state = await testing.async();
+
+  // Every ArrayBufferView is a BufferSource, viewed as its raw bytes.
+  const int8 = await new Request('https://example.com', { method: 'POST', body: new Int8Array([-1, 2]) }).bytes();
+  const float32 = await new Request('https://example.com', { method: 'POST', body: new Float32Array([1]) }).bytes();
+  const buf = new ArrayBuffer(4);
+  new DataView(buf).setUint32(0, 0x41424344);
+  const view = await new Request('https://example.com', { method: 'POST', body: new DataView(buf, 1, 2) }).text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(2, int8.length);
+    testing.expectEqual(255, int8[0]);
+    testing.expectEqual(2, int8[1]);
+    testing.expectEqual(4, float32.length);
+    testing.expectEqual('BC', view);
+  });
+</script>
+
 <script id=form_data type=module>
   const state = await testing.async();
 

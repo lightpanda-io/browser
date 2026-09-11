@@ -124,8 +124,53 @@ pub fn isArrayBuffer(self: Value) bool {
     return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
+pub fn taggedOpaque(self: Value) ?*const TaggedOpaque {
+    // caller must ensure self.isObject()
+    return TaggedOpaque.fromObject(@ptrCast(self.handle));
+}
+
+// === for JS values: identity for objects, value equality for primitives.
+pub fn strictEquals(self: Value, other: Value) bool {
+    return v8.v8__Value__StrictEquals(self.handle, other.handle);
+}
+
 pub fn isDate(self: Value) bool {
     return v8.v8__Value__IsDate(self.handle);
+}
+
+pub fn dateValue(self: Value) f64 {
+    if (comptime lp.IS_DEBUG) {
+        std.debug.assert(self.isDate());
+    }
+    return v8.v8__Date__ValueOf(@ptrCast(self.handle));
+}
+
+pub fn isMap(self: Value) bool {
+    return v8.v8__Value__IsMap(self.handle);
+}
+
+pub fn isSet(self: Value) bool {
+    return v8.v8__Value__IsSet(self.handle);
+}
+
+pub fn isWeakMap(self: Value) bool {
+    return v8.v8__Value__IsWeakMap(self.handle);
+}
+
+pub fn isWeakSet(self: Value) bool {
+    return v8.v8__Value__IsWeakSet(self.handle);
+}
+
+pub fn isRegExp(self: Value) bool {
+    return v8.v8__Value__IsRegExp(self.handle);
+}
+
+pub fn isProxy(self: Value) bool {
+    return v8.v8__Value__IsProxy(self.handle);
+}
+
+pub fn isGeneratorObject(self: Value) bool {
+    return v8.v8__Value__IsGeneratorObject(self.handle);
 }
 
 pub fn isUint8Array(self: Value) bool {
@@ -514,11 +559,7 @@ const CloneDelegate = struct {
 
         blk: {
             const obj = object orelse break :blk;
-            if (v8.v8__Object__InternalFieldCount(obj) == 0) {
-                break :blk;
-            }
-            const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(obj, 0) orelse break :blk;
-            const tao: *TaggedOpaque = @ptrCast(@alignCast(tao_ptr));
+            const tao = TaggedOpaque.fromObject(obj) orelse break :blk;
 
             const prototype_chain = tao.prototype_chain[0..tao.prototype_len];
             if (writeCloneable(ctx, prototype_chain[0].index, tao.value)) |result| {

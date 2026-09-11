@@ -19,7 +19,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const interactive = @import("browser/interactive.zig");
 const SelectorPath = @import("browser/SelectorPath.zig");
 
@@ -27,8 +26,10 @@ const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
 const Label = @import("browser/webapi/element/html/Label.zig");
 const Node = @import("browser/webapi/Node.zig");
-const AXNode = @import("cdp/AXNode.zig");
-const CDPNode = @import("cdp/Node.zig");
+const AXNode = @import("server/cdp/AXNode.zig");
+
+const NodeRegistry = @import("NodeRegistry.zig");
+const isAllWhitespace = @import("string.zig").isAllWhitespace;
 
 const log = lp.log;
 const Frame = lp.Frame;
@@ -36,7 +37,7 @@ const Frame = lp.Frame;
 const Self = @This();
 
 dom_node: *Node,
-registry: *CDPNode.Registry,
+registry: *NodeRegistry,
 frame: *Frame,
 arena: std.mem.Allocator,
 prune: bool = true,
@@ -50,15 +51,12 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
         .label_index = &label_index,
+        .owner_frame = self.dom_node.ownerFrame(self.frame),
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
@@ -73,15 +71,12 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    var visibility_cache: Element.VisibilityCache = .empty;
-    var pointer_events_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
     var ctx: WalkContext = .{
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
-        .visibility_cache = &visibility_cache,
-        .pointer_events_cache = &pointer_events_cache,
         .label_index = &label_index,
+        .owner_frame = self.dom_node.ownerFrame(self.frame),
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
@@ -96,7 +91,7 @@ const OptionData = struct {
 };
 
 const NodeData = struct {
-    id: CDPNode.Id,
+    id: NodeRegistry.Id,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
@@ -112,9 +107,8 @@ const NodeData = struct {
 const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
     listener_targets: interactive.ListenerTargetMap,
-    visibility_cache: *Element.VisibilityCache,
-    pointer_events_cache: *Element.PointerEventsCache,
     label_index: *Label.LabelByForIndex,
+    owner_frame: *Frame, // node's ow frame, not the callers
 };
 
 fn walk(
@@ -136,8 +130,14 @@ fn walk(
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(ctx.visibility_cache, self.frame, .scan)) {
+        // Hidden subtrees are never entered, so below the root only the
+        // element's own display matters.
+        const style_manager = &ctx.owner_frame._style_manager;
+        const hidden = if (current_depth == 0)
+            style_manager.isHidden(el, .{})
+        else
+            style_manager.hasDisplayNone(el);
+        if (hidden) {
             return;
         }
 
@@ -183,7 +183,7 @@ fn walk(
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets, ctx.pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(self.frame, el, html_el, ctx.listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -200,7 +200,7 @@ fn walk(
     var name = try axn.getName(self.frame, self.arena, ctx.label_index);
 
     const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(comptime .wrap("aria-label")) != null or el.getAttributeSafe(comptime .wrap("title")) != null
+        el.getAttributeInterned("aria-label") != null or el.getAttributeInterned("title") != null
     else
         false;
 
@@ -548,8 +548,8 @@ const TextVisitor = struct {
     }
 };
 
-pub const NodeDetails = struct {
-    backendNodeId: CDPNode.Id,
+const NodeDetails = struct {
+    backendNodeId: NodeRegistry.Id,
     tag_name: []const u8,
     role: []const u8,
     name: ?[]const u8,
@@ -655,7 +655,7 @@ pub const NodeDetails = struct {
 pub fn getNodeDetails(
     arena: std.mem.Allocator,
     node: *Node,
-    registry: *CDPNode.Registry,
+    registry: *NodeRegistry,
     frame: *Frame,
 ) !NodeDetails {
     const cdp_node = try registry.register(node);
@@ -680,12 +680,12 @@ pub fn getNodeDetails(
     if (node.is(Element)) |el| {
         tag_name = el.getTagNameLower();
         is_disabled = el.isDisabled();
-        id_attr = el.getAttributeSafe(comptime .wrap("id"));
-        class_attr = el.getAttributeSafe(comptime .wrap("class"));
+        id_attr = el.getId();
+        class_attr = el.getClassName();
         selector = try SelectorPath.init(arena, frame).build(el);
-        placeholder = el.getAttributeSafe(comptime .wrap("placeholder"));
+        placeholder = el.getAttributeInterned("placeholder");
 
-        if (el.getAttributeSafe(comptime .wrap("href"))) |h| {
+        if (el.getAttributeInterned("href")) |h| {
             const URL = lp.URL;
             href = URL.resolve(arena, frame.base(), h, .{ .encoding = frame.charset }) catch h;
         }
@@ -708,8 +708,7 @@ pub fn getNodeDetails(
 
         if (el.is(Element.Html)) |html_el| {
             const listener_targets = try interactive.buildListenerTargetMap(frame, arena);
-            var pointer_events_cache: Element.PointerEventsCache = .empty;
-            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets, &pointer_events_cache) != null) {
+            if (interactive.classifyInteractivity(frame, el, html_el, listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -737,7 +736,7 @@ pub fn getNodeDetails(
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});
@@ -760,8 +759,42 @@ test "SemanticTree backendDOMNodeId" {
     try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
 }
 
+test "SemanticTree: styles come from the node's own frame" {
+    var registry: NodeRegistry = .init(testing.allocator);
+    defer registry.deinit();
+
+    // The caller's frame hides #inner; the frame that actually owns the walked
+    // subtree does not. A backendNodeId lookup can hand us a node from another
+    // frame, so the walk must not use the caller's stylesheets.
+    var page_a = try testing.pageTest("cdp/semantic_tree_frame_a.html", .{});
+    defer page_a.close();
+    var page_b = try testing.pageTest("cdp/semantic_tree_frame_b.html", .{});
+    defer page_b.close();
+
+    const frame_a = page_a.frame().?;
+    const frame_b = page_b.frame().?;
+
+    const target = (try frame_b.window._document.querySelector(.wrap("#target"), frame_b)).?.asNode();
+
+    const st: Self = .{
+        .dom_node = target,
+        .registry = &registry,
+        .frame = frame_a,
+        .arena = testing.arena_allocator,
+        .prune = false,
+        .interactive_only = false,
+        .max_depth = std.math.maxInt(u32) - 1,
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try st.textStringify(&aw.writer);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "inner-b") != null);
+}
+
 test "SemanticTree max_depth" {
-    var registry: CDPNode.Registry = .init(testing.allocator);
+    var registry: NodeRegistry = .init(testing.allocator);
     defer registry.deinit();
 
     var page = try testing.pageTest("cdp/registry1.html", .{});

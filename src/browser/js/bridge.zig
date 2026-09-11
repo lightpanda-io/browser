@@ -300,6 +300,8 @@ pub const Indexed = struct {
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
+        // Only applies to setter and deleter; getters don't mutate.
+        ce_reactions: bool = false,
     };
 
     fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, query: anytype, definer: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
@@ -346,6 +348,18 @@ pub const Indexed = struct {
                     }
                     defer caller.deinit();
 
+                    const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                        .frame => |frame| frame,
+                        .worker => null,
+                    } else null;
+                    var ce_checkpoint: usize = undefined;
+                    if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                    }
+                    defer if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                    };
+
                     return caller.setIndex(T, setter, idx, c_value.?, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
@@ -363,6 +377,18 @@ pub const Indexed = struct {
                         return js.Intercepted.no;
                     }
                     defer caller.deinit();
+
+                    const ce_frame: ?*Frame = if (comptime opts.ce_reactions) switch (caller.local.ctx.global) {
+                        .frame => |frame| frame,
+                        .worker => null,
+                    } else null;
+                    var ce_checkpoint: usize = undefined;
+                    if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| ce_checkpoint = frame._ce_reactions.push();
+                    }
+                    defer if (comptime opts.ce_reactions) {
+                        if (ce_frame) |frame| frame._ce_reactions.popAndInvoke(ce_checkpoint, frame);
+                    };
 
                     return caller.deleteOrDefineIndex(T, deleter, idx, handle.?, .{
                         .as_typed_array = opts.as_typed_array,
@@ -602,7 +628,7 @@ pub const Iterator = struct {
     }
 };
 
-pub const Callable = struct {
+const Callable = struct {
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -684,128 +710,132 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
         .worker => {}, // no global lookup in a worker
     }
 
-    if (comptime lp.IS_DEBUG) {
-        if (std.mem.startsWith(u8, property, "__")) {
-            // some frameworks will extend built-in types using a __ prefix
-            // these should always be safe to ignore.
-            return js.Intercepted.no;
-        }
+    // @LOG-UNKNOWN-PROPERTY
+    // This was really useful when sites often broke because of an unimplemented
+    // feature. But it hasnt' been useful to me in ~6 months.
+    // if (comptime lp.IS_DEBUG) {
+    //     if (std.mem.startsWith(u8, property, "__")) {
+    //         // some frameworks will extend built-in types using a __ prefix
+    //         // these should always be safe to ignore.
+    //         return js.Intercepted.no;
+    //     }
 
-        const ignored = std.StaticStringMap(void).initComptime(.{
-            .{ "Deno", {} },
-            .{ "process", {} },
-            .{ "ShadyDOM", {} },
-            .{ "ShadyCSS", {} },
+    //     const ignored = std.StaticStringMap(void).initComptime(.{
+    //         .{ "Deno", {} },
+    //         .{ "process", {} },
+    //         .{ "ShadyDOM", {} },
+    //         .{ "ShadyCSS", {} },
 
-            // a lot of sites seem to like having their own window.config.
-            .{ "config", {} },
+    //         // a lot of sites seem to like having their own window.config.
+    //         .{ "config", {} },
 
-            .{ "litNonce", {} },
-            .{ "litHtmlVersions", {} },
-            .{ "litElementVersions", {} },
-            .{ "litHtmlPolyfillSupport", {} },
-            .{ "litElementHydrateSupport", {} },
-            .{ "litElementPolyfillSupport", {} },
-            .{ "reactiveElementVersions", {} },
+    //         .{ "litNonce", {} },
+    //         .{ "litHtmlVersions", {} },
+    //         .{ "litElementVersions", {} },
+    //         .{ "litHtmlPolyfillSupport", {} },
+    //         .{ "litElementHydrateSupport", {} },
+    //         .{ "litElementPolyfillSupport", {} },
+    //         .{ "reactiveElementVersions", {} },
 
-            .{ "recaptcha", {} },
-            .{ "grecaptcha", {} },
-            .{ "___grecaptcha_cfg", {} },
-            .{ "__recaptcha_api", {} },
-            .{ "__google_recaptcha_client", {} },
+    //         .{ "recaptcha", {} },
+    //         .{ "grecaptcha", {} },
+    //         .{ "___grecaptcha_cfg", {} },
+    //         .{ "__recaptcha_api", {} },
+    //         .{ "__google_recaptcha_client", {} },
 
-            .{ "CLOSURE_FLAGS", {} },
-            .{ "__REACT_DEVTOOLS_GLOBAL_HOOK__", {} },
-            .{ "ApplePaySession", {} },
-        });
-        if (!ignored.has(property)) {
-            var buf: [2048]u8 = undefined;
-            const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
-            logUnknownProperty(local, key) catch return js.Intercepted.no;
-        }
-    }
+    //         .{ "CLOSURE_FLAGS", {} },
+    //         .{ "__REACT_DEVTOOLS_GLOBAL_HOOK__", {} },
+    //         .{ "ApplePaySession", {} },
+    //     });
+    //     if (!ignored.has(property)) {
+    //         var buf: [2048]u8 = undefined;
+    //         const key = std.fmt.bufPrint(&buf, "Window:{s}", .{property}) catch return js.Intercepted.no;
+    //         logUnknownProperty(local, key) catch return js.Intercepted.no;
+    //     }
+    // }
 
     return js.Intercepted.no;
 }
 
+// @LOG-UNKNOWN-PROPERTY
 // Only used for debugging
-pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-    if (comptime !lp.IS_DEBUG) {
-        @compileError("unknownObjectPropertyCallback should only be used in debug builds");
-    }
+// pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+//     if (comptime !lp.IS_DEBUG) {
+//         @compileError("unknownObjectPropertyCallback should only be used in debug builds");
+//     }
 
-    return struct {
-        fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
-            const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+//     return struct {
+//         fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u32 {
+//             const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
 
-            var caller: Caller = undefined;
-            if (!caller.init(v8_isolate)) {
-                return js.Intercepted.no;
-            }
-            defer caller.deinit();
+//             var caller: Caller = undefined;
+//             if (!caller.init(v8_isolate)) {
+//                 return js.Intercepted.no;
+//             }
+//             defer caller.deinit();
 
-            const local = &caller.local;
+//             const local = &caller.local;
 
-            var hs: js.HandleScope = undefined;
-            hs.init(local.isolate);
-            defer hs.deinit();
+//             var hs: js.HandleScope = undefined;
+//             hs.init(local.isolate);
+//             defer hs.deinit();
 
-            const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
-                return js.Intercepted.no;
-            };
+//             const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
+//                 return js.Intercepted.no;
+//             };
 
-            if (std.mem.startsWith(u8, property, "__")) {
-                // some frameworks will extend built-in types using a __ prefix
-                // these should always be safe to ignore.
-                return js.Intercepted.no;
-            }
+//             if (std.mem.startsWith(u8, property, "__")) {
+//                 // some frameworks will extend built-in types using a __ prefix
+//                 // these should always be safe to ignore.
+//                 return js.Intercepted.no;
+//             }
 
-            if (std.mem.startsWith(u8, property, "jQuery")) {
-                return js.Intercepted.no;
-            }
+//             if (std.mem.startsWith(u8, property, "jQuery")) {
+//                 return js.Intercepted.no;
+//             }
 
-            if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
-                if (std.mem.eql(u8, property, "tagName")) {
-                    // knockout does this, a lot.
-                    return js.Intercepted.no;
-                }
-            }
+//             if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
+//                 if (std.mem.eql(u8, property, "tagName")) {
+//                     // knockout does this, a lot.
+//                     return js.Intercepted.no;
+//                 }
+//             }
 
-            if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
-                // react ?
-                if (std.mem.eql(u8, property, "props")) return js.Intercepted.no;
-                if (std.mem.eql(u8, property, "hydrated")) return js.Intercepted.no;
-                if (std.mem.eql(u8, property, "isHydrated")) return js.Intercepted.no;
-            }
+//             if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
+//                 // react ?
+//                 if (std.mem.eql(u8, property, "props")) return js.Intercepted.no;
+//                 if (std.mem.eql(u8, property, "hydrated")) return js.Intercepted.no;
+//                 if (std.mem.eql(u8, property, "isHydrated")) return js.Intercepted.no;
+//             }
 
-            if (JsApi == @import("../webapi/Console.zig").JsApi) {
-                if (std.mem.eql(u8, property, "firebug")) return js.Intercepted.no;
-            }
+//             if (JsApi == @import("../webapi/Console.zig").JsApi) {
+//                 if (std.mem.eql(u8, property, "firebug")) return js.Intercepted.no;
+//             }
 
-            const ignored = std.StaticStringMap(void).initComptime(.{});
-            if (!ignored.has(property)) {
-                var buf: [2048]u8 = undefined;
-                const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
-                logUnknownProperty(local, key) catch return js.Intercepted.no;
-            }
-            return js.Intercepted.no;
-        }
-    }.wrap;
-}
+//             const ignored = std.StaticStringMap(void).initComptime(.{});
+//             if (!ignored.has(property)) {
+//                 var buf: [2048]u8 = undefined;
+//                 const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return js.Intercepted.no;
+//                 logUnknownProperty(local, key) catch return js.Intercepted.no;
+//             }
+//             return js.Intercepted.no;
+//         }
+//     }.wrap;
+// }
 
-fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
-    const ctx = local.ctx;
-    const gop = try ctx.unknown_properties.getOrPut(ctx.arena.allocator(), key);
-    if (gop.found_existing) {
-        gop.value_ptr.count += 1;
-    } else {
-        gop.key_ptr.* = try ctx.arena.dupe(u8, key);
-        gop.value_ptr.* = .{
-            .count = 1,
-            .first_stack = try ctx.arena.dupe(u8, (try local.stackTrace()) orelse "???"),
-        };
-    }
-}
+// fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
+//     const ctx = local.ctx;
+//     const gop = try ctx.unknown_properties.getOrPut(ctx.arena.allocator(), key);
+//     if (gop.found_existing) {
+//         gop.value_ptr.count += 1;
+//     } else {
+//         gop.key_ptr.* = try ctx.arena.dupe(u8, key);
+//         gop.value_ptr.* = .{
+//             .count = 1,
+//             .first_stack = try ctx.arena.dupe(u8, (try local.stackTrace()) orelse "???"),
+//         };
+//     }
+// }
 
 // Given a Type, returns the length of the prototype chain, including self
 fn prototypeChainLength(comptime T: type) usize {
@@ -1135,6 +1165,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/event/PopStateEvent.zig"),
     @import("../webapi/event/HashChangeEvent.zig"),
+    @import("../webapi/event/MediaQueryListEvent.zig"),
     @import("../webapi/event/BeforeUnloadEvent.zig"),
     @import("../webapi/event/StorageEvent.zig"),
     @import("../webapi/event/DeviceMotionEvent.zig"),
@@ -1185,6 +1216,8 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),
     @import("../webapi/streams/WritableStream.zig"),
     @import("../webapi/streams/WritableStreamDefaultWriter.zig"),
+    @import("../webapi/streams/CountQueuingStrategy.zig"),
+    @import("../webapi/streams/ByteLengthQueuingStrategy.zig"),
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/streams/TransformStream.zig"),
     @import("../webapi/Node.zig"),
@@ -1222,6 +1255,9 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
+    @import("../webapi/canvas/TextMetrics.zig"),
+    @import("../webapi/canvas/CanvasGradient.zig"),
+    @import("../webapi/canvas/CanvasPattern.zig"),
     @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/CryptoKey.zig"),
     @import("../webapi/Selection.zig"),
@@ -1278,6 +1314,8 @@ const worker_common_apis = [_]type{
     @import("../webapi/streams/ReadableStreamDefaultController.zig"),
     @import("../webapi/streams/WritableStream.zig"),
     @import("../webapi/streams/WritableStreamDefaultWriter.zig"),
+    @import("../webapi/streams/CountQueuingStrategy.zig"),
+    @import("../webapi/streams/ByteLengthQueuingStrategy.zig"),
     @import("../webapi/streams/WritableStreamDefaultController.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
     @import("../webapi/encoding/TextDecoderStream.zig"),
@@ -1291,6 +1329,9 @@ const worker_common_apis = [_]type{
     @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
+    @import("../webapi/canvas/TextMetrics.zig"),
+    @import("../webapi/canvas/CanvasGradient.zig"),
+    @import("../webapi/canvas/CanvasPattern.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),

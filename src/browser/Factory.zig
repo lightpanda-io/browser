@@ -33,6 +33,7 @@ const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const AbortSignal = @import("webapi/AbortSignal.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
+const IDBRequest = @import("webapi/storage/idb/IDBRequest.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 const DOMRect = @import("webapi/DOMRect.zig");
@@ -337,7 +338,7 @@ pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
 
 // The full type list for a leaf. Walks the Proto chain.
 // For example CData.Text -> [_]type{EventTarget, Node, CData, Text}).
-pub fn prototypeTypes(comptime Leaf: type) []const type {
+fn prototypeTypes(comptime Leaf: type) []const type {
     comptime {
         var types: []const type = &.{Leaf};
         var T = Leaf;
@@ -505,6 +506,12 @@ pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !
     ).create(allocator, child);
 }
 
+pub fn idbOpenRequest(self: *Factory, child: anytype) !*@TypeOf(child) {
+    return try AutoPrototypeChain(
+        &.{ EventTarget, IDBRequest, @TypeOf(child) },
+    ).create(self._slab.allocator(), child);
+}
+
 pub fn taskSignal(self: *Factory, child: anytype) !*@TypeOf(child) {
     return try AutoPrototypeChain(
         &.{ EventTarget, AbortSignal, @TypeOf(child) },
@@ -574,7 +581,7 @@ fn destroyChain(
     }
 }
 
-pub fn createT(self: *Factory, comptime T: type) !*T {
+fn createT(self: *Factory, comptime T: type) !*T {
     const allocator = self._slab.allocator();
     return try allocator.create(T);
 }

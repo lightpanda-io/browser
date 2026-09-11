@@ -45,9 +45,6 @@ _firing_submission_events: bool = false,
 // form. You can imagine an formdata = () => form.submit() endless loop.
 _constructing_entry_list: bool = false,
 
-pub fn asHtmlElement(self: *Form) *HtmlElement {
-    return Factory.protoOf(self);
-}
 fn asConstElement(self: *const Form) *const Element {
     return Factory.protoOf(self).asElement();
 }
@@ -83,7 +80,7 @@ pub fn normalizeEnctype(attr: ?[]const u8, missing_default: []const u8) []const 
 }
 
 pub fn getMethod(self: *const Form) []const u8 {
-    return normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("method")), "get");
+    return normalizeMethod(self.asConstElement().getAttributeInterned("method"), "get");
 }
 
 pub fn setMethod(self: *Form, method: []const u8, frame: *Frame) !void {
@@ -101,7 +98,7 @@ pub fn getElements(self: *Form, frame: *Frame) !*collections.HTMLFormControlsCol
 }
 
 pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
-    const form_id = self.asElement().getAttributeSafe(comptime .wrap("id"));
+    const form_id = self.asElement().getId();
     const root = if (form_id != null)
         self.asNode().getRootNode(.{}) // Has ID: walk entire document to find form=ID controls
     else
@@ -110,33 +107,33 @@ pub fn iterator(self: *Form, frame: *Frame) collections.NodeLive(.form) {
     return collections.NodeLive(.form).init(root, .{ .form = self, .form_id = form_id }, frame);
 }
 
-pub fn getAction(self: *Form, frame: *Frame) ![]const u8 {
+fn getAction(self: *Form, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const owner_url = element.ownerFrame(frame).url;
-    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return owner_url;
+    const action = element.getAttributeInterned("action") orelse return owner_url;
     if (action.len == 0) {
         return owner_url;
     }
     return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
-pub fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setAction(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), frame);
 }
 
-pub fn getAcceptCharset(self: *Form) []const u8 {
+fn getAcceptCharset(self: *Form) []const u8 {
     return self.asElement().getAttributeSafe(.wrap("accept-charset")) orelse "";
 }
 
-pub fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setAcceptCharset(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("accept-charset"), .wrap(value), frame);
 }
 
-pub fn getEnctype(self: *const Form) []const u8 {
+fn getEnctype(self: *const Form) []const u8 {
     return normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("enctype")), "application/x-www-form-urlencoded");
 }
 
-pub fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
+fn setEnctype(self: *Form, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("enctype"), .wrap(value), frame);
 }
 
@@ -205,7 +202,7 @@ pub fn checkValidity(self: *Form, frame: *Frame) !bool {
 
 /// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#dom-form-reportvalidity
 /// Headless: identical to checkValidity (no UI to draw).
-pub fn reportValidity(self: *Form, frame: *Frame) !bool {
+fn reportValidity(self: *Form, frame: *Frame) !bool {
     return self.checkValidity(frame);
 }
 
@@ -218,7 +215,7 @@ fn checkElementValidity(element: *Element, frame: *Frame) !bool {
 }
 
 pub fn getNoValidate(self: *const Form) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("novalidate")) != null;
+    return self.asConstElement().getAttributeInterned("novalidate") != null;
 }
 
 pub const JsApi = struct {

@@ -54,7 +54,7 @@ assist: prompt_assist.State,
 /// used on the styled (REPL tty) path, hence the placeholder.
 md_stream: md_term.Stream = .{ .show_table_placeholder = true },
 
-pub const CompletionSource = prompt_assist.CompletionSource;
+const CompletionSource = prompt_assist.CompletionSource;
 pub const HistoryPaths = prompt_assist.HistoryPaths;
 
 /// Wires the isocline completer, hinter, and highlighter to `self.assist`.
@@ -241,9 +241,16 @@ fn renderStyled(self: *Terminal, text: []const u8, op: enum { full, delta, end }
     w.flush() catch {};
 }
 
-pub fn printAssistant(self: *Terminal, text: []const u8) void {
+/// Styled on a REPL tty, verbatim otherwise.
+pub fn printMarkdown(self: *Terminal, text: []const u8) void {
     if (text.len == 0) return;
     if (self.styledOutput()) return self.renderStyled(text, .full);
+    self.printPlain(text);
+}
+
+pub fn printPlain(self: *Terminal, text: []const u8) void {
+    _ = self;
+    if (text.len == 0) return;
     _ = std.c.write(std.posix.STDOUT_FILENO, (text).ptr, (text).len);
     _ = std.c.write(std.posix.STDOUT_FILENO, ("\n").ptr, ("\n").len);
 }
@@ -359,11 +366,6 @@ pub fn printInfo(self: *Terminal, comptime fmt: []const u8, args: anytype) void 
     std.debug.print(fmt ++ "\n", args);
 }
 
-pub fn printDimmed(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
-    std.debug.print(ansi.dim ++ fmt ++ ansi.reset ++ "\n", args);
-}
-
 /// REPL startup banner line: plain labels, dimmed values.
 pub fn printSessionBanner(self: *Terminal, model: []const u8, effort: []const u8, stream_enabled: bool) void {
     if (!self.isRepl()) return;
@@ -372,11 +374,6 @@ pub fn printSessionBanner(self: *Terminal, model: []const u8, effort: []const u8
         ansi.dim, effort,                              ansi.reset,
         ansi.dim, if (stream_enabled) "on" else "off", ansi.reset,
     });
-}
-
-pub fn printItalic(self: *Terminal, comptime fmt: []const u8, args: anytype) void {
-    if (!self.isRepl() and !self.verbosity.atLeast(.medium)) return;
-    std.debug.print(ansi.italic ++ fmt ++ ansi.reset ++ "\n", args);
 }
 
 fn helpLessThan(_: void, a: SlashCommand.Help, b: SlashCommand.Help) bool {

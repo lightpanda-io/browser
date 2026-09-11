@@ -44,12 +44,12 @@ const WebDriver = @This();
 
 _pad: bool = false,
 
-pub fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
+fn deleteAllCookies(_: *const WebDriver, page: *Page) void {
     page.session.cookie_jar.clearRetainingCapacity();
 }
 
-pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
-    const AXNode = @import("../../cdp/AXNode.zig");
+fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) ![]const u8 {
+    const AXNode = @import("../../server/cdp/AXNode.zig");
     const axnode = AXNode.fromNode(element.asNode());
     var labels: Label.LabelByForIndex = .{};
     return (try axnode.getName(frame, frame.call_arena, &labels)) orelse "";
@@ -64,11 +64,7 @@ pub fn getComputedLabel(_: *const WebDriver, element: *Element, frame: *Frame) !
 pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     if (element.is(Element.Html)) |html| {
         switch (html._type) {
-            inline .button, .input, .textarea, .select => |tag| {
-                if (html.subtype(Element.Html.Subtype(tag)).getDisabled()) {
-                    return;
-                }
-            },
+            .button, .input, .textarea, .select, .option, .optgroup => if (element.isDisabled()) return,
             else => {},
         }
     }
@@ -92,7 +88,7 @@ const WebDriverCookie = struct {
 };
 
 // Unlike the script-facing CookieStore, WebDriver can see HttpOnly cookies.
-pub fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
+fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriverCookie {
     const jar = &frame._session.cookie_jar;
     const target = Cookie.PreparedUri.init(frame.url);
     if (target.host.len == 0) {

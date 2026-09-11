@@ -53,6 +53,7 @@ _pulling: bool = false,
 _pull_again: bool = false,
 _cancel: ?Cancel = null,
 _collected: bool = false,
+_disturbed: bool = false, // once cancelled, cannot be consumed again
 
 const UnderlyingSource = struct {
     cancel: ?js.Function.Global = null,
@@ -122,7 +123,7 @@ pub fn initWithText(text: []const u8, exec: *const Execution) !*ReadableStream {
 
 pub fn getReader(self: *ReadableStream, exec: *const Execution) !*ReadableStreamDefaultReader {
     if (self.getLocked()) {
-        return error.ReaderLocked;
+        return exec.js.typeError("ReadableStream is locked");
     }
 
     const reader = try ReadableStreamDefaultReader.init(self, exec);
@@ -134,7 +135,7 @@ pub fn releaseReader(self: *ReadableStream) void {
     self._reader = null;
 }
 
-pub fn getAsyncIterator(self: *ReadableStream, exec: *const Execution) !*AsyncIterator {
+fn getAsyncIterator(self: *ReadableStream, exec: *const Execution) !*AsyncIterator {
     return AsyncIterator.init(self, exec);
 }
 
@@ -156,7 +157,10 @@ pub fn collectBodyBytes(self: *ReadableStream, arena: std.mem.Allocator) ![]cons
         .closed => {},
     }
 
-    const local = self._execution.js.local.?;
+    var ls: js.Local.Scope = undefined;
+    self._execution.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
 
     var buf = std.Io.Writer.Allocating.init(arena);
     const queue = &self._controller._queue;
@@ -241,6 +245,7 @@ fn shouldCallPull(self: *const ReadableStream) bool {
 
 pub fn cancel(self: *ReadableStream, reason: ?[]const u8, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
+    self._disturbed = true;
 
     if (self._state != .readable) {
         if (self._cancel) |c| {
@@ -296,9 +301,9 @@ const PipeTransform = struct {
     writable: *WritableStream,
 };
 
-pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
+fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
-        return error.ReaderLocked;
+        return exec.js.typeError("ReadableStream is locked");
     }
 
     // Start async piping from this stream to the writable side
@@ -434,7 +439,7 @@ pub const JsApi = struct {
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
 
-pub const AsyncIterator = struct {
+const AsyncIterator = struct {
     _stream: *ReadableStream,
     _reader: *ReadableStreamDefaultReader,
 

@@ -234,7 +234,7 @@ pub const RenewResponse = struct {
     headers: []const Http.Header,
 };
 
-pub const CachedData = union(enum) {
+const CachedData = union(enum) {
     buffer: []const u8,
 
     pub fn deinit(self: CachedData) void {

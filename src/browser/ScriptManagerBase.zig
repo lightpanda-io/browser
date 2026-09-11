@@ -19,68 +19,23 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const http = @import("../network/http.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
 const js = @import("js/js.zig");
-const Session = @import("Session.zig");
 const Frame = @import("Frame.zig");
 const ImportMap = @import("ImportMap.zig");
-const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const Element = @import("webapi/Element.zig");
+const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const log = lp.log;
 const String = lp.String;
+const GlobalScope = lp.GlobalScope;
 const Allocator = std.mem.Allocator;
 
 const ScriptManagerBase = @This();
 
-// Either a *Frame (for page ScriptManagers) or *WorkerGlobalScope (for workers).
-// Used from HTTP callbacks that only have a *Script in hand; the Script reaches
-// the owner through its manager pointer.
-pub const Owner = union(enum) {
-    frame: *Frame,
-    worker: *WorkerGlobalScope,
-
-    pub fn url(self: Owner) [:0]const u8 {
-        return switch (self) {
-            inline else => |g| g.url,
-        };
-    }
-
-    pub fn frameId(self: Owner) u32 {
-        return switch (self) {
-            inline else => |g| g._frame_id,
-        };
-    }
-
-    pub fn loaderId(self: Owner) u32 {
-        return switch (self) {
-            inline else => |g| g._loader_id,
-        };
-    }
-
-    pub fn session(self: Owner) *Session {
-        return switch (self) {
-            inline else => |g| g._session,
-        };
-    }
-
-    pub fn jsContext(self: Owner) *js.Context {
-        return switch (self) {
-            inline else => |g| g.js,
-        };
-    }
-
-    pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
-        return switch (self) {
-            inline else => |g| g.makeRequest(req),
-        };
-    }
-};
-
-owner: Owner,
+owner: GlobalScope,
 
 // used to prevent recursive evaluation
 is_evaluating: bool,
@@ -120,7 +75,7 @@ importmap: ImportMap,
 // scriptsCompletedLoading. Null for workers.
 tail_hook: ?*const fn (*ScriptManagerBase) void,
 
-pub fn init(allocator: Allocator, http_client: *HttpClient, owner: Owner) ScriptManagerBase {
+pub fn init(allocator: Allocator, http_client: *HttpClient, owner: GlobalScope) ScriptManagerBase {
     return .{
         .owner = owner,
         .async_scripts = .{},
@@ -239,7 +194,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
 
     if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.owner.jsContext().localScope(&ls);
+        self.owner.getJs().localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -257,17 +212,14 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     self.async_scripts.append(&script.node);
 
     const owner = self.owner;
-    const session = owner.session();
     owner.makeRequest(.{
         .ctx = script,
         .url = url,
         .method = .GET,
-        .frame_id = owner.frameId(),
-        .loader_id = owner.loaderId(),
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = owner.url(),
+        .origin = owner.origin(),
+        .request_mode = .cors,
+        .credentials_mode = .same_origin,
         .resource_type = .script,
-        .notification = session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -430,7 +382,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
 
     if (comptime lp.IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.owner.jsContext().localScope(&ls);
+        self.owner.getJs().localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -450,18 +402,15 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
     defer self.endEvaluationWindow(was_evaluating);
 
     const owner = self.owner;
-    const session = self.owner.session();
     self.async_scripts.append(&script.node);
     owner.makeRequest(.{
         .ctx = script,
         .url = url,
         .method = .GET,
-        .frame_id = owner.frameId(),
-        .loader_id = owner.loaderId(),
         .resource_type = .script,
-        .cookie_jar = &session.cookie_jar,
-        .cookie_origin = owner.url(),
-        .notification = session.notification,
+        .origin = owner.origin(),
+        .request_mode = .cors,
+        .credentials_mode = .same_origin,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -749,19 +698,14 @@ pub const Script = struct {
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
 
-        const content_length = transfer.getContentLength();
+        const body_len = transfer.bodyLen();
         if (self.source_arena == null) {
             // A redirect re-runs this callback; keep the arena we already have.
-            self.source_arena = if (content_length) |cl|
-                try self.manager.acquireArena(cl, "SM.source")
-            else
-                try self.manager.acquireArena(.large, "SM.source");
+            self.source_arena = try self.manager.acquireArena(body_len, "SM.source");
         }
 
         var buffer: std.ArrayList(u8) = .empty;
-        if (content_length) |cl| {
-            try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), cl);
-        }
+        try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), body_len);
         self.source = .{ .remote = buffer };
         return .proceed;
     }
@@ -1044,11 +988,11 @@ pub const Script = struct {
     }
 };
 
-pub const ImportAsync = struct {
+const ImportAsync = struct {
     data: *anyopaque,
     callback: ImportAsync.Callback,
 
-    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
+    const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
 };
 
 pub const ModuleSource = struct {
@@ -1067,7 +1011,7 @@ pub const ModuleSource = struct {
     }
 };
 
-pub const ImportedModule = struct {
+const ImportedModule = struct {
     waiters: u16 = 1,
     // Created by a <link rel=modulepreload> hint and not yet claimed by a real
     // import. While set, the single waiter slot belongs to the hint, which
@@ -1085,6 +1029,7 @@ pub const ImportedModule = struct {
 };
 
 const testing = @import("../testing.zig");
+const Inbox = @import("../Inbox.zig");
 
 test "ScriptManagerBase: shutdownCallback fails a .loading module" {
     const page = try testing.pageTest("mcp_nav.html", .{});
@@ -1196,12 +1141,16 @@ test "ScriptManagerBase: waitForImport stops when teardown is pending" {
     try sm.imported_modules.put(sm.allocator, url, .{ .state = .{ .loading = script } });
     sm.async_scripts.append(&script.node);
 
+    var inbox: Inbox = .{};
+    defer inbox.deinit();
+    client.test_inbox = &inbox;
+    defer client.test_inbox = null;
+
     const message_arena = try client.arena_pool.acquire(.tiny, "test teardown message");
-    client.inbox.push(message_arena, .{ .cdp = .{
+    inbox.push(message_arena, .{ .cdp = .{
         .raw = try message_arena.dupe(u8, "{}"),
         .input = .{ .method = "Target.disposeBrowserContext" },
     } });
-    defer client.inbox.pop().?.deinit();
 
     try testing.expectError(error.SyncWaitInterrupted, sm.waitForImport(url));
 }

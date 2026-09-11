@@ -411,7 +411,7 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
                         // If frames's base url is not already set, fill it with
                         // the base tag.
                         if (frame.base_url == null) {
-                            if (n.as(Element).getAttributeSafe(comptime .wrap("href"))) |href| {
+                            if (n.as(Element).getAttributeInterned("href")) |href| {
                                 frame.base_url = try URL.resolve(frame.arena, frame.url, href, .{});
                             }
                         }
@@ -823,19 +823,27 @@ pub fn createElementNS(frame: *Frame, namespace: Element.Namespace, name: []cons
             // Check if this is a custom element (must have hyphen for HTML namespace)
             const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
             if (has_hyphen and namespace == .html) {
-                const definition = frame.window._custom_elements._definitions.get(name);
+                const creation = frame._custom_element_creation;
+                const definition = switch (creation) {
+                    .construct, .bare_context => frame.window._custom_elements._definitions.get(name),
+                    // A windowless document has no registry.
+                    .undefined => null,
+                };
 
                 // Fragment-parse context element. It will not be inserted and
                 // we should not run the custom element's constructor.
                 //
                 // Undefined elements are created in the "undefined" state and
                 // upgraded later, when a matching definition is registered.
-                if (frame._skip_custom_element_upgrade or definition == null) {
+                // Only elements created for this frame's document are
+                // candidates: a windowless document's element is upgraded on
+                // insertion into this frame's document instead.
+                if (creation != .construct or definition == null) {
                     const node = try createHtmlElementT(frame, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = definition,
                     });
-                    if (frame._skip_custom_element_upgrade == false) {
+                    if (creation == .construct) {
                         try frame._undefined_custom_elements.append(frame.arena, node.as(Element).is(Element.Html.Custom).?);
                     }
                     return node;

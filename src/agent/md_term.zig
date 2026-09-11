@@ -20,12 +20,19 @@ const std = @import("std");
 const ansi = @import("ansi.zig");
 const js_highlight = @import("js_highlight.zig");
 
-/// Render markdown `src` as ANSI-styled terminal output to `w` — one-shot
-/// wrapper over `Stream`, so batch and streamed output share one dispatcher.
+/// Render markdown `src` as ANSI-styled terminal output to `w`. Tables are
+/// aligned straight from `src`, so unlike `Stream` there is no size limit.
 pub fn render(w: *std.Io.Writer, src: []const u8) !void {
-    var s: Stream = .{};
-    try s.feed(w, src);
-    try s.close(w);
+    var fence: Fence = .{};
+    var it: LineIterator = std.mem.splitScalar(u8, src, '\n');
+    while (it.next()) |line| {
+        if (!fence.open and isTableRow(line) and isTableSeparator(it.peek() orelse "")) {
+            try renderTable(w, line, &it);
+            try w.writeByte('\n');
+            continue;
+        }
+        try fence.emit(w, line, it.peek() != null);
+    }
 }
 
 const LineIterator = std.mem.SplitIterator(u8, .scalar);
@@ -236,6 +243,25 @@ fn renderFenceRule(w: *std.Io.Writer, opening: bool, delimiter: []const u8) !voi
     try w.writeAll(ansi.reset);
 }
 
+const Fence = struct {
+    open: bool = false,
+    js: js_highlight.State = .normal,
+
+    /// `terminated`: a newline followed the line; a trailing partial line gets none.
+    fn emit(self: *Fence, w: *std.Io.Writer, line: []const u8, terminated: bool) std.Io.Writer.Error!void {
+        if (isFenceDelimiter(line)) {
+            self.open = !self.open;
+            self.js = .normal;
+            if (!self.open) try w.writeByte('\n');
+            try renderFenceRule(w, self.open, line);
+            if (terminated) try w.splatByteAll('\n', if (self.open) 2 else 1);
+            return;
+        }
+        try renderLine(w, line, if (self.open) &self.js else null);
+        if (terminated) try w.writeByte('\n');
+    }
+};
+
 fn isTableRow(line: []const u8) bool {
     const trimmed = std.mem.trimStart(u8, line, " \t");
     return trimmed.len >= 1 and trimmed[0] == '|';
@@ -255,6 +281,9 @@ fn isTableSeparator(line: []const u8) bool {
     return has_dash and has_pipe;
 }
 
+/// A streamed table that outgrows this falls back to per-line rendering.
+const table_buf_len = 16384;
+
 /// Incremental renderer for streamed deltas: buffers until each newline,
 /// then renders the completed line. Fence state carries across lines. Table
 /// rows are withheld and re-rendered aligned once the table ends — alignment
@@ -266,9 +295,7 @@ pub const Stream = struct {
     /// off, withheld tables stay silent until they render.
     show_table_placeholder: bool = false,
     len: usize = 0,
-    in_fence: bool = false,
-    /// Fenced-code lexer state, carried across lines and chunks.
-    js_state: js_highlight.State = .normal,
+    fence: Fence = .{},
     /// A line that outgrew `buf` passes through unrendered to its newline.
     raw: bool = false,
     /// `held`: one pipe row buffered, pending the separator that confirms a
@@ -276,8 +303,7 @@ pub const Stream = struct {
     mode: enum { text, held, table } = .text,
     table_len: usize = 0,
     buf: [4096]u8 = undefined,
-    /// A table that outgrows this falls back to per-line rendering.
-    table_buf: [16384]u8 = undefined,
+    table_buf: [table_buf_len]u8 = undefined,
 
     pub fn feed(self: *Stream, w: *std.Io.Writer, data: []const u8) !void {
         var rest = data;
@@ -339,32 +365,17 @@ pub const Stream = struct {
             .table => try self.renderBufferedTable(w),
         }
         if (self.len == 0) return;
-        const partial = self.buf[0..self.len];
-        if (isFenceDelimiter(partial)) {
-            if (self.in_fence) try w.writeByte('\n');
-            return renderFenceRule(w, !self.in_fence, partial);
-        }
-        try renderLine(w, partial, if (self.in_fence) &self.js_state else null);
+        try self.fence.emit(w, self.buf[0..self.len], false);
     }
 
     fn emitLine(self: *Stream, w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
         switch (self.mode) {
             .text => {
-                if (isFenceDelimiter(text)) {
-                    self.in_fence = !self.in_fence;
-                    self.js_state = .normal;
-                    if (!self.in_fence) try w.writeByte('\n');
-                    try renderFenceRule(w, self.in_fence, text);
-                    try w.writeByte('\n');
-                    if (self.in_fence) try w.writeByte('\n');
-                    return;
-                }
-                if (!self.in_fence and isTableRow(text) and self.appendTableLine(text)) {
+                if (!self.fence.open and isTableRow(text) and self.appendTableLine(text)) {
                     self.mode = .held;
                     return;
                 }
-                try renderLine(w, text, if (self.in_fence) &self.js_state else null);
-                try w.writeByte('\n');
+                try self.fence.emit(w, text, true);
             },
             .held => {
                 if (isTableSeparator(text) and self.appendTableLine(text)) {
@@ -549,12 +560,14 @@ fn renderInlineStyled(w: *std.Io.Writer, text: []const u8, active: ?*const Style
                     continue;
                 }
             },
-            '[' => if (std.mem.indexOfPos(u8, text, i + 1, "](")) |mid| {
-                if (std.mem.indexOfScalarPos(u8, text, mid + 2, ')')) |end| {
-                    try renderLink(w, text[i + 1 .. mid], text[mid + 2 .. end]);
-                    try Style.applyOpt(active, w);
-                    i = end + 1;
-                    continue;
+            // An image shows as its alt-text link; the `!` means nothing on a terminal.
+            '!', '[' => |ch| {
+                const open = if (ch == '!') i + 1 else i;
+                if (open < text.len and text[open] == '[') {
+                    if (try renderLinkAt(w, text, open, active)) |end| {
+                        i = end;
+                        continue;
+                    }
                 }
             },
             else => {},
@@ -626,11 +639,10 @@ fn styled(w: *std.Io.Writer, inner: []const u8, style: []const u8) !void {
     try w.writeAll(ansi.reset);
 }
 
+/// CommonMark's rule: any ASCII punctuation. Covers what the page dumper
+/// escapes and leaves `C:\Users` alone.
 fn isEscapable(c: u8) bool {
-    return switch (c) {
-        '*', '_', '`', '~', '[', ']', '(', ')', '|', '\\' => true,
-        else => false,
-    };
+    return c >= '!' and c <= '~' and !std.ascii.isAlphanumeric(c);
 }
 
 /// A left-trimmed line of 3+ identical `-`, `*` or `_` markers — the whole
@@ -645,13 +657,20 @@ fn isHorizontalRule(line: []const u8) bool {
     return true;
 }
 
-fn renderLink(w: *std.Io.Writer, label: []const u8, url: []const u8) !void {
-    // OSC 8 makes the label clickable where supported and is ignored elsewhere;
-    // the trailing dim url is the fallback for terminals without OSC 8.
+/// Returns the index past the `)`, or null (nothing written) if unterminated.
+fn renderLinkAt(w: *std.Io.Writer, text: []const u8, open: usize, active: ?*const Style) std.Io.Writer.Error!?usize {
+    const mid = std.mem.indexOfPos(u8, text, open + 1, "](") orelse return null;
+    const close = std.mem.indexOfScalarPos(u8, text, mid + 2, ')') orelse return null;
+    try renderLink(w, text[open + 1 .. mid], text[mid + 2 .. close], active);
+    return close + 1;
+}
+
+/// OSC 8 support can't be queried; like `ls --hyperlink=auto` we assume it
+/// on a tty, so the url isn't repeated in the text.
+fn renderLink(w: *std.Io.Writer, label: []const u8, url: []const u8, active: ?*const Style) !void {
     try w.print("\x1b]8;;{s}\x1b\\", .{url});
-    try styled(w, label, ansi.underline);
+    try span(w, label, ansi.underline, active);
     try w.writeAll("\x1b]8;;\x1b\\");
-    if (!std.mem.eql(u8, label, url)) try w.print(" {s}({s}){s}", .{ ansi.dim, url, ansi.reset });
 }
 
 const testing = std.testing;
@@ -742,16 +761,29 @@ test "md_term: fenced template literal spans lines" {
 }
 
 test "md_term: link" {
-    // OSC 8 hyperlink around the label, plus a dim fallback url.
     try expectRender(
-        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\ \x1b[2m(https://x.io)\x1b[0m",
+        "\x1b]8;;https://x.io\x1b\\\x1b[4mLP\x1b[0m\x1b]8;;\x1b\\",
         "[LP](https://x.io)",
     );
-    // A bare link (label == url) omits the redundant suffix.
+}
+
+test "md_term: link label is inline-rendered" {
     try expectRender(
-        "\x1b]8;;https://x.io\x1b\\\x1b[4mhttps://x.io\x1b[0m\x1b]8;;\x1b\\",
-        "[https://x.io](https://x.io)",
+        "\x1b]8;;u\x1b\\\x1b[4ma \x1b[1mb\x1b[0m\x1b[4m [c]\x1b[0m\x1b]8;;\x1b\\",
+        "[a **b** \\[c\\]](u)",
     );
+    try expectRender(
+        "\x1b[1m\x1b]8;;u\x1b\\\x1b[4mx\x1b[0m\x1b[1m\x1b]8;;\x1b\\ y\x1b[0m",
+        "**[x](u) y**",
+    );
+}
+
+test "md_term: image renders as its alt-text link" {
+    try expectRender(
+        "\x1b]8;;https://x.io/a.png\x1b\\\x1b[4mLogo\x1b[0m\x1b]8;;\x1b\\",
+        "![Logo](https://x.io/a.png)",
+    );
+    try expectRender("wow! [x](y", "wow! [x](y");
 }
 
 test "md_term: blockquote" {
@@ -789,6 +821,35 @@ test "md_term: tables align columns and style cells" {
     );
     // A pipe line without a separator row underneath is not a table.
     try expectRender("| just \x1b[1mtext\x1b[0m |", "| just **text** |");
+}
+
+test "md_term: pipe rows without a separator pass through" {
+    try expectRender("| a |\nplain", "| a |\nplain");
+    try expectRender("| a |\n", "| a |\n");
+}
+
+const big_table = "| A | B |\n|-|-|\n" ++ ("| " ++ "a" ** 16 ++ " | " ++ "b" ** 16 ++ " |\n") ** 500;
+
+test "md_term: batch aligns tables beyond the stream table buffer" {
+    try testing.expect(big_table.len > table_buf_len);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try render(&aw.writer, big_table);
+    const out = aw.written();
+
+    const pipe = "\x1b[2m│\x1b[0m";
+    try testing.expectEqual(0, std.mem.count(u8, out, "| a"));
+    try testing.expectEqual(500, std.mem.count(u8, out, pipe ++ " " ++ "a" ** 16 ++ " " ++ pipe));
+    try testing.expect(std.mem.indexOf(u8, out, "\x1b[2m├" ++ "─" ** 18 ++ "┼" ++ "─" ** 18 ++ "┤\x1b[0m\n") != null);
+}
+
+test "md_term: stream falls back to raw rows past its table buffer" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var s: Stream = .{};
+    try s.feed(&aw.writer, big_table);
+    try s.close(&aw.writer);
+    try testing.expectEqual(500, std.mem.count(u8, aw.written(), "| a"));
 }
 
 test "md_term: overwide table falls back to verbatim rows" {
@@ -893,6 +954,7 @@ test "md_term: stream closing fence at message end still draws its rule" {
 
 test "md_term: backslash escapes" {
     try expectRender("a * b", "a \\* b");
+    try expectRender("Part 8 - {x} #1 ok!", "Part 8 \\- \\{x\\} \\#1 ok\\!");
     try expectRender("keep \\d and C:\\Users", "keep \\d and C:\\Users");
 }
 

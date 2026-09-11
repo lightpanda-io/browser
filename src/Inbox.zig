@@ -28,7 +28,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const CDP = @import("cdp/CDP.zig");
+const CDP = @import("server/cdp/CDP.zig");
+const Link = @import("server/Link.zig");
 
 const DoublyLinkedList = std.DoublyLinkedList;
 
@@ -37,20 +38,30 @@ const Inbox = @This();
 mutex: std.Io.Mutex = .init,
 queue: DoublyLinkedList = .{},
 
-// One-way latch, set by the worker's drainInbox the first time it
-// observes a .disconnect (or .close) and never cleared. Ensures that, on
-// multiple drains, the terminated state is preserved / communicated. This is
-// specifically meant to handle the case where a disconnect is captured during
-// a syncRequest and we want the following non-nested tick to pick it up again.
-terminated: bool = false,
+// Payload bytes sitting in the queue. Used to disconnect a client if we've
+// fallen too far behind (largely to protect against a misbehaving client)
+queued_bytes: usize = 0,
 
 pub fn deinit(self: *Inbox) void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     while (self.queue.popFirst()) |node| {
         const msg: *Message = @fieldParentPtr("node", node);
-        msg.deinit();
+        msg.discard();
     }
+    self.queued_bytes = 0;
+}
+
+pub fn queuedBytes(self: *Inbox) usize {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+    return self.queued_bytes;
+}
+
+pub fn isEmpty(self: *Inbox) bool {
+    self.mutex.lockUncancelable(lp.io);
+    defer self.mutex.unlock(lp.io);
+    return self.queue.first == null;
 }
 
 pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
@@ -61,6 +72,7 @@ pub fn push(self: *Inbox, arena: *lp.Arena, payload: Message.Payload) void {
     msg.* = .{ .payload = payload, .arena = arena };
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
+    self.queued_bytes += payload.size();
     self.queue.append(&msg.node);
 }
 
@@ -68,7 +80,9 @@ pub fn pop(self: *Inbox) ?*Message {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
     const node = self.queue.popFirst() orelse return null;
-    return @fieldParentPtr("node", node);
+    const msg: *Message = @fieldParentPtr("node", node);
+    self.queued_bytes -= msg.payload.size();
+    return msg;
 }
 
 // Peek for a message matching `predicate` without removing it. Used by
@@ -99,6 +113,7 @@ pub fn popIf(self: *Inbox, predicate: *const fn (*Message) bool) ?*Message {
         const msg: *Message = @fieldParentPtr("node", node);
         if (predicate(msg)) {
             self.queue.remove(node);
+            self.queued_bytes -= msg.payload.size();
             return msg;
         }
     }
@@ -120,21 +135,46 @@ pub const Message = struct {
         // consumer's use of `input`.
         cdp: Cdp,
 
+        // A BiDi text/binary frame, raw (owned). Unlike CDP it isn't
+        // parsed on the Network thread — nothing on that side needs the
+        // method name yet.
+        bidi: []u8,
+
         // WS ping frame body (≤125 bytes per spec). Consumer is
         // expected to echo via pong on its thread.
         ping: []u8,
 
-        // Peer-initiated close frame. Consumer is expected to send a
-        // close reply and tear the connection down. The peer's close
-        // body is dropped — historically we always reply CLOSE_NORMAL
-        // (status 1000) regardless of what the peer sent.
+        // A close frame was received from the peer. Consumer is expected to
+        // send the close frame and tear the connection down. This may or may
+        // not kill the worker (up to the driver, CDP: always yes, WebDriver:
+        // depends)
         close: void,
+
+        // The Session is over. Currently WebDriver only. Always kills the worker.
+        // This is because for WebDriver, the Worker isn't necessarily tied to
+        // a WebSocket connection, so only an explicit DELETE /session/:id (or
+        // the HTTP reaper) can kill it. tl;dr an explicit "close" needed for
+        // WebDriver since the implicit socket-is-gone (aka .close) is ambiguous
+        // for WebDriver.
+        quit: void,
 
         // No allocation; conveys "no more messages will arrive on
         // this inbox" plus an optional reason. The Network thread
         // pushes this on peer EOF, fatal WS framing error, or
         // (now) JSON parse failure.
         disconnect: ?anyerror,
+
+        // A websocket for the consumer to adopt (an HTTP WebDriver session
+        // gets its BiDi connection after the fact).
+        link: *Link,
+
+        pub fn size(self: Payload) usize {
+            return switch (self) {
+                .cdp => |c| c.raw.len,
+                .bidi, .ping => |b| b.len,
+                .close, .disconnect, .link, .quit => 0,
+            };
+        }
     };
 
     pub const Cdp = struct {
@@ -144,6 +184,15 @@ pub const Message = struct {
 
     pub fn deinit(self: *const Message) void {
         self.arena.release();
+    }
+
+    // For messages that never reached the consumer (Inbox.deinit).
+    fn discard(self: *const Message) void {
+        switch (self.payload) {
+            .link => |link| link.destroy(),
+            else => {},
+        }
+        self.deinit();
     }
 };
 
@@ -339,4 +388,49 @@ test "Inbox: popIf picks first match in FIFO order" {
     const m = inbox.popIf(testIsPing).?;
     defer m.deinit();
     try testing.expectEqual("first", m.payload.ping);
+}
+
+test "Inbox: queued bytes track the payloads" {
+    const arena_pool = &testing.test_app.arena_pool;
+
+    var inbox = Inbox{};
+    defer inbox.deinit();
+
+    try testing.expectEqual(0, inbox.queuedBytes());
+
+    {
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .ping = try arena.dupe(u8, "12345") });
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        // control payloads are free; only what the peer sends counts
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .disconnect = null });
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        const arena = try arena_pool.acquire(.tiny, "inbox test");
+        inbox.push(arena, .{ .bidi = try arena.dupe(u8, "abc") });
+    }
+    try testing.expectEqual(8, inbox.queuedBytes());
+
+    // popIf cherry-picks out of the middle, and has to pay the same toll
+    {
+        const m = inbox.popIf(struct {
+            fn f(msg: *Message) bool {
+                return msg.payload == .bidi;
+            }
+        }.f).?;
+        defer m.deinit();
+    }
+    try testing.expectEqual(5, inbox.queuedBytes());
+
+    {
+        const m = inbox.pop().?;
+        defer m.deinit();
+    }
+    try testing.expectEqual(0, inbox.queuedBytes());
 }

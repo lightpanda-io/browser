@@ -200,6 +200,31 @@ pub fn databaseVersion(self: *const Engine, name: []const u8) !?i64 {
     return self.conn.scalar(i64, "select version from idb_databases where name = ?1", .{name});
 }
 
+const DatabaseInfo = struct {
+    name: []const u8,
+    version: i64,
+};
+
+// Every database of the origin, by name (IDBFactory.databases).
+pub fn databases(self: *const Engine, arena: Allocator) ![]const DatabaseInfo {
+    var rows = try self.conn.rows("select name, version from idb_databases order by name", .{});
+    defer rows.deinit();
+
+    var list: std.ArrayList(DatabaseInfo) = .empty;
+    while (try rows.next()) |row| {
+        try list.append(arena, .{
+            .name = try arena.dupe(u8, row.get([]const u8, 0)),
+            .version = row.get(i64, 1),
+        });
+    }
+    return list.items;
+}
+
+pub fn indexExists(self: *const Engine, object_store_id: i64, name: []const u8) !bool {
+    const id = try self.conn.scalar(i64, "select id from idb_indexes where object_store_id = ?1 and name = ?2", .{ object_store_id, name });
+    return id != null;
+}
+
 pub fn upsertDatabase(self: *Engine, name: []const u8, version: i64) !i64 {
     try self.conn.exec(
         \\ insert into idb_databases (name, version) values (?1, ?2)
@@ -221,7 +246,7 @@ pub fn objectStoreId(self: *const Engine, database_id: i64, name: []const u8) !?
     );
 }
 
-pub const StoreInfo = struct {
+const StoreInfo = struct {
     id: i64,
     key_path: ?Key.KeyPath,
     auto_increment: bool,
@@ -288,6 +313,15 @@ pub fn createObjectStore(
         auto_increment,
     });
     return (try self.objectStoreId(database_id, name)).?;
+}
+
+// A duplicate name surfaces as error.Constraint.
+pub fn renameObjectStore(self: *Engine, object_store_id: i64, name: []const u8) !void {
+    try self.conn.exec("update idb_object_stores set name = ?2 where id = ?1", .{ object_store_id, name });
+}
+
+pub fn renameIndex(self: *Engine, index_id: i64, name: []const u8) !void {
+    try self.conn.exec("update idb_indexes set name = ?2 where id = ?1", .{ index_id, name });
 }
 
 pub fn deleteObjectStore(self: *Engine, database_id: i64, name: []const u8) !void {
@@ -557,7 +591,7 @@ pub fn indexGetAllRows(self: *const Engine, object_store_id: i64, index_id: i64,
     return self.conn.rows(sql, .{ object_store_id, index_id, b.lower, b.upper, limit });
 }
 
-pub const IndexCursorRecord = struct {
+const IndexCursorRecord = struct {
     key: []u8,
     primary_key: []u8,
     value: ?[]u8,
@@ -570,6 +604,7 @@ pub fn indexCursorSeek(
     index_id: i64,
     b: Bounds,
     reverse: bool,
+    unique: bool,
     from_key: []const u8,
     from_pk: []const u8,
     pk_inclusive: bool,
@@ -583,19 +618,26 @@ pub fn indexCursorSeek(
     const key_op = if (reverse) "< " else "> ";
     const pk_op = if (reverse) (if (pk_inclusive) "<= " else "< ") else (if (pk_inclusive) ">= " else "> ");
 
-    var buf: [640]u8 = undefined;
-    const select = if (with_value)
-        "select ir.key, ir.primary_key, r.value from idb_index_records ir join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key"
-    else
-        "select ir.key, ir.primary_key from idb_index_records ir";
-
+    var buf: [768]u8 = undefined;
     const sql = try std.fmt.bufPrint(
         &buf,
-        \\ {s} where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
-        \\ order by ir.key {s}, ir.primary_key {s}
+        \\ select ir.key, {s}{s} from idb_index_records ir {s}
+        \\ where ir.index_id = ?2 and ir.key {s} ?3 and ir.key {s} ?4 and (ir.key {s}?5 or (ir.key = ?5 and ir.primary_key {s}?6))
+        \\ {s} order by ir.key {s}, ir.primary_key {s}
         \\ limit 1 offset ?7
     ,
-        .{ select, ops.lo, ops.hi, key_op, pk_op, order, order },
+        .{
+            if (unique) "min(ir.primary_key)" else "ir.primary_key",
+            if (with_value) ", r.value" else "",
+            if (with_value) "join idb_records r on r.object_store_id = ?1 and r.key = ir.primary_key" else "",
+            ops.lo,
+            ops.hi,
+            key_op,
+            pk_op,
+            if (unique) "group by ir.key" else "",
+            order,
+            if (unique) "asc" else order,
+        },
     );
 
     var row = (try self.conn.row(sql, .{ object_store_id, index_id, b.lower, b.upper, from_key, from_pk, @as(i64, offset) })) orelse return null;
@@ -691,7 +733,7 @@ fn rangeOps(b: Bounds) struct { lo: []const u8, hi: []const u8 } {
 }
 
 // What a ranged getAll/getAllKeys returns: the value or key column.
-pub const Column = enum {
+const Column = enum {
     value,
     key,
 };
@@ -699,7 +741,7 @@ pub const Column = enum {
 // Open a getAll/getAllKeys cursor. The JS layer streams rows straight into a JS
 // array, avoiding a copy of the whole result set out of sqlite. (The SQL text is
 // copied into the prepared statement, so the stack `buf` can be discarded.)
-pub fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
+fn getAllRangeRows(self: *const Engine, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) !Sqlite.Rows {
     var buf: [256]u8 = undefined;
     const head = if (column == .value) "select value" else "select key";
     const sql = try rangeSql(&buf, head, b, " order by key limit ?4");
@@ -718,7 +760,7 @@ pub fn getAllRows(self: *const Engine, object_store_id: i64, b: Bounds, reverse:
     return self.conn.rows(sql, .{ object_store_id, b.lower, b.upper, limit });
 }
 
-pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
+fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, b: Bounds, column: Column, limit_: ?u32) ![]const []u8 {
     var rows = try self.getAllRangeRows(object_store_id, b, column, limit_);
     defer rows.deinit();
 
@@ -729,7 +771,7 @@ pub fn getAllRange(self: *const Engine, arena: Allocator, object_store_id: i64, 
     return list.items;
 }
 
-pub const CursorRecord = struct {
+const CursorRecord = struct {
     key: []u8,
     // null for a key-only cursor (the value column isn't selected or duped).
     value: ?[]u8,

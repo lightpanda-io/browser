@@ -18,7 +18,7 @@
 
 // Synthetic user input driving the DOM: mouse, wheel, keyboard, focus
 // navigation and text insertion. These are mostly fed by CDP's Input domain
-// (src/cdp/domains/input.zig) and by EventManager's default activation
+// (src/server/cdp/domains/input.zig) and by EventManager's default activation
 // behavior. Form submission itself lives on the Frame (it's a navigation
 // concern); the activation paths here call into it.
 
@@ -51,7 +51,7 @@ pub const mouse_button = struct {
     pub const fifth: i32 = 4; // forward
 };
 
-pub const HoverContext = struct {
+const HoverContext = struct {
     x: f64 = 0,
     y: f64 = 0,
     buttons: u16 = 0,
@@ -329,7 +329,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
     const html_element = element.is(Element.Html) orelse return isSvgLink(element);
 
     return switch (html_element._type) {
-        .anchor => element.getAttributeSafe(comptime .wrap("href")) != null,
+        .anchor => element.getAttributeInterned("href") != null,
         .input, .button, .select, .textarea, .label => true,
         .generic => html_element.subtype(Element.Html.Generic)._tag == .summary,
         else => false,
@@ -338,7 +338,7 @@ fn hasClickActivationBehavior(node: *Node) bool {
 
 // SVG 2 <a> links via `href`; xlink:href is the deprecated SVG 1.1 spelling.
 fn svgAnchorHref(element: *Element) ?[]const u8 {
-    return element.getAttributeSafe(comptime .wrap("href")) orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
+    return element.getAttributeInterned("href") orelse element.getAttributeSafe(comptime .wrap("xlink:href"));
 }
 
 fn isSvgLink(element: *Element) bool {
@@ -510,7 +510,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
 
     if (element.is(Element.Svg.Graphics.A) != null) {
         const href = svgAnchorHref(element) orelse return;
-        const target_name = element.getAttributeSafe(comptime .wrap("target")) orelse "";
+        const target_name = element.getAttributeInterned("target") orelse "";
         return followLink(frame, target, element, href, target_name);
     }
 
@@ -519,7 +519,7 @@ pub fn handleClick(frame: *Frame, target: *Node, event_target: *Node) !void {
     switch (html_element._type) {
         .anchor => {
             const anchor = html_element.subtype(Element.Html.Anchor);
-            const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+            const href = element.getAttributeInterned("href") orelse return;
             return followLink(frame, target, element, href, anchor.getTarget());
         },
         .input => {
@@ -600,9 +600,13 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         if (target_name.len == 0) {
             break :blk target.ownerFrame(frame);
         }
-        break :blk frame.resolveTargetFrame(target_name) orelse {
-            log.warn(.not_implemented, "target", .{ .type = frame._type, .url = frame.url, .target = target_name });
-            return;
+        break :blk switch (frame.resolveTargetFrame(target_name)) {
+            .frame => |f| f,
+            .blank => {
+                try element.focus(frame);
+                _ = try target.ownerFrame(frame).openBlankTarget(element, href);
+                return;
+            },
         };
     };
 
@@ -678,7 +682,7 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
             return;
         }
 
-        return editKey(frame, event, input, key);
+        return editKey(frame, keyboard_event, input, key);
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
@@ -689,12 +693,22 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
             return;
         }
 
-        return editKey(frame, event, textarea, key);
+        return editKey(frame, keyboard_event, textarea, key);
     }
 }
 
 // edit keys are handled by Input and TextArea the same
-fn editKey(frame: *Frame, event: *Event, ctl: anytype, key: KeyboardEvent.Key) !void {
+fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
+    const event = keyboard_event.asEvent();
+
+    if (caretMove(key, ctl)) |move| {
+        // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
+        if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
+            return;
+        }
+        return ctl.moveCaret(move, keyboard_event.getShiftKey(), frame);
+    }
+
     if (key == .Backspace or key == .Delete) {
         const forward = key == .Delete;
         if (try allowEdit(frame, event, ctl.asElement(), null, null, deleteInputType(forward))) {
@@ -708,6 +722,21 @@ fn editKey(frame: *Frame, event: *Event, ctl: anytype, key: KeyboardEvent.Key) !
             try ctl.innerInsert(key.asString(), frame);
         }
     }
+}
+
+// Caret movement a key's default action performs on `ctl`, if any. On a
+// single-line <input> ArrowUp/ArrowDown go to the ends of the value, as in
+// Chrome; on a <textarea> they would need line geometry, so they do nothing.
+fn caretMove(key: KeyboardEvent.Key, ctl: anytype) ?@TypeOf(ctl.*).CaretMove {
+    return switch (key) {
+        .ArrowLeft => .backward,
+        .ArrowRight => .forward,
+        .Home => .line_start,
+        .End => .line_end,
+        .ArrowUp => if (@TypeOf(ctl) == *Element.Html.Input) .line_start else null,
+        .ArrowDown => if (@TypeOf(ctl) == *Element.Html.Input) .line_end else null,
+        else => null,
+    };
 }
 
 fn deleteInputType(forward: bool) []const u8 {
@@ -813,7 +842,7 @@ fn enterActivates(element: *Element) bool {
         return true;
     }
     if (html_element._type == .anchor) {
-        return element.getAttributeSafe(comptime .wrap("href")) != null;
+        return element.getAttributeInterned("href") != null;
     }
     if (element.is(Element.Html.Input)) |input| {
         return switch (input._input_type) {
@@ -872,29 +901,10 @@ fn moveFocus(frame: *Frame, forward: bool) !void {
 
     var tw = TreeWalker.Full.Elements.init(document.asNode(), .{});
     while (tw.next()) |candidate| {
-        if (candidate.isDisabled()) {
+        const candidate_tab_index = candidate.focusTabIndex() orelse continue;
+        if (candidate_tab_index < 0) {
             continue;
         }
-        if (candidate.is(Element.Html) == null) {
-            continue;
-        }
-
-        const candidate_tab_index = blk: {
-            if (candidate.getAttributeSafe(comptime .wrap("tabindex"))) |attr| {
-                if (Element.Html.parseInteger(attr)) |tab_index| {
-                    if (tab_index < 0) {
-                        continue;
-                    }
-                    break :blk tab_index;
-                }
-                break :blk 0;
-            }
-
-            if (!isNativelyFocusable(candidate)) {
-                continue;
-            }
-            break :blk 0;
-        };
 
         if (edge == null or focusOrderBefore(candidate, candidate_tab_index, edge.?, edge_tab_index) == forward) {
             edge = candidate;

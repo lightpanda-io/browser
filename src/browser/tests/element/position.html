@@ -100,10 +100,13 @@
   testing.expectTrue(zeroWidth.scrollWidth > 0);
 
   // The root containers keep their synthetic size rather than summing
-  // children, so horizontal page-overflow checks stay stable.
+  // children, so horizontal page-overflow checks stay stable. In standards
+  // mode the root element's clientWidth is the viewport (CSSOM View), not
+  // its box; offsetWidth and scrollWidth still report the box.
   testing.expectEqual(document.body.clientWidth, document.body.scrollWidth);
+  testing.expectEqual(window.innerWidth, document.documentElement.clientWidth);
   testing.expectEqual(
-    document.documentElement.clientWidth,
+    document.documentElement.offsetWidth,
     document.documentElement.scrollWidth,
   );
 }
@@ -335,14 +338,16 @@
   testing.expectTrue(panel.scrollHeight > 0);
 
   // The root containers keep their synthetic size rather than summing
-  // children. This is what keeps infinite-scroll triggers reading
-  // `scrollTop + clientHeight >= scrollHeight` on body/documentElement
-  // behaving as they do today.
+  // children. The root element's clientHeight is the viewport (CSSOM View):
+  // jstracker tiles clientWidth/10 cells over clientHeight and calls
+  // elementFromPoint per cell, which the 100M px box turned into ~5M walks.
   testing.expectEqual(document.body.clientHeight, document.body.scrollHeight);
+  testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
   testing.expectEqual(
-    document.documentElement.clientHeight,
+    document.documentElement.offsetHeight,
     document.documentElement.scrollHeight,
   );
+  testing.expectTrue(document.documentElement.scrollHeight > document.documentElement.clientHeight);
 }
 </script>
 

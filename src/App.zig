@@ -44,7 +44,11 @@ arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
-    const platform = try Platform.init(config.v8Flags());
+    const platform = try Platform.init(.{
+        .v8_flags = config.v8Flags(),
+        .locale = config.locale(),
+        .timezone = config.timezone(),
+    });
     errdefer platform.deinit();
 
     const snapshot = try Snapshot.load();
@@ -72,7 +76,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    app.telemetry = try Telemetry.init(app, config.command, config.interactive());
+    app.telemetry = try Telemetry.init(app);
     errdefer app.telemetry.deinit(allocator);
 
     app.arena_pool = ArenaPool.init(allocator, .{});

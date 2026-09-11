@@ -32,7 +32,7 @@ pub const Property = struct {
     value: []const u8,
 };
 
-pub const AlternateLink = struct {
+const AlternateLink = struct {
     href: []const u8,
     hreflang: ?[]const u8,
     type: ?[]const u8,
@@ -41,12 +41,12 @@ pub const AlternateLink = struct {
 
 /// A relation discovered in the HTTP `Link:` response header (RFC 8288),
 /// restricted to the registered relations an agent can act on.
-pub const LinkRel = struct {
+const LinkRel = struct {
     rel: []const u8,
     href: []const u8,
 };
 
-pub const StructuredData = struct {
+const StructuredData = struct {
     json_ld: []const []const u8,
     open_graph: []const Property,
     twitter_card: []const Property,
@@ -173,7 +173,7 @@ pub fn collectStructuredData(
 
     // Extract language from the root <html> element.
     if (root.is(Element)) |root_el| {
-        if (root_el.getAttributeSafe(comptime .wrap("lang"))) |lang| {
+        if (root_el.getAttributeInterned("lang")) |lang| {
             try meta.append(arena, .{ .key = "language", .value = lang });
         }
     } else {
@@ -182,7 +182,7 @@ pub fn collectStructuredData(
         while (children.next()) |child| {
             const el = child.is(Element) orelse continue;
             if (el.getTag() == .html) {
-                if (el.getAttributeSafe(comptime .wrap("lang"))) |lang| {
+                if (el.getAttributeInterned("lang")) |lang| {
                     try meta.append(arena, .{ .key = "language", .value = lang });
                 }
                 break;
@@ -368,7 +368,7 @@ fn collectJsonLd(
     arena: Allocator,
     json_ld: *std.ArrayList([]const u8),
 ) !void {
-    const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
+    const type_attr = el.getAttributeInterned("type") orelse return;
     if (!std.ascii.eqlIgnoreCase(type_attr, "application/ld+json")) return;
 
     var buf: std.Io.Writer.Allocating = .init(arena);
@@ -387,11 +387,11 @@ fn collectMeta(
     arena: Allocator,
 ) !void {
     // charset: <meta charset="..."> (no content attribute needed).
-    if (el.getAttributeSafe(comptime .wrap("charset"))) |charset| {
+    if (el.getAttributeInterned("charset")) |charset| {
         try meta.append(arena, .{ .key = "charset", .value = charset });
     }
 
-    const content = el.getAttributeSafe(comptime .wrap("content")) orelse return;
+    const content = el.getAttributeInterned("content") orelse return;
 
     // Open Graph: <meta property="og:...">
     if (el.getAttributeSafe(comptime .wrap("property"))) |property| {
@@ -412,7 +412,7 @@ fn collectMeta(
     }
 
     // Twitter Cards: <meta name="twitter:...">
-    if (el.getAttributeSafe(comptime .wrap("name"))) |name| {
+    if (el.getName()) |name| {
         if (std.mem.startsWith(u8, name, "twitter:")) {
             try twitter_card.append(arena, .{ .key = name[8..], .value = content });
             return;
@@ -457,16 +457,16 @@ fn collectLink(
     links: *std.ArrayList(Property),
     alternate: *std.ArrayList(AlternateLink),
 ) !void {
-    const rel = el.getAttributeSafe(comptime .wrap("rel")) orelse return;
-    const raw_href = el.getAttributeSafe(comptime .wrap("href")) orelse return;
+    const rel = el.getAttributeInterned("rel") orelse return;
+    const raw_href = el.getAttributeInterned("href") orelse return;
     const href = URL.resolve(arena, frame.base(), raw_href, .{ .encoding = frame.charset }) catch raw_href;
 
     if (std.ascii.eqlIgnoreCase(rel, "alternate")) {
         try alternate.append(arena, .{
             .href = href,
             .hreflang = el.getAttributeSafe(comptime .wrap("hreflang")),
-            .type = el.getAttributeSafe(comptime .wrap("type")),
-            .title = el.getAttributeSafe(comptime .wrap("title")),
+            .type = el.getAttributeInterned("type"),
+            .title = el.getAttributeInterned("title"),
         });
         return;
     }

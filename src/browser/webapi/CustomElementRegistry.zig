@@ -104,6 +104,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = definition;
+    frame.styleChanged();
 
     // Upgrade any undefined custom elements with this name
     var idx: usize = 0;
@@ -137,6 +138,16 @@ pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function.Global {
     return definition.constructor;
 }
 
+pub fn getName(self: *CustomElementRegistry, constructor: js.Function) ?[]const u8 {
+    var it = self._definitions.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.*.constructor.isEqual(constructor)) {
+            return entry.key_ptr.*;
+        }
+    }
+    return null;
+}
+
 pub fn upgrade(self: *CustomElementRegistry, root: *Node, frame: *Frame) !void {
     try upgradeNode(self, root, frame);
 }
@@ -147,9 +158,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, frame: *Frame
         return local.resolvePromise(definition.constructor);
     }
 
-    validateName(name) catch |err| switch (err) {
-        error.SyntaxError => return local.rejectPromise(.{ .dom_exception = .{ .err = error.SyntaxError } }),
-    };
+    try validateName(name);
 
     const gop = try self._when_defined.getOrPut(frame.arena, name);
     if (gop.found_existing) {
@@ -319,6 +328,7 @@ pub const JsApi = struct {
 
     pub const define = bridge.function(CustomElementRegistry.define, .{ .ce_reactions = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
+    pub const getName = bridge.function(CustomElementRegistry.getName, .{});
     pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{ .ce_reactions = true });
     pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{});
 };

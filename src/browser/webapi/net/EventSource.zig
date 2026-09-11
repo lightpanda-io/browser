@@ -82,7 +82,7 @@ _on_open: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 
-pub const ReadyState = enum(u8) {
+const ReadyState = enum(u8) {
     connecting = 0,
     open = 1,
     closed = 2,
@@ -132,7 +132,7 @@ pub fn deinit(self: *EventSource, _: *Page) void {
     self._ready_state = .closed;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
 
     if (self._on_open) |func| {
@@ -162,8 +162,6 @@ fn asEventTarget(self: *EventSource) *EventTarget {
 
 fn connect(self: *EventSource) !void {
     const exec = self._exec;
-    const session = exec.session;
-
     self._skip_lf = false;
     self._bom_checked = false;
     self._line_buf.clearRetainingCapacity();
@@ -174,19 +172,16 @@ fn connect(self: *EventSource) !void {
     try self._id_buf.appendSlice(self._arena.allocator(), self._last_event_id.items);
 
     const same_origin = exec.isSameOrigin(self._url);
-    const cookie_support = self._with_credentials or same_origin;
 
     const transfer = try exec.newRequest(.{
         .ctx = self,
         .url = self._url,
         .method = .GET,
-        .frame_id = exec.frameId(),
-        .loader_id = exec.loaderId(),
-        .cookie_jar = if (cookie_support) &session.cookie_jar else null,
-        .cookie_origin = exec.url.*,
+        .origin = exec.origin(),
+        .request_mode = .cors,
+        .credentials_mode = if (self._with_credentials) .include else .same_origin,
         .resource_type = .eventsource,
         .streaming = true,
-        .notification = session.notification,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
@@ -241,7 +236,7 @@ fn deactivate(self: *EventSource) void {
     self._active = false;
     if (self._transfer) |transfer| {
         self._transfer = null;
-        transfer.abort(error.Abort);
+        transfer.cancel();
     }
     self.releaseRef(self._exec.page);
 }
@@ -575,41 +570,41 @@ pub fn getUrl(self: *const EventSource) []const u8 {
     return self._url;
 }
 
-pub fn getReadyState(self: *const EventSource) u16 {
+fn getReadyState(self: *const EventSource) u16 {
     return @intFromEnum(self._ready_state);
 }
 
-pub fn getWithCredentials(self: *const EventSource) bool {
+fn getWithCredentials(self: *const EventSource) bool {
     return self._with_credentials;
 }
 
-pub fn getOnOpen(self: *const EventSource) ?js.Function.Global {
+fn getOnOpen(self: *const EventSource) ?js.Function.Global {
     return self._on_open;
 }
 
-pub fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnOpen(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_open) |old| {
         old.release();
     }
     self._on_open = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnMessage(self: *const EventSource) ?js.Function.Global {
+fn getOnMessage(self: *const EventSource) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnMessage(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_message) |old| {
         old.release();
     }
     self._on_message = if (cb_) |cb| try cb.persistWithThis(self) else null;
 }
 
-pub fn getOnError(self: *const EventSource) ?js.Function.Global {
+fn getOnError(self: *const EventSource) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
+fn setOnError(self: *EventSource, cb_: ?js.Function) !void {
     if (self._on_error) |old| {
         old.release();
     }

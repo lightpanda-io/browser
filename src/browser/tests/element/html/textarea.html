@@ -230,6 +230,42 @@
   }
 </script>
 
+<script id="selection_uses_current_value">
+  {
+    // A <textarea>'s API value is its raw value, which comes from its child
+    // text node until something assigns to `value`. The selection APIs clamp
+    // against that value, not against an assigned one.
+    // https://html.spec.whatwg.org/#dom-textarea-value
+    // https://html.spec.whatwg.org/#dom-textarea/input-setselectionrange
+    const host = document.createElement('div');
+    host.innerHTML = '<textarea>abcdef</textarea>';
+    document.body.appendChild(host);
+    const parsed = host.firstChild;
+
+    parsed.select();
+    testing.expectEqual(0, parsed.selectionStart);
+    testing.expectEqual(6, parsed.selectionEnd);
+
+    parsed.setSelectionRange(2, 4, 'backward');
+    testing.expectEqual(2, parsed.selectionStart);
+    testing.expectEqual(4, parsed.selectionEnd);
+    testing.expectEqual('backward', parsed.selectionDirection);
+
+    // Offsets past the end clamp to the length of the value.
+    parsed.setSelectionRange(99, 99);
+    testing.expectEqual(6, parsed.selectionStart);
+    testing.expectEqual(6, parsed.selectionEnd);
+
+    // Same when the default value came from the defaultValue setter.
+    const seeded = document.createElement('textarea');
+    document.body.appendChild(seeded);
+    seeded.defaultValue = 'hello';
+    seeded.select();
+    testing.expectEqual(0, seeded.selectionStart);
+    testing.expectEqual(5, seeded.selectionEnd);
+  }
+</script>
+
 <script id="select_event">
   {
     const textarea = document.createElement('textarea');
@@ -303,5 +339,43 @@
       testing.expectEqual(false, lastEvent.cancelable);
       testing.expectEqual(true, bubbledToBody);
     });
+  }
+</script>
+
+<script id="value_setter_moves_caret">
+  {
+    // Setting `value` moves the text entry cursor to the end of the new value,
+    // unselects any selected text and resets the selection direction.
+    // https://html.spec.whatwg.org/#dom-textarea-value
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+
+    textarea.value = 'abc';
+    testing.expectEqual(3, textarea.selectionStart);
+    testing.expectEqual(3, textarea.selectionEnd);
+
+    textarea.setSelectionRange(1, 2, 'backward');
+    textarea.value = 'hello';
+    testing.expectEqual(5, textarea.selectionStart);
+    testing.expectEqual(5, textarea.selectionEnd);
+    testing.expectEqual('none', textarea.selectionDirection);
+
+    // Re-assigning the same value leaves the selection alone
+    // (WPT textfieldselection/selection-after-content-change.html).
+    textarea.setSelectionRange(1, 3, 'backward');
+    textarea.value = 'hello';
+    testing.expectEqual(1, textarea.selectionStart);
+    testing.expectEqual(3, textarea.selectionEnd);
+    testing.expectEqual('backward', textarea.selectionDirection);
+
+    // Assigning a value equal to the default is not a change for the caret,
+    // but it still sets the dirty flag: later default edits stay hidden.
+    const dflt = document.createElement('textarea');
+    dflt.defaultValue = 'foo';
+    dflt.value = 'foo';
+    testing.expectEqual(0, dflt.selectionStart);
+    testing.expectEqual(0, dflt.selectionEnd);
+    dflt.defaultValue = 'bar';
+    testing.expectEqual('foo', dflt.value);
   }
 </script>

@@ -19,11 +19,9 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const Pool = @import("Pool.zig");
 pub const c = @import("sqlite3");
 
 const log = lp.log;
-const Allocator = std.mem.Allocator;
 
 const Sqlite = @This();
 
@@ -168,7 +166,7 @@ pub const Conn = struct {
         return .{ .stmt = stmt.?, .conn = self.conn };
     }
 
-    pub const BeginKind = enum { deferred, immediate, exclusive };
+    const BeginKind = enum { deferred, immediate, exclusive };
     pub fn begin(self: Conn, kind: BeginKind) !void {
         switch (kind) {
             .deferred => try self.exec("begin deferred", .{}),
@@ -273,7 +271,7 @@ const Statement = struct {
         return true;
     }
 
-    pub fn stepToCompletion(self: Statement) !void {
+    fn stepToCompletion(self: Statement) !void {
         const stmt = self.stmt;
         while (true) {
             switch (c.sqlite3_step(stmt)) {
@@ -388,7 +386,7 @@ pub const Rows = struct {
     }
 };
 
-pub fn errorFromCode(result: c_int) Error {
+fn errorFromCode(result: c_int) Error {
     return switch (result) {
         c.SQLITE_ABORT => error.Abort,
         c.SQLITE_AUTH => error.Auth,
