@@ -913,13 +913,12 @@ fn jsValueToArrayBufferSlice(comptime T: type, any_view: bool, js_val: js.Value)
         byte_offset = 0;
     }
 
-    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
+    const buffer = array_buffer orelse return null;
     if (byte_len == 0) {
         return &[_]T{};
     }
 
-    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-    const data = v8.v8__BackingStore__Data(backing_store_handle);
+    const data = js.arrayBufferData(buffer);
     const base = @as([*]u8, @ptrCast(data)) + byte_offset;
 
     // 2. Validate alignment
