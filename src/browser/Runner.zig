@@ -23,6 +23,7 @@ const js = @import("js/js.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const VirtualTime = @import("VirtualTime.zig");
 
 const Node = @import("webapi/Node.zig");
 const Selector = @import("webapi/selector/Selector.zig");
@@ -179,9 +180,7 @@ fn _wait(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         if (ms_elapsed >= timeout_ms) {
             return .timeout;
         }
-        if (next_ms > 0) {
-            io.sleep(.fromMilliseconds(@intCast(next_ms)), .awake) catch {};
-        }
+        self.idleSleep(next_ms);
     }
 }
 
@@ -367,15 +366,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
-        }
+        try self.pollFrame(frame_id, timeout_ms - elapsed);
     }
 }
 
@@ -444,15 +435,7 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
         if (elapsed >= timeout_ms) {
             return error.Timeout;
         }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
-        }
+        try self.pollFrame(frame_id, timeout_ms - elapsed);
     }
 }
 
@@ -475,7 +458,51 @@ fn hasRunnablePage(session: *Session) bool {
     return false;
 }
 
+/// Idle pages still poll, so `remaining_ms` means "wait up to N ms", not
+/// "fail now".
+fn pollFrame(self: *Runner, frame_id: u32, remaining_ms: u32) !void {
+    const sleep_ms = switch (try self.tickForFrame(frame_id, remaining_ms, .{ .until = .done })) {
+        .done => @min(remaining_ms, 50),
+        .ok => |recommended_sleep_ms| recommended_sleep_ms,
+    };
+    self.idleSleep(sleep_ms);
+}
+
+/// Only reached when the last tick made no progress, so a clock jump here
+/// cannot reorder a timer ahead of work that tick completed.
+fn idleSleep(self: *Runner, ms: u32) void {
+    if (ms == 0) {
+        return;
+    }
+    const real_ms = self.advanceVirtualTime(ms);
+    if (real_ms > 0) {
+        lp.io.sleep(.fromMilliseconds(@intCast(real_ms)), .awake) catch {};
+    }
+}
+
+/// Returns the real ms still to sleep. Grants against the next task, not
+/// `real_wait_ms`, which is clamped to the caller's polling slice.
+fn advanceVirtualTime(self: *Runner, real_wait_ms: u32) u32 {
+    const budget = &(self.session.virtual_time orelse return real_wait_ms);
+    if (self.browser.hasBackgroundTasks() or self.http_client.activity().idle() == false) {
+        return real_wait_ms;
+    }
+    const next_ms = self.browser.msToNextTask() orelse return real_wait_ms;
+    const granted = budget.grant(next_ms);
+    if (granted == 0) {
+        return real_wait_ms;
+    }
+    VirtualTime.advance(self.browser.app.platform, granted);
+    log.debug(.browser, "virtual time", .{ .advanced_ms = granted, .remaining_ms = budget.remaining_ms });
+    return @intCast(@min(real_wait_ms, next_ms - granted));
+}
+
 const testing = @import("../testing.zig");
+
+fn textOf(runner: *Runner, frame_id: u32, selector: [:0]const u8) ![]const u8 {
+    const el = try runner.waitForSelector(frame_id, selector, 10);
+    return el.asNode().getTextContentAlloc(testing.arena_allocator);
+}
 test "Runner: waitForSelector timeout" {
     const page = try testing.pageTest("runner/runner1.html", .{});
     defer page.close();
@@ -488,8 +515,7 @@ test "Runner: waitForSelector" {
     const page = try testing.pageTest("runner/runner1.html", .{});
 
     var runner = page.session.runner(.{});
-    const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
-    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+    try testing.expectEqual("selector-1-content", try textOf(&runner, page.frame_id, "#sel1"));
 }
 
 test "Runner: waitForScript timeout" {
@@ -612,6 +638,145 @@ test "Runner: waits out a throttled navigation" {
     try testing.expectEqual(true, elapsed >= 250);
     try testing.expectEqual(0, http_client.delayed_count);
 
-    const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
-    try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+    try testing.expectEqual("selector-1-content", try textOf(&runner, page.frame_id, "#sel1"));
+}
+
+test "Runner: virtual time jumps to the next timer" {
+    const page = try testing.pageTest("runner/virtual_time.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+
+    try testing.expectEqual("virtual-done", try textOf(&runner, page.frame_id, "#out"));
+    try testing.expectEqual(true, elapsed < 1500);
+    // 3000ms skipped, less the real time the page spent before going idle.
+    const remaining = page.session.virtual_time.?.remaining_ms;
+    try testing.expectEqual(true, remaining >= 2000 and remaining < 2500);
+}
+
+test "Runner: virtual time keeps timer order" {
+    const page = try testing.pageTest("runner/virtual_time_order.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+
+    try testing.expectEqual("a,a2,b,c,", try textOf(&runner, page.frame_id, "#out"));
+    const remaining = page.session.virtual_time.?.remaining_ms;
+    try testing.expectEqual(true, remaining >= 4700 and remaining < 4900);
+}
+
+test "Runner: virtual time falls back to real time past the budget" {
+    const page = try testing.pageTest("runner/virtual_time_budget.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 100 });
+    defer page.close();
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+
+    try testing.expectEqual("budget-done", try textOf(&runner, page.frame_id, "#out"));
+    try testing.expectEqual(0, page.session.virtual_time.?.remaining_ms);
+    try testing.expectEqual(true, elapsed >= 100);
+}
+
+test "Runner: virtual time advances performance.now, event timestamps and Date.now" {
+    const page = try testing.pageTest("runner/virtual_time_clocks.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+
+    const perf = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#perf"), 10);
+    const evt = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#evt"), 10);
+    const date = try std.fmt.parseInt(u64, try textOf(&runner, page.frame_id, "#date"), 10);
+    try testing.expectEqual(true, perf >= 2990);
+    try testing.expectEqual(true, evt >= 2990);
+    try testing.expectEqual(true, date >= 2990);
+}
+
+test "Runner: virtual time satisfies the network idle hold" {
+    const page = try testing.pageTest("runner/virtual_time.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .networkidle });
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+
+    try testing.expectEqual(true, page.frame().?._notified_network_idle == .done);
+    try testing.expectEqual(true, elapsed < 450);
+}
+
+test "Runner: interval repeats do not hold virtual time" {
+    const page = try testing.pageTest("runner/virtual_time_interval.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+
+    try testing.expectEqual("interval-done", try textOf(&runner, page.frame_id, "#out"));
+    const remaining = page.session.virtual_time.?.remaining_ms;
+    try testing.expectEqual(true, remaining >= 4000 and remaining < 4200);
+}
+
+test "Runner: virtual time waits for in-flight transfers" {
+    const page = try testing.pageTest("runner/virtual_time_fetch.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+
+    try testing.expectEqual("true", try textOf(&runner, page.frame_id, "#out"));
+}
+
+test "Runner: virtual time drives a non-blocking poll chain" {
+    const page = try testing.pageTest("runner/virtual_time_poll.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    var runner = page.session.runner(.{});
+    _ = try runner.waitForSelector(page.frame_id, "#ready", 5000);
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+
+    try testing.expectEqual(true, elapsed < 1000);
+    // 15 hops of 100ms; the last five are past the blocking nesting depth.
+    const remaining = page.session.virtual_time.?.remaining_ms;
+    try testing.expectEqual(true, remaining >= 3500 and remaining < 3700);
+}
+
+test "Runner: virtual time budget resets per navigation" {
+    const page = try testing.pageTest("runner/virtual_time.html", .{ .wait_until_done = false, .virtual_time_budget_ms = 5000 });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    try testing.expectEqual(true, page.session.virtual_time.?.remaining_ms < 5000);
+
+    try page.session.initiateRootNavigation(page.frame_id, "http://127.0.0.1:9582/src/browser/tests/runner/virtual_time.html", .{});
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .load });
+    try testing.expectEqual(5000, page.session.virtual_time.?.remaining_ms);
+
+    try runner.waitForFrame(page.frame_id, 5000, .{ .until = .done });
+    try testing.expectEqual(true, page.session.virtual_time.?.remaining_ms < 5000);
+
+    const page2 = try page.session.createPage();
+    defer page2.close();
+    try testing.expectEqual(5000, page.session.virtual_time.?.remaining_ms);
+}
+
+test "Runner: timers wait for real time without a budget" {
+    const page = try testing.pageTest("runner/virtual_time.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    const start = lp.datetime.milliTimestamp(.boot);
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 100, .{ .until = .done });
+    const elapsed = lp.datetime.milliTimestamp(.boot) - start;
+
+    try testing.expectEqual(true, elapsed >= 100);
+    try testing.expectEqual("", try textOf(&runner, page.frame_id, "#out"));
 }

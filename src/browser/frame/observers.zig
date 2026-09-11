@@ -27,6 +27,7 @@ const lp = @import("lightpanda");
 
 const Frame = @import("../Frame.zig");
 const Page = @import("../Page.zig");
+const VirtualTime = @import("../VirtualTime.zig");
 
 const Node = @import("../webapi/Node.zig");
 const Event = @import("../webapi/Event.zig");
@@ -354,7 +355,7 @@ pub fn deliverIntersections(frame: *Frame) void {
     }
     frame._intersection.delivery_scheduled = false;
 
-    const now = lp.datetime.milliTimestamp(.boot);
+    const now = VirtualTime.milli();
     if (now - frame._intersection.last_delivery_ms > INTERSECTION_QUIET_MS) {
         frame._intersection.burst_start_ms = now;
         frame._intersection.burst_deliveries = 0;
