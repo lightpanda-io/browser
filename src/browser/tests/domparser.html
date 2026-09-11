@@ -506,6 +506,8 @@
     '<a b="1" b="2"/>',          // duplicate attribute
     '<x:a>1</x:a>',              // undeclared prefix
     '<a>&#0;</a>',
+    '<a><?1x?></a>',             // invalid processing instruction target
+    '<?1x?><a/>',
   ]) {
     testing.expectEqual(bad + ' -> error', bad + (isError(p.parseFromString(bad, 'text/xml')) ? ' -> error' : ' -> ok'));
   }
