@@ -241,6 +241,10 @@ pub fn deinit(self: *Env) void {
     allocator.free(self.eternal_function_templates);
     self.private_symbols.deinit();
 
+    // This has to be before it's destroyed, since the handle has to exist to
+    // be able to notify the platform about it. Documentation hits at this order:
+    // "Notifies the given platform about the Isolate getting deleted soon"
+    v8.v8__Platform__NotifyIsolateShutdown(self.platform.handle, self.isolate.handle);
     self.isolate.exit();
     self.isolate.deinit();
     v8.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
