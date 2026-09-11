@@ -247,6 +247,67 @@
   });
 </script>
 
+<script id=stream_body type=module>
+  const state = await testing.async();
+  const enc = new TextEncoder();
+
+  // ky's request-streams probe: an open stream body constructs fine, and
+  // since `duplex` is never read, it concludes uploads can't stream.
+  let duplexRead = false;
+  const probe = new Request('https://empty.invalid', {
+    body: new ReadableStream(),
+    method: 'POST',
+    get duplex() { duplexRead = true; return 'half'; },
+  });
+  const probeHasContentType = probe.headers.has('Content-Type');
+
+  // Drained on first use, so a body enqueued after construction is read.
+  let controller;
+  const req1 = new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { controller = c; } }),
+  });
+  const usedBefore1 = req1.bodyUsed;
+  controller.enqueue(enc.encode('late'));
+  controller.close();
+  const text1 = await req1.text();
+  const usedAfter1 = req1.bodyUsed;
+
+  // Still open at first use: TypeError.
+  const req2 = new Request('https://example.com', { method: 'POST', body: new ReadableStream() });
+  let rejected2 = false;
+  try { await req2.text(); } catch (e) { rejected2 = e instanceof TypeError; }
+
+  // A Request built from one with a stream body carries it.
+  const req3 = new Request(new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { c.enqueue(enc.encode('carried')); c.close(); } }),
+  }));
+  const text3 = await req3.text();
+
+  // clone() drains, so both copies read the body.
+  const req4 = new Request('https://example.com', {
+    method: 'POST',
+    body: new ReadableStream({ start(c) { c.enqueue(enc.encode('twice')); c.close(); } }),
+  });
+  const req4b = req4.clone();
+  const text4 = await req4.text();
+  const text4b = await req4b.text();
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectFalse(duplexRead);
+    testing.expectFalse(probeHasContentType);
+    testing.expectFalse(usedBefore1);
+    testing.expectEqual('late', text1);
+    testing.expectTrue(usedAfter1);
+    testing.expectTrue(rejected2);
+    testing.expectEqual('carried', text3);
+    testing.expectEqual('twice', text4);
+    testing.expectEqual('twice', text4b);
+  });
+</script>
+
 <script id=content_type_from_body>
   {
     const req = new Request('https://example.com', { method: 'POST', body: 'x' });

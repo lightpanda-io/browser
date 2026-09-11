@@ -26,6 +26,7 @@ const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
 const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
 const FormData = @import("FormData.zig");
@@ -41,6 +42,7 @@ _url: [:0]const u8,
 _method: http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
+_body_stream: ?*ReadableStream = null, // drained into `_body` on first use.
 _arena: *lp.Arena,
 _cache: Cache,
 _credentials: Credentials,
@@ -136,7 +138,13 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| if (r._headers) |h| try Headers.initGuarded(.{ .obj = h }, guard, exec) else null,
     };
 
+    var body_stream: ?*ReadableStream = null;
     const body = if (opts.body) |b| blk: {
+        if (b == .stream) {
+            // Drained on first use, not here: the stream may not be closed yet.
+            body_stream = b.stream;
+            break :blk null;
+        }
         const extracted = try b.extract(arena.allocator());
         // Per Fetch §6.5 step 11, the default Content-Type only applies if
         // the user has not already set one via the headers init dict.
@@ -150,9 +158,12 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         break :blk extracted.bytes;
     } else switch (input) {
         .url => null,
-        // Dupe: the source Request owns its body bytes and may be finalized
-        // before this one.
-        .request => |r| if (r._body) |b| try arena.dupe(u8, b) else null,
+        .request => |r| blk: {
+            body_stream = r._body_stream;
+            // Dupe: the source Request owns its body bytes and may be finalized
+            // before this one.
+            break :blk if (r._body) |b| try arena.dupe(u8, b) else null;
+        },
     };
 
     const signal = if (opts.signal) |s|
@@ -173,6 +184,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         ._redirect = opts.redirect,
         ._mode = mode,
         ._body = body,
+        ._body_stream = body_stream,
         ._signal = signal,
     };
     arena.report();
@@ -254,29 +266,42 @@ fn headerGuard(mode: Mode) Headers.Guard {
 }
 
 fn getBodyUsed(self: *const Request) bool {
-    if (self._body == null) {
+    if (self._body == null and self._body_stream == null) {
         return false;
     }
     return self._body_used;
 }
 
-// Marks a present body consumed; a TypeError if it already was.
-fn consume(self: *Request, local: *const js.Local) !void {
-    if (self._body == null) {
-        return;
+pub fn bodyBytes(self: *Request) !?[]const u8 {
+    if (self._body_stream) |stream| {
+        // drain the stram on first use, TypeError if it can't.
+        self._body = try stream.collectBodyBytes(self._arena.allocator());
+        self._body_stream = null;
+    }
+    return self._body;
+}
+
+// Marks a present body consumed and returns it
+fn consume(self: *Request, local: *const js.Local) ![]const u8 {
+    if (self._body == null and self._body_stream == null) {
+        return "";
     }
 
     if (self._body_used) {
         return local.typeError("Body has already been read");
     }
+    const body = self.bodyBytes() catch |err| switch (err) {
+        error.TypeError => return local.typeError("Failed to read ReadableStream body"),
+        else => return err,
+    };
     self._body_used = true;
+    return body orelse "";
 }
 
 pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
+    const body = try self.consume(local);
 
-    const body = self._body orelse "";
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec) orelse "";
 
@@ -286,15 +311,15 @@ pub fn blob(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn text(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
-    return local.resolvePromise(body_init.stripUtf8Bom(self._body orelse ""));
+    const body = try self.consume(local);
+    return local.resolvePromise(body_init.stripUtf8Bom(body));
 }
 
 pub fn json(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
+    const body = try self.consume(local);
 
-    const value = local.parseJSON(body_init.stripUtf8Bom(self._body orelse "")) catch {
+    const value = local.parseJSON(body_init.stripUtf8Bom(body)) catch {
         return local.rejectPromise(.{ .syntax_error = "failed to parse" });
     };
     return local.resolvePromise(try value.persist());
@@ -302,32 +327,37 @@ pub fn json(self: *Request, exec: *const Execution) !js.Promise {
 
 pub fn arrayBuffer(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
-    return local.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+    const body = try self.consume(local);
+    return local.resolvePromise(js.ArrayBuffer{ .values = body });
 }
 
 pub fn bytes(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
-    return local.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+    const body = try self.consume(local);
+    return local.resolvePromise(js.TypedArray(u8){ .values = body });
 }
 
 pub fn formData(self: *Request, exec: *const Execution) !js.Promise {
     const local = exec.js.local.?;
-    try self.consume(local);
+    // Per Fetch, a null body acts as an empty byte sequence.
+    const body = try self.consume(local);
 
     const headers = try self.getHeaders(exec);
     const content_type = try headers.get("content-type", exec);
-    // Per Fetch, a null body acts as an empty byte sequence.
-    const form_data = body_init.parseFormData(self._body orelse "", content_type, exec) catch |err| switch (err) {
+    const form_data = body_init.parseFormData(body, content_type, exec) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.TypeError => return local.typeError("Failed to parse body as FormData"),
     };
     return local.resolvePromise(form_data);
 }
 
-pub fn clone(self: *const Request, exec: *const Execution) !*Request {
-    const arena = try exec.getPinnedArena(if (self._body) |b| b.len else 512, "Request.clone");
+pub fn clone(self: *Request, exec: *const Execution) !*Request {
+    // No stream tee: a stream body is drained so each copy owns its bytes.
+    const body = self.bodyBytes() catch |err| switch (err) {
+        error.TypeError => return exec.js.local.?.typeError("Failed to read ReadableStream body"),
+        else => return err,
+    };
+    const arena = try exec.getPinnedArena(if (body) |b| b.len else 512, "Request.clone");
     errdefer arena.release();
 
     const request = try arena.create(Request);
@@ -340,7 +370,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._credentials = self._credentials,
         ._redirect = self._redirect,
         ._mode = self._mode,
-        ._body = if (self._body) |b| try arena.dupe(u8, b) else null,
+        ._body = if (body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
     };
     arena.report();

@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const ImageData = @import("../ImageData.zig");
 const context2d = @import("context2d.zig");
 const TextMetrics = @import("TextMetrics.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const CanvasGradient = @import("CanvasGradient.zig");
 const CanvasPattern = @import("CanvasPattern.zig");
 
@@ -32,7 +33,13 @@ const Execution = js.Execution;
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvasRenderingContext2D
 const OffscreenCanvasRenderingContext2D = @This();
+/// https://html.spec.whatwg.org/multipage/canvas.html#dom-offscreencanvasrenderingcontext2d-canvas
+_canvas: *OffscreenCanvas,
 _state: context2d.State = .{},
+
+fn getCanvas(self: *const OffscreenCanvasRenderingContext2D) *OffscreenCanvas {
+    return self._canvas;
+}
 
 fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
     return self._state.getStyle(.fill, exec);
@@ -177,6 +184,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const canvas = bridge.accessor(OffscreenCanvasRenderingContext2D.getCanvas, null, .{});
     pub const font = bridge.accessor(OffscreenCanvasRenderingContext2D.getFont, OffscreenCanvasRenderingContext2D.setFont, .{});
     pub const measureText = bridge.function(OffscreenCanvasRenderingContext2D.measureText, .{});
     pub const setLineDash = bridge.function(OffscreenCanvasRenderingContext2D.setLineDash, .{});
