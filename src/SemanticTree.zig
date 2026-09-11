@@ -134,9 +134,9 @@ fn walk(
         // element's own display matters.
         const style_manager = &ctx.owner_frame._style_manager;
         const hidden = if (current_depth == 0)
-            style_manager.isHidden(el, .{}, .scan)
+            style_manager.isHidden(el, .{})
         else
-            style_manager.hasDisplayNone(el, .scan);
+            style_manager.hasDisplayNone(el);
         if (hidden) {
             return;
         }

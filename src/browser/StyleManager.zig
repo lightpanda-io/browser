@@ -682,30 +682,30 @@ const Probe = enum { hidden, visibility, pointer_events };
 
 const Memo = std.AutoHashMapUnmanaged(*Element, Props);
 
-pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions, comptime access: InlineAccess) bool {
+pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, access, .hidden, options);
+    return self.anyInChain(el, .hidden, options);
 }
 
 /// Computed display:none for a single element (own property, no ancestor walk).
 /// Honors the UA stylesheet rules per HTML Rendering §15.3.1 "Hidden elements".
-pub fn hasDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
-    return self.display(el, access) == .none;
+pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
+    return self.display(el) == .none;
 }
 
 /// Own property, no ancestor walk; honors the UA hidden-element rules.
-pub fn display(self: *StyleManager, el: *Element, comptime access: InlineAccess) Display {
+pub fn display(self: *StyleManager, el: *Element) Display {
     self.rebuildIfDirty() catch return .other;
-    return self.ownProps(el, access).display;
+    return self.ownProps(el).display;
 }
 
 /// Computed display:none coming only from inline style or an author stylesheet
 /// rule — the UA stylesheet's hidden elements (<head>, <script>, [hidden], …)
 /// are NOT counted, so document scaffolding is preserved. Used by the HTML
 /// dump's "invisible" strip mode.
-pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
+pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    const p = self.ownProps(el, access);
+    const p = self.ownProps(el);
     return p.author_display and p.display == .none;
 }
 
@@ -715,18 +715,18 @@ pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element, comptime access: 
 /// rendered, but its computed `visibility` still reflects inherited visibility.
 pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, .materialize, .visibility, .{});
+    return self.anyInChain(el, .visibility, .{});
 }
 
-pub fn hasPointerEventsNone(self: *StyleManager, el: *Element, comptime access: InlineAccess) bool {
+pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     self.rebuildIfDirty() catch return false;
-    return self.anyInChain(el, access, .pointer_events, .{});
+    return self.anyInChain(el, .pointer_events, .{});
 }
 
-fn anyInChain(self: *StyleManager, el: *Element, comptime access: InlineAccess, comptime what: Probe, options: CheckVisibilityOptions) bool {
+fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
-        if (self.ownProps(elem, access).probe(what, options)) {
+        if (self.ownProps(elem).probe(what, options)) {
             return true;
         }
     }
@@ -735,7 +735,7 @@ fn anyInChain(self: *StyleManager, el: *Element, comptime access: InlineAccess, 
 
 /// The memoized own-element result. Callers must have run rebuildIfDirty,
 /// which resets the memo.
-fn ownProps(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+fn ownProps(self: *StyleManager, el: *Element) Props {
     const version = self.frame._page.style_version;
     if (self.memo_version != version) {
         self.memo.clearRetainingCapacity();
@@ -744,17 +744,12 @@ fn ownProps(self: *StyleManager, el: *Element, comptime access: InlineAccess) Pr
 
     const gop = self.memo.getOrPut(self.arena.allocator(), el) catch |err| {
         log.warn(.browser, "StyleManager memo", .{ .err = err });
-        return self.compute(el, access);
+        return self.compute(el);
     };
     if (gop.found_existing) {
-        // Layout reads the inline style object directly, so a hit must still
-        // create what a scan-mode miss left unparsed.
-        if (access == .materialize and el._flags.has_inline_style) {
-            _ = inlineStyle(el, .materialize, self.frame);
-        }
         return gop.value_ptr.*;
     }
-    gop.value_ptr.* = self.compute(el, access);
+    gop.value_ptr.* = self.compute(el);
     return gop.value_ptr.*;
 }
 
@@ -777,12 +772,12 @@ const Priorities = struct {
     }
 };
 
-fn compute(self: *StyleManager, el: *Element, comptime access: InlineAccess) Props {
+fn compute(self: *StyleManager, el: *Element) Props {
     const frame = self.frame;
     var p: Props = .{};
     var priorities: Priorities = .{};
 
-    const inline_props = inlineProps(el, access, frame);
+    const inline_props = inlineProps(el, frame);
     inline for (property_fields) |field| {
         if (@field(inline_props, field)) |value| {
             @field(p, field) = value;
@@ -1179,52 +1174,19 @@ const CheckVisibilityOptions = struct {
 // its field max, so a real rule can never pack to all-ones.
 const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 
-/// How a probe reads an element's inline `style=` attribute.
-pub const InlineAccess = enum {
-    /// Parse the attribute into the element's CSSStyleProperties (the object
-    /// `el.style` hands out) and keep it, so repeat probes on the same element
-    /// cost a list lookup. Layout reads that object directly (getElementAxis,
-    /// horizontalPosition), so every JS-reachable path must materialize.
-    materialize,
-    /// Fold the attribute text on each call; allocates nothing. For
-    /// Zig-initiated tooling that walks the whole document once per turn
-    /// (markdown, dump, tree), where pinning a parsed declaration list in the
-    /// page arena for every inline-styled element outlives its use. An
-    /// object JS already created is still read.
-    scan,
-};
-
-fn inlineProps(el: *Element, comptime access: InlineAccess, frame: *Frame) VisibilityProperties {
+// `frame` must be el's owner frame (el.ownerFrame): that is the map where a
+// parsed inline style lives. Without one the attribute text is folded in
+// place; layout materializes the object itself when it needs it.
+fn inlineProps(el: *Element, frame: *Frame) VisibilityProperties {
     if (!el._flags.has_inline_style) {
         // Neither a style object nor a style attribute; skip both lookups.
         return .{};
     }
-    if (inlineStyle(el, access, frame)) |style| {
+    if (el.existingStyle(frame)) |style| {
         return extractVisibilityProperties(style);
     }
-    // A JS-created object is read by both modes; `scan` folds the attribute
-    // text instead of parsing it into the page arena.
-    if (access == .scan) {
-        if (el.getAttributeInterned("style")) |attr| {
-            return scanInlineProps(attr);
-        }
-    }
-    return .{};
-}
-
-/// `frame` must be el's owner frame (el.ownerFrame): that is the map where
-/// the materialized style lives.
-fn inlineStyle(el: *Element, comptime access: InlineAccess, frame: *Frame) ?*CSSStyleProperties {
-    if (el.getStyle(frame)) |style| {
-        return style;
-    }
-    if (access == .scan or el.getAttributeInterned("style") == null) {
-        return null;
-    }
-    return el.getOrCreateStyle(frame) catch |err| {
-        log.err(.browser, "StyleManager getOrCreateStyle", .{ .err = err });
-        return null;
-    };
+    const attr = el.getAttributeInterned("style") orelse return .{};
+    return scanInlineProps(attr);
 }
 
 fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
@@ -1278,7 +1240,7 @@ fn scanInlineProps(attr: []const u8) VisibilityProperties {
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
-    const style = inlineStyle(el, .materialize, self.frame) orelse return null;
+    const style = el.inlineStyle(self.frame) orelse return null;
     return styleValue(style, property_name);
 }
 
@@ -1584,7 +1546,7 @@ test "StyleManager: packed priority bounds" {
     try testing.expect(MAX_LAYERS < UNLAYERED_RANK);
 }
 
-test "StyleManager: inlineProps: scan matches materialize" {
+test "StyleManager: inlineProps: scan matches the parsed style object" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
@@ -1618,10 +1580,10 @@ test "StyleManager: inlineProps: scan matches materialize" {
     var child = div.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         const el = node.is(Element) orelse continue;
-        const scanned = inlineProps(el, .scan, frame);
+        const scanned = inlineProps(el, frame);
         // scanning never creates the style object
-        try testing.expectEqual(null, el.getStyle(frame));
-        const materialized = inlineProps(el, .materialize, frame);
+        try testing.expectEqual(null, el.existingStyle(frame));
+        const materialized = extractVisibilityProperties(try el.getOrCreateStyle(frame));
         inline for (property_fields) |field| {
             try testing.expectEqual(@field(expected[i], field), @field(scanned, field));
             try testing.expectEqual(@field(expected[i], field), @field(materialized, field));
@@ -1644,41 +1606,38 @@ test "StyleManager: memo: reuse and invalidation" {
     const b = p.asNode().firstChild().?.as(Element);
 
     // The walk memoizes the element and every ancestor
-    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.memo.count());
-    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
     try testing.expectEqual(3, sm.memo.count());
 
-    // A scan never creates the style object; a materialize hit does
-    try testing.expectEqual(null, b.getStyle(frame));
-    try testing.expectEqual(false, sm.isHidden(b, .{}, .materialize));
-    try testing.expect(b.getStyle(frame) != null);
-    try testing.expectEqual(3, sm.memo.count());
+    // Probes never create the style object
+    try testing.expectEqual(null, b.existingStyle(frame));
 
     // An attribute change anywhere invalidates the memo
     try p.setAttributeSafe(comptime .wrap("hidden"), .wrap(""), frame);
-    try testing.expectEqual(true, sm.isHidden(b, .{}, .scan));
-    try testing.expectEqual(false, sm.hasDisplayNone(b, .scan));
-    try testing.expectEqual(true, sm.hasDisplayNone(p, .scan));
-    try testing.expectEqual(false, sm.hasAuthorDisplayNone(p, .scan));
+    try testing.expectEqual(true, sm.isHidden(b, .{}));
+    try testing.expectEqual(false, sm.hasDisplayNone(b));
+    try testing.expectEqual(true, sm.hasDisplayNone(p));
+    try testing.expectEqual(false, sm.hasAuthorDisplayNone(p));
 
     p.removeAttributeSafe(comptime .wrap("hidden"), frame);
-    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
 
     try b.setStyle("display: none; pointer-events: none", frame);
-    try testing.expectEqual(true, sm.hasAuthorDisplayNone(b, .scan));
-    try testing.expectEqual(true, sm.hasPointerEventsNone(b, .scan));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(p, .scan));
+    try testing.expectEqual(true, sm.hasAuthorDisplayNone(b));
+    try testing.expectEqual(true, sm.hasPointerEventsNone(b));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(p));
 
     try b.setStyle("display: flex; visibility: hidden", frame);
-    try testing.expectEqual(.flex, sm.display(b, .scan));
-    try testing.expectEqual(false, sm.isHidden(b, .{}, .scan));
-    try testing.expectEqual(true, sm.isHidden(b, .{ .check_visibility = true }, .scan));
+    try testing.expectEqual(.flex, sm.display(b));
+    try testing.expectEqual(false, sm.isHidden(b, .{}));
+    try testing.expectEqual(true, sm.isHidden(b, .{ .check_visibility = true }));
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
-    try testing.expectEqual(false, sm.hasPointerEventsNone(b, .scan));
+    try testing.expectEqual(false, sm.hasPointerEventsNone(b));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
-    try testing.expectEqual(false, sm.isHidden(p, .{}, .scan));
+    try testing.expectEqual(false, sm.isHidden(p, .{}));
     try testing.expectEqual(2, sm.memo.count());
 }
