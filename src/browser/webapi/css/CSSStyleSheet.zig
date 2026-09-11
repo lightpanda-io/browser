@@ -66,8 +66,9 @@ fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
 
     if (self.getOwnerNode()) |owner| {
         if (owner.is(Element.Html.Style)) |style| {
+            // Same cascade as the text StyleManager already parsed: no notify.
             const text = try style.asNode().getTextContentAlloc(frame.local_arena);
-            try self.replaceSync(text, frame);
+            try self.parseInto(text, frame);
         }
     }
 
@@ -114,9 +115,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
         log.debug(.not_implemented, "insertRule clamped index", .{});
     }
     try rules.insert(index, inserted, frame);
-
-    // Notify StyleManager that rules have changed
-    frame._style_manager.sheetModified();
+    frame._style_manager.ruleInserted(self, inserted);
 
     return index;
 }
@@ -167,7 +166,12 @@ pub fn replace(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!j
 pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
     const rules = try self.getCssRules(frame);
     rules.clear();
+    try self.parseInto(text, frame);
+    frame._style_manager.sheetModified();
+}
 
+fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
+    const rules = try self.getCssRules(frame);
     var it = Parser.parseStylesheet(text);
     var index: u32 = 0;
     while (it.next()) |parsed_rule| {
@@ -187,9 +191,6 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSErr
         try rules.insert(index, inserted, frame);
         index += 1;
     }
-
-    // Notify StyleManager that rules have changed
-    frame._style_manager.sheetModified();
 }
 
 pub const JsApi = struct {

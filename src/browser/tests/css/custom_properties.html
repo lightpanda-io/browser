@@ -156,6 +156,26 @@
 }
 </script>
 
+<script id=custom_property_insert_rule_append>
+{
+  // An append to the last sheet skips the rebuild, but still has to reach a
+  // property that was already looked up and parsed.
+  const plain = $('#plain');
+  testing.expectEqual('#336699', getComputedStyle(plain).getPropertyValue('--brand'));
+
+  const sheet = $('#dyn').sheet;
+  sheet.insertRule(':root { --brand: red }', sheet.cssRules.length);
+  testing.expectEqual('red', getComputedStyle(plain).getPropertyValue('--brand'));
+  sheet.insertRule(':root { --fresh: new }', sheet.cssRules.length);
+  testing.expectEqual('new', getComputedStyle(plain).getPropertyValue('--fresh'));
+
+  sheet.deleteRule(0);
+  sheet.deleteRule(0);
+  testing.expectEqual('#336699', getComputedStyle(plain).getPropertyValue('--brand'));
+  testing.expectEqual('', getComputedStyle(plain).getPropertyValue('--fresh'));
+}
+</script>
+
 <script id=custom_property_not_on_inline_declaration>
 {
   // A non-computed declaration only ever reports its own inline properties;
