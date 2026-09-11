@@ -643,19 +643,32 @@ pub fn httpMaxHostOpen(self: *const Config) u8 {
     };
 }
 
-pub fn httpNavDelay(self: *const Config) ?u32 {
+pub const HttpNavDelay = union(enum) {
+    // --http-nav-delay 0: no rate limiting
+    off,
+    // no --http-nav-delay: dynamic spacing, grows with the host's load
+    adaptive,
+    // --http-nav-delay N: exact spacing asked by the user
+    fixed: u32,
+};
+
+pub fn httpNavDelay(self: *const Config) HttpNavDelay {
     const ms = switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_delay,
         else => unreachable,
-    } orelse return null;
-    return if (ms == 0) null else ms;
+    } orelse return .adaptive;
+    return if (ms == 0) .off else .{ .fixed = ms };
 }
+
+// Navigations an idle host absorbs before the rate limiter spaces them. A
+// short job never reaches it, so the limiter stays invisible to it.
+pub const DEFAULT_NAV_BURST: u32 = 10;
 
 pub fn httpNavBurst(self: *const Config) u32 {
     const burst = switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_nav_burst,
         else => unreachable,
-    } orelse 1;
+    } orelse DEFAULT_NAV_BURST;
     return @max(burst, 1);
 }
 
@@ -1236,6 +1249,48 @@ test "Config: adblockLists splits comma-separated paths" {
     try std.testing.expectEqualStrings("easylist.txt", paths.next().?);
     try std.testing.expectEqualStrings("easyprivacy.txt", paths.next().?);
     try std.testing.expectEqual(null, paths.next());
+}
+
+test "Config: httpNavDelay modes" {
+    // unset: adaptive rate limit by default
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(.adaptive, config.httpNavDelay());
+    }
+    // 0: no rate limit
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .http_nav_delay = 0,
+        } });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(.off, config.httpNavDelay());
+    }
+    // explicit value: fixed rate limit
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .http_nav_delay = 250,
+        } });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(HttpNavDelay{ .fixed = 250 }, config.httpNavDelay());
+    }
+}
+
+test "Config: httpNavBurst" {
+    // unset: an idle host absorbs DEFAULT_NAV_BURST navigations at once
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{} });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(DEFAULT_NAV_BURST, config.httpNavBurst());
+    }
+    // 0 is treated as 1: strict spacing, no burst
+    {
+        var config = try Config.init(std.testing.allocator, "test", .{ .serve = .{
+            .http_nav_burst = 0,
+        } });
+        defer config.deinit(std.testing.allocator);
+        try std.testing.expectEqual(1, config.httpNavBurst());
+    }
 }
 
 test "Config: blockedUrlPatterns splits comma-separated patterns" {
