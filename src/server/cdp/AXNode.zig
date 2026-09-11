@@ -1280,8 +1280,10 @@ fn scratchAllocator(temp_arena: ?*lp.Arena, frame: *Frame) std.mem.Allocator {
     return if (temp_arena) |a| a.allocator() else frame.call_arena;
 }
 
+const HiddenOptions = struct { ancestors: bool = true };
+
 /// Chromium's AX tree prunes display:none and visibility:hidden alike.
-fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: struct { ancestors: bool = true }) bool {
+fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: HiddenOptions) bool {
     return hasHidingAttribute(elt) or frame._style_manager.isHidden(elt, .{
         .check_visibility = true,
         .ancestors = options.ancestors,
