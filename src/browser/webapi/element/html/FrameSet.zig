@@ -35,45 +35,45 @@ fn reflectedWindow(self: *FrameSet, frame: *Frame) *Window {
     return self.asElement().ownerFrame(frame).window;
 }
 
-pub fn getOnBlur(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnBlur(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_blur;
 }
-pub fn setOnBlur(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnBlur(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_blur = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnError(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_error;
 }
-pub fn setOnError(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnError(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_error = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getOnFocus(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnFocus(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_focus;
 }
-pub fn setOnFocus(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnFocus(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_focus = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getOnLoad(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnLoad(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_load;
 }
-pub fn setOnLoad(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnLoad(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_load = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getOnResize(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnResize(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_resize;
 }
-pub fn setOnResize(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnResize(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_resize = Window.getFunctionFromSetter(setter);
 }
 
-pub fn getOnScroll(self: *FrameSet, frame: *Frame) ?js.Function.Global {
+fn getOnScroll(self: *FrameSet, frame: *Frame) ?js.Function.Global {
     return self.reflectedWindow(frame)._on_scroll;
 }
-pub fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
+fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
     self.reflectedWindow(frame)._on_scroll = Window.getFunctionFromSetter(setter);
 }
 

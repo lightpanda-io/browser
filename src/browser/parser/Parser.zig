@@ -185,7 +185,7 @@ const Error = struct {
 };
 
 pub const PrescanResource = h5e.PrescanResource;
-pub const PrescanCallback = h5e.PrescanCallback;
+const PrescanCallback = h5e.PrescanCallback;
 
 // Preload scanner: a tokenizer-only pass over a buffered document, reporting
 // fetchable script resources (and the first <base href>) through `callback`.
@@ -728,6 +728,7 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
             try self.frame.appendNew(parent, child);
         },
         .text => |txt| try self.appendTextChunk(parent, txt),
+        .failed => {},
     }
 }
 
@@ -801,6 +802,7 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
             break :blk child;
         },
         .text => |txt| try Frame.node_factory.createTextNode(self.frame, txt),
+        .failed => return,
     };
     try self.frame.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
 }

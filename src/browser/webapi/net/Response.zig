@@ -156,7 +156,7 @@ pub fn createError(exec: *const Execution) !*Response {
     return self;
 }
 
-pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
+fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Response {
     const status = status_ orelse 302;
     switch (status) {
         301, 302, 303, 307, 308 => {},
@@ -189,7 +189,7 @@ pub fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !
     return self;
 }
 
-pub fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
     const session = exec.session;
     const arena = try session.getPinnedArena(.medium, "Response.json");
     errdefer arena.release();
@@ -245,7 +245,7 @@ pub fn getStatus(self: *const Response) u16 {
     return self._status;
 }
 
-pub fn getStatusText(self: *const Response) []const u8 {
+fn getStatusText(self: *const Response) []const u8 {
     return self._status_text;
 }
 
@@ -253,7 +253,7 @@ pub fn getURL(self: *const Response) []const u8 {
     return self._url;
 }
 
-pub fn isRedirected(self: *const Response) bool {
+fn isRedirected(self: *const Response) bool {
     return self._is_redirected;
 }
 
@@ -297,11 +297,11 @@ fn lockStream(stream: *ReadableStream, exec: *const Execution) !void {
     stream._disturbed = true;
 }
 
-pub fn isOK(self: *const Response) bool {
+fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
-pub fn getBodyUsed(self: *const Response) bool {
+fn getBodyUsed(self: *const Response) bool {
     return switch (self._body) {
         .empty => false,
         .stream => |stream| stream._disturbed,
@@ -342,7 +342,7 @@ pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
     return self.consumeAs(.text, exec);
 }
 
-pub fn getJson(self: *Response, exec: *const Execution) !js.Promise {
+fn getJson(self: *Response, exec: *const Execution) !js.Promise {
     return self.consumeAs(.json, exec);
 }
 

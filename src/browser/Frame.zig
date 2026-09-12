@@ -76,6 +76,7 @@ const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRa
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
@@ -363,7 +364,7 @@ _http_headers: std.ArrayList(HttpHeader) = .empty,
 _referrer: ?[]const u8 = null,
 referrer_policy: referrer.Policy = .default,
 
-pub const HttpHeader = struct {
+const HttpHeader = struct {
     name: []const u8,
     value: []const u8,
 };
@@ -460,18 +461,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     }
     self.window._cross_origin_wrapper = .{ .window = self.window };
 
-    self._http_owner = .{
-        .blob_urls = &page.blob_urls,
-        .origin = &self.origin,
-        .url = &self.url,
-        .parent = if (parent) |p| &p._http_owner else null,
-        .frame_id = frame_id,
-        .document_frame_id = frame_id,
-        .loader_id = self._loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .notification = session.notification,
-        .performance = self.window._performance,
-    };
+    self._http_owner = GlobalScope.initHttpOwner(.{ .frame = self });
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
@@ -1214,7 +1204,7 @@ pub fn documentIsLoaded(self: *Frame) void {
     };
 }
 
-pub fn _documentIsLoaded(self: *Frame) !void {
+fn _documentIsLoaded(self: *Frame) !void {
     try self.dispatchReadyStateChange();
 
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._page);
@@ -1247,7 +1237,7 @@ pub fn scriptsCompletedLoading(self: *Frame) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
+fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
     // When parsing HTML, fire any load event for an iframe on the next tick.
     const parsing_html = switch (self._parse_state) {
         .html => true,
@@ -1951,7 +1941,8 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        log.err(.frame, "frame.scriptAddedCallback", .{
+        const level: log.Level = if (err == error.UrlBlocked) .warn else .err;
+        log.log(.frame, level, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
             .src = script.asElement().getAttributeInterned("src"),
@@ -2818,7 +2809,7 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
     return self.moveAllChildren(fragment, parent, ref_node, .records);
 }
 
-pub const MoveChildrenNotify = enum { records, silent_parent };
+const MoveChildrenNotify = enum { records, silent_parent };
 
 // Moves every child of `source` into `parent` (before `ref_node`, or
 // appended). Per the DOM insert algorithm for fragments, observers get one
@@ -2910,7 +2901,7 @@ const InsertNodeOpts = struct {
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
 }
-pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
+fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     // caller should have made sure this was the case
 
     lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
@@ -3121,7 +3112,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
 }
 
 fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
-    const style = element.getStyle(self) orelse return;
+    const style = element.existingStyle(self) orelse return;
     style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
         log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
     };
@@ -3179,7 +3170,7 @@ pub fn updateRangesForSplitText(self: *Frame, target: *Node, new_node: *Node, of
 /// Update all live ranges after a node insertion.
 /// Per DOM spec insert algorithm step 6: only applies when inserting before a
 /// non-null reference node.
-pub fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u32) void {
+fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3189,7 +3180,7 @@ pub fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u3
 
 /// Update all live ranges after a node removal.
 /// Per DOM spec remove algorithm steps 4-7.
-pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_index: u32) void {
+fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3416,7 +3407,7 @@ const IdleNotification = union(enum) {
     }
 };
 
-pub const NavigateReason = enum {
+const NavigateReason = enum {
     anchor,
     address_bar,
     form,
@@ -3485,7 +3476,7 @@ pub const QueuedNavigation = struct {
     navigation_type: NavigationType,
 };
 
-pub const TargetFrame = union(enum) {
+const TargetFrame = union(enum) {
     frame: *Frame,
     blank,
 };

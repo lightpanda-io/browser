@@ -67,7 +67,7 @@ pub fn length(self: *NodeList, frame: *Frame) !u32 {
     };
 }
 
-pub fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
+fn indexedGet(self: *NodeList, index: usize, frame: *Frame) !*Node {
     return try self.getAtIndex(index, frame) orelse return error.NotHandled;
 }
 

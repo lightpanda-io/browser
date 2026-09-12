@@ -50,59 +50,59 @@ pub fn getLanguages(_: *const WorkerNavigator, exec: *const Execution) []const [
     return Navigator.getLanguages(&Navigator.init, exec);
 }
 
-pub fn getAppName(_: *const WorkerNavigator) []const u8 {
+fn getAppName(_: *const WorkerNavigator) []const u8 {
     return Navigator.getAppName(&Navigator.init);
 }
 
-pub fn getAppCodeName(_: *const WorkerNavigator) []const u8 {
+fn getAppCodeName(_: *const WorkerNavigator) []const u8 {
     return Navigator.getAppCodeName(&Navigator.init);
 }
 
-pub fn getAppVersion(_: *const WorkerNavigator) []const u8 {
+fn getAppVersion(_: *const WorkerNavigator) []const u8 {
     return Navigator.getAppVersion(&Navigator.init);
 }
 
-pub fn getLanguage(_: *const WorkerNavigator, exec: *const Execution) []const u8 {
+fn getLanguage(_: *const WorkerNavigator, exec: *const Execution) []const u8 {
     return Navigator.getLanguage(&Navigator.init, exec);
 }
 
-pub fn getOnLine(_: *const WorkerNavigator) bool {
+fn getOnLine(_: *const WorkerNavigator) bool {
     return Navigator.getOnLine(&Navigator.init);
 }
 
-pub fn getHardwareConcurrency(_: *const WorkerNavigator) u32 {
+fn getHardwareConcurrency(_: *const WorkerNavigator) u32 {
     return Navigator.getHardwareConcurrency(&Navigator.init);
 }
 
-pub fn getDeviceMemory(_: *const WorkerNavigator) f64 {
+fn getDeviceMemory(_: *const WorkerNavigator) f64 {
     return Navigator.getDeviceMemory(&Navigator.init);
 }
 
-pub fn getVendor(_: *const WorkerNavigator) []const u8 {
+fn getVendor(_: *const WorkerNavigator) []const u8 {
     return Navigator.getVendor(&Navigator.init);
 }
 
-pub fn getProduct(_: *const WorkerNavigator) []const u8 {
+fn getProduct(_: *const WorkerNavigator) []const u8 {
     return Navigator.getProduct(&Navigator.init);
 }
 
-pub fn getGlobalPrivacyControl(_: *const WorkerNavigator) bool {
+fn getGlobalPrivacyControl(_: *const WorkerNavigator) bool {
     return Navigator.getGlobalPrivacyControl(&Navigator.init);
 }
 
-pub fn getPlatform(_: *const WorkerNavigator) []const u8 {
+fn getPlatform(_: *const WorkerNavigator) []const u8 {
     return Navigator.getPlatform(&Navigator.init);
 }
 
-pub fn getPermissions(self: *WorkerNavigator) *Permissions {
+fn getPermissions(self: *WorkerNavigator) *Permissions {
     return &self._permissions;
 }
 
-pub fn getStorage(self: *WorkerNavigator) *StorageManager {
+fn getStorage(self: *WorkerNavigator) *StorageManager {
     return &self._storage;
 }
 
-pub fn getUserAgentData(self: *WorkerNavigator) *NavigatorUAData {
+fn getUserAgentData(self: *WorkerNavigator) *NavigatorUAData {
     return &self._ua_data;
 }
 

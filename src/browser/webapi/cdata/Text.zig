@@ -51,7 +51,7 @@ pub fn ownData(self: *const Text) []const u8 {
 
 // The concatenated data of the contiguous exclusive Text nodes (adjacent
 // Text siblings on both sides of this one), in tree order.
-pub fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
+fn getWholeText(self: *Text, frame: *Frame) ![]const u8 {
     const node = Factory.protoOf(self).asNode();
 
     var first = node;
@@ -81,7 +81,7 @@ fn isExclusiveTextNode(node: *Node) bool {
     return node.is(Text) != null;
 }
 
-pub fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
+fn getAssignedSlot(self: *Text, frame: *Frame) ?*Slot {
     return slotting.findSlot(Factory.protoOf(self).asNode(), true, frame);
 }
 

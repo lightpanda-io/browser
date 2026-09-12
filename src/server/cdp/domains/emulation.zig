@@ -107,20 +107,6 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
             .value = v,
         });
     }
-    if (params.screenWidth) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenWidth",
-            .value = v,
-        });
-    }
-    if (params.screenHeight) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenHeight",
-            .value = v,
-        });
-    }
 
     // The override is stored on the Browser so it persists across page
     // navigations for the whole CDP connection.
@@ -135,6 +121,8 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
         .scale = if (dsf > 0) dsf else current.scale,
+        .screen_width = if (params.screenWidth orelse 0 > 0) params.screenWidth else current.screen_width,
+        .screen_height = if (params.screenHeight orelse 0 > 0) params.screenHeight else current.screen_height,
     });
 
     return cmd.sendResult(null, .{});
@@ -306,6 +294,39 @@ test "cdp.Emulation: viewport override fires matchMedia change events" {
     frame.js.localScope(&ls);
     defer ls.deinit();
     const v = try ls.local.exec("events.join() === 'onchange:(max-width: 500px),listener:true,onchange:(max-width: 500px),listener:false'", null);
+    try testing.expect(v.toBool());
+}
+
+test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach window.screen" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SCR", .url = "hi.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false, .screenWidth = 2560, .screenHeight = 1440 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    var v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1280 && innerHeight === 720", null);
+    try testing.expect(v.toBool());
+
+    // 0 keeps the current value, as for width/height.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 1024, .height = 0, .deviceScaleFactor = 0, .mobile = false, .screenWidth = 0, .screenHeight = 0 },
+    });
+    v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1024 && innerHeight === 720", null);
+    try testing.expect(v.toBool());
+
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.clearDeviceMetricsOverride" });
+    v = try ls.local.exec("screen.width === innerWidth && screen.height === innerHeight", null);
     try testing.expect(v.toBool());
 }
 

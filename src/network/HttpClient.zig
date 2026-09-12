@@ -30,6 +30,7 @@ const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const Cookie = @import("../browser/webapi/storage/Cookie.zig");
 const Performance = @import("../browser/webapi/Performance.zig");
+const GlobalScope = @import("../browser/global_scope.zig").GlobalScope;
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -46,7 +47,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Method = http.Method;
 pub const Header = http.Header;
-pub const HeaderIterator = http.HeaderIterator;
+const HeaderIterator = http.HeaderIterator;
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -570,7 +571,7 @@ pub fn cancelRequests(self: *Client, owner: *Owner) void {
 }
 
 // Point-in-time snapshot of the client's outstanding work
-pub const Activity = struct {
+const Activity = struct {
     // in-flight + buffered-awaiting-dispatch + parked-for-CDP-interception
     http: usize,
 
@@ -656,8 +657,8 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.frame_id == 0) owned.frame_id = o.frame_id;
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
-            if (owned.notification == null) owned.notification = o.notification;
-            cookie_jar = o.cookie_jar;
+            if (owned.notification == null) owned.notification = o.scope.notification();
+            cookie_jar = o.scope.cookieJar();
         }
         // Resolved onto the transfer; the request's copy is left null so
         // nothing reads the caller's (possibly short-lived) url through it.
@@ -671,7 +672,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             owned.basic_auth_credentials = try arena.dupeZ(u8, c);
         }
 
-        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.origin.* else null;
+        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
         owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
 
         // The body can be larger, so callers can signal, via the
@@ -1374,8 +1375,9 @@ const SyncContext = struct {
         const self: *SyncContext = @ptrCast(@alignCast(transfer.req.ctx));
         lp.assert(transfer.responseStatus() != null, "HttpClient.SyncRequest.headerCallback", .{ .value = transfer.responseStatus() });
         self.status = transfer.responseStatus().?;
-        if (transfer.getContentLength()) |cl| {
-            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(cl), cl);
+        const body_len = transfer.bodyLen();
+        if (body_len > 0) {
+            try self.body.ensureTotalCapacityPrecise(try self.bodyAllocator(body_len), body_len);
         }
         return .proceed;
     }
@@ -1499,23 +1501,33 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 
         defer msg.deinit();
 
-        switch (msg.payload) {
-            .cdp, .bidi => driver.onMessage(msg) catch |err| {
-                // A single malformed/failed dispatch shouldn't poison
-                // the rest of the batch — log and continue.
-                log.err(.app, "client dispatch", .{ .err = err });
+        const done = switch (msg.payload) {
+            .cdp, .bidi => blk: {
+                driver.onMessage(msg) catch |err| {
+                    // A single malformed/failed dispatch shouldn't poison
+                    // the rest of the batch — log and continue.
+                    log.err(.app, "client dispatch", .{ .err = err });
+                };
+                break :blk false;
             },
-            .ping => |body| driver.onPing(body),
-            .close => {
-                driver.onClose();
-                self.disconnected = true;
-                return error.ClientDisconnected;
+            .ping => |body| blk: {
+                driver.onPing(body);
+                break :blk false;
             },
-            .disconnect => |err| {
-                driver.onDisconnect(err);
-                self.disconnected = true;
-                return error.ClientDisconnected;
+            .link => |link| blk: {
+                driver.onLink(link);
+                break :blk false;
             },
+            .quit => blk: {
+                driver.onQuit();
+                break :blk true; // quit always shutsdown
+            },
+            .close => driver.onClose(), // close is up to the driver if it shutsdown
+            .disconnect => |err| driver.onDisconnect(err), // same with disconnect
+        };
+        if (done) {
+            self.disconnected = true;
+            return error.ClientDisconnected;
         }
     }
 }
@@ -1534,7 +1546,7 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
 // eval frame above us will dereference.
 fn allowDuringSyncWait(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .ping, .close, .disconnect => true,
+        .ping, .close, .disconnect, .quit, .link => true,
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
@@ -1544,8 +1556,8 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
 
 fn isTerminal(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .close, .disconnect => true,
-        .ping, .cdp, .bidi => false,
+        .close, .disconnect, .quit => true,
+        .ping, .cdp, .bidi, .link => false,
     };
 }
 
@@ -1562,8 +1574,8 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 // teardown command sits undispatched behind the sync_wait allowlist.
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
-        .close, .disconnect => true,
-        .ping => false,
+        .close, .disconnect, .quit => true,
+        .ping, .link => false,
         .cdp => |c| isTeardownMethod(c.input.method),
         // Frames aren't parsed on the Network thread for BiDi, so we
         // can't spot a teardown command without re-parsing here.
@@ -1850,12 +1862,12 @@ fn ensureNoActiveConnection(self: *const Client) !void {
 }
 
 pub const Request = struct {
-    pub const StartCallback = *const fn (transfer: *Transfer) anyerror!void;
-    pub const HeaderCallback = *const fn (transfer: *Transfer) anyerror!Transfer.HeaderResult;
-    pub const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
-    pub const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
-    pub const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
-    pub const ShutdownCallback = *const fn (ctx: *anyopaque) void;
+    const StartCallback = *const fn (transfer: *Transfer) anyerror!void;
+    const HeaderCallback = *const fn (transfer: *Transfer) anyerror!Transfer.HeaderResult;
+    const DataCallback = *const fn (transfer: *Transfer, data: []const u8) anyerror!void;
+    const DoneCallback = *const fn (ctx: *anyopaque) anyerror!void;
+    const ErrorCallback = *const fn (ctx: *anyopaque, err: anyerror) void;
+    const ShutdownCallback = *const fn (ctx: *anyopaque) void;
 
     pub const ResourceType = enum {
         document,
@@ -1887,7 +1899,7 @@ pub const Request = struct {
 
     // Fetch request redirect mode. `.follow` keeps navigations, XHR and
     // internal requests transparently following redirects.
-    pub const RedirectMode = enum { follow, manual, @"error" };
+    const RedirectMode = enum { follow, manual, @"error" };
 
     // How much of a headers_only body we'll read rather than abort. Draining
     // costs bandwidth but keeps the connection poolable; aborting saves
@@ -1996,7 +2008,7 @@ pub const Request = struct {
     }
 };
 
-pub const SyncResponse = struct {
+const SyncResponse = struct {
     status: u16,
     body: std.ArrayList(u8),
 
@@ -2142,15 +2154,12 @@ pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
 
-    // The Page-level blob: URL store, shared by every context on the page.
-    blob_urls: *const Blob.UrlMap,
+    // The global these requests are made on behalf of.
+    scope: GlobalScope,
 
-    // The owning Frame's / WorkerGlobalScope's origin slot. Pointer because
-    // it can change during navigation.
-    origin: *const ?[]const u8,
-
-    // The owning Frame's URL slot, a pointer for the same reason. A worker
-    // has none: its site for cookies is its creating document's.
+    // The owning Frame's URL slot. A pointer because it changes during
+    // navigation; a worker has none, its site for cookies is its creating
+    // document's. (We don't use scope beause unit tests fake this, `testOwner`)
     url: ?*const [:0]const u8,
 
     // The parent frame's Owner; for a worker, its creating frame's. Outlives
@@ -2164,9 +2173,6 @@ pub const Owner = struct {
     frame_id: u32,
     document_frame_id: u32,
     loader_id: u32,
-    cookie_jar: *CookieJar,
-    performance: *Performance,
-    notification: *Notification,
 
     const Blob = @import("../browser/webapi/Blob.zig");
 
@@ -2207,11 +2213,11 @@ pub const Owner = struct {
         return .{ .url = own_url };
     }
 
-    pub fn addTransfer(self: *Owner, t: *Transfer) void {
+    fn addTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.append(&t.owner_node);
     }
 
-    pub fn removeTransfer(self: *Owner, t: *Transfer) void {
+    fn removeTransfer(self: *Owner, t: *Transfer) void {
         self.transfers.remove(&t.owner_node);
     }
 
@@ -2313,6 +2319,10 @@ pub const Transfer = struct {
 
     // Content length reported on the CDP loadingFinished event.
     _content_length: usize = 0,
+
+    // Length of the body data_callback will receive. Can be different than
+    // Content-Length if the content was compressed
+    _body_len: usize = 0,
 
     _conn_id: i64 = 0,
     _conn_reused: bool = false,
@@ -2931,7 +2941,7 @@ pub const Transfer = struct {
             owner.parent orelse return null
         else
             owner;
-        return .{ .performance = target.performance, .origin = target.origin.* };
+        return .{ .performance = target.scope.performance(), .origin = target.scope.origin() };
     }
 
     // https://fetch.spec.whatwg.org/#concept-tao-check
@@ -3058,6 +3068,7 @@ pub const Transfer = struct {
             lp.metrics.http_response_size_bytes.observe(body.len);
         }
 
+        self._body_len = body.len;
         try self._events.ensureUnusedCapacity(self.arena.allocator(), 4);
         self._events.appendAssumeCapacity(.start);
         self._events.appendAssumeCapacity(.header);
@@ -3305,7 +3316,7 @@ pub const Transfer = struct {
     }
 
     // `url` must have transfer-arena lifetime: it's stored as-is, not duped.
-    pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
+    fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         self.req.url = url;
     }
 
@@ -3445,7 +3456,7 @@ pub const Transfer = struct {
         self.req.basic_auth_credentials = userpwd;
     }
 
-    pub const RequestHeader = struct {
+    const RequestHeader = struct {
         name: []const u8,
         value: []const u8,
         source: HeaderSource = .user_agent,
@@ -3455,9 +3466,9 @@ pub const Transfer = struct {
     // setHeader/appendHeader let a source overwrite headers from its own or
     // a lower layer, never a higher one. .fixed is hardcoded and can't be
     // changed (Sec-Ch-Ua). For CORS, only script-set headers cause a preflight.
-    pub const HeaderSource = enum { user_agent, author, cdp, cli, fixed };
+    const HeaderSource = enum { user_agent, author, cdp, cli, fixed };
 
-    pub const HeaderOpts = struct {
+    const HeaderOpts = struct {
         source: HeaderSource = .user_agent,
     };
 
@@ -3630,6 +3641,13 @@ pub const Transfer = struct {
                         res.callback_error = error.ResponseTooLarge;
                         return http.writefunc_error;
                     }
+                    // TODO: Because of compression, Content-Length is the wire
+                    // length, not necessarily the final length. The chunks
+                    // are read into the transfer.*ARENA* so growth doesn't free
+                    // previous allocations. We could look at Content-Encoding
+                    // and `cl * 3` or something, but that's just a guess.
+                    // I prefer to leave this simple; easier for someone to come
+                    // up with a good solution.
                     res.buffer.ensureTotalCapacityPrecise(transfer.arena.allocator(), cl) catch {};
                 }
             }
@@ -3752,6 +3770,14 @@ pub const Transfer = struct {
     pub fn getContentLength(self: *const Transfer) ?usize {
         const cl = self.getContentLengthRawValue() orelse return null;
         return std.fmt.parseInt(usize, cl, 10) catch null;
+    }
+
+    // Unless streaming, we've read the entire body before calling
+    // header_callback. Code that needs to own the body (most callers) should
+    // use the body length NOT the Content-Length (which would be the compressed
+    // on-the-wire size, not the actual final length). 0 for streaming.
+    pub fn bodyLen(self: *const Transfer) usize {
+        return self._body_len;
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
@@ -4055,10 +4081,10 @@ const Synthetic = struct {
 
             const owner = transfer.owner orelse return error.BlobNotFound;
             const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
-            if (!Owner.Blob.urlBelongsToOrigin(key, owner.origin.*)) {
+            if (!Owner.Blob.urlBelongsToOrigin(key, owner.scope.origin())) {
                 return error.BlobNotFound;
             }
-            const blob = (owner.blob_urls.get(key) orelse return error.BlobNotFound).blob;
+            const blob = (owner.scope.blobUrls().get(key) orelse return error.BlobNotFound).blob;
             // blob can be removed by the time we run, dupe it.
             content_type = try arena.dupe(u8, blob._mime);
             body = try arena.dupe(u8, blob._slice);
@@ -4082,16 +4108,12 @@ const testing = @import("../testing.zig");
 // it: they build their transfers by hand and never go through newRequest.
 fn testOwner(url: ?*const [:0]const u8, parent: ?*const Owner) Owner {
     return .{
-        .blob_urls = undefined,
-        .origin = undefined,
+        .scope = undefined,
         .url = url,
         .parent = parent,
         .frame_id = 0,
         .document_frame_id = 0,
         .loader_id = 0,
-        .cookie_jar = undefined,
-        .notification = undefined,
-        .performance = undefined,
     };
 }
 const AdBlocker = @import("adblock/AdBlocker.zig");
@@ -4939,6 +4961,70 @@ test "HttpClient: kill during a non-terminal callback defers shutdown_callback" 
     try testing.expectEqual(false, ctx.done_called);
 
     try testing.expectEqual(0, client.intercepted);
+    try testing.expectEqual(0, client.transfers.count());
+    try testing.expectEqual(null, owner.transfers.first);
+}
+
+test "HttpClient: bodyLen is the buffered body, not Content-Length" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+    // Runs before pool.deinit (LIFO): retired arenas must go back first.
+    defer client.processGraveyard();
+    defer client.transfers.deinit(testing.allocator);
+
+    var owner = testOwner(null, null);
+
+    const Ctx = struct {
+        body_len: usize = 0,
+        content_length: ?usize = null,
+
+        fn headerCallback(transfer: *Transfer) !Transfer.HeaderResult {
+            const self: *@This() = @ptrCast(@alignCast(transfer.req.ctx));
+            self.body_len = transfer.bodyLen();
+            self.content_length = transfer.getContentLength();
+            return .proceed;
+        }
+    };
+    var ctx = Ctx{};
+
+    const arena = try pool.acquire(.small, "test");
+    const transfer = try arena.create(Transfer);
+    transfer.* = .{
+        .arena = arena,
+        .owner = null,
+        .req = .{
+            .method = .GET,
+            .url = "http://example.com/",
+            .origin = null,
+            .credentials_mode = .omit,
+            .request_mode = .no_cors,
+            .resource_type = .xhr,
+            .shutdown_callback = noopShutdown,
+            .ctx = &ctx,
+            .header_callback = Ctx.headerCallback,
+        },
+        .client = &client,
+        .id = 1,
+        .start_time = 0,
+    };
+
+    try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
+    owner.addTransfer(transfer);
+    transfer.owner = &owner;
+
+    transfer.park(.intercept_request);
+    client.intercepted += 1;
+    try client.fulfillIntercepted(transfer, 200, &.{
+        .{ .name = "Content-Length", .value = "323838382838" },
+    }, "hello");
+    _ = client.dispatchCompleted(.all);
+
+    try testing.expectEqual(323838382838, ctx.content_length);
+    try testing.expectEqual(5, ctx.body_len);
+
     try testing.expectEqual(0, client.transfers.count());
     try testing.expectEqual(null, owner.transfers.first);
 }

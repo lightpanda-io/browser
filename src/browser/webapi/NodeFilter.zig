@@ -47,19 +47,19 @@ pub const FILTER_REJECT: i32 = 2;
 pub const FILTER_SKIP: i32 = 3;
 
 // whatToShow constants
-pub const SHOW_ALL: u32 = 0xFFFFFFFF;
-pub const SHOW_ELEMENT: u32 = 0x1;
-pub const SHOW_ATTRIBUTE: u32 = 0x2;
-pub const SHOW_TEXT: u32 = 0x4;
-pub const SHOW_CDATA_SECTION: u32 = 0x8;
-pub const SHOW_ENTITY_REFERENCE: u32 = 0x10;
-pub const SHOW_ENTITY: u32 = 0x20;
-pub const SHOW_PROCESSING_INSTRUCTION: u32 = 0x40;
-pub const SHOW_COMMENT: u32 = 0x80;
-pub const SHOW_DOCUMENT: u32 = 0x100;
-pub const SHOW_DOCUMENT_TYPE: u32 = 0x200;
-pub const SHOW_DOCUMENT_FRAGMENT: u32 = 0x400;
-pub const SHOW_NOTATION: u32 = 0x800;
+const SHOW_ALL: u32 = 0xFFFFFFFF;
+const SHOW_ELEMENT: u32 = 0x1;
+const SHOW_ATTRIBUTE: u32 = 0x2;
+const SHOW_TEXT: u32 = 0x4;
+const SHOW_CDATA_SECTION: u32 = 0x8;
+const SHOW_ENTITY_REFERENCE: u32 = 0x10;
+const SHOW_ENTITY: u32 = 0x20;
+const SHOW_PROCESSING_INSTRUCTION: u32 = 0x40;
+const SHOW_COMMENT: u32 = 0x80;
+const SHOW_DOCUMENT: u32 = 0x100;
+const SHOW_DOCUMENT_TYPE: u32 = 0x200;
+const SHOW_DOCUMENT_FRAGMENT: u32 = 0x400;
+const SHOW_NOTATION: u32 = 0x800;
 
 pub fn acceptNode(self: *const NodeFilter, node: *Node, local: *const js.Local) !i32 {
     const opts = self._opts orelse return FILTER_ACCEPT;

@@ -73,7 +73,7 @@ pub fn getBaseVal(self: *const AnimatedNumber) f32 {
     return self.currentValue();
 }
 
-pub fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
+fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
     if (!std.math.isFinite(value)) {
         return error.TypeError;
     }
@@ -81,7 +81,7 @@ pub fn setBaseVal(self: *AnimatedNumber, value: f32, frame: *Frame) !void {
     try self._element.setAttributeSafe(self._attr_name, .wrap(serialized), frame);
 }
 
-pub fn getAnimVal(self: *const AnimatedNumber) f32 {
+fn getAnimVal(self: *const AnimatedNumber) f32 {
     return self.currentValue();
 }
 

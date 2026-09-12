@@ -154,19 +154,19 @@ pub fn getReady(self: *Animation, frame: *Frame) !js.Promise {
     return frame.js.toLocal(self._ready_resolver).?.promise();
 }
 
-pub fn getEffect(self: *const Animation) ?js.Object.Global {
+fn getEffect(self: *const Animation) ?js.Object.Global {
     return self._effect;
 }
 
-pub fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
+fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
     self._effect = effect;
 }
 
-pub fn getTimeline(self: *const Animation) ?js.Object.Global {
+fn getTimeline(self: *const Animation) ?js.Object.Global {
     return self._timeline;
 }
 
-pub fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
+fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
     self._timeline = timeline;
 }
 
@@ -174,7 +174,7 @@ pub fn getStartTime(self: *const Animation) ?f64 {
     return self._startTime;
 }
 
-pub fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
+fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     self._startTime = value;
 
     // if the startTime is null, don't play the animation.
@@ -185,7 +185,7 @@ pub fn setStartTime(self: *Animation, value: ?f64, frame: *Frame) !void {
     return self.play(frame);
 }
 
-pub fn getOnFinish(self: *const Animation) ?js.Function.Global {
+fn getOnFinish(self: *const Animation) ?js.Function.Global {
     return self._onFinish;
 }
 
@@ -221,11 +221,11 @@ fn update(ctx: *anyopaque) !?u32 {
     return null;
 }
 
-pub fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
+fn setOnFinish(self: *Animation, cb: ?js.Function.Global) !void {
     self._onFinish = cb;
 }
 
-pub fn playState(self: *const Animation) []const u8 {
+fn playState(self: *const Animation) []const u8 {
     return @tagName(self._playState);
 }
 

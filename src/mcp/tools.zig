@@ -1138,6 +1138,13 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
+    for ([_][]const u8{ "#btnPreventDefault", "#btnDisabled", "#focusTarget", "#plain" }) |selector| {
+        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{{\"name\":\"click\",\"arguments\":{{\"selector\":\"{s}\"}}}}}}", .{selector});
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Clicked element") != null);
+        out.clearRetainingCapacity();
+    }
+
     {
         const inp = frame.document.getElementById("inp", frame).?.asNode();
         const inp_id = (try server.active_session.registry.register(inp)).id;
@@ -1237,6 +1244,13 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     defer try_catch.deinit();
 
     const result = try ls.local.exec(
+        \\ JSON.stringify(window.seq) === JSON.stringify([
+        \\   'pointerdown:0:1:mouse:true', 'mousedown:0:1::true',
+        \\   'pointerup:0:0:mouse:true', 'mouseup:0:0::true', 'click:0:0:mouse:true'
+        \\ ]) &&
+        \\ JSON.stringify(window.seqPrevented) === JSON.stringify(['pointerdown', 'pointerup', 'click']) &&
+        \\ JSON.stringify(window.disabledEvents) === '[]' &&
+        \\ window.focusTargetFocused === true && window.plainBlurred === true &&
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
         \\ window.scrolled === true &&

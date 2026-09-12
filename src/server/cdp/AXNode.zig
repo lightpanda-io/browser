@@ -748,7 +748,7 @@ pub const Writer = struct {
     }
 };
 
-pub const AXRole = enum(u8) {
+const AXRole = enum(u8) {
     // zig fmt: off
     none, article, banner, blockquote, button, caption, cell, checkbox, code, color,
     columnheader, combobox, complementary, contentinfo, date, definition, deletion,
@@ -1295,7 +1295,7 @@ fn isHidden(elt: *DOMNode.Element, frame: *Frame) bool {
 
     // CSS display:none and visibility:hidden (both inherited from ancestors via
     // style computation). Matches Chromium's AX tree which prunes both.
-    if (frame._style_manager.isHidden(elt, .{ .check_visibility = true }, .scan)) {
+    if (frame._style_manager.isHidden(elt, .{ .check_visibility = true })) {
         return true;
     }
 

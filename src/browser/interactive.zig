@@ -29,7 +29,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const InteractivityType = enum {
+const InteractivityType = enum {
     native,
     aria,
     contenteditable,
@@ -37,7 +37,7 @@ pub const InteractivityType = enum {
     focusable,
 };
 
-pub const InteractiveElement = struct {
+const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -149,7 +149,7 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
-pub const FindFilter = struct {
+const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
     /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
@@ -186,7 +186,7 @@ fn walkInteractive(
 
     if (root.is(Element)) |root_el| {
         // root is outside of the tree walk, so check its visibility upfront.
-        if (!root_el.isVisible(frame, .scan)) {
+        if (!root_el.isVisible(frame)) {
             return &.{};
         }
     }
@@ -205,7 +205,7 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+        if (frame._style_manager.hasDisplayNone(el)) {
             tw.skipChildren();
             continue;
         }
@@ -298,7 +298,7 @@ pub fn classifyInteractivity(
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(frame, .scan)) return null;
+    if (el.hasPointerEventsNone(frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {

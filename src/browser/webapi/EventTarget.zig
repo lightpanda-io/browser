@@ -236,7 +236,7 @@ fn defaultPassiveValue(self: *EventTarget, typ: []const u8) bool {
     }
 }
 
-pub const EventListenerCallback = union(enum) {
+const EventListenerCallback = union(enum) {
     function: js.Function,
     object: js.Object,
 };

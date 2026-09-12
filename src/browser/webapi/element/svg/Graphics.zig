@@ -136,7 +136,7 @@ pub const JsApi = struct {
 // SVGBoundingBoxOptions is not modelled: Chrome declares no parameter at all
 // and Firefox's flags degenerate to the fill geometry, so both engines answer
 // every call with the fill box.
-pub fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
+fn getBBox(self: *Graphics, frame: *Frame) !*DOMRect {
     var bounds: PathData.Bounds = .{};
     switch (self._type) {
         .geometry => {
@@ -223,13 +223,13 @@ fn accumulateChildren(parent: *Graphics, matrix: PathData.Matrix, bounds: *PathD
 
 /// Composes `transform` attributes from the element up to, excluding, its
 /// nearest <svg>. Null when the element isn't in a document.
-pub fn getCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+fn getCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
     return currentTransformMatrix(self, .viewport, frame);
 }
 
 /// Like getCTM through every enclosing <svg>, offset by where the outermost
 /// one sits on the page. Nested viewport x/y are not applied.
-pub fn getScreenCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
+fn getScreenCTM(self: *Graphics, frame: *Frame) !?*DOMMatrix {
     return currentTransformMatrix(self, .screen, frame);
 }
 
@@ -290,14 +290,14 @@ fn transformMatrix(element: *Element) PathData.Matrix {
     };
 }
 
-pub fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
+fn getTransform(self: *Graphics, frame: *Frame) !*AnimatedTransformList {
     return AnimatedTransformList.getOrCreate(self.asElement(), .transform, frame);
 }
 
-pub fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
+fn getRequiredExtensions(self: *Graphics, frame: *Frame) !*StringList {
     return StringList.getOrCreate(self.asElement(), .required_extensions, frame);
 }
 
-pub fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
+fn getSystemLanguage(self: *Graphics, frame: *Frame) !*StringList {
     return StringList.getOrCreate(self.asElement(), .system_language, frame);
 }

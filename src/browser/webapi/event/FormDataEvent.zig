@@ -72,7 +72,7 @@ pub fn asEvent(self: *FormDataEvent) *Event {
     return self._proto;
 }
 
-pub fn getFormData(self: *const FormDataEvent) ?*FormData {
+fn getFormData(self: *const FormDataEvent) ?*FormData {
     return self._form_data;
 }
 

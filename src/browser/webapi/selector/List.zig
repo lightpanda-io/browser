@@ -255,13 +255,11 @@ fn findIdSelector(selector: *const Selector.Selector) ?IdAnchor {
 pub fn matches(node: *Node, selector: Selector.Selector, scope: *Node, nth: ?*NthCache, frame: *Frame) bool {
     const el = node.is(Node.Element) orelse return false;
 
-    if (selector.segments.len == 0) {
-        return matchesCompound(el, selector.first, scope, nth, frame);
-    }
-
-    const last_segment = selector.segments[selector.segments.len - 1];
-    if (!matchesCompound(el, last_segment.compound, scope, nth, frame)) {
+    if (!matchesCompound(el, selector.rightmost(), scope, nth, frame)) {
         return false;
+    }
+    if (selector.segments.len == 0) {
+        return true;
     }
 
     return matchSegments(node, selector, selector.segments.len - 1, null, scope, nth, frame);

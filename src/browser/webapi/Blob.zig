@@ -49,7 +49,7 @@ pub const Type = union(enum) {
 };
 
 // Stored in Page.blob_urls.
-pub const UrlEntry = struct {
+const UrlEntry = struct {
     blob: *Blob,
     creator: u32, // frame_id of creator
 };
@@ -238,7 +238,7 @@ const vector_sizes = blk: {
 };
 
 /// Writes a single part with optional line ending normalization.
-pub fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
+fn writePartWithEndings(part: []const u8, use_native_endings: bool, writer: *Writer) !void {
     // Transparent - no conversion needed.
     if (!use_native_endings) {
         try writer.writeAll(part);
@@ -338,7 +338,7 @@ pub fn stream(self: *const Blob, exec: *Execution) !*ReadableStream {
     return ReadableStream.initWithData(self._slice, exec);
 }
 
-pub fn textStream(self: *const Blob, exec: *const Execution) !*ReadableStream {
+fn textStream(self: *const Blob, exec: *const Execution) !*ReadableStream {
     return ReadableStream.initWithText(self._slice, exec);
 }
 

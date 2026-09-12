@@ -58,15 +58,15 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         return resolver.promise();
     };
 
-    if (request._mode == .navigate) {
-        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
-        return resolver.promise();
-    }
-
     // This Request is never exposed to JS. makeRequest dupes the url/body
     // into the transfer, so nothing references it once we return.
     request.acquireRef();
     defer request.releaseRef(exec.page);
+
+    if (request._mode == .navigate) {
+        resolver.rejectError("fetch request mode error", .{ .type_error = "Fetch can't be navigate" });
+        return resolver.promise();
+    }
 
     if (request._signal) |signal| {
         if (signal._aborted) {
@@ -74,6 +74,14 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             return resolver.promise();
         }
     }
+
+    const body = request.bodyBytes() catch |err| switch (err) {
+        error.TypeError => {
+            resolver.rejectError("fetch body error", .{ .type_error = "Failed to read ReadableStream body" });
+            return resolver.promise();
+        },
+        else => return err,
+    };
 
     const response = try Response.initPending(exec);
     errdefer response.deinit(exec.page);
@@ -99,7 +107,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .ctx = fetch,
         .url = request._url,
         .method = request._method,
-        .body = request._body,
+        .body = body,
         .resource_type = .fetch,
         .credentials_mode = switch (request._credentials) {
             .omit => .omit,
@@ -160,9 +168,7 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const arena = self._response._arena;
     if (!is_opaque) {
-        if (transfer.getContentLength()) |cl| {
-            try self._buf.ensureTotalCapacityPrecise(arena.allocator(), cl);
-        }
+        try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
     const res = self._response;

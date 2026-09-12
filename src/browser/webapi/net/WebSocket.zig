@@ -101,7 +101,7 @@ _on_message: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_close: ?js.Function.Global = null,
 
-pub const ReadyState = enum(u8) {
+const ReadyState = enum(u8) {
     connecting = 0,
     open = 1,
     closing = 2,
@@ -131,7 +131,7 @@ const RecvEvent = union(enum) {
     };
 };
 
-pub const BinaryType = enum {
+const BinaryType = enum {
     blob,
     arraybuffer,
 };
@@ -655,11 +655,11 @@ pub fn getUrl(self: *const WebSocket) []const u8 {
     return self._url;
 }
 
-pub fn getReadyState(self: *const WebSocket) u16 {
+fn getReadyState(self: *const WebSocket) u16 {
     return @intFromEnum(self._ready_state);
 }
 
-pub fn getBufferedAmount(self: *const WebSocket) u32 {
+fn getBufferedAmount(self: *const WebSocket) u32 {
     var buffered: u32 = 0;
     for (self._send_queue.items) |msg| {
         switch (msg) {
@@ -670,7 +670,7 @@ pub fn getBufferedAmount(self: *const WebSocket) u32 {
     return buffered;
 }
 
-pub fn getBinaryType(self: *const WebSocket) []const u8 {
+fn getBinaryType(self: *const WebSocket) []const u8 {
     return @tagName(self._binary_type);
 }
 
@@ -678,17 +678,17 @@ pub fn getProtocol(self: *const WebSocket) []const u8 {
     return self._protocol;
 }
 
-pub fn setBinaryType(self: *WebSocket, value: []const u8) void {
+fn setBinaryType(self: *WebSocket, value: []const u8) void {
     if (std.meta.stringToEnum(BinaryType, value)) |bt| {
         self._binary_type = bt;
     }
 }
 
-pub fn getOnOpen(self: *const WebSocket) ?js.Function.Global {
+fn getOnOpen(self: *const WebSocket) ?js.Function.Global {
     return self._on_open;
 }
 
-pub fn setOnOpen(self: *WebSocket, cb_: ?js.Function) !void {
+fn setOnOpen(self: *WebSocket, cb_: ?js.Function) !void {
     if (self._on_open) |old| old.release();
     if (cb_) |cb| {
         self._on_open = try cb.persistWithThis(self);
@@ -697,11 +697,11 @@ pub fn setOnOpen(self: *WebSocket, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnMessage(self: *const WebSocket) ?js.Function.Global {
+fn getOnMessage(self: *const WebSocket) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *WebSocket, cb_: ?js.Function) !void {
+fn setOnMessage(self: *WebSocket, cb_: ?js.Function) !void {
     if (self._on_message) |old| old.release();
     if (cb_) |cb| {
         self._on_message = try cb.persistWithThis(self);
@@ -710,11 +710,11 @@ pub fn setOnMessage(self: *WebSocket, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnError(self: *const WebSocket) ?js.Function.Global {
+fn getOnError(self: *const WebSocket) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *WebSocket, cb_: ?js.Function) !void {
+fn setOnError(self: *WebSocket, cb_: ?js.Function) !void {
     if (self._on_error) |old| old.release();
     if (cb_) |cb| {
         self._on_error = try cb.persistWithThis(self);
@@ -723,11 +723,11 @@ pub fn setOnError(self: *WebSocket, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnClose(self: *const WebSocket) ?js.Function.Global {
+fn getOnClose(self: *const WebSocket) ?js.Function.Global {
     return self._on_close;
 }
 
-pub fn setOnClose(self: *WebSocket, cb_: ?js.Function) !void {
+fn setOnClose(self: *WebSocket, cb_: ?js.Function) !void {
     if (self._on_close) |old| old.release();
     if (cb_) |cb| {
         self._on_close = try cb.persistWithThis(self);

@@ -103,11 +103,11 @@ _selection_direction: Selection.SelectionDirection = .none,
 
 _on_selectionchange: ?js.Function.Global = null,
 
-pub fn getOnSelectionChange(self: *Input) ?js.Function.Global {
+fn getOnSelectionChange(self: *Input) ?js.Function.Global {
     return self._on_selectionchange;
 }
 
-pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
+fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
     if (listener) |listen| {
         self._on_selectionchange = try listen.persistWithThis(self);
     } else {
@@ -129,7 +129,7 @@ pub fn getType(self: *const Input) []const u8 {
     return self._input_type.toString();
 }
 
-pub fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
+fn setType(self: *Input, typ: []const u8, frame: *Frame) !void {
     // Reflected verbatim; attributeChange derives the state from it
     try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), frame);
 }
@@ -189,7 +189,7 @@ pub fn getDefaultValue(self: *const Input) []const u8 {
     return self._default_value orelse "";
 }
 
-pub fn setDefaultValue(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setDefaultValue(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), frame);
 }
 
@@ -212,16 +212,16 @@ pub fn getIndeterminate(self: *const Input) bool {
     return self._indeterminate;
 }
 
-pub fn setIndeterminate(self: *Input, value: bool, frame: *Frame) !void {
+fn setIndeterminate(self: *Input, value: bool, frame: *Frame) !void {
     self._indeterminate = value;
     frame.styleChanged();
 }
 
-pub fn getDefaultChecked(self: *const Input) bool {
+fn getDefaultChecked(self: *const Input) bool {
     return self._default_checked;
 }
 
-pub fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
+fn setDefaultChecked(self: *Input, checked: bool, frame: *Frame) !void {
     if (checked) {
         try self.asElement().setAttributeSafe(comptime .wrap("checked"), .wrap(""), frame);
     } else {
@@ -252,7 +252,7 @@ fn hasDatalistAncestor(self: *const Input) bool {
 // Constraint validation API
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#the-constraint-validation-api
 
-pub fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
+fn getValidity(self: *Input, frame: *Frame) !*ValidityState {
     if (self._validity) |v| return v;
     const v = try frame._factory.create(ValidityState{ ._owner = self.asElement() });
     self._validity = v;
@@ -274,7 +274,7 @@ fn ensureFileList(self: *Input, frame: *Frame) !*FileList {
 
 /// Returns the FileList for a `type="file"` input (lazily allocated, identity preserved).
 /// Non-file inputs return null per HTMLInputElement IDL.
-pub fn getFiles(self: *Input, frame: *Frame) !?*FileList {
+fn getFiles(self: *Input, frame: *Frame) !?*FileList {
     if (self._input_type != .file) {
         return null;
     }
@@ -318,7 +318,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
 
 /// The `files` IDL setter. Unlike a user picking files (selectFiles), an
 /// assignment fires no input/change event.
-pub fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
+fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
     if (self._input_type != .file) {
         return;
     }
@@ -331,7 +331,7 @@ pub fn setFiles(self: *Input, list_: ?*FileList, frame: *Frame) !void {
 
 /// JS-binding wrapper for the `value` getter: for type=file, return the spec
 /// "C:\\fakepath\\<name>" string; otherwise delegate to plain getValue().
-pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
+fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     if (self._input_type != .file) {
         return self.getValue();
     }
@@ -343,7 +343,7 @@ pub fn getValueForJS(self: *const Input, frame: *Frame) ![]const u8 {
     return try std.fmt.allocPrint(frame.local_arena, "C:\\fakepath\\{s}", .{fl._files[0]._name});
 }
 
-pub fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
+fn getValidationMessage(self: *Input, frame: *Frame) []const u8 {
     if (!self.getWillValidate()) return "";
     if (self._custom_validity) |msg| return msg;
     if (self.suffersValueMissing(frame)) return "Please fill out this field.";
@@ -370,12 +370,12 @@ pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     return false;
 }
 
-pub fn reportValidity(self: *Input, frame: *Frame) !bool {
+fn reportValidity(self: *Input, frame: *Frame) !bool {
     // Headless: no UI to draw, so reportValidity matches checkValidity exactly.
     return self.checkValidity(frame);
 }
 
-pub fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void {
+fn setCustomValidity(self: *Input, message: []const u8, frame: *Frame) !void {
     if (message.len == 0) {
         self._custom_validity = null;
     } else {
@@ -593,11 +593,11 @@ fn codepointCount(value: []const u8) usize {
     return std.unicode.utf8CountCodepoints(value) catch value.len;
 }
 
-pub fn getDisabled(self: *const Input) bool {
+fn getDisabled(self: *const Input) bool {
     return self.asConstElement().getAttributeInterned("disabled") != null;
 }
 
-pub fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
+fn setDisabled(self: *Input, disabled: bool, frame: *Frame) !void {
     if (disabled) {
         try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), frame);
     } else {
@@ -618,7 +618,7 @@ pub fn getSrc(self: *const Input, frame: *Frame) ![]const u8 {
     return self.asConstElement().asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Input, src: []const u8, frame: *Frame) !void {
     const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), frame);
 }
@@ -643,24 +643,24 @@ pub fn selectionAvailable(self: *const Input) bool {
 }
 
 // Nullable here, unlike <textarea>'s, which is why these two aren't shared.
-pub fn getSelectionStart(self: *const Input) !?u32 {
+fn getSelectionStart(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_start;
 }
 
-pub fn getSelectionEnd(self: *const Input) !?u32 {
+fn getSelectionEnd(self: *const Input) !?u32 {
     if (!self.selectionAvailable()) return null;
     return self._selection_end;
 }
 
-pub fn getLabels(self: *Input, frame: *Frame) !js.Array {
+fn getLabels(self: *Input, frame: *Frame) !js.Array {
     if (self._input_type == .hidden) {
         return frame.js.local.?.newArray(0);
     }
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 
-pub fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
+fn getList(self: *Input, frame: *Frame) ?*HtmlElement.DataList {
     switch (self._input_type) {
         .hidden, .password, .checkbox, .radio, .file, .submit, .image, .reset, .button => return null,
         else => {},
@@ -706,7 +706,7 @@ pub fn getForm(self: *Input, frame: *Frame) ?*Form {
 // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-submission-0
 // Mirrors Button's overrides — same spec semantics.
 
-pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
+fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     const element = self.asElement();
     const owner_url = element.ownerFrame(frame).url;
     const action = element.getAttributeSafe(comptime .wrap("formaction")) orelse return owner_url;
@@ -716,23 +716,23 @@ pub fn getFormAction(self: *Input, frame: *Frame) ![]const u8 {
     return element.asNode().resolveURLReflect(action, frame, .{});
 }
 
-pub fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormAction(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formaction"), .wrap(value), frame);
 }
 
-pub fn getFormEnctype(self: *const Input) []const u8 {
+fn getFormEnctype(self: *const Input) []const u8 {
     return Form.normalizeEnctype(self.asConstElement().getAttributeSafe(comptime .wrap("formenctype")), "");
 }
 
-pub fn setFormEnctype(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormEnctype(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formenctype"), .wrap(value), frame);
 }
 
-pub fn getFormMethod(self: *const Input) []const u8 {
+fn getFormMethod(self: *const Input) []const u8 {
     return Form.normalizeMethod(self.asConstElement().getAttributeSafe(comptime .wrap("formmethod")), "");
 }
 
-pub fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setFormMethod(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("formmethod"), .wrap(value), frame);
 }
 
@@ -740,7 +740,7 @@ pub fn getFormNoValidate(self: *const Input) bool {
     return self.asConstElement().getAttributeSafe(.wrap("formnovalidate")) != null;
 }
 
-pub fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
+fn setFormNoValidate(self: *Input, value: bool, frame: *Frame) !void {
     if (value) {
         try self.asElement().setAttributeSafe(.wrap("formnovalidate"), .wrap(""), frame);
     } else {
@@ -826,11 +826,11 @@ fn hasNumericValue(typ: Type) bool {
     };
 }
 
-pub fn getValueAsNumber(self: *const Input) f64 {
+fn getValueAsNumber(self: *const Input) f64 {
     return valueToNumber(self._input_type, self.getValue()) orelse std.math.nan(f64);
 }
 
-pub fn setValueAsNumber(self: *Input, number: f64, frame: *Frame) !void {
+fn setValueAsNumber(self: *Input, number: f64, frame: *Frame) !void {
     if (!hasNumericValue(self._input_type)) return error.InvalidStateError;
     if (std.math.isInf(number)) return error.TypeError;
     var buf: [64]u8 = undefined;
@@ -838,7 +838,7 @@ pub fn setValueAsNumber(self: *Input, number: f64, frame: *Frame) !void {
     return self.setValue(text, frame);
 }
 
-pub fn getValueAsDate(self: *const Input, exec: *const js.Execution) !?js.Value {
+fn getValueAsDate(self: *const Input, exec: *const js.Execution) !?js.Value {
     const ms = switch (self._input_type) {
         .date, .week, .time => valueToNumber(self._input_type, self.getValue()),
         .month => if (valueToNumber(.month, self.getValue())) |months| monthsToMs(months) else null,
@@ -847,7 +847,7 @@ pub fn getValueAsDate(self: *const Input, exec: *const js.Execution) !?js.Value 
     return try exec.js.local.?.newDate(ms);
 }
 
-pub fn setValueAsDate(self: *Input, value: js.Value, frame: *Frame) !void {
+fn setValueAsDate(self: *Input, value: js.Value, frame: *Frame) !void {
     switch (self._input_type) {
         .date, .month, .week, .time => {},
         else => return error.InvalidStateError,
@@ -859,11 +859,11 @@ pub fn setValueAsDate(self: *Input, value: js.Value, frame: *Frame) !void {
     return self.setValueAsNumber(number, frame);
 }
 
-pub fn stepUp(self: *Input, n_: ?i32, frame: *Frame) !void {
+fn stepUp(self: *Input, n_: ?i32, frame: *Frame) !void {
     return self.stepBy(n_ orelse 1, frame);
 }
 
-pub fn stepDown(self: *Input, n_: ?i32, frame: *Frame) !void {
+fn stepDown(self: *Input, n_: ?i32, frame: *Frame) !void {
     return self.stepBy(-(n_ orelse 1), frame);
 }
 
@@ -1409,11 +1409,11 @@ fn uncheckRadioGroup(self: *Input, frame: *Frame) void {
     }
 }
 
-pub fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
+fn getPopoverTargetElement(self: *Input, frame: *Frame) ?*Element {
     return popover.invokerTarget(self.asNode(), self._popover_target, frame);
 }
 
-pub fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
+fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !void {
     self._popover_target = value;
     if (value == null) {
         try self.asElement().removeAttribute(.wrap("popovertarget"), frame);
@@ -1422,19 +1422,19 @@ pub fn setPopoverTargetElement(self: *Input, value: ?*Element, frame: *Frame) !v
     }
 }
 
-pub fn getPopoverTargetAction(self: *Input) []const u8 {
+fn getPopoverTargetAction(self: *Input) []const u8 {
     return @tagName(popover.getInvokerAction(self.asElement()));
 }
 
-pub fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !void {
+fn setPopoverTargetAction(self: *Input, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttribute(.wrap("popovertargetaction"), .wrap(value), frame);
 }
 
-pub fn getMax(self: *const Input) []const u8 {
+fn getMax(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
 }
 
-pub fn getMin(self: *const Input) []const u8 {
+fn getMin(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
 }
 
@@ -1442,7 +1442,7 @@ pub fn getRequired(self: *const Input) bool {
     return self.asConstElement().getAttributeInterned("required") != null;
 }
 
-pub fn getStep(self: *const Input) []const u8 {
+fn getStep(self: *const Input) []const u8 {
     return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
 }
 

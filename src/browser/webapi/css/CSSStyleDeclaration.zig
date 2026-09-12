@@ -84,7 +84,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         if (self._element) |element| {
             if (wrapped.eql(comptime .wrap("display"))) {
                 const style_manager = &element.ownerFrame(frame)._style_manager;
-                if (style_manager.hasDisplayNone(element, .materialize)) {
+                if (style_manager.hasDisplayNone(element)) {
                     return "none";
                 }
             } else if (wrapped.eql(comptime .wrap("visibility"))) {
@@ -133,7 +133,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.isVisible(frame, .materialize)) {
+    if (!element.isVisible(frame)) {
         return "auto";
     }
     const value = switch (dimension) {
@@ -269,16 +269,16 @@ fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
     }
 }
 
-pub fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
+fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
     try self.setPropertyImpl("float", value_ orelse "", false, frame);
     try self.syncStyleAttribute(frame);
 }
 
-pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();
