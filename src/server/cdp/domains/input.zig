@@ -259,6 +259,60 @@ test "cdp.input: dispatchMouseEvent mouseReleased fires mouseup" {
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: dispatchMouseEvent mousePressed honors preventDefault for focus" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // The toolbar idiom: preventDefault() on mousedown keeps focus where it is.
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('hoverTarget')
+        \\  .addEventListener('mousedown', (e) => { e.preventDefault(); });
+        \\document.getElementById('inp').focus();
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+
+    const kept = try ls.local.compileAndRun("document.activeElement.id === 'inp'", null);
+    try testing.expect(kept.isTrue());
+
+    // Without preventDefault the same press moves focus, so the assertion above
+    // is testing the gate and not just an inert default action.
+    const focus_x = try (try ls.local.compileAndRun("document.getElementById('focusTarget').getBoundingClientRect().x", null)).toF64();
+    const focus_y = try (try ls.local.compileAndRun("document.getElementById('focusTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = focus_x, .y = focus_y, .button = "left", .clickCount = 1 },
+    });
+
+    const moved = try ls.local.compileAndRun("document.activeElement.id === 'focusTarget'", null);
+    try testing.expect(moved.isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
     var ctx = try testing.context();
     defer ctx.deinit();

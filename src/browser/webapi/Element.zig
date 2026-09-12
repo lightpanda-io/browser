@@ -1211,6 +1211,12 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    const old_active = doc._active_element;
+    if (old_active == self) {
+        return;
+    }
+
     // Per HTML spec §6.4.4, an element must be "being rendered" (not
     // display:none on self or any ancestor) to be focusable.
     if (!self.isVisible(frame)) {
@@ -1220,15 +1226,9 @@ pub fn focus(self: *Element, frame: *Frame) !void {
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
-    const old_active = doc._active_element;
     doc.setActiveElement(self, frame);
 
     if (old_active) |old| {
-        if (old == self) {
-            return;
-        }
-
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)

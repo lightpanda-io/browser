@@ -1441,6 +1441,67 @@ test "agent script runtime: tool errors throw and stop execution" {
     );
 }
 
+// Complements the fixture-driven MCP test in tools.zig with nodes created at
+// runtime.
+test "agent script runtime: mousedown focus follows mouse-focusability rules" {
+    defer testing.test_session.closeAllPages();
+
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    const runtime = try Runtime.init(testing.allocator, testing.test_app, testing.test_session, &registry);
+    defer runtime.deinit();
+
+    try runTestScript(runtime,
+        \\const page = new Page();
+        \\await page.goto("http://localhost:9582/src/browser/tests/mcp_actions.html");
+        \\const active = () => page.evaluate("document.activeElement === document.body ? 'body' : document.activeElement.id");
+        \\const expectActive = (id, what) => { const got = active(); if (got !== id) throw new Error(what + " (active: " + got + ")"); };
+        \\page.evaluate(`
+        \\  const add = (tag, id, attrs = {}, parent = document.body, ns = null) => {
+        \\    const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
+        \\    e.id = id;
+        \\    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+        \\    parent.appendChild(e);
+        \\    return e;
+        \\  };
+        \\  add('span', 'dynChild', {}, add('div', 'dynFocus', { tabindex: '0' })).textContent = 'x';
+        \\  add('div', 'dynNeg', { tabindex: '-1' }).textContent = 'neg';
+        \\  add('div', 'dynBad', { tabindex: 'abc' }).textContent = 'bad';
+        \\  add('button', 'dynBadBtn', { tabindex: 'abc' }).addEventListener('mouseup', () => { window.badBtnFocusAtMouseup = document.activeElement.id; });
+        \\  add('div', 'toolbarBtn').addEventListener('mousedown', (e) => e.preventDefault());
+        \\  add('span', 'dynHostSpan', {}, add('div', 'dynHost', { contenteditable: 'true' })).textContent = 'hs';
+        \\  add('span', 'dynInnerSpan', {}, add('div', 'dynInner', { contenteditable: 'true' }, add('div', 'dynOuter', { contenteditable: 'true' }))).textContent = 'is';
+        \\  const SVG = 'http://www.w3.org/2000/svg';
+        \\  add('rect', 'dynSvgRect', { tabindex: '0', width: '100', height: '40' }, add('svg', 'dynSvg', {}, document.body, SVG), SVG);
+        \\`);
+        \\page.click("#dynChild");
+        \\expectActive("dynFocus", "child click did not focus tabindex ancestor");
+        \\page.click("#dynNeg");
+        \\expectActive("dynNeg", "tabindex=-1 was not mouse-focusable");
+        \\page.click("#dynBad");
+        \\expectActive("body", "unparsable tabindex was mouse-focusable");
+        \\page.click("#dynBadBtn");
+        \\// Sampled at mouseup: click activation focuses a button regardless of
+        \\// what mousedown decided, which would mask the native focusability.
+        \\if (page.evaluate("window.badBtnFocusAtMouseup") !== "dynBadBtn") throw new Error("unparsable tabindex on a native button lost native mousedown focusability");
+        \\// Toolbar idiom: preventDefault() on mousedown preserves existing focus.
+        \\page.click("#inp");
+        \\expectActive("inp", "setup failed");
+        \\page.click("#toolbarBtn");
+        \\expectActive("inp", "preventDefault on mousedown did not protect focus");
+        \\// Verified against Chrome.
+        \\page.click("#dynHostSpan");
+        \\expectActive("dynHost", "span inside contenteditable did not focus host");
+        \\page.click("#dynInnerSpan");
+        \\expectActive("dynOuter", "nested contenteditable did not focus the outer host");
+        \\// An explicit tabindex is focusable on a non-HTML element too.
+        \\page.click("#inp");
+        \\page.click("#dynSvgRect");
+        \\expectActive("dynSvgRect", "svg [tabindex] click did not focus the svg element");
+    );
+}
+
 test "agent script runtime: builtin argument marshalling (positional + options)" {
     defer testing.test_session.closeAllPages();
 

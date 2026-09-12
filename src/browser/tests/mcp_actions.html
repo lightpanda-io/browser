@@ -19,7 +19,32 @@
     </select>
     <input id="chk" type="checkbox">
     <input id="rad" type="radio" name="group1">
+    <button id="btnPreventDefault">Prevent Default</button>
+    <button id="btnDisabled" disabled>Disabled</button>
+    <div id="focusTarget" tabindex="0" onclick="window.focusTargetFocused = document.activeElement === this;">Focus me</div>
+    <div id="plain" onclick="window.plainBlurred = document.activeElement === document.body;">Not focusable</div>
     <script>
+        window.seq = [];
+        const btn = document.getElementById('btn');
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            btn.addEventListener(t, function(e) { window.seq.push([e.type, e.button, e.buttons, e.pointerType, e.isTrusted].join(':')); });
+        }
+
+        // Regression coverage for pointerdown's preventDefault() suppressing
+        // the compatibility mousedown/mouseup (click still fires).
+        window.seqPrevented = [];
+        const btnPreventDefault = document.getElementById('btnPreventDefault');
+        btnPreventDefault.addEventListener('pointerdown', function(e) { e.preventDefault(); });
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            btnPreventDefault.addEventListener(t, function(e) { window.seqPrevented.push(e.type); });
+        }
+
+        window.disabledEvents = [];
+        const btnDisabled = document.getElementById('btnDisabled');
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            btnDisabled.addEventListener(t, function(e) { window.disabledEvents.push(e.type); });
+        }
+
         document.getElementById('chk').addEventListener('click', function() { window.chkClicked = true; });
         document.getElementById('chk').addEventListener('change', function() { window.chkChanged = true; });
         document.getElementById('rad').addEventListener('click', function() { window.radClicked = true; });

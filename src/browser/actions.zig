@@ -22,6 +22,7 @@ const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const PointerEvent = @import("webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -38,21 +39,69 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-pub fn click(node: *DOMNode, frame: *Frame) !void {
-    const el = node.is(Element) orelse return error.InvalidNodeType;
+fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame) !bool {
+    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event) catch |err| {
+        lp.log.err(.app, "click " ++ typ ++ " failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+}
 
-    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail: u32, frame: *Frame) !bool {
+    const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = 0,
-        .clientY = 0,
+        .buttons = buttons,
+        .detail = detail,
+        .pointerId = 1,
+        .pointerType = "mouse",
+        .isPrimary = true,
+        .pressure = if (buttons != 0) 0.5 else 0.0,
     }, frame);
+    return dispatch(el, event.asEvent(), typ, frame);
+}
 
-    frame._event_manager.dispatch(el.asEventTarget(), mouse_event.asEvent()) catch |err| {
-        lp.log.err(.app, "click failed", .{ .err = err });
-        return error.ActionFailed;
-    };
+fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !bool {
+    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .buttons = buttons,
+        .detail = 1,
+    }, frame);
+    return dispatch(el, event.asEvent(), typ, frame);
+}
+
+/// The trusted primary-button gesture a real user click produces; widgets key
+/// off pointerdown/mousedown, not click alone.
+pub fn click(node: *DOMNode, frame: *Frame) !void {
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+
+    if (el.isDisabled()) {
+        return;
+    }
+
+    Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
+
+    // preventDefault() on pointerdown suppresses both compatibility mouse
+    // events (mousedown and mouseup) for the rest of this gesture; click
+    // still fires.
+    const suppress_mouse = try dispatchPointer(el, "pointerdown", 1, 0, frame);
+    if (!suppress_mouse) {
+        const suppress_focus = try dispatchMouse(el, "mousedown", 1, frame);
+        if (!suppress_focus) {
+            Frame.user_input.focusForMouseDown(frame, el) catch |err| {
+                lp.log.warn(.app, "click mousedown focus", .{ .err = err });
+            };
+        }
+    }
+
+    _ = try dispatchPointer(el, "pointerup", 0, 0, frame);
+    if (!suppress_mouse) {
+        _ = try dispatchMouse(el, "mouseup", 0, frame);
+    }
+
+    _ = try dispatchPointer(el, "click", 0, 1, frame);
 }
 
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
@@ -94,16 +143,12 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    // Keep the event alive past dispatch so we can read defaultPrevented.
-    keydown_event.asEvent().acquireRef();
-    defer _ = keydown_event.asEvent().releaseRef(frame._page);
-
-    frame._event_manager.dispatch(target, keydown_event.asEvent()) catch |err| {
+    const prevented = frame._event_manager.dispatchCancelable(target, keydown_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };
 
-    if (std.mem.eql(u8, canonical, "Enter") and !keydown_event.asEvent().getDefaultPrevented()) {
+    if (std.mem.eql(u8, canonical, "Enter") and !prevented) {
         if (target_el) |el| implicitFormSubmit(el, frame) catch |err| {
             // Don't skip keyup on a submit-listener throw — UIs that gate
             // state on keyup (e.g. clearing a "submitting" flag) would hang.
