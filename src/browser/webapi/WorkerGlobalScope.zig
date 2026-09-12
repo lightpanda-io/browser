@@ -30,6 +30,7 @@ const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
 const Session = @import("../Session.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const GlobalScope = @import("../global_scope.zig").GlobalScope;
 const EventManagerBase = @import("../EventManagerBase.zig");
 const ScriptManagerBase = @import("../ScriptManagerBase.zig");
 
@@ -174,18 +175,7 @@ pub fn init(
     const self = leaf._proto;
     self._type = @unionInit(Type, @tagName(tag), leaf);
 
-    self._http_owner = .{
-        .blob_urls = &frame._page.blob_urls,
-        .origin = &self.origin,
-        .url = null,
-        .parent = &frame._http_owner,
-        .frame_id = frame_id,
-        .document_frame_id = frame._frame_id,
-        .loader_id = loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .notification = session.notification,
-        .performance = self._performance,
-    };
+    self._http_owner = GlobalScope.initHttpOwner(.{ .worker = self });
 
     self._script_manager = ScriptManagerBase.init(
         arena,

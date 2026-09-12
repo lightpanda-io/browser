@@ -30,6 +30,7 @@ const referrer = @import("../browser/referrer.zig");
 const WebSocket = @import("../browser/webapi/net/WebSocket.zig");
 const Cookie = @import("../browser/webapi/storage/Cookie.zig");
 const Performance = @import("../browser/webapi/Performance.zig");
+const GlobalScope = @import("../browser/global_scope.zig").GlobalScope;
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
@@ -656,8 +657,8 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             if (owned.frame_id == 0) owned.frame_id = o.frame_id;
             if (owned.loader_id == 0) owned.loader_id = o.loader_id;
             if (owned.document_frame_id == null) owned.document_frame_id = o.document_frame_id;
-            if (owned.notification == null) owned.notification = o.notification;
-            cookie_jar = o.cookie_jar;
+            if (owned.notification == null) owned.notification = o.scope.notification();
+            cookie_jar = o.scope.cookieJar();
         }
         // Resolved onto the transfer; the request's copy is left null so
         // nothing reads the caller's (possibly short-lived) url through it.
@@ -671,7 +672,7 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
             owned.basic_auth_credentials = try arena.dupeZ(u8, c);
         }
 
-        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.origin.* else null;
+        const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
         owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
 
         // The body can be larger, so callers can signal, via the
@@ -2153,15 +2154,12 @@ pub const Owner = struct {
     transfers: std.DoublyLinkedList = .{},
     websockets: std.DoublyLinkedList = .{},
 
-    // The Page-level blob: URL store, shared by every context on the page.
-    blob_urls: *const Blob.UrlMap,
+    // The global these requests are made on behalf of.
+    scope: GlobalScope,
 
-    // The owning Frame's / WorkerGlobalScope's origin slot. Pointer because
-    // it can change during navigation.
-    origin: *const ?[]const u8,
-
-    // The owning Frame's URL slot, a pointer for the same reason. A worker
-    // has none: its site for cookies is its creating document's.
+    // The owning Frame's URL slot. A pointer because it changes during
+    // navigation; a worker has none, its site for cookies is its creating
+    // document's. (We don't use scope beause unit tests fake this, `testOwner`)
     url: ?*const [:0]const u8,
 
     // The parent frame's Owner; for a worker, its creating frame's. Outlives
@@ -2175,9 +2173,6 @@ pub const Owner = struct {
     frame_id: u32,
     document_frame_id: u32,
     loader_id: u32,
-    cookie_jar: *CookieJar,
-    performance: *Performance,
-    notification: *Notification,
 
     const Blob = @import("../browser/webapi/Blob.zig");
 
@@ -2946,7 +2941,7 @@ pub const Transfer = struct {
             owner.parent orelse return null
         else
             owner;
-        return .{ .performance = target.performance, .origin = target.origin.* };
+        return .{ .performance = target.scope.performance(), .origin = target.scope.origin() };
     }
 
     // https://fetch.spec.whatwg.org/#concept-tao-check
@@ -4086,10 +4081,10 @@ const Synthetic = struct {
 
             const owner = transfer.owner orelse return error.BlobNotFound;
             const key = url[0 .. std.mem.indexOfScalar(u8, url, '#') orelse url.len];
-            if (!Owner.Blob.urlBelongsToOrigin(key, owner.origin.*)) {
+            if (!Owner.Blob.urlBelongsToOrigin(key, owner.scope.origin())) {
                 return error.BlobNotFound;
             }
-            const blob = (owner.blob_urls.get(key) orelse return error.BlobNotFound).blob;
+            const blob = (owner.scope.blobUrls().get(key) orelse return error.BlobNotFound).blob;
             // blob can be removed by the time we run, dupe it.
             content_type = try arena.dupe(u8, blob._mime);
             body = try arena.dupe(u8, blob._slice);
@@ -4113,16 +4108,12 @@ const testing = @import("../testing.zig");
 // it: they build their transfers by hand and never go through newRequest.
 fn testOwner(url: ?*const [:0]const u8, parent: ?*const Owner) Owner {
     return .{
-        .blob_urls = undefined,
-        .origin = undefined,
+        .scope = undefined,
         .url = url,
         .parent = parent,
         .frame_id = 0,
         .document_frame_id = 0,
         .loader_id = 0,
-        .cookie_jar = undefined,
-        .notification = undefined,
-        .performance = undefined,
     };
 }
 const AdBlocker = @import("adblock/AdBlocker.zig");

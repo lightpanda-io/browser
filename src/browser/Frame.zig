@@ -76,6 +76,7 @@ const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRa
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
@@ -460,18 +461,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     }
     self.window._cross_origin_wrapper = .{ .window = self.window };
 
-    self._http_owner = .{
-        .blob_urls = &page.blob_urls,
-        .origin = &self.origin,
-        .url = &self.url,
-        .parent = if (parent) |p| &p._http_owner else null,
-        .frame_id = frame_id,
-        .document_frame_id = frame_id,
-        .loader_id = self._loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .notification = session.notification,
-        .performance = self.window._performance,
-    };
+    self._http_owner = GlobalScope.initHttpOwner(.{ .frame = self });
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
