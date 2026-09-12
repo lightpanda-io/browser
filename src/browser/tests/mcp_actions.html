@@ -27,7 +27,7 @@
         window.seq = [];
         const btn = document.getElementById('btn');
         for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-            btn.addEventListener(t, function(e) { window.seq.push([e.type, e.button, e.buttons, e.pointerType, e.isTrusted].join(':')); });
+            btn.addEventListener(t, function(e) { window.seq.push([e.type, e.button, e.buttons, e.detail, e.pointerType, e.isTrusted].join(':')); });
         }
 
         // Regression coverage for pointerdown's preventDefault() suppressing
