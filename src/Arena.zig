@@ -63,7 +63,9 @@ account: ?*Account,
 // `bytes` as of the last report() — what the account has already been told.
 reported: usize,
 
-debug: if (lp.IS_DEBUG) []const u8 else void = if (lp.IS_DEBUG) "" else {},
+// The acquire site's label. Carried in every build (not just Debug) so a
+// release binary can attribute an in-flight spike to a call site.
+debug: []const u8,
 
 pub fn allocator(self: *Arena) Allocator {
     return self._arena.allocator();

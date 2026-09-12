@@ -31,12 +31,137 @@ const SAFETY = Arena.SAFETY;
 
 pub const BucketSize = enum { tiny, small, medium, large };
 
+// A bucket dumps its per-site breakdown once its in-flight count reaches this
+// multiple of its free_list_max. Scaling off the bucket lets one number cover
+// tiny (512 -> 10240) and large (32 -> 640); both of the spikes we've chased
+// so far would have tripped it.
+const SPIKE_MULTIPLE = 20;
+
+// Distinct acquire labels we can attribute. Must be a power of two.
+const SITES = 128;
+const SITES_SHIFT = 7;
+
+// How many sites a spike dump names.
+const TOP_SITES = 5;
+
 pub const Bucket = struct {
     size: BucketSize,
     free_list: ?*Arena = null,
     free_list_len: u16 = 0,
     free_list_max: u16,
     retain_bytes: usize,
+
+    // Arenas handed out and not yet released.
+    inflight: u32 = 0,
+
+    // Set when a spike is dumped, cleared once in-flight falls back under half
+    // the threshold, so one incident logs once instead of tens of thousands of
+    // times.
+    spiked: bool = false,
+
+    fn spikeThreshold(self: *const Bucket) u32 {
+        return @as(u32, self.free_list_max) * SPIKE_MULTIPLE;
+    }
+};
+
+// Per-call-site in-flight counts, keyed on the label's address: every acquire
+// site passes a comptime literal, so equal labels share a pointer. Insert-only
+// and guarded by ArenaPool.mutex.
+const Sites = struct {
+    entries: [SITES]Entry = [_]Entry{.{}} ** SITES,
+
+    // Acquisitions whose label found no free slot. Non-zero means SITES is too
+    // small and the breakdown below is missing callers.
+    overflow: u32 = 0,
+
+    const Entry = struct {
+        name: []const u8 = "",
+        count: u32 = 0,
+
+        fn moreThan(_: void, a: Entry, b: Entry) bool {
+            return a.count > b.count;
+        }
+    };
+
+    fn incr(self: *Sites, name: []const u8) void {
+        const entry = self.find(name, true) orelse {
+            self.overflow += 1;
+            return;
+        };
+        entry.count += 1;
+    }
+
+    fn decr(self: *Sites, name: []const u8) void {
+        const entry = self.find(name, false) orelse return;
+        entry.count -|= 1;
+    }
+
+    fn find(self: *Sites, name: []const u8, insert: bool) ?*Entry {
+        var i = (@intFromPtr(name.ptr) *% 0x9E3779B97F4A7C15) >> (64 - SITES_SHIFT);
+        for (0..SITES) |_| {
+            const entry = &self.entries[i];
+            if (entry.name.len == 0) {
+                if (insert == false) {
+                    return null;
+                }
+                entry.name = name;
+                return entry;
+            }
+            if (entry.name.ptr == name.ptr) {
+                return entry;
+            }
+            i = (i + 1) % SITES;
+        }
+        return null;
+    }
+
+    fn snapshot(self: *const Sites, bucket: *const Bucket) Spike {
+        var all: [SITES]Entry = undefined;
+        var len: usize = 0;
+        for (self.entries) |entry| {
+            if (entry.count == 0) {
+                continue;
+            }
+            all[len] = entry;
+            len += 1;
+        }
+        std.mem.sort(Entry, all[0..len], {}, Entry.moreThan);
+
+        var spike: Spike = .{
+            .bucket = bucket.size,
+            .inflight = bucket.inflight,
+            .overflow = self.overflow,
+            .len = @min(len, TOP_SITES),
+            .top = undefined,
+        };
+        @memcpy(spike.top[0..spike.len], all[0..spike.len]);
+        return spike;
+    }
+};
+
+// Taken under the mutex, reported after it is dropped.
+const Spike = struct {
+    bucket: BucketSize,
+    inflight: u32,
+    overflow: u32,
+    len: usize,
+    top: [TOP_SITES]Sites.Entry,
+
+    // err, not warn: prod runs with everything below error filtered out.
+    fn report(self: *const Spike) void {
+        log.err(.app, "arena inflight spike", .{
+            .bucket = @tagName(self.bucket),
+            .inflight = self.inflight,
+            .unattributed = self.overflow,
+        });
+        for (self.top[0..self.len]) |entry| {
+            log.err(.app, "arena inflight site", .{
+                .bucket = @tagName(self.bucket),
+                .name = entry.name,
+                .inflight = entry.count,
+            });
+        }
+    }
 };
 
 pub const Config = struct {
@@ -58,6 +183,7 @@ large: Bucket,
 allocator: Allocator,
 mutex: std.Io.Mutex = .init,
 entry_pool: std.heap.MemoryPool(Arena),
+sites: Sites = .{},
 
 _leak_track: if (lp.IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (lp.IS_DEBUG) .empty else {},
 
@@ -140,15 +266,27 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
 
     lp.metrics.arena_inflight.incr(bucket_size);
 
+    // Registered before the unlock so it runs after it: the dump is rare (once
+    // per rising edge) but it still has no business holding the mutex.
+    var spike: ?Spike = null;
+    defer if (spike) |s| s.report();
+
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
+
+    bucket.inflight += 1;
+    self.sites.incr(debug);
+    if (bucket.spiked == false and bucket.inflight >= bucket.spikeThreshold()) {
+        bucket.spiked = true;
+        spike = self.sites.snapshot(bucket);
+    }
 
     if (bucket.free_list) |entry| {
         bucket.free_list = entry.next;
         bucket.free_list_len -= 1;
         entry.released = false;
+        entry.debug = debug;
         if (lp.IS_DEBUG) {
-            entry.debug = debug;
             const gop = try self._leak_track.getOrPut(self.allocator, debug);
             if (!gop.found_existing) {
                 gop.value_ptr.* = 0;
@@ -171,7 +309,7 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
         .bytes = 0,
         .account = account,
         .reported = 0,
-        .debug = if (lp.IS_DEBUG) debug else {},
+        .debug = debug,
         ._arena = undefined,
     };
     // Routed through the entry so it sees every node the arena takes and gives
@@ -203,10 +341,16 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
             // it'll crash in some random code.
             lp.assert(false, "ArenaPool double release", .{
                 .bucket = @tagName(bucket.size),
-                .name = if (comptime lp.IS_DEBUG) entry.debug else "",
+                .name = entry.debug,
             });
         }
         entry.released = true;
+
+        bucket.inflight -= 1;
+        self.sites.decr(entry.debug);
+        if (bucket.inflight < bucket.spikeThreshold() / 2) {
+            bucket.spiked = false;
+        }
 
         if (comptime lp.IS_DEBUG) {
             if (self._leak_track.getPtr(entry.debug)) |count| {
@@ -505,4 +649,69 @@ test "ArenaPool: bytes agrees with the arena's own view of its capacity" {
         try testing.expect(arena.bytes >= capacity);
         try testing.expect(arena.bytes - capacity < 1024); // header slop only
     }
+}
+
+test "ArenaPool: sites attribute in-flight arenas to their label" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+
+    // Hoisted so both acquires pass the same pointer: Sites keys on the
+    // label's address, not its bytes.
+    const site_a = "site-a";
+    const site_b = "site-b";
+
+    const a1 = try pool.acquire(.tiny, site_a);
+    const a2 = try pool.acquire(.tiny, site_a);
+    const b1 = try pool.acquire(.small, site_b);
+
+    try testing.expectEqual(2, pool.sites.find(site_a, false).?.count);
+    try testing.expectEqual(1, pool.sites.find(site_b, false).?.count);
+    try testing.expectEqual(0, pool.sites.overflow);
+
+    // A label that never acquired anything isn't inserted by a lookup.
+    try testing.expectEqual(null, pool.sites.find("site-c", false));
+
+    // The label survives the round trip through the entry, so release
+    // decrements the site it was acquired under.
+    a1.release();
+    a2.release();
+    b1.release();
+    try testing.expectEqual(0, pool.sites.find(site_a, false).?.count);
+    try testing.expectEqual(0, pool.sites.find(site_b, false).?.count);
+}
+
+test "ArenaPool: a bucket dumps its sites once per spike" {
+    var pool = ArenaPool.init(testing.allocator, .{ .tiny = .{ .max = 1, .retain = 1024 } });
+    defer pool.deinit();
+
+    const site = "spike-site";
+    const threshold = pool.tiny.spikeThreshold();
+    try testing.expectEqual(SPIKE_MULTIPLE, threshold);
+
+    var arenas: [SPIKE_MULTIPLE]*Arena = undefined;
+    for (&arenas, 0..) |*arena, i| {
+        try testing.expectEqual(false, pool.tiny.spiked); // only the last one trips it
+        arena.* = try pool.acquire(.tiny, site);
+        try testing.expectEqual(i + 1, pool.tiny.inflight);
+    }
+    try testing.expectEqual(true, pool.tiny.spiked);
+
+    const spike = pool.sites.snapshot(&pool.tiny);
+    try testing.expectEqual(threshold, spike.inflight);
+    try testing.expectEqual(1, spike.len);
+    try testing.expectEqualStrings(site, spike.top[0].name);
+    try testing.expectEqual(threshold, spike.top[0].count);
+
+    // Re-arms only once in-flight falls back under half the threshold.
+    const half = threshold / 2;
+    for (arenas[0..half]) |arena| {
+        arena.release();
+    }
+    try testing.expectEqual(true, pool.tiny.spiked);
+
+    for (arenas[half..]) |arena| {
+        arena.release();
+    }
+    try testing.expectEqual(false, pool.tiny.spiked);
+    try testing.expectEqual(0, pool.tiny.inflight);
 }
