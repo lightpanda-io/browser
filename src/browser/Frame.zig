@@ -872,6 +872,9 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .skip_cache = self.parent == null,
         .throttle = self.parent == null,
         .origin = self.origin,
+        // Our own url is already the destination, so the owner's site for
+        // cookies would say "same-site" for any top-level navigation.
+        .cookie_origin = opts.initiator_url,
         .resource_type = .document,
         .request_mode = .navigate,
         .credentials_mode = .include,

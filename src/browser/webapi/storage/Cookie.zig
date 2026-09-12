@@ -43,12 +43,34 @@ expires: ?f64,
 secure: bool = false,
 http_only: bool = false,
 same_site: SameSite = .none,
+// True when Set-Cookie carried no SameSite attribute: the cookie is Lax
+// through the "Default" enforcement mode (RFC 6265bis 5.6.7.1), which
+// makes it eligible for "Lax-allowing-unsafe", see appliesTo.
+same_site_default: bool = false,
+// Seconds since the epoch. Set by Jar.add, and inherited from the cookie it
+// replaces, so a site re-setting a cookie on every response can't keep it
+// "recently created" forever.
+creation_time: u64 = 0,
 
 pub const SameSite = enum {
     strict,
     lax,
     none,
 };
+
+// How the request carrying the Cookie header reaches its target. Only a
+// cross-site request cares; it's what unlocks SameSite=Lax cookies.
+pub const RequestKind = enum(u2) {
+    // A sub-resource (image, script, fetch...), a sub-frame's document, or
+    // a non-HTTP retrieval (document.cookie).
+    subresource,
+    // A top-level navigation using a "safe" method (GET, HEAD, OPTIONS).
+    navigation,
+    // A top-level navigation using an unsafe method, e.g. a POSTed form.
+    unsafe_navigation,
+};
+
+const lax_allowing_unsafe_max_age = 2 * 60;
 
 pub fn deinit(self: *const Cookie) void {
     self.arena.deinit();
@@ -210,6 +232,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         .value = owned_value,
         .path = owned_path,
         .same_site = same_site orelse .lax,
+        .same_site_default = same_site == null,
         .secure = secure orelse false,
         .http_only = http_only orelse false,
         .domain = owned_domain,
@@ -402,8 +425,27 @@ pub fn matchesHost(self: *const Cookie, host: []const u8) bool {
     return std.ascii.eqlIgnoreCase(host, self.domain);
 }
 
-pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, is_navigation: bool, is_http: bool) bool {
-    if (self.http_only and is_http == false) {
+// RFC 6265bis 5.6.7.2 "Lax-allowing-unsafe": a cookie that never asked for
+// Lax (it got it by default) still rides a cross-site top-level POST, as
+// long as it was created recently. Compatibility mode for the login flows
+// that POST back to the site from an identity provider: without it, the
+// session cookie set right before the redirect is dropped on return.
+inline fn isLaxAllowingUnsafe(self: *const Cookie, now: u64) bool {
+    return self.same_site_default and now -| self.creation_time <= lax_allowing_unsafe_max_age;
+}
+
+pub const MatchOpts = struct {
+    // Whether the request's "site for cookies" is same-site with the target.
+    same_site: bool,
+    // An HTTP retrieval (Cookie header), as opposed to document.cookie.
+    is_http: bool,
+    kind: RequestKind = .subresource,
+    // Seconds since the epoch. Only read for a cross-site unsafe navigation and `Jar.forRequest`.
+    now: ?u64 = null,
+};
+
+pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, opts: MatchOpts) bool {
+    if (self.http_only and opts.is_http == false) {
         // http only cookies cannot be accessed from Javascript
         return false;
     }
@@ -413,15 +455,20 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
         return false;
     }
 
-    if (same_site == false) {
-        // If we aren't on the "same site" (matching 2nd level domain
-        // taking into account public suffix list), then the cookie
-        // can only be sent if cookie.same_site == .none, or if
-        // we're navigating to (as opposed to, say, loading an image)
-        // and cookie.same_site == .lax
+    if (opts.same_site == false) {
+        // If we aren't on the "same site", then the cookie
+        // can only be sent if cookie.same_site == .none, or if the
+        // request is one the Lax exception covers.
         switch (self.same_site) {
             .strict => return false,
-            .lax => if (is_navigation == false) return false,
+            .lax => switch (opts.kind) {
+                .subresource => return false,
+                .navigation => {},
+                .unsafe_navigation => {
+                    const now = opts.now orelse unreachable;
+                    if (!self.isLaxAllowingUnsafe(now)) return false;
+                },
+            },
             .none => {},
         }
     }
@@ -491,11 +538,14 @@ pub const Jar = struct {
 
     pub fn add(
         self: *Jar,
-        cookie: Cookie,
+        new_cookie: Cookie,
         request_time: u64,
         /// Checks if addition comes from HTTP request or JS context.
         comptime is_http: bool,
     ) !void {
+        var cookie = new_cookie;
+        cookie.creation_time = request_time;
+
         // `add` takes ownership of `cookie` unconditionally on entry.
         var stored = false;
         defer if (!stored) cookie.deinit();
@@ -530,6 +580,9 @@ pub const Jar = struct {
                 c.deinit();
                 _ = self.cookies.swapRemove(i);
             } else {
+                // RFC 6265bis 5.7 step 23: the replacement keeps the
+                // creation time of the cookie it replaces.
+                cookie.creation_time = c.creation_time;
                 // Free the old cookie's arena before overwriting the slot;
                 // after the assignment, c points at the new cookie.
                 c.deinit();
@@ -581,19 +634,28 @@ pub const Jar = struct {
     const LookupOpts = struct {
         is_http: bool,
         request_time: ?u64 = null,
-        is_navigation: bool = true,
+        // `subresource` is the most restrictive, a caller who forgets to set
+        // it won't leak `SameSite=Lax` cookies.
+        kind: RequestKind = .subresource,
         prefix: ?[]const u8 = null,
         origin_url: SiteForCookies,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
         const target = PreparedUri.init(target_url);
         const same_site = areSameSite(opts.origin_url, target.host);
+        const now = opts.request_time orelse lp.datetime.timestamp(.real);
 
-        removeExpired(self, opts.request_time);
+        removeExpired(self, now);
 
         var first = true;
         for (self.cookies.items) |*cookie| {
-            if (!cookie.appliesTo(&target, same_site, opts.is_navigation, opts.is_http)) {
+            const applies = cookie.appliesTo(&target, .{
+                .same_site = same_site,
+                .is_http = opts.is_http,
+                .kind = opts.kind,
+                .now = now,
+            });
+            if (!applies) {
                 continue;
             }
 
@@ -879,14 +941,15 @@ test "Jar: forRequest" {
     try jar.add(try Cookie.parse(testing.allocator, url2, "domain1=9;domain=test.lightpanda.io"), now, true);
 
     // nothing fancy here
-    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true });
-    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_navigation = false, .is_http = true });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true, .kind = .navigation });
+    try expectCookies("global1=1; global2=2", &jar, test_url, .{ .origin_url = .{ .url = test_url }, .is_http = true, .kind = .subresource });
 
     // We have a cookie where Domain=lightpanda.io
     // This should _not_ match xyxlightpanda.io
     try expectCookies("", &jar, "http://anothersitelightpanda.io/", .{
         .origin_url = .{ .url = test_url },
         .is_http = true,
+        .kind = .navigation,
     });
 
     // matching path without trailing /
@@ -935,33 +998,35 @@ test "Jar: forRequest" {
     try expectCookies("global1=1; global2=2; secure=5; sitenone=6; sitelax=7", &jar, "https://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
+        .kind = .navigation,
     });
 
     // navigational cross domain, insecure
     try expectCookies("global1=1; global2=2; sitelax=7", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
+        .kind = .navigation,
     });
 
     // non-navigational cross domain, insecure
     try expectCookies("", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
-        .is_navigation = false,
+        .kind = .subresource,
     });
 
     // non-navigational cross domain, secure
     try expectCookies("sitenone=6", &jar, "https://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://example.com/" },
         .is_http = true,
-        .is_navigation = false,
+        .kind = .subresource,
     });
 
     // non-navigational same origin
     try expectCookies("global1=1; global2=2; sitelax=7; sitestrict=8", &jar, "http://lightpanda.io/x/", .{
         .origin_url = .{ .url = "https://lightpanda.io/" },
         .is_http = true,
-        .is_navigation = false,
+        .kind = .subresource,
     });
 
     // exact domain match + suffix
@@ -1014,18 +1079,21 @@ test "Jar: forRequest SameSite=Strict on cross-site navigation" {
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
         .origin_url = .{ .url = victim_url },
         .is_http = true,
+        .kind = .navigation,
     });
 
     // Cross-site navigation from attacker.test: cookie excluded.
     try expectCookies("", &jar, "http://victim.example/transfer", .{
         .origin_url = .{ .url = "http://attacker.test/strict-form" },
         .is_http = true,
+        .kind = .navigation,
     });
 
     // Browser-initiated navigation: the initiator is the destination itself.
     try expectCookies("sid=STRICT_COOKIE", &jar, "http://victim.example/transfer", .{
         .origin_url = .{ .url = "http://victim.example/transfer" },
         .is_http = true,
+        .kind = .navigation,
     });
 }
 
@@ -1054,20 +1122,93 @@ test "Jar: forRequest with .none site-for-cookies" {
     try expectCookies("lax=2; none=3", &jar, victim_url, .{
         .origin_url = .none,
         .is_http = true,
+        .kind = .navigation,
     });
 
     // Sub-resources from such a frame only carry SameSite=None cookies.
     try expectCookies("none=3", &jar, victim_url, .{
         .origin_url = .none,
         .is_http = true,
-        .is_navigation = false,
+        .kind = .subresource,
     });
 
     // Sanity: a same-site initiator still gets everything.
     try expectCookies("strict=1; lax=2; none=3", &jar, victim_url, .{
         .origin_url = .{ .url = victim_url },
         .is_http = true,
-        .is_navigation = false,
+        .kind = .subresource,
+    });
+}
+
+test "Jar: forRequest Lax-allowing-unsafe" {
+    const expectCookies = struct {
+        fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
+            var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer aw.deinit();
+            try jar.forRequest(target_url, &aw.writer, opts);
+            try testing.expectEqual(expected, aw.written());
+        }
+    }.expect;
+
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    const victim_url: [:0]const u8 = "https://victim.example/";
+    const attacker: Cookie.SiteForCookies = .{ .url = "https://attacker.test/" };
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "default=1; Path=/"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "lax=2; Path=/; SameSite=Lax"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "none=3; Path=/; SameSite=None; Secure"), now, true);
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "strict=4; Path=/; SameSite=Strict"), now, true);
+
+    // Cross-site POST right after the cookies were set: the cookie without
+    // a SameSite attribute rides along, an explicit Lax does not.
+    try expectCookies("default=1; none=3", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .unsafe_navigation,
+        .request_time = now + 119,
+    });
+
+    // Two minutes later, the compatibility window is closed.
+    try expectCookies("none=3", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .unsafe_navigation,
+        .request_time = now + 121,
+    });
+
+    // The age only matters for unsafe methods.
+    try expectCookies("default=1; lax=2; none=3", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .navigation,
+        .request_time = now + 121,
+    });
+    try expectCookies("none=3", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .subresource,
+        .request_time = now + 1,
+    });
+
+    // Re-setting the cookie doesn't reopen the window: the replacement
+    // inherits the creation time of the cookie it replaces.
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "default=5; Path=/"), now + 300, true);
+    try expectCookies("none=3", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .unsafe_navigation,
+        .request_time = now + 301,
+    });
+
+    // A brand new cookie is young again.
+    try jar.add(try Cookie.parse(testing.allocator, victim_url, "fresh=6; Path=/"), now + 300, true);
+    try expectCookies("none=3; fresh=6", &jar, victim_url, .{
+        .origin_url = attacker,
+        .is_http = true,
+        .kind = .unsafe_navigation,
+        .request_time = now + 301,
     });
 }
 
@@ -1383,7 +1524,7 @@ test "Cookie: appliesTo with empty domain" {
         .secure = false,
     };
 
-    try testing.expectEqual(false, cookie.appliesTo(&target, true, true, true));
+    try testing.expectEqual(false, cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }));
 }
 
 test "Cookie: matchesHost is case-insensitive" {
