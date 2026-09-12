@@ -380,10 +380,22 @@ test "cdp.input: dispatchMouseEvent mouseWheel scrolls a scroll container, not t
         .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
     });
 
-    const box = try ls.local.compileAndRun("document.getElementById('scrollbox').scrollTop === 40 && window.scrolled === true", null);
+    const box = try ls.local.compileAndRun("document.getElementById('scrollbox').scrollTop === 40 && window.scrollY === 0", null);
     try testing.expect(box.isTrue());
-    const win = try ls.local.compileAndRun("window.scrollY === 0", null);
-    try testing.expect(win.isTrue());
+
+    // The scroll event is scheduled, not fired inline with the wheel.
+    var runner = bc.session.runner(.{});
+    try runner.waitForScript(frame._frame_id, "window.scrolled === true", 1000);
+
+    // Per axis: x is not scrollable on the box, so it goes to the viewport.
+    _ = try ls.local.compileAndRun("document.getElementById('scrollbox').style.overflow = 'hidden scroll'", null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaX = 30, .deltaY = 10 },
+    });
+    const split = try ls.local.compileAndRun("document.getElementById('scrollbox').scrollTop === 50 && document.getElementById('scrollbox').scrollLeft === 0 && window.scrollX === 30 && window.scrollY === 0", null);
+    try testing.expect(split.isTrue());
 }
 
 test "cdp.input: dispatchMouseEvent mouseWheel on page content scrolls the viewport" {
