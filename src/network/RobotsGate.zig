@@ -214,6 +214,7 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
+                        // BE CAREFUL: robots can be invalidated after this call
                     }
                 } else {
                     // Empty robots.txt means we can short-circuit the allowed path.
