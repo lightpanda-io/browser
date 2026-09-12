@@ -39,6 +39,37 @@ pub noinline fn crash(
     begin_addr: usize,
 ) noreturn {
     @branchHint(.cold);
+    crashWith(reason, args, .{ .first_address = begin_addr });
+}
+
+// INTERNAL BUILD ONLY.
+// Entry point for SIGSEGV/SIGBUS/SIGILL/SIGFPE, reached via the
+// `debug.handleSegfault` override in main.zig. ReleaseFast installs no
+// segfault handler, so without this a segfault dies with no stderr output and
+// no report -- the only trace is the supervisor's exit status.
+// The signal frame sits between us and the faulting code, so we unwind from
+// the register context the kernel hands the handler instead of from here.
+pub fn handleSegfault(addr: ?usize, name: []const u8, opt_ctx: ?std.debug.CpuContextPtr) noreturn {
+    @branchHint(.cold);
+
+    var addr_buf: [32]u8 = undefined;
+    const address: []const u8 = if (addr) |a|
+        (std.fmt.bufPrint(&addr_buf, "0x{x}", .{a}) catch "?")
+    else
+        "unavailable";
+
+    crashWith(name, .{ .source = "signal", .address = address }, .{
+        .context = opt_ctx,
+        .allow_unsafe_unwind = true,
+    });
+}
+
+fn crashWith(
+    reason: []const u8,
+    args: anytype,
+    unwind: std.debug.StackUnwindOptions,
+) noreturn {
+    @branchHint(.cold);
 
     nosuspend switch (panic_level) {
         0 => {
@@ -69,10 +100,10 @@ pub noinline fn crash(
                     writer.writeByte('\n') catch abort();
                 }
 
-                std.debug.writeCurrentStackTrace(.{ .first_address = begin_addr }, .{ .writer = writer, .mode = .no_color }) catch abort();
+                std.debug.writeCurrentStackTrace(unwind, .{ .writer = writer, .mode = .no_color }) catch abort();
             }
 
-            report(reason, begin_addr, args) catch {};
+            report(reason, args, unwind) catch {};
         },
         1 => {
             panic_level = 2;
@@ -86,14 +117,15 @@ pub noinline fn crash(
     abort();
 }
 
-fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
+fn report(reason: []const u8, args: anytype, unwind: std.debug.StackUnwindOptions) !void {
     if (comptime lp.IS_DEBUG) {
         return;
     }
 
-    if (@import("telemetry/telemetry.zig").isDisabled()) {
-        return;
-    }
+    // INTERNAL BUILD ONLY.
+    // The `telemetry.isDisabled()` guard normally lives here. The scraper runs
+    // with LIGHTPANDA_DISABLE_TELEMETRY=true and has to keep running that way,
+    // but we still want its crash reports, so the check is dropped.
 
     var curl_path: [2048]u8 = undefined;
     const curl_path_len = curlPath(&curl_path) orelse return;
@@ -128,7 +160,7 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
             writer.writeByte('\n') catch {};
         }
 
-        std.debug.writeCurrentStackTrace(.{ .first_address = begin_addr }, .{ .writer = &writer, .mode = .no_color }) catch {};
+        std.debug.writeCurrentStackTrace(unwind, .{ .writer = &writer, .mode = .no_color }) catch {};
         const written = writer.buffered();
         if (written.len == 0) {
             break :blk "???";
@@ -163,18 +195,32 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
 }
 
 fn curlPath(buf: []u8) ?usize {
-    const path_z = std.c.getenv("PATH") orelse return null;
-    var it = std.mem.tokenizeScalar(u8, std.mem.span(path_z), std.fs.path.delimiter);
-
-    var fba = std.heap.FixedBufferAllocator.init(buf);
-    const allocator = fba.allocator();
-
     const cwd = std.Io.Dir.cwd();
-    while (it.next()) |p| {
-        defer fba.reset();
-        const full_path = std.fs.path.joinZ(allocator, &.{ p, "curl" }) catch continue;
-        cwd.access(lp.io, full_path, .{}) catch continue;
-        return full_path.len;
+
+    if (std.c.getenv("PATH")) |path_z| {
+        var it = std.mem.tokenizeScalar(u8, std.mem.span(path_z), std.fs.path.delimiter);
+
+        var fba = std.heap.FixedBufferAllocator.init(buf);
+        const allocator = fba.allocator();
+
+        while (it.next()) |p| {
+            defer fba.reset();
+            const full_path = std.fs.path.joinZ(allocator, &.{ p, "curl" }) catch continue;
+            cwd.access(lp.io, full_path, .{}) catch continue;
+            return full_path.len;
+        }
+    }
+
+    // INTERNAL BUILD ONLY.
+    // The scraper replaces the environment rather than extending it, so the
+    // child has no PATH at all and the lookup above finds nothing. Fall back to
+    // the usual absolute locations before giving up on the report.
+    for ([_][]const u8{ "/usr/bin/curl", "/bin/curl", "/usr/local/bin/curl" }) |candidate| {
+        if (candidate.len >= buf.len) continue;
+        @memcpy(buf[0..candidate.len], candidate);
+        buf[candidate.len] = 0;
+        cwd.access(lp.io, buf[0..candidate.len :0], .{}) catch continue;
+        return candidate.len;
     }
     return null;
 }
