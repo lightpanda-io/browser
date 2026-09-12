@@ -596,7 +596,7 @@ pub const Writer = struct {
         }
 
         // Children
-        const write_children = axn.ignoreChildren() == false;
+        const write_children = axn.ignoreChildren() == false and hidden == false;
         const skip_text = ignoreText(axn.dom);
 
         const child_in_aria_hidden = in_aria_hidden or blk: {
@@ -2028,4 +2028,31 @@ test "AXNode: getName name-from-content honors explicit role" {
             try testing.expect(name == null);
         }
     }
+}
+
+test "AXNode: writer prunes children when root is hidden" {
+    var registry = NodeRegistry.init(testing.allocator);
+    defer registry.deinit();
+
+    var page = try testing.pageTest("cdp/ax_tree.html", .{});
+    defer page.close();
+
+    const frame = page.frame().?;
+    const el = (try frame.window._document.querySelector(.wrap("#d-none"), frame)).?;
+    const node = try registry.register(el.asNode());
+    var label_index: Label.LabelByForIndex = .{};
+    const temp_arena = try frame.getArena(.medium, "AXNode");
+    defer temp_arena.release();
+
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, Writer{
+        .root = node,
+        .registry = &registry,
+        .frame = frame,
+        .label_index = &label_index,
+        .temp_arena = temp_arena,
+    }, .{});
+    defer testing.allocator.free(json);
+
+    try testing.expect(std.mem.indexOf(u8, json, "under-display-none") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"childIds\":[]") != null);
 }
