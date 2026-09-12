@@ -28,6 +28,23 @@ pub const panic = lp.crash_handler.panic;
 
 pub const std_options: std.Options = .{
     .signal_stack_size = null,
+    // INTERNAL BUILD ONLY.
+    // Defaults to `runtime_safety`, i.e. off in ReleaseFast, which is why a
+    // production segfault produces no output whatsoever. Turning it on routes
+    // SIGSEGV/SIGBUS/SIGILL/SIGFPE through `debug.handleSegfault` below.
+    // Note `signal_stack_size` stays null: it costs 256KB of static TLS per
+    // thread (v8 workers included) and this build exists to watch memory. The
+    // cost is that a stack-overflow segfault has no stack to run the handler
+    // on, and still dies silently.
+    .enable_segfault_handler = true,
+};
+
+// INTERNAL BUILD ONLY.
+// `std.debug.handleSegfault` calls `root.debug.handleSegfault` in preference to
+// its own printer, which is how the crash handler gets to file a report for a
+// signal rather than only for a panic.
+pub const debug = struct {
+    pub const handleSegfault = lp.crash_handler.handleSegfault;
 };
 
 pub fn main(init: std.process.Init) !void {
