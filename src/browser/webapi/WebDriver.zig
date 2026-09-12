@@ -67,11 +67,31 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         }
     }
 
-    dispatchPointer(element, "pointerdown", 0, 1, frame);
-    _ = dispatchMouse(element, "mousedown", 0, 1, 1, frame);
-    dispatchPointer(element, "pointerup", 0, 0, frame);
-    _ = dispatchMouse(element, "mouseup", 0, 0, 1, frame);
-    _ = dispatchMouse(element, "click", 0, 0, 1, frame);
+    // Shares its dispatch mechanics with actions.click and the CDP mouse
+    // press/release path (Frame.user_input.dispatchPointer{Press,Release}),
+    // which also gives this call its suppress/focus handling and its
+    // PointerEvent click for the first time — previously this dispatched a
+    // fixed five-event sequence unconditionally. Every dispatch here keeps
+    // this function's pre-existing contract of never failing: a dispatch
+    // error is a warning, not a rejection of the testdriver command.
+    const main = Frame.user_input.mouse_button.main;
+    const modifiers = frame._page.input_modifiers;
+    const press = Frame.user_input.dispatchPointerPress(frame, element, 0, 0, main, 1, modifiers) catch |err| {
+        log.warn(.app, "webdriver click press", .{ .err = err });
+        return;
+    };
+    if (!press.suppress_mouse and !press.suppress_focus) {
+        Frame.user_input.focusForMouseDown(frame, element) catch |err| {
+            log.warn(.app, "webdriver click focus", .{ .err = err });
+        };
+    }
+    Frame.user_input.dispatchPointerRelease(frame, element, 0, 0, main, press.suppress_mouse, 1, modifiers) catch |err| {
+        log.warn(.app, "webdriver click release", .{ .err = err });
+        return;
+    };
+    Frame.user_input.dispatchClickAsPointer(frame, element, 0, 0, 1, modifiers) catch |err| {
+        log.warn(.app, "webdriver click click", .{ .err = err });
+    };
 }
 
 const WebDriverCookie = struct {

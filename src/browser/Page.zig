@@ -186,6 +186,13 @@ input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.z
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
 
+// Whether the in-flight mouse gesture's pointerdown suppressed the
+// compatibility mousedown/mouseup (preventDefault() was called). CDP's
+// mousePressed/mouseReleased arrive as two independent
+// Input.dispatchMouseEvent messages, so the release half reads this instead
+// of carrying the state itself.
+input_mousedown_suppressed: bool = false,
+
 // Popup Frames opened by window.open. They are top-level browsing contexts
 // (parent == null, no iframe element) but share this Page's factory, arena,
 // and identity map.
