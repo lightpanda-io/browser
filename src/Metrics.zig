@@ -92,7 +92,7 @@ http_navigation_delay_ms: Histogram(&.{
 }) = .{},
 robots_status: CounterEnum("category", @import("network/http.zig").StatusCategory) = .{},
 robots_access: CounterEnum("result", enum { allow, deny }) = .{},
-cors_check: CounterEnum("result", enum { same_origin, no_cors, simple, preflight }) = .{},
+cors_check: CounterEnum("result", enum { same_origin, no_cors, simple, preflight, cached }) = .{},
 cors_preflight: CounterEnum("result", enum { allowed, blocked }) = .{},
 cors_response: CounterEnum("result", enum { allowed, blocked }) = .{},
 adblock_verdicts: CounterEnum("verdict", @import("network/adblock/AdBlocker.zig").Verdict) = .{},

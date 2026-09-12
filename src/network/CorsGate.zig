@@ -25,11 +25,15 @@ const http = @import("http.zig");
 const Transfer = @import("HttpClient.zig").Transfer;
 const SingleFlight = @import("SingleFlight.zig");
 const HttpClient = @import("HttpClient.zig");
+const Network = @import("Network.zig");
+
+const CorsStore = @import("CorsStore.zig");
 
 const log = lp.log;
 
 const CorsGate = @This();
 
+network: *Network,
 single_flight: SingleFlight,
 
 // CORS Request Headers
@@ -42,6 +46,7 @@ const ACCESS_CONTROL_ALLOW_ORIGIN = "access-control-allow-origin";
 const ACCESS_CONTROL_ALLOW_METHODS = "access-control-allow-methods";
 const ACCESS_CONTROL_ALLOW_HEADERS = "access-control-allow-headers";
 const ACCESS_CONTROL_ALLOW_CREDENTIALS = "access-control-allow-credentials";
+const ACCESS_CONTROL_MAX_AGE = "access-control-max-age";
 
 pub fn deinit(self: *CorsGate) void {
     self.single_flight.deinit();
@@ -212,6 +217,20 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         return .allowed;
     }
 
+    if (self.network.cors_store.get(.{ .origin = origin, .target = req.url })) |cached| {
+        const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
+        if (CorsStore.covers(cached, req.method, req.credentials_mode == .include, authored.items)) {
+            log.debug(.cors, "cross origin", .{
+                .url = req.url,
+                .origin = origin,
+                .preflight = false,
+                .cached = true,
+            });
+            lp.metrics.cors_check.incr(.cached);
+            return .allowed;
+        }
+    }
+
     log.debug(.cors, "cross origin", .{
         .url = req.url,
         .origin = origin,
@@ -221,6 +240,21 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
 
     try self.fetchThenResume(transfer);
     return .pending;
+}
+
+fn collectAuthoredHeaders(transfer: *Transfer, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    var header_names: std.ArrayList([]const u8) = .empty;
+    for (transfer.req_headers.items) |hdr| {
+        if (hdr.source != .author) continue;
+        if (isSafelistedHeader(hdr.name, hdr.value)) continue;
+        try header_names.append(allocator, try std.ascii.allocLowerString(allocator, hdr.name));
+    }
+    std.mem.sort([]const u8, header_names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+    return header_names;
 }
 
 const CorsKey = struct {
@@ -355,6 +389,56 @@ const CorsPreflightContext = struct {
         return true;
     }
 
+    fn cacheGrant(self: *CorsPreflightContext, acam: ?[]const u8, acah: ?[]const u8, acma: ?[]const u8) !void {
+        if (self.url.len == 0) return;
+
+        const max_age_s: u64 = blk: {
+            const v = acma orelse break :blk 5;
+            if (v.len == 0) break :blk 5;
+            break :blk std.fmt.parseUnsigned(u64, v, 10) catch return;
+        };
+        if (max_age_s == 0) return;
+
+        const capped_s: u64 = @min(max_age_s, 7200);
+        const capped_ms = capped_s * 1000;
+
+        const allocator = self.arena.allocator();
+
+        const methods_wildcard = acam != null and std.mem.eql(u8, acam.?, "*") and !self.wants_credentials;
+        var methods = std.EnumSet(http.Method).initEmpty();
+        if (!methods_wildcard) {
+            if (acam) |list| {
+                var it = std.mem.splitScalar(u8, list, ',');
+                while (it.next()) |raw| {
+                    const token = std.mem.trim(u8, raw, &std.ascii.whitespace);
+                    if (std.meta.stringToEnum(http.Method, token)) |m| methods.insert(m);
+                }
+            }
+        }
+
+        const headers_wildcard = acah != null and std.mem.eql(u8, acah.?, "*") and !self.wants_credentials;
+        var owned_headers: []const []const u8 = &.{};
+        if (!headers_wildcard and self.request_headers.len > 0) {
+            const dup = try allocator.alloc([]const u8, self.request_headers.len);
+            for (self.request_headers, 0..) |src, i| {
+                dup[i] = try allocator.dupe(u8, src);
+            }
+            owned_headers = dup;
+        }
+
+        try self.gate.network.cors_store.put(
+            .{ .origin = self.origin, .target = self.url },
+            .{
+                .credentials = self.wants_credentials,
+                .methods_wildcard = methods_wildcard,
+                .methods = methods,
+                .headers_wildcard = headers_wildcard,
+                .headers = owned_headers,
+                .expires_at = lp.datetime.milliTimestamp(.real) + capped_ms,
+            },
+        );
+    }
+
     fn methodAllowed(list: []const u8, method: http.Method) bool {
         const method_name = @tagName(method);
         var it = std.mem.splitScalar(u8, list, ',');
@@ -393,6 +477,7 @@ const CorsPreflightContext = struct {
         var acam: ?[]const u8 = null;
         var acah: ?[]const u8 = null;
         var acac: ?[]const u8 = null;
+        var acma: ?[]const u8 = null;
 
         var iter = transfer.responseHeaderIterator();
         while (iter.next()) |hdr| {
@@ -404,10 +489,17 @@ const CorsPreflightContext = struct {
                 acah = hdr.value;
             } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_ALLOW_CREDENTIALS, hdr.name)) {
                 acac = hdr.value;
+            } else if (std.ascii.eqlIgnoreCase(ACCESS_CONTROL_MAX_AGE, hdr.name)) {
+                acma = hdr.value;
             }
         }
 
         self.allowed = self.validateHeaders(acao, acam, acah, acac);
+        if (self.allowed) {
+            self.cacheGrant(acam, acah, acma) catch |err| {
+                log.warn(.cors, "preflight cache store failed", .{ .url = self.url, .err = err });
+            };
+        }
         return .proceed;
     }
 
