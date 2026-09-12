@@ -637,7 +637,7 @@ pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
-fn referrerSource(self: *const Frame) [:0]const u8 {
+pub fn referrerSource(self: *const Frame) [:0]const u8 {
     var frame = self;
     while (std.mem.startsWith(u8, frame.url, "about:")) {
         // about:blank and about:srcdoc documents aren't valid referrer sources,

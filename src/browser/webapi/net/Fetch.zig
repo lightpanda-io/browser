@@ -33,6 +33,8 @@ const log = lp.log;
 const Execution = js.Execution;
 const Transfer = HttpClient.Transfer;
 
+const referrer = @import("../../referrer.zig");
+
 const Fetch = @This();
 
 _exec: *const Execution,
@@ -141,7 +143,28 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         if (request._headers) |h| {
             try h.populateRequestHeaders(transfer);
         }
-        try exec.headersForRequest(transfer);
+
+        switch (request._referrer) {
+            .none => {},
+            .client => {
+                if (request._referrer_policy) |policy| {
+                    const source = exec.referrerSource();
+                    if (try referrer.compute(transfer.arena.allocator(), policy, source, transfer.req.url)) |ref| {
+                        try transfer.setHeader("Referer", ref, .{});
+                    }
+                    transfer.req.referrer_policy = policy;
+                } else {
+                    try exec.headersForRequest(transfer);
+                }
+            },
+            .url => |source| {
+                const policy = request._referrer_policy orelse referrer.Policy.default;
+                if (try referrer.compute(transfer.arena.allocator(), policy, source, transfer.req.url)) |ref| {
+                    try transfer.setHeader("Referer", ref, .{});
+                }
+                transfer.req.referrer_policy = policy;
+            },
+        }
     }
 
     // Held for Response.deinit's abort; the error, shutdown and done
