@@ -763,7 +763,11 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = if (err == error.TransferCanceled) .debug else .err;
+    const level: log.Level = switch (err) {
+        error.TransferCanceled => .debug,
+        error.UrlBlocked => .warn,
+        else => .err,
+    };
     log.log(.http, level, "error", .{
         .url = self._url,
         .err = err,
