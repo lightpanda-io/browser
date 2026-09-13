@@ -186,11 +186,19 @@ input_modifiers: if (lp.build_config.wpt_extensions) @import("frame/user_input.z
 // The element the synthetic pointer is currently over
 input_hover_target: ?*Element = null,
 
-// Whether the in-flight mouse gesture's pointerdown suppressed the
-// compatibility mousedown/mouseup (preventDefault() was called). CDP's
-// mousePressed/mouseReleased arrive as two independent
-// Input.dispatchMouseEvent messages, so the release half reads this instead
-// of carrying the state itself.
+// The aggregate mask of mouse buttons currently held down, tracked across
+// individual mousePressed/mouseReleased (CDP) or equivalent (BiDi) messages
+// so a chorded press (a second button pressed before the first is released)
+// can be told apart from the start of a new gesture.
+input_pressed_buttons: u16 = 0,
+
+// Whether the pointerdown that started the current gesture (the 0-to-nonzero
+// transition of input_pressed_buttons) suppressed the compatibility
+// mousedown/mouseup (preventDefault() was called). Set once at the start of
+// the gesture and held for its whole duration, including any chorded
+// button presses/releases in between — CDP's mousePressed/mouseReleased
+// arrive as independent Input.dispatchMouseEvent messages, so each half
+// reads this instead of carrying the state itself.
 input_mousedown_suppressed: bool = false,
 
 // Popup Frames opened by window.open. They are top-level browsing contexts

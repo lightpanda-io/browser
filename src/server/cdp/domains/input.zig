@@ -687,6 +687,63 @@ test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across
     try testing.expect(result.isTrue());
 }
 
+// A second button pressed while the first is still held is a chord on one
+// pointer, not two independent gestures: the aggregate buttons mask changes
+// (as pointermove), but pointerdown/pointerup fire only at the 0/nonzero
+// transitions, and a cancelled pointerdown's mouse-event suppression holds
+// for the whole gesture — https://www.w3.org/TR/pointerevents3/#chorded-button-interactions.
+test "cdp.input: a mouse chord fires pointermove for the mid-gesture button change, not a second pointerdown/pointerup" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btnChord').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btnChord').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+
+    const result = try ls.local.compileAndRun(
+        \\JSON.stringify(window.seqChord) === JSON.stringify([
+        \\  'pointerdown:1', 'pointermove:3', 'pointermove:1', 'contextmenu:1', 'pointerup:0', 'click:0'
+        \\])
+    , null);
+    try testing.expect(result.isTrue());
+}
+
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
     var ctx = try testing.context();
     defer ctx.deinit();
