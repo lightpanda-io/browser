@@ -358,7 +358,7 @@ fn isScrollContainer(el: *Element, axis: ScrollAxis, frame: *Frame) bool {
             .y => it.next() orelse x,
         };
     };
-    return std.mem.eql(u8, value, "auto") or std.mem.eql(u8, value, "scroll");
+    return std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "scroll");
 }
 
 fn deltaToScroll(d: f64) i32 {
