@@ -186,7 +186,9 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
         if (r.len == 0) break :blk .none;
         if (std.mem.eql(u8, r, "about:client")) break :blk .client;
-        break :blk .{ .url = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* }) };
+        const resolved = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* });
+        if (!exec.isSameOrigin(resolved)) break :blk .client;
+        break :blk .{ .url = resolved };
     } else switch (input) {
         .url => .client,
         .request => |r| switch (r._referrer) {
