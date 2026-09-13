@@ -441,33 +441,7 @@ pub const Writer = struct {
                         const option = el.as(DOMNode.Element.Html.Option);
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
 
-                        // Check if this option is selected by examining the parent select
-                        const is_selected = blk: {
-                            // First check if explicitly selected
-                            if (option.getSelected()) break :blk true;
-
-                            // Check if implicitly selected (first enabled option in select with no explicit selection)
-                            const parent = dom_node._parent orelse break :blk false;
-                            const parent_el = parent.as(DOMNode.Element);
-                            if (parent_el.getTag() != .select) break :blk false;
-
-                            const select = parent_el.as(DOMNode.Element.Html.Select);
-                            const selected_idx = select.getSelectedIndex();
-
-                            // Find this option's index
-                            var idx: i32 = 0;
-                            var it = parent.childrenIterator();
-                            while (it.next()) |child| {
-                                if (child.is(DOMNode.Element.Html.Option) == null) continue;
-                                if (child == dom_node) {
-                                    break :blk idx == selected_idx;
-                                }
-                                idx += 1;
-                            }
-                            break :blk false;
-                        };
-
-                        if (is_selected) {
+                        if (option.getSelected()) {
                             try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
                         }
                     },

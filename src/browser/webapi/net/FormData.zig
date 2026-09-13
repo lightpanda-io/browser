@@ -861,18 +861,14 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
 
             if (element.is(Form.Select)) |select| {
-                if (select.getMultiple() == false) {
-                    // Per the HTML spec, a single-select with no selectedness
-                    // candidate (zero options or every option disabled)
-                    // contributes no entry. Otherwise emit the candidate's
-                    // value.
-                    const opt = select.effectiveOption() orelse continue;
-                    break :blk opt.getValue(frame);
-                }
-
                 var options = try select.getSelectedOptions(frame);
-                while (options.next()) |option| {
-                    try appendString(&list, arena, name, option.as(Form.Select.Option).getValue(frame));
+                while (options.next()) |node| {
+                    const option = node.as(Form.Select.Option);
+                    // A disabled option can be selected, but isn't submitted.
+                    if (option.asElement().isDisabled()) {
+                        continue;
+                    }
+                    try appendString(&list, arena, name, option.getValue(frame));
                 }
                 continue;
             }
