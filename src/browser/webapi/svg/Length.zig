@@ -290,8 +290,8 @@ fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
 fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, frame: *Frame, depth: u8) f64 {
     const factor = switch (parsed.unit) {
         .percentage => ancestorViewportDimensionAt(element, direction, frame, depth) / 100.0,
-        .em => element.ownerFrame(frame)._style_manager.computedFontSize(element),
-        .ex => element.ownerFrame(frame)._style_manager.computedFontSize(element) / 2.0,
+        .em => elementFontSize(element, frame),
+        .ex => elementFontSize(element, frame) / 2.0,
         else => units.absoluteLengthFactor(toShared(parsed.unit)).?,
     };
     return parsed.value * factor;
@@ -299,7 +299,12 @@ fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, 
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
     const element = self._element orelse return frame._style_manager.computedFontSize(null);
-    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
+    return elementFontSize(element, frame);
+}
+
+fn elementFontSize(element: *Element, frame: *Frame) f64 {
+    const owner = element.ownerFrame(frame) orelse return frame._style_manager.computedFontSize(null);
+    return owner._style_manager.computedFontSize(element);
 }
 
 const Parsed = struct {

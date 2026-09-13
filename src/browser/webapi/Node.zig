@@ -752,16 +752,14 @@ fn ownerDocumentIncludingSelf(self: *const Node, frame: *const Frame) ?*Document
     return self.ownerDocument(frame);
 }
 
-// Returns the Frame that owns this node's tree. Used to tie cached state of
-// "live" collections (NodeList, HTMLCollection, etc.) to the right frame's DOM
-// version: cross-realm callers must invalidate based on mutations through the
-// node's owning frame, not the caller's frame.
-//
-// Falls back to `default` when the node has no associated document yet (e.g.,
-// freshly created and detached) or its document has no frame.
-pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
-    const doc = self.ownerDocumentIncludingSelf(default) orelse return default;
-    return doc._frame orelse default;
+// Returns the Frame that owns this node's tree, or null when the node's
+// document has none: a DOMParser/XHR/createHTMLDocument document, or one
+// whose frame has since navigated away. Used to tie per-frame state (the
+// StyleManager, live-collection versions, the event manager, ...) to the
+// right frame: cross-realm callers must not use the calling frame's.
+pub fn ownerFrame(self: *const Node, frame: *const Frame) ?*Frame {
+    const doc = self.ownerDocumentIncludingSelf(frame) orelse return null;
+    return doc._frame;
 }
 
 pub const ResolveURLOpts = struct {
@@ -771,11 +769,12 @@ pub const ResolveURLOpts = struct {
 // Resolve a URL relative to this node's owning document.
 // Uses the document's charset for query string encoding (with NCR fallback for unmappable chars).
 pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveURLOpts) ![:0]const u8 {
-    const owner_frame = self.ownerFrame(frame);
     const allocator = opts.allocator orelse frame.call_arena;
     const doc: ?*const Document = self.ownerDocumentIncludingSelf(frame);
-    const encoding = if (doc) |d| d.getCharset() else owner_frame.charset;
-    return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = encoding });
+    const encoding = if (doc) |d| d.getCharset() else frame.charset;
+    // A frameless document (DOMParser, XHR) has no <base>; its URL is the base.
+    const base = if (self.ownerFrame(frame)) |owner| owner.base() else if (doc) |d| d.getURL(frame) else frame.url;
+    return URL.resolve(allocator, base, url, .{ .encoding = encoding });
 }
 
 // Same as `resolveURL` but can't return `TypeError`, this is needed for multiple

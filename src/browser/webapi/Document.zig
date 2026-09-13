@@ -923,7 +923,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    const style_manager = &root.ownerFrame(frame)._style_manager;
+    const style_manager = &(root.ownerFrame(frame) orelse return null)._style_manager;
     const Entry = struct { node: *Node, hidden: bool };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });

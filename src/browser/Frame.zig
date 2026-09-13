@@ -590,6 +590,10 @@ pub fn deinit(self: *Frame) void {
         worker.deinit();
     }
 
+    // The document outlives the frame (it's nodes stay reachable from any other
+    // live frame)
+    self.document._frame = null;
+
     self._script_manager.base.shutdown = true;
 
     self._script_manager.deinit();
@@ -3249,31 +3253,31 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             }
         }
 
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.scriptAddedCallback(from_parser, script) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.iframeAddedCallback(iframe) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Meta)) |meta| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         meta.processRefresh(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         link.linkAddedCallback(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         style.styleAddedCallback(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
@@ -3609,7 +3613,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const target: TargetFrame = blk: {
         const target_name = target_name_ orelse {
-            break :blk .{ .frame = form_element.ownerFrame(self) };
+            break :blk .{ .frame = form_element.ownerFrame(self) orelse return };
         };
         break :blk self.resolveTargetFrame(target_name);
     };
@@ -3776,7 +3780,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // no stray window.
     const target_frame = switch (target) {
         .frame => |f| f,
-        .blank => try form_element.ownerFrame(self).openBlankTarget(form_element, ""),
+        .blank => try (form_element.ownerFrame(self) orelse return).openBlankTarget(form_element, ""),
     };
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
 }

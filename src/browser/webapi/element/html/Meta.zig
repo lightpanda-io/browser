@@ -187,7 +187,7 @@ pub const Build = struct {
         if (!name.eql(comptime .wrap("http-equiv")) and !name.eql(comptime .wrap("content"))) {
             return;
         }
-        return element.as(Meta).processRefresh(element.asNode().ownerFrame(frame));
+        return element.as(Meta).processRefresh(element.asNode().ownerFrame(frame) orelse return);
     }
 };
 
