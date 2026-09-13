@@ -39,11 +39,8 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
 }
 
 /// The trusted primary-button gesture a real user click produces; widgets key
-/// off pointerdown/mousedown, not click alone. Shares its dispatch mechanics
-/// with `WebDriver.click` and the CDP mouse-press/release path (both go
-/// through `Frame.user_input.dispatchPointer{Press,Release}`); this call
-/// site's own error-handling choice — a focus failure is worth a warning,
-/// not aborting the click — lives here, not in the shared code.
+/// off pointerdown/mousedown, not click alone. A focus failure is worth a
+/// warning, not aborting the click.
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 

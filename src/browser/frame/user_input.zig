@@ -305,12 +305,12 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
             .type = frame._type,
         });
     }
-    // CDP's mousedown has never carried a click count (params.clickCount is
-    // only read on the release side); preserve that rather than fixing it
-    // here. mousePressed/mouseReleased arrive as two independent CDP
-    // messages, so the release half (below) can't observe this gesture's
-    // pointerdown directly — stash the outcome on the page first, before
-    // the fallible focus call, mirroring input_hover_target.
+    // triggerMousePress takes no click-count parameter, so mousedown always
+    // fires with detail 0; only the release side (below) carries a click
+    // count. mousePressed/mouseReleased arrive as two independent CDP
+    // messages, so the release half can't observe this gesture's pointerdown
+    // directly — stash the outcome on the page first, before the fallible
+    // focus call, mirroring input_hover_target.
     const press = try dispatchPointerPress(frame, target, x, y, button, 0, .{});
     frame._page.input_mousedown_suppressed = press.suppress_mouse;
     if (!press.suppress_mouse and !press.suppress_focus) {

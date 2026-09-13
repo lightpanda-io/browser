@@ -500,14 +500,11 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     try testing.expect(result.isTrue());
 }
 
-// Regression for the shared click-dispatch refactor: mousePressed/
-// mouseReleased now go through the same Frame.user_input.dispatchPointer*
-// primitives as actions.click and WebDriver.click, so CDP (i.e. Puppeteer,
-// Playwright) gets pointerdown/pointerup for the first time. #btn's
-// listeners (mcp_actions.html) record the same five-event sequence the MCP
-// click test asserts on the actions.click path, modulo one pre-existing,
-// deliberately-untouched CDP quirk: mousedown's detail (click count) has
-// never been threaded from clickCount here, unlike mouseup/click below.
+// A CDP mousePressed/mouseReleased pair fires the full pointerdown/mousedown/
+// pointerup/mouseup/click sequence, matching actions.click's five-event
+// sequence (asserted in the MCP click test) except that mousedown's detail
+// (click count) is always 0 — triggerMousePress takes no click-count
+// parameter, so only the release half's mouseup/click carries one.
 test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full pointer/mouse sequence" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -551,11 +548,9 @@ test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full po
     try testing.expect(result.isTrue());
 }
 
-// Regression for the same refactor's page-level suppression state
-// (Page.input_mousedown_suppressed): mousePressed and mouseReleased are two
-// independent CDP messages, so a pointerdown cancelled on the press half
-// must still suppress mouseup on the release half, with no state carried by
-// the caller between the two calls.
+// mousePressed and mouseReleased are two independent CDP messages, so a
+// pointerdown cancelled on the press half must still suppress mouseup on the
+// release half, with no state carried by the caller between the two calls.
 test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across the split mousePressed/mouseReleased calls" {
     var ctx = try testing.context();
     defer ctx.deinit();
