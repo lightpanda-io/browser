@@ -1167,8 +1167,8 @@ pub const BrowserContext = struct {
         };
 
         const cdp = self.cdp;
-        const allocator = cdp.link.sendAllocator();
-        defer cdp.link.sendDone();
+        const allocator = cdp.link.acquireSendArena();
+        defer cdp.link.releaseSendArena();
 
         const field = ",\"sessionId\":\"";
 

@@ -119,12 +119,12 @@ pub fn destroy(self: *Link) void {
 }
 
 // Pair every call with sendDone.
-pub fn sendAllocator(self: *Link) Allocator {
+pub fn acquireSendArena(self: *Link) Allocator {
     self.send_depth += 1;
     return self.send_arena.allocator();
 }
 
-pub fn sendDone(self: *Link) void {
+pub fn releaseSendArena(self: *Link) void {
     self.send_depth -= 1;
     if (self.send_depth == 0) {
         _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
@@ -174,8 +174,8 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
     var header_buf: [10]u8 = undefined;
     const header = WS.frameHeader(&header_buf, .pong, data.len);
 
-    const allocator = self.sendAllocator();
-    defer self.sendDone();
+    const allocator = self.acquireSendArena();
+    defer self.releaseSendArena();
     const framed = try allocator.alloc(u8, header.len + data.len);
     @memcpy(framed[0..header.len], header);
     @memcpy(framed[header.len..], data);
@@ -186,8 +186,8 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
 // We serialize into a buffer whose first 10 bytes are reserved, then
 // backfill the header right-aligned and send the slice.
 pub fn sendJSON(self: *Link, message: anytype, opts: std.json.Stringify.Options) !void {
-    const allocator = self.sendAllocator();
-    defer self.sendDone();
+    const allocator = self.acquireSendArena();
+    defer self.releaseSendArena();
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
     try aw.writer.writeAll(&[_]u8{0} ** 10);
