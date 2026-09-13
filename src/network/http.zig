@@ -348,6 +348,11 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(easy, .copy_post_fields, body.ptr);
     }
 
+    pub fn setNoBody(self: *const Connection) !void {
+        const easy = self._easy;
+        try libcurl.curl_easy_setopt(easy, .no_body, true);
+    }
+
     pub fn setGetMode(self: *const Connection) !void {
         try libcurl.curl_easy_setopt(self._easy, .http_get, true);
     }
