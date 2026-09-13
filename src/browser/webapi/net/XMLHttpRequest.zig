@@ -847,6 +847,19 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../../testing.zig");
+
+test "parseMethod: accepts known methods case-insensitively" {
+    try testing.expectEqual(.GET, try parseMethod("GET"));
+    try testing.expectEqual(.GET, try parseMethod("get"));
+    try testing.expectEqual(.HEAD, try parseMethod("Head"));
+    try testing.expectEqual(.POST, try parseMethod("post"));
+    try testing.expectEqual(.PUT, try parseMethod("put"));
+    try testing.expectEqual(.DELETE, try parseMethod("delete"));
+    try testing.expectEqual(.OPTIONS, try parseMethod("options"));
+    try testing.expectEqual(.PATCH, try parseMethod("patch"));
+    try testing.expectEqual(.PROPFIND, try parseMethod("propfind"));
+}
+
 test "WebApi: XHR" {
     testing.expectLog(&.{ .http, .http, .http });
     try testing.htmlRunner("net/xhr.html", .{});
