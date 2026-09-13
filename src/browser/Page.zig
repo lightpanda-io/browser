@@ -80,6 +80,12 @@ broadcast_sequence: u64 = 0,
 // Not exhaustive: some swallowed-callback paths aren't routed here.
 js_error_count: usize = 0,
 
+// Live MutationRecords created by this Page's frames: queued on an observer or
+// handed to JS and waiting on V8's finalizer. Scrape-build diagnostic; see
+// MutationObserver.RECORD_SPIKE.
+mutation_records: u32 = 0,
+mutation_records_spiked: bool = false,
+
 // DOM object factory scoped to this Page's documents.
 factory: Factory,
 

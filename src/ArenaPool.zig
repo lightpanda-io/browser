@@ -44,6 +44,14 @@ const SITES_SHIFT = 7;
 // How many sites a spike dump names.
 const TOP_SITES = 5;
 
+// Sites whose volume we already understand. They're still counted, but they
+// neither trip a spike nor take a slot in its dump, so they can't drown out
+// the site we're actually looking for.
+const IGNORED_SITES = [_][]const u8{
+    // One tiny arena per record, held until V8 finalizes it.
+    "MutationRecord",
+};
+
 pub const Bucket = struct {
     size: BucketSize,
     free_list: ?*Arena = null,
@@ -54,13 +62,22 @@ pub const Bucket = struct {
     // Arenas handed out and not yet released.
     inflight: u32 = 0,
 
+    // The part of inflight acquired under an IGNORED_SITES label.
+    ignored: u32 = 0,
+
     // Set when a spike is dumped, cleared once in-flight falls back under half
     // the threshold, so one incident logs once instead of tens of thousands of
     // times.
     spiked: bool = false,
 
+    sites: Sites = .{},
+
     fn spikeThreshold(self: *const Bucket) u32 {
         return @as(u32, self.free_list_max) * SPIKE_MULTIPLE;
+    }
+
+    fn watched(self: *const Bucket) u32 {
+        return self.inflight - self.ignored;
     }
 };
 
@@ -77,23 +94,28 @@ const Sites = struct {
     const Entry = struct {
         name: []const u8 = "",
         count: u32 = 0,
+        ignored: bool = false,
 
         fn moreThan(_: void, a: Entry, b: Entry) bool {
             return a.count > b.count;
         }
     };
 
-    fn incr(self: *Sites, name: []const u8) void {
+    // Returns whether the site is ignored.
+    fn incr(self: *Sites, name: []const u8) bool {
         const entry = self.find(name, true) orelse {
             self.overflow += 1;
-            return;
+            return false;
         };
         entry.count += 1;
+        return entry.ignored;
     }
 
-    fn decr(self: *Sites, name: []const u8) void {
-        const entry = self.find(name, false) orelse return;
+    // Returns whether the site is ignored.
+    fn decr(self: *Sites, name: []const u8) bool {
+        const entry = self.find(name, false) orelse return false;
         entry.count -|= 1;
+        return entry.ignored;
     }
 
     fn find(self: *Sites, name: []const u8, insert: bool) ?*Entry {
@@ -105,6 +127,7 @@ const Sites = struct {
                     return null;
                 }
                 entry.name = name;
+                entry.ignored = isIgnored(name);
                 return entry;
             }
             if (entry.name.ptr == name.ptr) {
@@ -115,11 +138,20 @@ const Sites = struct {
         return null;
     }
 
+    fn isIgnored(name: []const u8) bool {
+        for (IGNORED_SITES) |ignored| {
+            if (std.mem.eql(u8, name, ignored)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     fn snapshot(self: *const Sites, bucket: *const Bucket) Spike {
         var all: [SITES]Entry = undefined;
         var len: usize = 0;
         for (self.entries) |entry| {
-            if (entry.count == 0) {
+            if (entry.count == 0 or entry.ignored) {
                 continue;
             }
             all[len] = entry;
@@ -130,6 +162,7 @@ const Sites = struct {
         var spike: Spike = .{
             .bucket = bucket.size,
             .inflight = bucket.inflight,
+            .ignored = bucket.ignored,
             .overflow = self.overflow,
             .len = @min(len, TOP_SITES),
             .top = undefined,
@@ -143,6 +176,7 @@ const Sites = struct {
 const Spike = struct {
     bucket: BucketSize,
     inflight: u32,
+    ignored: u32,
     overflow: u32,
     len: usize,
     top: [TOP_SITES]Sites.Entry,
@@ -152,6 +186,7 @@ const Spike = struct {
         log.err(.app, "arena inflight spike", .{
             .bucket = @tagName(self.bucket),
             .inflight = self.inflight,
+            .ignored = self.ignored,
             .unattributed = self.overflow,
         });
         for (self.top[0..self.len]) |entry| {
@@ -183,7 +218,6 @@ large: Bucket,
 allocator: Allocator,
 mutex: std.Io.Mutex = .init,
 entry_pool: std.heap.MemoryPool(Arena),
-sites: Sites = .{},
 
 _leak_track: if (lp.IS_DEBUG) std.StringHashMapUnmanaged(isize) else void = if (lp.IS_DEBUG) .empty else {},
 
@@ -275,10 +309,12 @@ fn _acquire(self: *ArenaPool, account: ?*Arena.Account, size_or_bucket: anytype,
     defer self.mutex.unlock(lp.io);
 
     bucket.inflight += 1;
-    self.sites.incr(debug);
-    if (bucket.spiked == false and bucket.inflight >= bucket.spikeThreshold()) {
+    if (bucket.sites.incr(debug)) {
+        bucket.ignored += 1;
+    }
+    if (bucket.spiked == false and bucket.watched() >= bucket.spikeThreshold()) {
         bucket.spiked = true;
-        spike = self.sites.snapshot(bucket);
+        spike = bucket.sites.snapshot(bucket);
     }
 
     if (bucket.free_list) |entry| {
@@ -347,8 +383,10 @@ pub fn release(self: *ArenaPool, entry: *Arena) void {
         entry.released = true;
 
         bucket.inflight -= 1;
-        self.sites.decr(entry.debug);
-        if (bucket.inflight < bucket.spikeThreshold() / 2) {
+        if (bucket.sites.decr(entry.debug)) {
+            bucket.ignored -= 1;
+        }
+        if (bucket.watched() < bucket.spikeThreshold() / 2) {
             bucket.spiked = false;
         }
 
@@ -664,20 +702,23 @@ test "ArenaPool: sites attribute in-flight arenas to their label" {
     const a2 = try pool.acquire(.tiny, site_a);
     const b1 = try pool.acquire(.small, site_b);
 
-    try testing.expectEqual(2, pool.sites.find(site_a, false).?.count);
-    try testing.expectEqual(1, pool.sites.find(site_b, false).?.count);
-    try testing.expectEqual(0, pool.sites.overflow);
+    try testing.expectEqual(2, pool.tiny.sites.find(site_a, false).?.count);
+    try testing.expectEqual(1, pool.small.sites.find(site_b, false).?.count);
+    try testing.expectEqual(0, pool.tiny.sites.overflow);
+
+    // Sites are per bucket: a small acquire never shows up in tiny's dump.
+    try testing.expectEqual(null, pool.tiny.sites.find(site_b, false));
 
     // A label that never acquired anything isn't inserted by a lookup.
-    try testing.expectEqual(null, pool.sites.find("site-c", false));
+    try testing.expectEqual(null, pool.tiny.sites.find("site-c", false));
 
     // The label survives the round trip through the entry, so release
     // decrements the site it was acquired under.
     a1.release();
     a2.release();
     b1.release();
-    try testing.expectEqual(0, pool.sites.find(site_a, false).?.count);
-    try testing.expectEqual(0, pool.sites.find(site_b, false).?.count);
+    try testing.expectEqual(0, pool.tiny.sites.find(site_a, false).?.count);
+    try testing.expectEqual(0, pool.small.sites.find(site_b, false).?.count);
 }
 
 test "ArenaPool: a bucket dumps its sites once per spike" {
@@ -696,7 +737,7 @@ test "ArenaPool: a bucket dumps its sites once per spike" {
     }
     try testing.expectEqual(true, pool.tiny.spiked);
 
-    const spike = pool.sites.snapshot(&pool.tiny);
+    const spike = pool.tiny.sites.snapshot(&pool.tiny);
     try testing.expectEqual(threshold, spike.inflight);
     try testing.expectEqual(1, spike.len);
     try testing.expectEqualStrings(site, spike.top[0].name);
@@ -713,5 +754,41 @@ test "ArenaPool: a bucket dumps its sites once per spike" {
         arena.release();
     }
     try testing.expectEqual(false, pool.tiny.spiked);
+    try testing.expectEqual(0, pool.tiny.inflight);
+}
+
+test "ArenaPool: an ignored site neither trips a spike nor appears in its dump" {
+    var pool = ArenaPool.init(testing.allocator, .{ .tiny = .{ .max = 1, .retain = 1024 } });
+    defer pool.deinit();
+
+    var ignored: [SPIKE_MULTIPLE]*Arena = undefined;
+    for (&ignored) |*arena| {
+        arena.* = try pool.acquire(.tiny, "MutationRecord");
+    }
+    try testing.expectEqual(false, pool.tiny.spiked);
+    try testing.expectEqual(SPIKE_MULTIPLE, pool.tiny.ignored);
+
+    const site = "watched-site";
+    var watched: [SPIKE_MULTIPLE]*Arena = undefined;
+    for (&watched) |*arena| {
+        arena.* = try pool.acquire(.tiny, site);
+    }
+    try testing.expectEqual(true, pool.tiny.spiked);
+
+    const spike = pool.tiny.sites.snapshot(&pool.tiny);
+    try testing.expectEqual(2 * SPIKE_MULTIPLE, spike.inflight);
+    try testing.expectEqual(SPIKE_MULTIPLE, spike.ignored);
+    try testing.expectEqual(1, spike.len);
+    try testing.expectEqualStrings(site, spike.top[0].name);
+
+    for (watched) |arena| {
+        arena.release();
+    }
+    try testing.expectEqual(false, pool.tiny.spiked);
+
+    for (ignored) |arena| {
+        arena.release();
+    }
+    try testing.expectEqual(0, pool.tiny.ignored);
     try testing.expectEqual(0, pool.tiny.inflight);
 }
