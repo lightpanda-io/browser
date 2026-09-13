@@ -77,7 +77,7 @@ fn flushPending(self: *CorsGate, key: []const u8, allowed: bool) void {
     }
 }
 
-fn isSafelistedMethod(value: http.Method) bool {
+pub fn isSafelistedMethod(value: http.Method) bool {
     return switch (value) {
         .GET, .HEAD, .POST => true,
         else => false,
@@ -217,9 +217,15 @@ pub fn check(self: *CorsGate, transfer: *Transfer) !Result {
         return .allowed;
     }
 
-    if (self.network.cors_store.get(.{ .origin = origin, .target = req.url })) |cached| {
+    const wants_credentials = req.credentials_mode == .include;
+
+    if (self.network.cors_store.get(.{
+        .origin = origin,
+        .target = req.url,
+        .credentials = wants_credentials,
+    })) |cached| {
         const authored = try collectAuthoredHeaders(transfer, transfer.arena.allocator());
-        if (CorsStore.covers(cached, req.method, req.credentials_mode == .include, authored.items)) {
+        if (CorsStore.covers(cached, req.method, authored.items)) {
             log.debug(.cors, "cross origin", .{
                 .url = req.url,
                 .origin = origin,
@@ -427,9 +433,8 @@ const CorsPreflightContext = struct {
         }
 
         try self.gate.network.cors_store.put(
-            .{ .origin = self.origin, .target = self.url },
+            .{ .origin = self.origin, .target = self.url, .credentials = self.wants_credentials },
             .{
-                .credentials = self.wants_credentials,
                 .methods_wildcard = methods_wildcard,
                 .methods = methods,
                 .headers_wildcard = headers_wildcard,

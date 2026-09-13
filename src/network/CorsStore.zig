@@ -20,17 +20,20 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const http = @import("http.zig");
+const isSafelistedMethod = @import("CorsGate.zig").isSafelistedMethod;
 
 const CorsStore = @This();
 
 const Key = struct {
     origin: []const u8,
     target: []const u8,
+    credentials: bool,
 
     fn dupe(self: Key, allocator: std.mem.Allocator) !Key {
         return .{
             .origin = try allocator.dupe(u8, self.origin),
             .target = try allocator.dupe(u8, self.target),
+            .credentials = self.credentials,
         };
     }
 
@@ -46,11 +49,15 @@ const KeyContext = struct {
         hasher.update(key.origin);
         hasher.update(&.{0});
         hasher.update(key.target);
+        hasher.update(&.{0});
+        hasher.update(&.{@intFromBool(key.credentials)});
         return hasher.final();
     }
 
     pub fn eql(_: KeyContext, a: Key, b: Key) bool {
-        return std.mem.eql(u8, a.origin, b.origin) and std.mem.eql(u8, a.target, b.target);
+        return std.mem.eql(u8, a.origin, b.origin) and
+            std.mem.eql(u8, a.target, b.target) and
+            a.credentials == b.credentials;
     }
 };
 
@@ -62,8 +69,6 @@ const Entry = struct {
     headers: []const []const u8,
 
     expires_at: u64,
-
-    credentials: bool,
 
     fn unionHeaders(
         allocator: std.mem.Allocator,
@@ -94,7 +99,6 @@ const Entry = struct {
 
     fn merge(self: Entry, allocator: std.mem.Allocator, new: Entry) !Entry {
         return .{
-            .credentials = self.credentials or new.credentials,
             .methods_wildcard = self.methods_wildcard or new.methods_wildcard,
             .methods = self.methods.unionWith(new.methods),
             .headers_wildcard = self.headers_wildcard or new.headers_wildcard,
@@ -120,7 +124,6 @@ const Entry = struct {
             .headers_wildcard = self.headers_wildcard,
             .headers = new_headers.items,
             .expires_at = self.expires_at,
-            .credentials = self.credentials,
         };
     }
 
@@ -200,14 +203,9 @@ pub fn put(self: *CorsStore, key: Key, entry: Entry) !void {
 pub fn covers(
     entry: Entry,
     method: http.Method,
-    wants_credentials: bool,
     authored_headers: []const []const u8,
 ) bool {
-    if (wants_credentials and !entry.credentials) {
-        return false;
-    }
-
-    if (!entry.methods_wildcard and !entry.methods.contains(method)) {
+    if (!isSafelistedMethod(method) and !entry.methods_wildcard and !entry.methods.contains(method)) {
         return false;
     }
 
@@ -235,7 +233,7 @@ fn freeHeaders(allocator: std.mem.Allocator, headers: []const []const u8) void {
     allocator.free(headers);
 }
 
-test "CorsStore: put then get, miss on different origin/target" {
+test "CorsStore: put then get, miss on different origin/target/credentials" {
     const allocator = testing.allocator;
     var store = CorsStore.init(allocator);
     defer store.deinit();
@@ -244,8 +242,7 @@ test "CorsStore: put then get, miss on different origin/target" {
     headers[0] = try allocator.dupe(u8, "x-custom");
     defer freeHeaders(allocator, headers);
 
-    try store.put(.{ .origin = "https://a.example", .target = "https://api.example" }, .{
-        .credentials = false,
+    try store.put(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }, .{
         .methods_wildcard = false,
         .methods = std.EnumSet(http.Method).initOne(.POST),
         .headers_wildcard = false,
@@ -254,12 +251,15 @@ test "CorsStore: put then get, miss on different origin/target" {
     });
 
     // store.get returns the store's own copy — not caller-owned, don't free it.
-    const hit = store.get(.{ .origin = "https://a.example", .target = "https://api.example" }).?;
+    const hit = store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }).?;
     try testing.expect(hit.methods.contains(.POST));
     try testing.expect(!hit.methods.contains(.GET));
 
-    try testing.expectEqual(null, store.get(.{ .origin = "https://b.example", .target = "https://api.example" }));
-    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://other.example" }));
+    try testing.expectEqual(null, store.get(.{ .origin = "https://b.example", .target = "https://api.example", .credentials = false }));
+    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://other.example", .credentials = false }));
+
+    // Same origin/target but different credentials mode: separate entry, must miss.
+    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = true }));
 }
 
 test "CorsStore: expired entries are evicted on get" {
@@ -267,8 +267,7 @@ test "CorsStore: expired entries are evicted on get" {
     var store = CorsStore.init(allocator);
     defer store.deinit();
 
-    try store.put(.{ .origin = "https://a.example", .target = "https://api.example" }, .{
-        .credentials = false,
+    try store.put(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }, .{
         .methods_wildcard = true,
         .methods = .initEmpty(),
         .headers_wildcard = true,
@@ -276,7 +275,7 @@ test "CorsStore: expired entries are evicted on get" {
         .expires_at = lp.datetime.milliTimestamp(.real) - 1,
     });
 
-    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example" }));
+    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }));
     try testing.expectEqual(0, store.map.count());
 }
 
@@ -285,12 +284,11 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
     var store = CorsStore.init(allocator);
     defer store.deinit();
 
-    const key = Key{ .origin = "https://a.example", .target = "https://api.example" };
+    const key = Key{ .origin = "https://a.example", .target = "https://api.example", .credentials = false };
 
     const h1 = try allocator.alloc([]const u8, 1);
     h1[0] = try allocator.dupe(u8, "x-one");
     try store.put(key, .{
-        .credentials = false,
         .methods_wildcard = false,
         .methods = std.EnumSet(http.Method).initOne(.POST),
         .headers_wildcard = false,
@@ -302,7 +300,6 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
     const h2 = try allocator.alloc([]const u8, 1);
     h2[0] = try allocator.dupe(u8, "x-two");
     try store.put(key, .{
-        .credentials = false,
         .methods_wildcard = false,
         .methods = std.EnumSet(http.Method).initOne(.PUT),
         .headers_wildcard = false,
@@ -316,33 +313,68 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
     try testing.expect(merged.methods.contains(.PUT));
     try testing.expectEqual(2, merged.headers.len);
 
-    try testing.expect(CorsStore.covers(merged, .POST, false, &.{"x-one"}));
-    try testing.expect(CorsStore.covers(merged, .PUT, false, &.{"x-two"}));
-    try testing.expect(!CorsStore.covers(merged, .DELETE, false, &.{}));
+    try testing.expect(CorsStore.covers(merged, .POST, &.{"x-one"}));
+    try testing.expect(CorsStore.covers(merged, .PUT, &.{"x-two"}));
+    try testing.expect(!CorsStore.covers(merged, .DELETE, &.{}));
 }
 
-test "CorsStore: covers rejects credentialed request against uncredentialed wildcard" {
-    const entry = CorsStore.Entry{
-        .credentials = false,
+test "CorsStore: credentialed and non-credentialed grants for same origin/target stay separate" {
+    const allocator = testing.allocator;
+    var store = CorsStore.init(allocator);
+    defer store.deinit();
+
+    const origin = "https://a.example";
+    const target = "https://api.example";
+
+    // Non-credentialed grant: wildcard headers allowed (valid per spec for non-cred requests).
+    try store.put(.{ .origin = origin, .target = target, .credentials = false }, .{
         .methods_wildcard = true,
         .methods = .initEmpty(),
         .headers_wildcard = true,
         .headers = &.{},
-        .expires_at = std.math.maxInt(u64),
-    };
-    try testing.expect(!CorsStore.covers(entry, .GET, true, &.{}));
-    try testing.expect(CorsStore.covers(entry, .GET, false, &.{}));
+        .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
+    });
+
+    // Credentialed grant: explicit methods/headers only, no wildcard.
+    const h = try allocator.alloc([]const u8, 1);
+    h[0] = try allocator.dupe(u8, "x-custom");
+    try store.put(.{ .origin = origin, .target = target, .credentials = true }, .{
+        .methods_wildcard = false,
+        .methods = std.EnumSet(http.Method).initOne(.GET),
+        .headers_wildcard = false,
+        .headers = h,
+        .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
+    });
+    freeHeaders(allocator, h);
+
+    const non_cred = store.get(.{ .origin = origin, .target = target, .credentials = false }).?;
+    const cred = store.get(.{ .origin = origin, .target = target, .credentials = true }).?;
+
+    // The two entries must never have merged: the credentialed entry must NOT
+    // have inherited the non-credentialed entry's wildcard.
+    try testing.expect(non_cred.headers_wildcard);
+    try testing.expect(!cred.headers_wildcard);
+    try testing.expect(!cred.methods_wildcard);
+    try testing.expect(cred.methods.contains(.GET));
+    try testing.expect(!cred.methods.contains(.POST));
+
+    // A credentialed request asking for an arbitrary header must be rejected
+    // against the credentialed entry, even though the non-cred entry has a wildcard.
+    try testing.expect(!CorsStore.covers(cred, .GET, &.{"x-anything"}));
+    try testing.expect(CorsStore.covers(cred, .GET, &.{"x-custom"}));
+
+    // The non-credentialed entry's wildcard still works for non-cred requests.
+    try testing.expect(CorsStore.covers(non_cred, .GET, &.{"x-anything"}));
 }
 
 test "CorsStore: covers never lets a wildcard cover Authorization" {
     const entry = CorsStore.Entry{
-        .credentials = false,
         .methods_wildcard = true,
         .methods = .initEmpty(),
         .headers_wildcard = true,
         .headers = &.{},
         .expires_at = std.math.maxInt(u64),
     };
-    try testing.expect(!CorsStore.covers(entry, .GET, false, &.{"authorization"}));
-    try testing.expect(CorsStore.covers(entry, .GET, false, &.{"x-anything"}));
+    try testing.expect(!CorsStore.covers(entry, .GET, &.{"authorization"}));
+    try testing.expect(CorsStore.covers(entry, .GET, &.{"x-anything"}));
 }
