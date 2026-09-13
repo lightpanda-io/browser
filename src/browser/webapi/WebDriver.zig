@@ -67,13 +67,8 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         }
     }
 
-    // Shares its dispatch mechanics with actions.click and the CDP mouse
-    // press/release path (Frame.user_input.dispatchPointer{Press,Release}),
-    // which also gives this call its suppress/focus handling and its
-    // PointerEvent click for the first time — previously this dispatched a
-    // fixed five-event sequence unconditionally. Every dispatch here keeps
-    // this function's pre-existing contract of never failing: a dispatch
-    // error is a warning, not a rejection of the testdriver command.
+    // A dispatch error must never reject the testdriver command, so each
+    // stage is caught and logged rather than propagated.
     const main = Frame.user_input.mouse_button.main;
     const modifiers = frame._page.input_modifiers;
     const press = Frame.user_input.dispatchPointerPress(frame, element, 0, 0, main, 1, modifiers) catch |err| {
