@@ -34,6 +34,7 @@ const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const referrer = @import("../referrer.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Console = @import("../webapi/Console.zig");
@@ -94,6 +95,10 @@ pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer)
 
 pub fn referrerSource(self: *const Execution) [:0]const u8 {
     return self.js.global.referrerSource();
+}
+
+pub fn referrerPolicy(self: *const Execution) referrer.Policy {
+    return self.js.global.referrerPolicy();
 }
 
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {

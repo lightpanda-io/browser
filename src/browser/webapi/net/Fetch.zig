@@ -144,26 +144,18 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             try h.populateRequestHeaders(transfer);
         }
 
-        switch (request._referrer) {
-            .none => {},
-            .client => {
-                if (request._referrer_policy) |policy| {
-                    const source = exec.referrerSource();
-                    if (try referrer.compute(transfer.arena.allocator(), policy, source, transfer.req.url)) |ref| {
-                        try transfer.setHeader("Referer", ref, .{});
-                    }
-                    transfer.req.referrer_policy = policy;
-                } else {
-                    try exec.headersForRequest(transfer);
-                }
-            },
-            .url => |source| {
-                const policy = request._referrer_policy orelse referrer.Policy.default;
-                if (try referrer.compute(transfer.arena.allocator(), policy, source, transfer.req.url)) |ref| {
-                    try transfer.setHeader("Referer", ref, .{});
-                }
+        const source: ?[:0]const u8 = switch (request._referrer) {
+            .none => null,
+            .client => exec.referrerSource(),
+            .url => |u| u,
+        };
+
+        if (source) |s| {
+            const policy = request._referrer_policy orelse exec.referrerPolicy();
+            if (try referrer.compute(transfer.arena.allocator(), policy, s, transfer.req.url)) |ref| {
+                try transfer.setHeader("Referer", ref, .{});
                 transfer.req.referrer_policy = policy;
-            },
+            }
         }
     }
 

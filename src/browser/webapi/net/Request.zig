@@ -74,7 +74,7 @@ pub const InitOpts = struct {
 
 pub const ReferrerValue = union(enum) {
     client,
-    @"no-referrer",
+    none,
     url: [:0]const u8,
 };
 
@@ -184,7 +184,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     };
 
     const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
-        if (r.len == 0) break :blk .@"no-referrer";
+        if (r.len == 0) break :blk .none;
         if (std.mem.eql(u8, r, "about:client")) break :blk .client;
         break :blk .{ .url = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* }) };
     } else switch (input) {
@@ -418,7 +418,7 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
 pub fn getReferrer(self: *Request) []const u8 {
     return switch (self._referrer) {
         .client => "about:client",
-        .@"no-referrer" => "",
+        .none => "",
         .url => |url| url,
     };
 }

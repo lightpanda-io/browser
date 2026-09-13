@@ -32,6 +32,7 @@ const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
+const referrer = @import("referrer.zig");
 const EventManagerBase = @import("EventManagerBase.zig");
 
 pub const GlobalScope = union(enum) {
@@ -95,6 +96,13 @@ pub const GlobalScope = union(enum) {
         return switch (self) {
             .frame => |frame| frame.referrerSource(),
             .worker => |worker| worker.url,
+        };
+    }
+
+    pub fn referrerPolicy(self: GlobalScope) referrer.Policy {
+        return switch (self) {
+            .frame => |frame| frame.referrer_policy,
+            .worker => |worker| worker._frame.referrer_policy,
         };
     }
 
