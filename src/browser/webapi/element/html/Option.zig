@@ -80,17 +80,19 @@ pub fn getSelected(self: *const Option) bool {
 }
 
 fn setSelected(self: *Option, selected: bool, frame: *Frame) !void {
+    self.setSelectedness(selected);
+    frame.domChanged();
+}
+
+fn setSelectedness(self: *Option, selected: bool) void {
+    if (self._selected == selected) {
+        // Deselecting an option that isn't selected doesn't ask for a reset.
+        return;
+    }
     self._selected = selected;
     if (self.ownerSelect()) |select| {
-        if (selected) {
-            if (!select.getMultiple()) {
-                select.deselectOthers(self);
-            }
-        } else {
-            select.resetToDefaultSelection();
-        }
+        select.optionSelectednessChanged(self);
     }
-    frame.domChanged();
 }
 
 /// The <select> this option belongs to, directly or through an <optgroup>.
@@ -169,7 +171,7 @@ pub const Build = struct {
             .value => self._value = element.getAttributeInterned("value"),
             .selected => {
                 self._default_selected = true;
-                self._selected = true;
+                self.setSelectedness(true);
             },
         }
     }
@@ -181,7 +183,7 @@ pub const Build = struct {
             .value => self._value = null,
             .selected => {
                 self._default_selected = false;
-                self._selected = false;
+                self.setSelectedness(false);
             },
         }
     }
