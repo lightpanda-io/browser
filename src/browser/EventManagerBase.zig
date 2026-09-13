@@ -454,6 +454,10 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
+                    error.StackExhausted => {
+                        event._listeners_did_throw = true;
+                        local.ctx.page.recordJsError(err);
+                    },
                     else => log.warn(.event, context, .{ .err = err }),
                 };
             },
@@ -511,6 +515,10 @@ pub const Listener = struct {
                         reportException(&try_catch, local);
                     },
                     error.ExecutionTerminated => return error.ExecutionTerminated,
+                    error.StackExhausted => {
+                        event._listeners_did_throw = true;
+                        local.ctx.page.recordJsError(err);
+                    },
                     else => log.warn(.event, context, .{ .err = err }),
                 };
             },

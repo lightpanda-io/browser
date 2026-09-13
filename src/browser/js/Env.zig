@@ -109,6 +109,8 @@ tearing_down: bool = false,
 
 heap_limit_protected: bool = false,
 
+stack_headroom: usize = 16 * 1024,
+
 // Message for the next TypeError the bridge builds. Set by local.typeError.
 // Think of it as our own little global errno. How cute.
 error_message: ?[]const u8 = null,
@@ -215,6 +217,11 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .microtask_queues_are_running = false,
         .eternal_function_templates = eternal_function_templates,
     };
+}
+
+// Leave room for V8 to construct a stack-overflow exception.
+pub fn stackExhausted(self: *const Env) bool {
+    return !v8.v8__Isolate__HasStackHeadroom(self.isolate.handle, self.stack_headroom);
 }
 
 pub fn deinit(self: *Env) void {
@@ -425,6 +432,10 @@ pub fn destroyContext(self: *Env, context: *Context) void {
 }
 
 pub fn runMicrotasks(self: *Env) void {
+    // Defer until a shallower checkpoint.
+    if (self.stackExhausted()) {
+        return;
+    }
     if (self.microtask_queues_are_running == false) {
         self.terminate_mutex.lockUncancelable(lp.io);
         defer self.terminate_mutex.unlock(lp.io);
@@ -655,7 +666,7 @@ pub fn cancelTerminate(self: *Env) void {
 pub fn performIsolateMicrotasks(self: *Env) void {
     self.terminate_mutex.lockUncancelable(lp.io);
     defer self.terminate_mutex.unlock(lp.io);
-    if (self.terminatePending()) return;
+    if (self.terminatePending() or self.stackExhausted()) return;
     v8.v8__Isolate__PerformMicrotaskCheckpoint(self.isolate.handle);
 }
 
@@ -793,4 +804,111 @@ test "Env: Frame context" {
     try testing.expectEqual(true, (try ls.local.exec("typeof Node !== 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof WorkerGlobalScope === 'undefined'", null)).isTrue());
     try testing.expectEqual(true, (try ls.local.exec("typeof DedicatedWorkerGlobalScope === 'undefined'", null)).isTrue());
+}
+
+test "Env: stack headroom refuses entry and recovers" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const env = frame.js.env;
+    const reserve = env.stack_headroom;
+    defer env.stack_headroom = reserve;
+
+    try local.eval("globalThis.entered = 0", null);
+    const func = try local.compileFunction("globalThis.entered++; return 7;", &.{}, &.{});
+    const script = try local.compile("globalThis.entered++", null);
+    try testing.expectEqual(false, env.stackExhausted());
+
+    env.stack_headroom = 8 * 1024 * 1024;
+    try testing.expectEqual(true, env.stackExhausted());
+    var caught: js.TryCatch.Caught = .{};
+    try testing.expectError(error.StackExhausted, func.tryCall(void, .{}, &caught));
+    try testing.expectError(error.StackExhausted, func.newInstanceThrow());
+    try testing.expectError(error.StackExhausted, local.compileFunction("return 1", &.{}, &.{}));
+    try testing.expectError(error.StackExhausted, local.compile("1", null));
+    try testing.expectError(error.StackExhausted, script.run());
+
+    env.stack_headroom = reserve;
+    try testing.expectEqual(0, try (try local.exec("entered", null)).toI32());
+    try testing.expectEqual(7, try func.tryCall(i32, .{}, &caught));
+    _ = try func.newInstanceThrow();
+    _ = try script.run();
+    try testing.expectEqual(3, try (try local.exec("entered", null)).toI32());
+}
+
+test "Env: stack headroom defers both microtask queues" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const env = frame.js.env;
+    const reserve = env.stack_headroom;
+    defer env.stack_headroom = reserve;
+
+    try local.eval("globalThis.ran = false; Promise.resolve().then(() => { ran = true; });", null);
+    var isolate_ran = false;
+    v8.v8__Isolate__EnqueueMicrotask(env.isolate.handle, struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const ran: *bool = @ptrCast(@alignCast(data.?));
+            ran.* = true;
+        }
+    }.run, &isolate_ran);
+
+    env.stack_headroom = 8 * 1024 * 1024;
+    env.runMicrotasks();
+    env.performIsolateMicrotasks();
+    try testing.expectEqual(false, isolate_ran);
+
+    env.stack_headroom = reserve;
+    try testing.expectEqual(false, (try local.exec("ran", null)).isTrue());
+    env.runMicrotasks();
+    env.performIsolateMicrotasks();
+    try testing.expectEqual(true, isolate_ran);
+    try testing.expectEqual(true, (try local.exec("ran", null)).isTrue());
+}
+
+test "Env: stack headroom skips exception getters" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const env = frame.js.env;
+    const reserve = env.stack_headroom;
+    defer env.stack_headroom = reserve;
+
+    var tc: js.TryCatch = undefined;
+    tc.init(local);
+    defer tc.deinit();
+    try testing.expectError(error.JsException, local.exec(
+        \\globalThis.getters = 0;
+        \\throw {
+        \\  get message() { getters++; return 'message'; },
+        \\  get stack() { getters++; return 'stack'; }
+        \\};
+    , null));
+
+    env.stack_headroom = 8 * 1024 * 1024;
+    const skipped = tc.caughtOrError(testing.allocator, error.JsException);
+    try testing.expectString("StackExhausted", skipped.exception.?);
+    try testing.expectEqual(true, skipped.caught);
+    try testing.expectEqual(null, skipped.stack);
+
+    env.stack_headroom = reserve;
+    try testing.expectEqual(0, try (try local.exec("getters", null)).toI32());
+    const reported = tc.caughtOrError(testing.allocator, error.JsException);
+    defer if (reported.exception) |text| testing.allocator.free(text);
+    defer if (reported.stack) |text| testing.allocator.free(text);
+    try testing.expectString("message", reported.exception.?);
+    try testing.expectString("stack", reported.stack.?);
+    try testing.expectEqual(2, try (try local.exec("getters", null)).toI32());
 }
