@@ -712,7 +712,7 @@ pub const BrowserContext = struct {
         // checks (`frame._style_manager`) are per-frame; getting this wrong on
         // cross-frame queries produces names/visibility from the wrong document.
         const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
-        const frame = root.dom.ownerFrame(fallback);
+        const frame = root.dom.ownerFrame(fallback) orelse fallback;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{

@@ -221,7 +221,7 @@ pub const List = struct {
     // *Attribute until the attribute is removed. The map must be the
     // element's frame's, not the caller's frame.
     pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const owner = if (element) |el| el.ownerFrame(frame) else frame;
+        const owner = if (element) |el| (el.ownerFrame(frame) orelse frame) else frame;
         const gop = try owner._attribute_lookup.getOrPut(owner.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
             gop.value_ptr.* = try entry.toAttribute(element, owner);
@@ -243,7 +243,7 @@ pub const List = struct {
     // run script which mutates the list, moving or shifting entries. The
     // canonical name is interned, so it stays valid.
     fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, frame: *Frame) ![]const u8 {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
@@ -312,7 +312,7 @@ pub const List = struct {
 
         const name = try self.put(attribute._name, attribute._value, element, frame);
         attribute._element = element;
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         try owner._attribute_lookup.put(owner.arena, .{ .list = self, .name = name.ptr }, attribute);
         return existing_attribute;
     }
@@ -350,7 +350,7 @@ pub const List = struct {
     }
 
     fn _delete(self: *List, entry: *Entry, normalized: String, element: *Element, frame: *Frame) void {
-        const owner = element.ownerFrame(frame);
+        const owner = element.ownerFrame(frame) orelse frame;
         const is_id = shouldAddToIdMap(normalized, element);
         const old_value = entry.value();
 

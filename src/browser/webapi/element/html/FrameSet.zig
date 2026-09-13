@@ -31,50 +31,50 @@ pub fn asNode(self: *FrameSet) *Node {
 // The aliased Window is the one of the element's node document's frame — not
 // the caller's frame, which differs when a same-origin script reaches into
 // another frame (e.g. the parent setting a handler on a child frameset).
-fn reflectedWindow(self: *FrameSet, frame: *Frame) *Window {
-    return self.asElement().ownerFrame(frame).window;
+fn reflectedWindow(self: *FrameSet, frame: *Frame) ?*Window {
+    return (self.asElement().ownerFrame(frame) orelse return null).window;
 }
 
 fn getOnBlur(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_blur;
+    return (self.reflectedWindow(frame) orelse return null)._on_blur;
 }
 fn setOnBlur(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_blur = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_blur = Window.getFunctionFromSetter(setter);
 }
 
 fn getOnError(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_error;
+    return (self.reflectedWindow(frame) orelse return null)._on_error;
 }
 fn setOnError(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_error = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_error = Window.getFunctionFromSetter(setter);
 }
 
 fn getOnFocus(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_focus;
+    return (self.reflectedWindow(frame) orelse return null)._on_focus;
 }
 fn setOnFocus(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_focus = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_focus = Window.getFunctionFromSetter(setter);
 }
 
 fn getOnLoad(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_load;
+    return (self.reflectedWindow(frame) orelse return null)._on_load;
 }
 fn setOnLoad(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_load = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_load = Window.getFunctionFromSetter(setter);
 }
 
 fn getOnResize(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_resize;
+    return (self.reflectedWindow(frame) orelse return null)._on_resize;
 }
 fn setOnResize(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_resize = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_resize = Window.getFunctionFromSetter(setter);
 }
 
 fn getOnScroll(self: *FrameSet, frame: *Frame) ?js.Function.Global {
-    return self.reflectedWindow(frame)._on_scroll;
+    return (self.reflectedWindow(frame) orelse return null)._on_scroll;
 }
 fn setOnScroll(self: *FrameSet, setter: ?Window.FunctionSetter, frame: *Frame) !void {
-    self.reflectedWindow(frame)._on_scroll = Window.getFunctionFromSetter(setter);
+    (self.reflectedWindow(frame) orelse return)._on_scroll = Window.getFunctionFromSetter(setter);
 }
 
 pub const JsApi = struct {
@@ -106,7 +106,7 @@ pub const Build = struct {
 
     pub fn complete(node: *Node, frame: *Frame) !void {
         const el = node.as(Element);
-        const owner = node.ownerFrame(frame);
+        const owner = node.ownerFrame(frame) orelse return;
         inline for (window_reflecting_attributes) |attr| {
             if (el.getAttributeSafe(comptime .wrap(attr))) |value| {
                 owner.window.setWindowReflectingHandlerFromAttribute(comptime .wrap(attr), value, owner);
@@ -115,12 +115,12 @@ pub const Build = struct {
     }
 
     pub fn attributeChange(el: *Element, name: String, value: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame);
+        const owner = el.ownerFrame(frame) orelse return;
         owner.window.setWindowReflectingHandlerFromAttribute(name, value.str(), owner);
     }
 
     pub fn attributeRemove(el: *Element, name: String, frame: *Frame) !void {
-        const owner = el.ownerFrame(frame);
+        const owner = el.ownerFrame(frame) orelse return;
         owner.window.setWindowReflectingHandlerFromAttribute(name, null, owner);
     }
 };
