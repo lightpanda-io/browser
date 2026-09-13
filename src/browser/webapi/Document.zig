@@ -917,16 +917,23 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     // preorder counter instead of calling calculateDocumentPosition per node
     // (which itself is O(N)). Once the counter's y passes the query y, no
     // later element can contain the point, and we can return.
+    //
+    // Hidden subtrees still count towards the index so positions agree with
+    // getBoundingClientRect; the hidden verdict just rides down the stack.
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    var stack: std.ArrayList(*Node) = .empty;
-    try stack.append(frame.local_arena, root);
+    const style_manager = &root.ownerFrame(frame)._style_manager;
+    const Entry = struct { node: *Node, hidden: bool };
+    var stack: std.ArrayList(Entry) = .empty;
+    try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
 
     var preorder_index: f64 = 0;
 
     while (stack.items.len > 0) {
-        const node = stack.pop() orelse break;
+        const entry = stack.pop() orelse break;
+        const node = entry.node;
+        var hidden = entry.hidden;
         const pos = preorder_index * 5.0;
 
         if (pos > y) {
@@ -936,7 +943,8 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
 
         preorder_index += 1;
         if (node.is(Element)) |element| {
-            if (element.isVisible(frame)) {
+            hidden = hidden or style_manager.hasDisplayNone(element);
+            if (!hidden) {
                 if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
@@ -955,7 +963,7 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         // Add children to stack in reverse order so we process them in document order
         var child = node.lastChild();
         while (child) |c| {
-            try stack.append(frame.local_arena, c);
+            try stack.append(frame.local_arena, .{ .node = c, .hidden = hidden });
             child = c.previousSibling();
         }
     }
