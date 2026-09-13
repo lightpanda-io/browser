@@ -17,24 +17,23 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const lp = @import("lightpanda");
 
-const js = @import("../../js/js.zig");
 const http = @import("../../../network/http.zig");
-
-const URL = @import("../URL.zig");
+const testing = @import("../../../testing.zig");
+const js = @import("../../js/js.zig");
+const Execution = js.Execution;
 const Page = @import("../../Page.zig");
-const Blob = @import("../Blob.zig");
+const referrer = @import("../../referrer.zig");
 const AbortSignal = @import("../AbortSignal.zig");
+const Blob = @import("../Blob.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
-
-const Headers = @import("Headers.zig");
-const FormData = @import("FormData.zig");
+const URL = @import("../URL.zig");
 const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
-const referrer = @import("../../referrer.zig");
-
-const Execution = js.Execution;
+const FormData = @import("FormData.zig");
+const Headers = @import("Headers.zig");
 
 const Request = @This();
 
@@ -75,7 +74,7 @@ pub const InitOpts = struct {
 
 pub const ReferrerValue = union(enum) {
     client,
-    none,
+    @"no-referrer",
     url: [:0]const u8,
 };
 
@@ -185,7 +184,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     };
 
     const referrer_value: ReferrerValue = if (opts.referrer) |r| blk: {
-        if (r.len == 0) break :blk .none;
+        if (r.len == 0) break :blk .@"no-referrer";
         if (std.mem.eql(u8, r, "about:client")) break :blk .client;
         break :blk .{ .url = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* }) };
     } else switch (input) {
@@ -410,6 +409,28 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
     return request;
 }
 
+pub fn getReferrer(self: *Request) []const u8 {
+    return switch (self._referrer) {
+        .client => "about:client",
+        .@"no-referrer" => "",
+        .url => |url| url,
+    };
+}
+
+pub fn getReferrerPolicy(self: *Request) []const u8 {
+    const policy = self._referrer_policy orelse return "";
+    return switch (policy) {
+        .no_referrer => "no-referrer",
+        .no_referrer_when_downgrade => "no-referrer-when-downgrade",
+        .origin => "origin",
+        .origin_when_cross_origin => "origin-when-cross-origin",
+        .same_origin => "same-origin",
+        .strict_origin => "strict-origin",
+        .strict_origin_when_cross_origin => "strict-origin-when-cross-origin",
+        .unsafe_url => "unsafe-url",
+    };
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Request);
 
@@ -436,9 +457,10 @@ pub const JsApi = struct {
     pub const bytes = bridge.function(Request.bytes, .{});
     pub const formData = bridge.function(Request.formData, .{});
     pub const clone = bridge.function(Request.clone, .{});
+    pub const referrer = bridge.accessor(Request.getReferrer, null, .{});
+    pub const referrerPolicy = bridge.accessor(Request.getReferrerPolicy, null, .{});
 };
 
-const testing = @import("../../../testing.zig");
 test "WebApi: Request" {
     try testing.htmlRunner("net/request.html", .{});
 }
