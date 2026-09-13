@@ -38,6 +38,10 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
+// A page holding this many live records at once is logged, once per spike, so
+// the site can be looked at.
+const RECORD_SPIKE = 2048;
+
 _rc: lp.RC = .{},
 _arena: *lp.Arena,
 _callback: js.Function.Global,
@@ -200,6 +204,42 @@ fn releaseAll(records: []const *MutationRecord, page: *Page) void {
     }
 }
 
+fn queueRecord(self: *MutationObserver, record: *MutationRecord, frame: *Frame) !void {
+    try self._pending_records.append(self._arena.allocator(), record);
+
+    const page = frame._page;
+    page.mutation_records += 1;
+    if (page.mutation_records_spiked == false and page.mutation_records >= RECORD_SPIKE) {
+        page.mutation_records_spiked = true;
+        logRecordSpike(frame);
+    }
+
+    try Frame.observers.scheduleMutationDelivery(frame);
+}
+
+fn logRecordSpike(frame: *Frame) void {
+    var pending: usize = 0;
+    var observers: usize = 0;
+    var it: ?*std.DoublyLinkedList.Node = frame._mutation.observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
+        pending += observer._pending_records.items.len;
+        observers += 1;
+    }
+
+    // pending close to live: delivery isn't keeping up with the page.
+    // pending near zero: the records were delivered and are waiting on V8's GC.
+    // err, not warn: prod runs with everything below error filtered out.
+    log.err(.frame, "MutationRecord spike", .{
+        .live = frame._page.mutation_records,
+        .pending = pending,
+        .observers = observers,
+        .type = frame._type,
+        .url = frame.url,
+        .page_url = frame._page.frame.url,
+    });
+}
+
 // Called when an attribute changes on any element
 pub fn notifyAttributeChange(
     self: *MutationObserver,
@@ -250,9 +290,7 @@ pub fn notifyAttributeChange(
             ._next_sibling = null,
         };
 
-        try self._pending_records.append(self._arena.allocator(), record);
-
-        try Frame.observers.scheduleMutationDelivery(frame);
+        try self.queueRecord(record, frame);
         break;
     }
 }
@@ -295,9 +333,7 @@ pub fn notifyCharacterDataChange(
             ._next_sibling = null,
         };
 
-        try self._pending_records.append(self._arena.allocator(), record);
-
-        try Frame.observers.scheduleMutationDelivery(frame);
+        try self.queueRecord(record, frame);
         break;
     }
 }
@@ -340,9 +376,7 @@ pub fn notifyChildListChange(
             ._next_sibling = next_sibling,
         };
 
-        try self._pending_records.append(self._arena.allocator(), record);
-
-        try Frame.observers.scheduleMutationDelivery(frame);
+        try self.queueRecord(record, frame);
         break;
     }
 }
@@ -387,7 +421,11 @@ pub const MutationRecord = struct {
         characterData,
     };
 
-    pub fn deinit(self: *MutationRecord, _: *Page) void {
+    pub fn deinit(self: *MutationRecord, page: *Page) void {
+        page.mutation_records -= 1;
+        if (page.mutation_records < RECORD_SPIKE / 2) {
+            page.mutation_records_spiked = false;
+        }
         self._arena.release();
     }
 
@@ -483,6 +521,30 @@ const testing = @import("../../testing.zig");
 test "WebApi: MutationObserver" {
     testing.expectLog(&.{ .frame, .frame });
     try testing.htmlRunner("mutation_observer", .{});
+}
+
+test "WebApi: MutationObserver counts live records on the page" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const page = frame._page;
+    const before = page.mutation_records;
+
+    try ls.local.eval(
+        \\window.__mo_target = document.createElement('div');
+        \\window.__mo = new MutationObserver(() => {});
+        \\window.__mo.observe(window.__mo_target, {attributes: true});
+        \\for (let i = 0; i < 3; i++) window.__mo_target.setAttribute('x', String(i));
+    , null);
+    try testing.expectEqual(before + 3, page.mutation_records);
+
+    // Never delivered, so disconnect drops the only ref and the count follows.
+    try ls.local.eval("window.__mo.disconnect()", null);
+    try testing.expectEqual(before, page.mutation_records);
 }
 
 test "WebApi: runaway MutationObserver delivery is disconnected" {
