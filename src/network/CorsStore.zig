@@ -50,7 +50,7 @@ const KeyContext = struct {
     }
 
     pub fn eql(_: KeyContext, a: Key, b: Key) bool {
-        return std.ascii.eqlIgnoreCase(a.origin, b.origin) and std.ascii.eqlIgnoreCase(a.target, b.target);
+        return std.mem.eql(u8, a.origin, b.origin) and std.mem.eql(u8, a.target, b.target);
     }
 };
 
