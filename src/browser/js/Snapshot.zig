@@ -887,9 +887,7 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         }
     }
 
-    // The remaining per-class setup targets the class's own instance template;
-    // in [Global] flattening mode the global already has these (or doesn't need
-    // them), so skip it.
+    // Flattening mirrors members onto a global, not per-interface setup.
     if (comptime flatten) {
         return;
     }
@@ -905,7 +903,8 @@ fn attachClass(comptime JsApi: type, comptime flatten: bool, isolate: *v8.Isolat
         // "console", not "Console").
         const tag = if (@hasDecl(JsApi.Meta, "class_string")) JsApi.Meta.class_string else JsApi.Meta.name;
         const js_value = v8.v8__String__NewFromUtf8(isolate, tag.ptr, v8.kNormal, @intCast(tag.len));
-        v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontEnum);
+        // Interfaces inherit tags from prototypes; namespaces keep own tags.
+        v8.v8__Template__Set(@ptrCast(member_template), js_name, js_value, v8.ReadOnly + v8.DontEnum);
     }
 
     // @LOG-UNKNOWN-PROPERTY
