@@ -519,9 +519,14 @@ fn getResponseURL(self: *XMLHttpRequest) []const u8 {
 
 fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
     // https://xhr.spec.whatwg.org/#the-response-attribute
-    // If the response type is default or text, we don't need it to be done to return things.
-    const needs_done = self._response_type != .default and self._response_type != .text;
-    if (needs_done and self._ready_state != .done) {
+    // default/text can be read while still loading, so we return the
+    // current bytes directly instead of caching a value that would go
+    // stale as more data arrives.
+    if (self._response_type == .default or self._response_type == .text) {
+        return .{ .text = self._response_data.items };
+    }
+
+    if (self._ready_state != .done) {
         return null;
     }
 
@@ -532,7 +537,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
 
     const data = self._response_data.items;
     const res: Response = switch (self._response_type) {
-        .default, .text => .{ .text = data },
+        .default, .text => unreachable,
         .json => blk: {
             const local = exec.js.local.?;
 
