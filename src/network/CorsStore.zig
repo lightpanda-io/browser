@@ -61,7 +61,7 @@ const KeyContext = struct {
     }
 };
 
-const Entry = struct {
+pub const Entry = struct {
     methods_wildcard: bool,
     methods: std.EnumSet(http.Method),
 
@@ -127,7 +127,7 @@ const Entry = struct {
         };
     }
 
-    fn deinit(self: Entry, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: Entry, allocator: std.mem.Allocator) void {
         for (self.headers) |h| allocator.free(h);
         allocator.free(self.headers);
     }
@@ -156,7 +156,7 @@ pub fn deinit(self: *CorsStore) void {
     self.map.deinit(self.allocator);
 }
 
-pub fn get(self: *CorsStore, key: Key) ?Entry {
+pub fn get(self: *CorsStore, key: Key) !?Entry {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 
@@ -169,7 +169,7 @@ pub fn get(self: *CorsStore, key: Key) ?Entry {
         return null;
     }
 
-    return entry;
+    return try entry.dupe(self.allocator);
 }
 
 /// Insert or merge a CORS grant for (origin, target). `entry` is not
@@ -250,16 +250,17 @@ test "CorsStore: put then get, miss on different origin/target/credentials" {
         .expires_at = lp.datetime.milliTimestamp(.real) + 60_000,
     });
 
-    // store.get returns the store's own copy — not caller-owned, don't free it.
-    const hit = store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }).?;
+    // store.get returns a caller-owned copy: it must be freed.
+    const hit = (try store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false })).?;
+    defer hit.deinit(allocator);
     try testing.expect(hit.methods.contains(.POST));
     try testing.expect(!hit.methods.contains(.GET));
 
-    try testing.expectEqual(null, store.get(.{ .origin = "https://b.example", .target = "https://api.example", .credentials = false }));
-    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://other.example", .credentials = false }));
+    try testing.expectEqual(null, try store.get(.{ .origin = "https://b.example", .target = "https://api.example", .credentials = false }));
+    try testing.expectEqual(null, try store.get(.{ .origin = "https://a.example", .target = "https://other.example", .credentials = false }));
 
     // Same origin/target but different credentials mode: separate entry, must miss.
-    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = true }));
+    try testing.expectEqual(null, try store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = true }));
 }
 
 test "CorsStore: expired entries are evicted on get" {
@@ -275,7 +276,7 @@ test "CorsStore: expired entries are evicted on get" {
         .expires_at = lp.datetime.milliTimestamp(.real) - 1,
     });
 
-    try testing.expectEqual(null, store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }));
+    try testing.expectEqual(null, try store.get(.{ .origin = "https://a.example", .target = "https://api.example", .credentials = false }));
     try testing.expectEqual(0, store.map.count());
 }
 
@@ -308,7 +309,8 @@ test "CorsStore: put merges into existing entry rather than clobbering" {
     });
     freeHeaders(allocator, h2);
 
-    const merged = store.get(key).?;
+    const merged = (try store.get(key)).?;
+    defer merged.deinit(allocator);
     try testing.expect(merged.methods.contains(.POST));
     try testing.expect(merged.methods.contains(.PUT));
     try testing.expectEqual(2, merged.headers.len);
@@ -347,8 +349,10 @@ test "CorsStore: credentialed and non-credentialed grants for same origin/target
     });
     freeHeaders(allocator, h);
 
-    const non_cred = store.get(.{ .origin = origin, .target = target, .credentials = false }).?;
-    const cred = store.get(.{ .origin = origin, .target = target, .credentials = true }).?;
+    const non_cred = (try store.get(.{ .origin = origin, .target = target, .credentials = false })).?;
+    defer non_cred.deinit(allocator);
+    const cred = (try store.get(.{ .origin = origin, .target = target, .credentials = true })).?;
+    defer cred.deinit(allocator);
 
     // The two entries must never have merged: the credentialed entry must NOT
     // have inherited the non-credentialed entry's wildcard.
