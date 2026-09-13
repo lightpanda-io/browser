@@ -998,19 +998,19 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
     );
 }
 
-fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
+pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
     // The scroll is relative to the current position. So compute to new
     // absolute position.
     var absx: i32 = undefined;
     var absy: i32 = undefined;
     switch (opts) {
         .x => |x| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) + x;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) + (y orelse 0);
+            absx = @as(i32, @intCast(self._scroll_pos.x)) +| x;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) +| (y orelse 0);
         },
         .opts => |o| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) + o.left;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) + o.top;
+            absx = @as(i32, @intCast(self._scroll_pos.x)) +| o.left;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) +| o.top;
         },
     }
     return self.scrollTo(.{ .x = absx }, absy, frame);
