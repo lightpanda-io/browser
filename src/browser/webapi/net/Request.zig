@@ -189,7 +189,10 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         break :blk .{ .url = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* }) };
     } else switch (input) {
         .url => .client,
-        .request => |r| r._referrer,
+        .request => |r| switch (r._referrer) {
+            .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+            else => r._referrer,
+        },
     };
 
     // Per spec, an unrecognized policy string is ignored
@@ -402,7 +405,10 @@ pub fn clone(self: *Request, exec: *const Execution) !*Request {
         ._mode = self._mode,
         ._body = if (body) |b| try arena.dupe(u8, b) else null,
         ._signal = self._signal,
-        ._referrer = self._referrer,
+        ._referrer = switch (self._referrer) {
+            .url => |u| .{ .url = try arena.dupeZ(u8, u) },
+            else => self._referrer,
+        },
         ._referrer_policy = self._referrer_policy,
     };
     arena.report();
