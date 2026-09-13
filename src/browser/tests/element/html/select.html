@@ -544,3 +544,211 @@
   testing.expectEqual(false, Object.getOwnPropertyDescriptor(opts, 'opt_first').enumerable);
 }
 </script>
+
+<select id="value_no_match" autocomplete="off">
+  <option value="a">A</option>
+  <option value="b" selected>B</option>
+</select>
+<script id="value_set_without_match_deselects_all">
+{
+  const select = $('#value_no_match');
+  testing.expectEqual('b', select.value);
+
+  select.value = 'nope';
+  testing.expectEqual('', select.value);
+  testing.expectEqual(-1, select.selectedIndex);
+  testing.expectEqual(false, select.options[0].selected);
+  testing.expectEqual(false, select.options[1].selected);
+
+  select.value = '';
+  testing.expectEqual('', select.value);
+  testing.expectEqual(-1, select.selectedIndex);
+
+  select.value = 'a';
+  testing.expectEqual('a', select.value);
+  testing.expectEqual(0, select.selectedIndex);
+
+  const empty = document.createElement('option');
+  empty.value = '';
+  select.appendChild(empty);
+  select.value = '';
+  testing.expectEqual('', select.value);
+  testing.expectEqual(2, select.selectedIndex);
+  testing.expectTrue(empty.selected);
+}
+</script>
+
+<script id="value_set_selects_first_matching_option_only">
+{
+  const select = document.createElement('select');
+  for (const v of ['x', 'dup', 'dup']) {
+    const option = document.createElement('option');
+    option.value = v;
+    select.appendChild(option);
+  }
+  for (const multiple of [false, true]) {
+    select.multiple = multiple;
+    select.value = 'dup';
+    testing.expectEqual(1, select.selectedIndex);
+    testing.expectFalse(select.options[0].selected);
+    testing.expectTrue(select.options[1].selected);
+    testing.expectFalse(select.options[2].selected);
+  }
+}
+</script>
+
+<script id="empty_listbox_selection_is_preserved">
+{
+  for (const multiple of [false, true]) {
+    const select = document.createElement('select');
+    select.multiple = multiple;
+    select.size = multiple ? 0 : 3;
+    for (const value of ['a', 'b']) {
+      const option = document.createElement('option');
+      option.value = value;
+      select.appendChild(option);
+    }
+    select.value = 'missing';
+    select.options[1].selected = false;
+    testing.expectEqual('', select.value);
+    testing.expectEqual(-1, select.selectedIndex);
+    testing.expectFalse(select.options[0].selected);
+    testing.expectFalse(select.options[1].selected);
+  }
+}
+</script>
+
+<script id="cleared_selection_resets_on_option_list_changes">
+{
+  const select = document.createElement('select');
+  select.innerHTML = '<option value="a">A</option><option value="b">B</option>';
+  select.value = 'missing';
+  select.appendChild(document.createTextNode('text'));
+  select.appendChild(document.createComment('comment'));
+  select.appendChild(document.createElement('div'));
+  select.appendChild(document.createElement('optgroup'));
+  testing.expectEqual('', select.value);
+  testing.expectEqual(-1, select.selectedIndex);
+
+  const option = document.createElement('option');
+  option.value = 'c';
+  select.appendChild(option);
+  testing.expectEqual('a', select.value);
+  testing.expectEqual(0, select.selectedIndex);
+  testing.expectTrue(select.options[0].selected);
+
+  select.value = 'missing';
+  select.removeChild(select.options[0]);
+  testing.expectEqual('b', select.value);
+  testing.expectEqual(0, select.selectedIndex);
+  testing.expectTrue(select.options[0].selected);
+
+  select.selectedIndex = -1;
+  select.insertBefore(option, select.firstChild);
+  testing.expectEqual('b', select.value);
+  testing.expectEqual(1, select.selectedIndex);
+
+  select.value = 'missing';
+  select.innerHTML = '<option value="d">D</option><option value="e">E</option>';
+  testing.expectEqual('d', select.value);
+  testing.expectEqual(0, select.selectedIndex);
+  testing.expectTrue(select.options[0].selected);
+}
+</script>
+
+<script id="cleared_selection_resets_on_grouped_option_changes">
+{
+  const select = document.createElement('select');
+  select.innerHTML = '<option value="a">A</option>';
+  const group = document.createElement('optgroup');
+  group.innerHTML = '<option value="b">B</option>';
+  select.value = 'missing';
+  select.appendChild(group);
+  testing.expectEqual('a', select.value);
+
+  select.value = 'missing';
+  const option = document.createElement('option');
+  option.value = 'c';
+  group.appendChild(option);
+  testing.expectEqual('a', select.value);
+
+  const other = document.createElement('select');
+  other.innerHTML = '<option value="x">X</option>';
+  select.value = 'missing';
+  other.value = 'missing';
+  other.appendChild(option);
+  testing.expectEqual('a', select.value);
+  testing.expectEqual('x', other.value);
+
+  select.value = 'missing';
+  select.removeChild(group);
+  testing.expectEqual('a', select.value);
+
+  select.value = 'missing';
+  const selected = document.createElement('option');
+  selected.value = 'selected';
+  selected.selected = true;
+  select.appendChild(selected);
+  testing.expectEqual('selected', select.value);
+  testing.expectEqual(1, select.selectedIndex);
+}
+</script>
+
+<script id="empty_listbox_stays_empty_after_option_insertion">
+{
+  for (const multiple of [false, true]) {
+    const select = document.createElement('select');
+    select.multiple = multiple;
+    select.size = multiple ? 0 : 3;
+    select.innerHTML = '<option value="a">A</option>';
+    select.value = 'missing';
+    const option = document.createElement('option');
+    option.value = 'b';
+    select.appendChild(option);
+    testing.expectEqual('', select.value);
+    testing.expectEqual(-1, select.selectedIndex);
+    testing.expectFalse(select.options[0].selected);
+    testing.expectFalse(select.options[1].selected);
+  }
+}
+</script>
+
+<script id="mirrored_selects_converge">
+{
+  const makeSelect = (values) => {
+    const select = document.createElement('select');
+    for (const v of values) {
+      const option = document.createElement('option');
+      option.value = v;
+      select.appendChild(option);
+    }
+    return select;
+  };
+  const a = makeSelect(['x', 'y']);
+  const b = makeSelect(['x']);
+  let current = 'x';
+  let hops = 0;
+  const subscribers = [a, b];
+  const next = (value) => {
+    current = value;
+    for (const s of subscribers) {
+      if (s.value !== value) {
+        s.value = value;
+        s.dispatchEvent(new Event('change'));
+      }
+    }
+  };
+  for (const s of subscribers) {
+    s.addEventListener('change', () => {
+      if (++hops > 10) return;
+      next(s.value);
+    });
+  }
+  a.value = 'y';
+  a.dispatchEvent(new Event('change'));
+  testing.expectEqual('', current);
+  testing.expectEqual('', a.value);
+  testing.expectEqual('', b.value);
+  testing.expectTrue(hops < 10);
+}
+</script>

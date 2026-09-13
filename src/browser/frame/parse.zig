@@ -107,6 +107,10 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     while (it.next()) |child| {
         child._parent = node;
     }
+    it = node.childrenIterator();
+    while (it.next()) |child| {
+        Element.Html.Select.optionListChanged(node, child);
+    }
 }
 
 // Build a detached XMLDocument from `xml` (DOMParser.parseFromString and

@@ -2691,6 +2691,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     const old_id_maps = idMapsForRoot(old_root);
 
     child._parent = null;
+    Element.Html.Select.optionListChanged(parent, child);
 
     // Update live ranges for removal (DOM spec remove steps 4-7)
     if (child_index_for_ranges) |idx| {
@@ -2920,6 +2921,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         },
     }
     child._parent = parent;
+    Element.Html.Select.optionListChanged(parent, child);
 
     // Update live ranges for insertion (DOM spec insert step 6).
     // For .before/.after the child was inserted at a specific position;

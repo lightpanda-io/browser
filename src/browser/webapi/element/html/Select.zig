@@ -39,7 +39,7 @@ const Select = @This();
 pub const Proto = HtmlElement;
 
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
-_selected_index_set: bool = false,
+_explicit_selection: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
@@ -102,7 +102,6 @@ pub fn deselectOthers(self: *const Select, keep: *const Option) void {
     }
 }
 
-// A non-multiple select with a display size < 2 always has 1 item selected.
 pub fn resetToDefaultSelection(self: *const Select) void {
     if (self.getMultiple() or self.displaySize() > 1) {
         return;
@@ -128,6 +127,28 @@ pub fn resetToDefaultSelection(self: *const Select) void {
     }
 }
 
+pub fn optionListChanged(parent: *Node, child: *Node) void {
+    const select = parent.is(Select) orelse blk: {
+        if (parent.is(Element.Html.OptGroup) == null) return;
+        break :blk (parent.parentNode() orelse return).is(Select) orelse return;
+    };
+    if (!select._explicit_selection) return;
+
+    if (child.is(Option) == null) {
+        if (child.is(Element.Html.OptGroup) == null or parent != select.asNode()) return;
+        var children = child.childrenIterator();
+        while (children.next()) |node| {
+            if (node.is(Option) != null) break;
+        } else return;
+    }
+
+    var options = OptionIterator.init(select);
+    while (options.next()) |option| {
+        if (option.getSelected()) return;
+    }
+    select.resetToDefaultSelection();
+}
+
 // The size attribute, as the size IDL attribute parses it (0 when absent or
 // invalid). Whether the select renders as a menu list or a list box hinges on
 // this, and with it whether an option can be deselected outright.
@@ -137,19 +158,11 @@ fn displaySize(self: *const Select) i64 {
     return @max(parsed, 0);
 }
 
-// Resolves the option whose selectedness contributes to the select's value
-// per HTML §form-elements§selectedness-setting-algorithm: an explicitly
-// selected non-disabled option, falling back to the first non-disabled
-// option in tree order. Returns null if there is no candidate (zero options
-// or every option disabled), in which case the select has no selectedness
-// and contributes no entry to a FormData set.
 pub fn effectiveOption(self: *const Select) ?*Option {
     var first_option: ?*Option = null;
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        // Element.isDisabled, not Option.getDisabled: an option is also
-        // disabled when its parent is an <optgroup disabled>
-        // (HTML "concept-option-disabled").
+        // Includes disabled optgroups.
         if (option.asElement().isDisabled()) {
             continue;
         }
@@ -157,6 +170,9 @@ pub fn effectiveOption(self: *const Select) ?*Option {
             return option;
         }
         if (first_option == null) first_option = option;
+    }
+    if (self._explicit_selection) {
+        return null;
     }
     return first_option;
 }
@@ -169,13 +185,14 @@ pub fn getValue(self: *Select, frame: *Frame) []const u8 {
 }
 
 pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
-    // Find option with matching value and select it
-    // Note: This updates the current state (_selected), not the default state (attribute)
-    // Setting value always deselects all others, even for multiple selects
+    var matched = false;
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        option._selected = std.mem.eql(u8, option.getValue(frame), value);
+        const is_match = !matched and std.mem.eql(u8, option.getValue(frame), value);
+        option._selected = is_match;
+        if (is_match) matched = true;
     }
+    self._explicit_selection = !matched;
     frame.domChanged();
 }
 
@@ -190,17 +207,14 @@ pub fn getSelectedIndex(self: *Select) i32 {
         }
         index += 1;
     }
-    // If selectedIndex was explicitly set and no option is selected, return -1
-    // If selectedIndex was never set, return 0 (first option implicitly selected) if we have options
-    if (self._selected_index_set) {
+    if (self._explicit_selection) {
         return -1;
     }
     return if (has_options) 0 else -1;
 }
 
 pub fn setSelectedIndex(self: *Select, index: i32, frame: *Frame) !void {
-    // Mark that selectedIndex has been explicitly set
-    self._selected_index_set = true;
+    self._explicit_selection = true;
 
     // Select option at given index
     // Note: This updates the current state (_selected), not the default state (attribute)
