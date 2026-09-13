@@ -582,6 +582,14 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 
     frame._page.recordJsError(error.JsException);
 
+    // Error conversion and handlers can re-enter JavaScript.
+    if (frame.js.env.stackExhausted()) {
+        if (comptime lp.IS_TEST == false) {
+            log.warn(.js, "window.reportError", .{ .err = error.StackExhausted });
+        }
+        return;
+    }
+
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
         if (comptime lp.IS_TEST == false) {

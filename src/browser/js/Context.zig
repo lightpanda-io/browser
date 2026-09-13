@@ -457,6 +457,7 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
 }
 
 fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.Module {
+    if (local.ctx.env.stackExhausted()) return error.StackExhausted;
     var origin_handle: v8.ScriptOrigin = undefined;
     v8.v8__ScriptOrigin__CONSTRUCT2(
         &origin_handle,
@@ -1025,6 +1026,38 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 }
 
 const testing = @import("../../testing.zig");
+
+test "Context: stack headroom refuses module work and recovers" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+    const env = frame.js.env;
+    const reserve = env.stack_headroom;
+    defer env.stack_headroom = reserve;
+
+    try local.eval("globalThis.moduleRan = false", null);
+    const mod = try compileModule(local, "globalThis.moduleRan = true", "headroom.mjs");
+    env.stack_headroom = 8 * 1024 * 1024;
+    try testing.expectError(error.StackExhausted, compileModule(local, "", "blocked.mjs"));
+    try testing.expectError(error.StackExhausted, mod.instantiate(resolveModuleCallback));
+    try testing.expectEqual(js.Module.Status.kUninstantiated, mod.getStatus());
+
+    env.stack_headroom = reserve;
+    try testing.expectEqual(true, try mod.instantiate(resolveModuleCallback));
+    env.stack_headroom = 8 * 1024 * 1024;
+    try testing.expectError(error.StackExhausted, mod.evaluate());
+    try testing.expectEqual(js.Module.Status.kInstantiated, mod.getStatus());
+
+    env.stack_headroom = reserve;
+    try testing.expectEqual(false, (try local.exec("moduleRan", null)).isTrue());
+    _ = try mod.evaluate();
+    try testing.expectEqual(true, (try local.exec("moduleRan", null)).isTrue());
+}
+
 test "Context: terminated async module completion does not re-enter V8" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

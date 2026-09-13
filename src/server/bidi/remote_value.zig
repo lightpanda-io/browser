@@ -328,6 +328,7 @@ pub const Serializer = struct {
         TypeError,
         JsException,
         ExecutionTerminated,
+        StackExhausted,
         MethodNotFound,
         DeadFunctionHandle,
     };

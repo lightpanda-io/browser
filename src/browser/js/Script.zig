@@ -36,6 +36,9 @@ pub fn run(self: Script) !js.Value {
     if (env.terminatePending()) {
         return error.ExecutionTerminated;
     }
+    if (env.stackExhausted()) {
+        return error.StackExhausted;
+    }
     const result = v8.v8__Script__Run(self.handle, self.local.handle) orelse {
         if (env.terminatePending()) {
             return error.ExecutionTerminated;

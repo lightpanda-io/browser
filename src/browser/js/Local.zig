@@ -148,6 +148,7 @@ pub fn compileFunction(
     comptime parameter_names: []const []const u8,
     extensions: []const *const v8.Object,
 ) !js.Function {
+    if (self.ctx.env.stackExhausted()) return error.StackExhausted;
     // TODO: Make configurable.
     const script_name = self.isolate.initStringHandle("anonymous");
     const script_source = if (@TypeOf(src) == js.String) src.handle else self.isolate.initStringHandle(src);
@@ -204,6 +205,7 @@ const CompileResult = struct {
 // Like compile, but takes an optional cached_data which is a previously
 // compiled and serialized script (see Script.Unbound.createCodeCache)
 pub fn compileWithCache(self: *const Local, src: []const u8, name: ?[]const u8, cached_data: ?[]const u8) !CompileResult {
+    if (self.ctx.env.stackExhausted()) return error.StackExhausted;
     const script_name = self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = self.isolate.initStringHandle(src);
 

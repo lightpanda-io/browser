@@ -57,6 +57,9 @@ pub fn caught(self: *const TryCatch, allocator: Allocator) ?Caught {
     }
 
     const l = self.local;
+    if (l.ctx.env.stackExhausted()) {
+        return .{ .caught = true, .exception = "StackExhausted" };
+    }
     const line: ?u32 = blk: {
         const handle = v8.v8__TryCatch__Message(&self.handle) orelse return null;
         const line = v8.v8__Message__GetLineNumber(handle, l.handle);

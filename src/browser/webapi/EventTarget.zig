@@ -395,3 +395,8 @@ test "WebApi: EventTarget" {
     try testing.expectEqual(8, @alignOf(EventTarget));
     try testing.htmlRunner("events.html", .{});
 }
+
+test "WebApi: EventTarget listener recursion past the stack limit" {
+    testing.silenceLog(&.{ .js, .event, .frame });
+    try testing.htmlRunner("event/listener_stack_overflow.html", .{});
+}
