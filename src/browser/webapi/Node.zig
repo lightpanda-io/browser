@@ -723,7 +723,9 @@ pub fn getDocument(self: *const Node, frame: *const Frame) *Document {
     if (self._type == .document) {
         return self.subtype(Document);
     }
-    return self.ownerDocument(frame).?;
+    const doc = self.ownerDocument(frame);
+    lp.assert(doc != null, "null node document", .{ .type = self.getNodeType() });
+    return doc.?;
 }
 
 // Returns the Frame that owns this node's tree, or null when the node's
