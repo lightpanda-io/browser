@@ -575,6 +575,16 @@
   testing.expectEqual('', select.value);
   testing.expectEqual(2, select.selectedIndex);
   testing.expectTrue(empty.selected);
+
+  // Deselecting an option that isn't selected changes nothing; deselecting the
+  // selected one asks for a reset, which re-selects the first option.
+  select.value = 'nope';
+  select.options[1].selected = false;
+  testing.expectEqual('', select.value);
+  select.options[1].selected = true;
+  select.options[1].selected = false;
+  testing.expectEqual('a', select.value);
+  testing.expectEqual(0, select.selectedIndex);
 }
 </script>
 
@@ -750,5 +760,216 @@
   testing.expectEqual('', a.value);
   testing.expectEqual('', b.value);
   testing.expectTrue(hops < 10);
+}
+</script>
+
+<select id="parsed_default" autocomplete="off">
+  <option value="a">A</option>
+  <option value="b">B</option>
+</select>
+<select id="parsed_disabled_first" autocomplete="off">
+  <option value="a" disabled>A</option>
+  <option value="b">B</option>
+</select>
+<select id="parsed_two_selected" autocomplete="off">
+  <option value="a" selected>A</option>
+  <option value="b" selected>B</option>
+</select>
+<script id="parsed_selectedness">
+{
+  // The parser's insertions keep selectedness the way script's do: the first
+  // enabled option really is selected, and of two selected options the last
+  // one wins.
+  const s1 = $('#parsed_default');
+  testing.expectEqual(true, s1.options[0].selected);
+  testing.expectEqual(1, s1.selectedOptions.length);
+
+  const s2 = $('#parsed_disabled_first');
+  testing.expectEqual(false, s2.options[0].selected);
+  testing.expectEqual(true, s2.options[1].selected);
+  testing.expectEqual('b', s2.value);
+
+  const s3 = $('#parsed_two_selected');
+  testing.expectEqual(false, s3.options[0].selected);
+  testing.expectEqual('b', s3.value);
+}
+</script>
+
+<script id="list_changes_ask_for_a_reset">
+{
+  const mk = (html) => {
+    const select = document.createElement('select');
+    select.innerHTML = html;
+    return select;
+  };
+  const option = (value, props = {}) => Object.assign(document.createElement('option'), { value }, props);
+
+  {
+    // Nothing selected: adding a disabled option changes nothing, an enabled
+    // one brings back the default.
+    const s = mk('<option value="a">A</option><option value="b">B</option>');
+    s.value = 'nope';
+    s.add(option('c', { disabled: true }));
+    testing.expectEqual(-1, s.selectedIndex);
+    s.add(option('d'));
+    testing.expectEqual('a', s.value);
+    testing.expectEqual(0, s.selectedIndex);
+  }
+
+  {
+    // Nothing selected: removing any option brings back the default.
+    const s = mk('<option value="a">A</option><option value="b">B</option><option value="c">C</option>');
+    s.value = 'nope';
+    s.options[2].remove();
+    testing.expectEqual('a', s.value);
+  }
+
+  {
+    // Repopulating after a value no option had.
+    const s = mk('<option value="a">A</option><option value="b">B</option>');
+    s.value = 'nope';
+    s.innerHTML = '<option value="x">X</option><option value="y">Y</option>';
+    testing.expectEqual('x', s.value);
+    testing.expectEqual(true, s.options[0].selected);
+  }
+
+  {
+    // Removing the selected option falls back to the first enabled one.
+    const s = mk('<option value="a" disabled>A</option><option value="b">B</option><option value="c">C</option>');
+    s.value = 'c';
+    s.options[2].remove();
+    testing.expectEqual('b', s.value);
+    testing.expectEqual(1, s.selectedIndex);
+
+    const t = mk('<option value="a">A</option><option value="b">B</option><option value="c">C</option>');
+    t.selectedIndex = 2;
+    t.options[2].remove();
+    testing.expectEqual('a', t.value);
+    testing.expectEqual(0, t.selectedIndex);
+  }
+
+  {
+    // An inserted selected option wins, directly or inside an optgroup.
+    const s = mk('<option value="a">A</option><option value="b">B</option>');
+    s.add(option('c', { selected: true }), 0);
+    testing.expectEqual('c', s.value);
+    testing.expectEqual(1, s.selectedOptions.length);
+
+    const t = mk('<option value="a">A</option><option value="b">B</option>');
+    const group = document.createElement('optgroup');
+    group.innerHTML = '<option value="x">X</option><option value="y" selected>Y</option>';
+    t.appendChild(group);
+    testing.expectEqual('y', t.value);
+    testing.expectEqual(3, t.selectedIndex);
+    testing.expectEqual(1, t.selectedOptions.length);
+
+    group.remove();
+    testing.expectEqual('a', t.value);
+  }
+
+  {
+    // Moving the selected option keeps it selected.
+    const s = mk('<option value="a">A</option><option value="b">B</option>');
+    s.options[1].selected = true;
+    s.insertBefore(s.options[1], s.options[0]);
+    testing.expectEqual('b', s.value);
+    testing.expectEqual(0, s.selectedIndex);
+  }
+
+  {
+    const s = mk('<option value="a">A</option><option value="b">B</option>');
+    const clone = s.cloneNode(true);
+    testing.expectEqual(true, clone.options[0].selected);
+  }
+}
+</script>
+
+<form id="disabled_value_form">
+  <select id="disabled_value" name="s" autocomplete="off">
+    <option value="a">A</option>
+    <option value="b" disabled>B</option>
+  </select>
+</form>
+<script id="disabled_option_is_the_value">
+{
+  // A disabled option can be selected by script and is then the value; it is
+  // only left out of the form data.
+  const s = $('#disabled_value');
+  s.value = 'b';
+  testing.expectEqual('b', s.value);
+  testing.expectEqual(1, s.selectedIndex);
+  testing.expectEqual(null, new FormData($('#disabled_value_form')).get('s'));
+}
+</script>
+
+<script id="multiple_and_list_box_have_no_default">
+{
+  const mk = (html, props) => {
+    const select = Object.assign(document.createElement('select'), props);
+    select.innerHTML = html;
+    return select;
+  };
+
+  {
+    const s = mk('<option value="a">A</option><option value="b">B</option>', { multiple: true });
+    testing.expectEqual('', s.value);
+    testing.expectEqual(-1, s.selectedIndex);
+    s.value = 'nope';
+    testing.expectEqual('', s.value);
+  }
+
+  {
+    // selectedIndex deselects every other option, even in a multiple select.
+    const s = mk('<option selected>a</option><option selected>b</option><option selected>c</option>', { multiple: true });
+    s.selectedIndex = 1;
+    testing.expectEqual(1, s.selectedOptions.length);
+    testing.expectEqual('b', s.value);
+  }
+
+  {
+    // Dropping multiple keeps the first selected option, or asks for a reset.
+    const s = mk('<option>a</option><option selected>b</option><option selected>c</option>', { multiple: true });
+    s.multiple = false;
+    testing.expectEqual('b', s.value);
+    testing.expectEqual(1, s.selectedOptions.length);
+
+    const t = mk('<option>a</option><option>b</option>', { multiple: true });
+    t.multiple = false;
+    testing.expectEqual('a', t.value);
+  }
+
+  {
+    // A list box has no default selection; turning it into a menu list does.
+    const s = mk('<option>a</option><option>b</option>', { size: 3 });
+    testing.expectEqual(-1, s.selectedIndex);
+    s.size = 1;
+    testing.expectEqual(0, s.selectedIndex);
+  }
+}
+</script>
+
+<script id="selected_attribute_changes_selectedness">
+{
+  const s = document.createElement('select');
+  s.innerHTML = '<option value="a">A</option><option value="b">B</option>';
+  s.options[1].setAttribute('selected', '');
+  testing.expectEqual('b', s.value);
+  testing.expectEqual(false, s.options[0].selected);
+
+  s.options[1].removeAttribute('selected');
+  testing.expectEqual('a', s.value);
+}
+</script>
+
+<script id="required_with_no_selection">
+{
+  const s = document.createElement('select');
+  s.required = true;
+  s.innerHTML = '<option value="">choose</option><option value="a">A</option>';
+  testing.expectEqual(true, s.validity.valueMissing);
+  s.value = 'a';
+  testing.expectEqual(false, s.validity.valueMissing);
+  s.value = 'nope';
+  testing.expectEqual(true, s.validity.valueMissing);
 }
 </script>

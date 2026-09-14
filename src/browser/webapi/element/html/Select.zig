@@ -34,12 +34,13 @@ const Form = @import("Form.zig");
 pub const Option = @import("Option.zig");
 const ValidityState = @import("ValidityState.zig");
 
+const String = lp.String;
+
 const Select = @This();
 
 pub const Proto = HtmlElement;
 
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
-_explicit_selection: bool = false,
 _custom_validity: ?[]const u8 = null,
 _validity: ?*ValidityState = null,
 
@@ -54,6 +55,125 @@ pub fn asNode(self: *Select) *Node {
 }
 pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
+}
+
+// Called by the Frame for every node, an inserted option has to update its select.
+// TODO: if ever we have more of these, we should add inserted/removed Build
+// hooks. For this one off, I'm sticking with a direct call from Frame because
+// it's easier.
+pub fn childInserted(parent: *Node, child: *Node) void {
+    if (ListChange.isinList(parent, child) == false) {
+        return;
+    }
+    const select = ListChange.getSelect(parent) orelse return;
+    var change: ListChange = .{};
+    change.add(child);
+    change.processInserted(select);
+}
+
+// parser.fragment links every child of a parent at once.
+pub fn childrenInserted(parent: *Node) void {
+    const select = ListChange.getSelect(parent) orelse return;
+    var change: ListChange = .{};
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        if (ListChange.isinList(parent, child)) {
+            change.add(child);
+        }
+    }
+    change.processInserted(select);
+}
+
+// Called by the Frame for every node, a removed option has to update its select.
+pub fn childRemoved(parent: *Node, child: *Node) void {
+    if (ListChange.isinList(parent, child) == false) {
+        return;
+    }
+    const select = ListChange.getSelect(parent) orelse return;
+    if (select.isMenuList() == false) {
+        return;
+    }
+
+    var change: ListChange = .{};
+    change.add(child);
+    if (change.last_selected != null or select.selectedOption() == null) {
+        select.selectFirstEnabled();
+    }
+}
+
+// The options that nodes linked into, or unlinked from, a select's list of
+// options carry: options themselves, and an optgroup's option children.
+const ListChange = struct {
+    has_enabled: bool = false,
+    last_selected: ?*Option = null,
+
+    fn add(self: *ListChange, child: *Node) void {
+        if (child.is(Option)) |option| {
+            self.addOption(option);
+            return;
+        }
+        var it = child.childrenIterator();
+        while (it.next()) |node| {
+            if (node.is(Option)) |option| {
+                self.addOption(option);
+            }
+        }
+    }
+
+    fn addOption(self: *ListChange, option: *Option) void {
+        if (option._selected) {
+            self.last_selected = option;
+        }
+        if (self.has_enabled == false and option.asElement().isDisabled() == false) {
+            self.has_enabled = true;
+        }
+    }
+
+    fn getSelect(parent: *Node) ?*Select {
+        if (parent.is(Select)) |select| {
+            return select;
+        }
+        if (parent.is(Element.Html.OptGroup) == null) {
+            return null;
+        }
+        // optgroup's select
+        const grandparent = parent.parentNode() orelse return null;
+        return grandparent.is(Select);
+    }
+
+    fn isinList(parent: *Node, child: *Node) bool {
+        if (child.is(Option) != null) {
+            // an option is always in a select
+            return true;
+        }
+        // an optgroup may be in a select
+        return child.is(Element.Html.OptGroup) != null and parent.is(Select) != null;
+    }
+
+    fn processInserted(self: *const ListChange, select: *const Select) void {
+        if (select.getMultiple()) {
+            // can have multiple selected, nothing to do
+            return;
+        }
+        if (self.last_selected) |option| {
+            // the newcome wins
+            select.deselectOthers(option);
+        } else if (self.has_enabled) {
+            // there's at least 1 enabled option
+            select.resetToDefaultSelection();
+        }
+    }
+};
+
+pub fn optionSelectednessChanged(self: *const Select, option: *const Option) void {
+    if (option._selected) {
+        if (self.getMultiple() == false) {
+            self.deselectOthers(option);
+        }
+    } else {
+        // this isn't a multiple, so our only selected option became unselected
+        self.resetToDefaultSelection();
+    }
 }
 
 // Walks the select's list of options in tree order: its option children plus
@@ -95,58 +215,37 @@ const OptionIterator = struct {
     }
 };
 
-pub fn deselectOthers(self: *const Select, keep: *const Option) void {
+fn deselectOthers(self: *const Select, keep: *const Option) void {
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
         if (option != keep) option._selected = false;
     }
 }
 
-pub fn resetToDefaultSelection(self: *const Select) void {
-    if (self.getMultiple() or self.displaySize() > 1) {
-        return;
+// HTML's "ask for a reset". Every path that selects an option in a
+// non-multiple select deselects the others, so this only has to handle a
+// menu list left with nothing selected.
+fn resetToDefaultSelection(self: *const Select) void {
+    if (self.isMenuList() and self.selectedOption() == null) {
+        self.selectFirstEnabled();
     }
+}
 
-    var first_enabled: ?*Option = null;
-    var last_selected: ?*Option = null;
+// For a menu list with nothing selected.
+fn selectFirstEnabled(self: *const Select) void {
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        if (option._selected) {
-            if (last_selected) |prev| prev._selected = false;
-            last_selected = option;
-        }
-        if (first_enabled == null and !option.asElement().isDisabled()) {
-            first_enabled = option;
-        }
-    }
-
-    if (last_selected == null) {
-        if (first_enabled) |option| {
+        if (option.asElement().isDisabled() == false) {
             option._selected = true;
+            return;
         }
     }
 }
 
-pub fn optionListChanged(parent: *Node, child: *Node) void {
-    const select = parent.is(Select) orelse blk: {
-        if (parent.is(Element.Html.OptGroup) == null) return;
-        break :blk (parent.parentNode() orelse return).is(Select) orelse return;
-    };
-    if (!select._explicit_selection) return;
-
-    if (child.is(Option) == null) {
-        if (child.is(Element.Html.OptGroup) == null or parent != select.asNode()) return;
-        var children = child.childrenIterator();
-        while (children.next()) |node| {
-            if (node.is(Option) != null) break;
-        } else return;
-    }
-
-    var options = OptionIterator.init(select);
-    while (options.next()) |option| {
-        if (option.getSelected()) return;
-    }
-    select.resetToDefaultSelection();
+// A menu list (Blink's UsesMenuList) always shows a selected option when it
+// has an enabled one; multiple selects and list boxes have no default.
+fn isMenuList(self: *const Select) bool {
+    return self.getMultiple() == false and self.displaySize() < 2;
 }
 
 // The size attribute, as the size IDL attribute parses it (0 when absent or
@@ -158,77 +257,55 @@ fn displaySize(self: *const Select) i64 {
     return @max(parsed, 0);
 }
 
-pub fn effectiveOption(self: *const Select) ?*Option {
-    var first_option: ?*Option = null;
+// The first selected option in tree order. Disabled options count: they can be
+// selected by script, they just aren't submitted.
+fn selectedOption(self: *const Select) ?*Option {
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        // Includes disabled optgroups.
-        if (option.asElement().isDisabled()) {
-            continue;
-        }
-        if (option.getSelected()) {
+        if (option._selected) {
             return option;
         }
-        if (first_option == null) first_option = option;
     }
-    if (self._explicit_selection) {
-        return null;
-    }
-    return first_option;
+    return null;
 }
 
 pub fn getValue(self: *Select, frame: *Frame) []const u8 {
-    if (self.effectiveOption()) |opt| {
-        return opt.getValue(frame);
-    }
-    return "";
+    const option = self.selectedOption() orelse return "";
+    return option.getValue(frame);
 }
 
 pub fn setValue(self: *Select, value: []const u8, frame: *Frame) !void {
+    // Selects the first matching option only, and none when nothing matches.
+    // This updates the current state (_selected), not the default state
+    // (attribute).
     var matched = false;
     var it = OptionIterator.init(self);
     while (it.next()) |option| {
-        const is_match = !matched and std.mem.eql(u8, option.getValue(frame), value);
+        const is_match = matched == false and std.mem.eql(u8, option.getValue(frame), value);
         option._selected = is_match;
-        if (is_match) matched = true;
+        matched = matched or is_match;
     }
-    self._explicit_selection = !matched;
     frame.domChanged();
 }
 
 pub fn getSelectedIndex(self: *Select) i32 {
     var index: i32 = 0;
-    var has_options = false;
     var it = OptionIterator.init(self);
-    while (it.next()) |option| {
-        has_options = true;
-        if (option.getSelected()) {
+    while (it.next()) |option| : (index += 1) {
+        if (option._selected) {
             return index;
         }
-        index += 1;
     }
-    if (self._explicit_selection) {
-        return -1;
-    }
-    return if (has_options) 0 else -1;
+    return -1;
 }
 
 pub fn setSelectedIndex(self: *Select, index: i32, frame: *Frame) !void {
-    self._explicit_selection = true;
-
-    // Select option at given index
-    // Note: This updates the current state (_selected), not the default state (attribute)
-    const is_multiple = self.getMultiple();
+    // Every other option is deselected, even in a multiple select, and an
+    // out-of-range index leaves none selected.
     var current_index: i32 = 0;
     var it = OptionIterator.init(self);
-    while (it.next()) |option| {
-        if (current_index == index) {
-            option._selected = true;
-        } else if (!is_multiple) {
-            // Only deselect others if not multiple
-            option._selected = false;
-        }
-        current_index += 1;
+    while (it.next()) |option| : (current_index += 1) {
+        option._selected = current_index == index;
     }
     frame.domChanged();
 }
@@ -377,8 +454,8 @@ pub fn hasCustomValidity(self: *const Select) bool {
 pub fn suffersValueMissing(self: *const Select) bool {
     if (!self.getWillValidate()) return false;
     if (!self.getRequired()) return false;
-    // No selectable option ⇒ no value to submit.
-    const opt = self.effectiveOption() orelse return true;
+    // No selected option ⇒ no value to submit.
+    const opt = self.selectedOption() orelse return true;
     // The selected option's `value` attribute (`opt._value`) is what matters
     // for the missing-value check; an explicit `value=""` is the canonical
     // placeholder pattern. When `value=` is absent the option's text would
@@ -432,6 +509,28 @@ pub const JsApi = struct {
 pub const Build = struct {
     pub fn created(_: *Node, _: *Frame) !void {
         // No initialization needed - disabled is lazy from attribute
+    }
+
+    pub fn attributeChange(element: *Element, name: String, _: String, _: *Frame) !void {
+        // Switching between a list box and a menu list asks for a reset.
+        if (name.eql(comptime .wrap("size"))) {
+            element.as(Select).resetToDefaultSelection();
+        }
+    }
+
+    pub fn attributeRemove(element: *Element, name: String, _: *Frame) !void {
+        const attribute = std.meta.stringToEnum(enum { multiple, size }, name.str()) orelse return;
+        const self = element.as(Select);
+        switch (attribute) {
+            // Blink, Gecko and WebKit keep the first selected option; the
+            // spec is silent.
+            .multiple => if (self.selectedOption()) |option| {
+                self.deselectOthers(option);
+            } else {
+                self.resetToDefaultSelection();
+            },
+            .size => self.resetToDefaultSelection(),
+        }
     }
 };
 
