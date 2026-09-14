@@ -4427,7 +4427,7 @@ test "HttpClient: adblock verdicts apply per request" {
     var client: Client = undefined;
     initTestClient(&client, &pool);
 
-    var blocker: AdBlocker = try .init(testing.allocator);
+    var blocker: AdBlocker = try .init(testing.allocator, testing.test_app.regex_context);
     defer blocker.deinit();
     var list: std.Io.Reader = .fixed(
         \\||ads.example.com^
