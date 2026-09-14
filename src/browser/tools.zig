@@ -566,7 +566,7 @@ pub const Tool = enum {
                     \\{
                     \\  "type": "object",
                     \\  "properties": {
-                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If omitted (or 0), scrolls the window." },
+                    \\    "backendNodeId": { "type": "integer", "description": "Optional: The backend node ID of the element to scroll. If the element is not itself a scroll container, its nearest scrollable ancestor is scrolled instead. If omitted (or 0), scrolls the window." },
                     \\    "x": { "type": "integer", "description": "Optional: The horizontal scroll offset." },
                     \\    "y": { "type": "integer", "description": "Optional: The vertical scroll offset." }
                     \\  }
@@ -1879,15 +1879,20 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
         y: ?i32 = null,
     };
     const args = try parseArgsOrDefault(Params, arena, arguments);
+    const scope = beginAction(session);
     const page = try requireFrame(session);
     const target_node = try resolveOptionalNode(registry, args.backendNodeId);
 
-    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
+    const result = lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
 
-    return std.fmt.allocPrint(arena, "Scrolled to x: {d}, y: {d}", .{
-        args.x orelse 0,
-        args.y orelse 0,
-    }) catch return ToolError.InternalError;
+    const body = (if (result.scrolled) |scrolled| blk: {
+        const moved: ActionTarget = .{ .backend_node_id = (registry.register(scrolled) catch return ToolError.InternalError).id };
+        break :blk if (scrolled == target_node)
+            std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{ moved, result.x, result.y })
+        else
+            std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{ moved, ActionTarget{ .backend_node_id = args.backendNodeId.? }, result.x, result.y });
+    } else std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y })) catch return ToolError.InternalError;
+    return finalizeAction(arena, session, registry, scope, body);
 }
 
 /// Default timeout for the `waitFor*` tools — short, since they wait on an

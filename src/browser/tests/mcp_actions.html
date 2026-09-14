@@ -10,6 +10,9 @@
     <div id="scrollbox" style="width: 100px; height: 100px; overflow: scroll;" onscroll="window.scrolled = true;">
         <div style="height: 500px;">Long content</div>
     </div>
+    <div id="outerscroll" style="height: 100px; overflow: auto;" onscroll="window.outerScrolled = true;">
+        <div style="height: 500px;"><p id="innerleaf">Inner leaf</p></div>
+    </div>
     <div id="hoverTarget" onmouseover="window.hovered = true;">Hover Me</div>
     <input id="keyTarget" onkeydown="window.keyPressed = event.key;" onkeyup="window.keyReleased = event.key;">
     <select id="sel2" onchange="window.sel2Changed = this.value">
