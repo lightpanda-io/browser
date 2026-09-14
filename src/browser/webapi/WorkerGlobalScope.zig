@@ -46,9 +46,9 @@ const WorkerLocation = @import("WorkerLocation.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
 const idb = @import("storage/idb/idb.zig");
-const CookieStore = @import("storage/CookieStore.zig");
 const MessagePort = @import("MessagePort.zig");
 const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
 const log = lp.log;
@@ -112,7 +112,6 @@ _idb_factory: ?*idb.IDBFactory = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
-_cookie_store: ?*CookieStore = null,
 
 _location: WorkerLocation,
 
@@ -121,6 +120,7 @@ _scheduler: Scheduler = .{},
 
 pub const Type = union(enum) {
     shared: *SharedWorkerGlobalScope,
+    service: *ServiceWorkerGlobalScope,
     dedicated: *DedicatedWorkerGlobalScope,
 };
 
@@ -314,13 +314,6 @@ pub fn performance(self: *WorkerGlobalScope) *Performance {
 
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
     return &self._location;
-}
-
-fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
-    if (self._cookie_store) |cs| return cs;
-    const cs = try self._factory.eventTargetWithAllocator(self.arena, CookieStore{ ._proto = undefined });
-    self._cookie_store = cs;
-    return cs;
 }
 
 fn getOnError(self: *const WorkerGlobalScope) ?JS.Function.Global {
@@ -606,7 +599,6 @@ pub const JsApi = struct {
     }.wrap, null, .{});
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
-    pub const cookieStore = bridge.accessor(WorkerGlobalScope.getCookieStore, null, .{});
     pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
