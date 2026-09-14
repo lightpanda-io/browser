@@ -20,7 +20,7 @@ pub fn asNode(self: *Meter) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Meter, frame: *Frame) !js.Array {
+fn getLabels(self: *Meter, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 

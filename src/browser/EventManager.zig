@@ -39,7 +39,7 @@ const Allocator = std.mem.Allocator;
 // Re-export types from EventManagerBase for API compatibility
 pub const RegisterOptions = EventManagerBase.RegisterOptions;
 pub const Callback = EventManagerBase.Callback;
-pub const Listener = EventManagerBase.Listener;
+const Listener = EventManagerBase.Listener;
 
 pub const EventManager = @This();
 
@@ -73,7 +73,7 @@ pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callba
 }
 
 // Re-export DispatchError from base
-pub const DispatchError = EventManagerBase.DispatchError;
+const DispatchError = EventManagerBase.DispatchError;
 
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
     event.acquireRef();
@@ -94,6 +94,16 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
         .window => try self.dispatchDirect(target, event, windowInlineHandler(target.subtype(Window), event._type_string), .{ .context = "dispatch" }),
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
+}
+
+/// dispatch() drops its reference, and with it the event, before returning;
+/// this keeps the event alive so the caller can learn whether a listener
+/// called preventDefault().
+pub fn dispatchCancelable(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!bool {
+    event.acquireRef();
+    defer event.releaseRef(self.frame._page);
+    try self.dispatch(target, event);
+    return event.getDefaultPrevented();
 }
 
 // Resolves the Window's property event handler for the given event type.
@@ -574,7 +584,7 @@ const AdjustedTargets = struct {
     }
 };
 
-pub const EventPath = struct {
+const EventPath = struct {
     len: usize,
     // Whether a shadow root sits on the path, i.e. whether an invocation can
     // see a target other than the one the event was dispatched at.
@@ -772,6 +782,9 @@ const ActivationState = struct {
                 prev_radio._checked = true;
                 prev_radio._checked_dirty = true;
             }
+            // Listeners ran between setChecked and here, so `:checked` state
+            // built during dispatch has to be stamped as stale.
+            frame.styleChanged();
             return;
         }
 

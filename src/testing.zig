@@ -33,7 +33,7 @@ pub const expectEqualSlices = std.testing.expectEqualSlices;
 // in a test. Like, you need a mutable string, so you just want to dupe a
 // string literal. It has nothing to do with the code under test, it's just
 // infrastructure for the test itself.
-pub var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+var arena_instance = std.heap.ArenaAllocator.init(std.heap.c_allocator);
 pub const arena_allocator = arena_instance.allocator();
 
 pub fn reset() void {
@@ -147,19 +147,19 @@ fn isStringArray(comptime T: type) bool {
     return std.meta.Elem(T) == u8;
 }
 
-pub const TraitFn = fn (type) bool;
+const TraitFn = fn (type) bool;
 pub fn is(comptime id: std.builtin.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             return id == @typeInfo(T);
         }
     };
     return Closure.trait;
 }
 
-pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
+fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
     const Closure = struct {
-        pub fn trait(comptime T: type) bool {
+        fn trait(comptime T: type) bool {
             if (!comptime isSingleItemPtr(T)) return false;
             return id == @typeInfo(std.meta.Child(T));
         }
@@ -167,7 +167,7 @@ pub fn isPtrTo(comptime id: std.builtin.TypeId) TraitFn {
     return Closure.trait;
 }
 
-pub fn isSingleItemPtr(comptime T: type) bool {
+fn isSingleItemPtr(comptime T: type) bool {
     if (comptime is(.pointer)(T)) {
         return @typeInfo(T).pointer.size == .one;
     }
@@ -188,18 +188,6 @@ pub const Random = struct {
     pub fn fill(buf: []u8) void {
         var r = random();
         r.bytes(buf);
-    }
-
-    pub fn fillAtLeast(buf: []u8, min: usize) []u8 {
-        var r = random();
-        const l = r.intRangeAtMost(usize, min, buf.len);
-        r.bytes(buf[0..l]);
-        return buf;
-    }
-
-    pub fn intRange(comptime T: type, min: T, max: T) T {
-        var r = random();
-        return r.intRangeAtMost(T, min, max);
     }
 
     pub fn random() std.Random {
@@ -334,7 +322,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
-pub var test_notification: *Notification = undefined;
+var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";

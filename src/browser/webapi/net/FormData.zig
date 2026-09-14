@@ -214,7 +214,7 @@ pub fn has(self: *const FormData, name: String) bool {
     return false;
 }
 
-pub const EntryValue = union(enum) {
+const EntryValue = union(enum) {
     blob: *Blob, // can be of _type == .file
     bytes: []const u8, //must be last, everything can coerce to a []const u8
 };
@@ -331,7 +331,7 @@ pub const EncType = union(enum) {
     plaintext,
 };
 
-pub const WriteOpts = struct {
+const WriteOpts = struct {
     encoding: EncType = .urlencode,
     charset: []const u8 = "UTF-8",
 };
@@ -495,7 +495,7 @@ fn writeMultipartName(writer: *std.Io.Writer, name: []const u8, comptime newline
 // Inverse of urlEncode: application/x-www-form-urlencoded parsing per
 // URL §5.1 — '+' decodes to a space, invalid percent sequences pass through
 // verbatim, and a pair without '=' becomes an entry with an empty value.
-pub fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
+fn parseUrlEncoded(self: *FormData, bytes: []const u8) !void {
     var it = std.mem.splitScalar(u8, bytes, '&');
     while (it.next()) |pair| {
         if (pair.len == 0) {
@@ -861,18 +861,14 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, charset: 
             }
 
             if (element.is(Form.Select)) |select| {
-                if (select.getMultiple() == false) {
-                    // Per the HTML spec, a single-select with no selectedness
-                    // candidate (zero options or every option disabled)
-                    // contributes no entry. Otherwise emit the candidate's
-                    // value.
-                    const opt = select.effectiveOption() orelse continue;
-                    break :blk opt.getValue(frame);
-                }
-
                 var options = try select.getSelectedOptions(frame);
-                while (options.next()) |option| {
-                    try appendString(&list, arena, name, option.as(Form.Select.Option).getValue(frame));
+                while (options.next()) |node| {
+                    const option = node.as(Form.Select.Option);
+                    // A disabled option can be selected, but isn't submitted.
+                    if (option.asElement().isDisabled()) {
+                        continue;
+                    }
+                    try appendString(&list, arena, name, option.getValue(frame));
                 }
                 continue;
             }

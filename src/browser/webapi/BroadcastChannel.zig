@@ -115,19 +115,19 @@ pub fn close(self: *BroadcastChannel) void {
     self._exec.getBroadcastChannels().remove(&self._node);
 }
 
-pub fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
+fn getOnMessage(self: *const BroadcastChannel) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
+fn setOnMessage(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
     self._on_message = cb;
 }
 
-pub fn getOnMessageError(self: *const BroadcastChannel) ?js.Function.Global {
+fn getOnMessageError(self: *const BroadcastChannel) ?js.Function.Global {
     return self._on_message_error;
 }
 
-pub fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
+fn setOnMessageError(self: *BroadcastChannel, cb: ?js.Function.Global) !void {
     self._on_message_error = cb;
 }
 

@@ -125,15 +125,24 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
     pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, null, .{ .null_as_undefined = true });
-
-    pub const item = bridge.function(_item, .{});
-    fn _item(self: *HTMLAllCollection, index: i32, frame: *Frame) ?*Element {
-        if (index < 0) {
-            return null;
+    pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, null, struct {
+        fn wrap(self: *HTMLAllCollection, name: []const u8, frame: *Frame) !u32 {
+            if (self.getByName(name, frame) != null) {
+                // Named properties are [LegacyUnenumerableNamedProperties]
+                return js.v8.DontEnum;
+            }
+            return error.NotHandled;
         }
-        return self.getAtIndex(@intCast(index), frame);
-    }
+    }.wrap, .{ .null_as_undefined = true });
+
+    pub const item = bridge.function(struct {
+        fn wrap(self: *HTMLAllCollection, index: i32, frame: *Frame) ?*Element {
+            if (index < 0) {
+                return null;
+            }
+            return self.getAtIndex(@intCast(index), frame);
+        }
+    }.wrap, .{});
 
     pub const namedItem = bridge.function(HTMLAllCollection.getByName, .{});
     pub const symbol_iterator = bridge.iterator(HTMLAllCollection.iterator, .{});

@@ -154,10 +154,6 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
-    if (params.runImmediately) {
-        log.warn(.not_implemented, "addScriptOnNewDocument", .{ .param = "runImmediately" });
-    }
-
     // A worldName registers the world itself.
     var world_name: ?[]const u8 = null;
     if (params.worldName) |name| {
@@ -176,6 +172,30 @@ fn addScriptToEvaluateOnNewDocument(cmd: *CDP.Command) !void {
         .source = source_dupe,
         .world_name = world_name,
     });
+
+    // runImmediately: also evaluate in the current document, in the requested world.
+    if (params.runImmediately) {
+        if (bc.mainFrame()) |frame| {
+            const js_context = if (world_name) |name| blk: {
+                const world = bc.findIsolatedWorld(name) orelse break :blk null;
+                break :blk world.contextFor(frame);
+            } else frame.js;
+            if (js_context) |context| {
+                var ls: js.Local.Scope = undefined;
+                context.localScope(&ls);
+                defer ls.deinit();
+
+                var try_catch: lp.js.TryCatch = undefined;
+                try_catch.init(&ls.local);
+                defer try_catch.deinit();
+
+                ls.local.eval(source_dupe, null) catch |err| {
+                    const caught = try_catch.caughtOrError(cmd.arena, err);
+                    log.warn(.cdp, "script on new doc", .{ .caught = caught });
+                };
+            }
+        }
+    }
 
     var id_buf: [16]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{script_id}) catch "1";
@@ -1067,7 +1087,7 @@ fn captureScreenshot(cmd: *CDP.Command) !void {
     }
 
     // Prepared streams itself as base64 straight into the outgoing message.
-    const shot = try lp.screenshot.preparePng(cmd.arena, frame.window._document.asNode(), opts, frame);
+    const shot = try lp.screenshot.preparePng(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame);
     return cmd.sendResult(.{ .data = shot }, .{});
 }
 
@@ -1112,7 +1132,7 @@ fn printToPDF(cmd: *CDP.Command) !void {
             error.OutOfMemory => return error.OutOfMemory,
         },
     };
-    const prepared = lp.pdf.prepare(cmd.arena, frame.window._document.asNode(), opts, frame) catch |err| switch (err) {
+    const prepared = lp.pdf.prepare(cmd.arena, .{ .root = frame.window._document.asNode() }, opts, frame) catch |err| switch (err) {
         error.InvalidPdfOptions => return cmd.sendError(-32602, "invalid print parameters", .{}),
         error.PageRangeExceedsPageCount => return cmd.sendError(-32000, "Page range exceeds page count", .{}),
         else => return err,
@@ -2446,6 +2466,35 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
     }
 }
 
+test "cdp.frame: addScriptToEvaluateOnNewDocument runImmediately evaluates in the current document" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RI", .url = "hi.html", .target_id = "FID-00000000RI".* });
+
+    try ctx.processMessage(.{
+        .id = 30,
+        .method = "Page.addScriptToEvaluateOnNewDocument",
+        .params = .{ .source = "window.__now = 1", .runImmediately = true },
+    });
+    try ctx.expectSentResult(.{ .identifier = "1" }, .{ .id = 30 });
+
+    // Without the flag the script only runs on the next document.
+    try ctx.processMessage(.{
+        .id = 31,
+        .method = "Page.addScriptToEvaluateOnNewDocument",
+        .params = .{ .source = "window.__later = 1" },
+    });
+    try ctx.expectSentResult(.{ .identifier = "2" }, .{ .id = 31 });
+
+    const f = bc.mainFrame() orelse unreachable;
+    var ls: js.Local.Scope = undefined;
+    f.js.localScope(&ls);
+    defer ls.deinit();
+    const v = try ls.local.exec("window.__now === 1 && window.__later === undefined", null);
+    try testing.expect(v.toBool());
+}
+
 test "cdp.frame: addScriptToEvaluateOnNewDocument" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -2532,28 +2581,30 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try testing.waitForPage(bc);
     }
 
-    // Three entries (ids 0, 1, 2), currentIndex points at the most-recent.
+    // Three entries (ids 1, 2, 3) — id 0 was the synthetic initial
+    // about:blank entry that loadBrowserContext's navigation to dom1.html
+    // replaced. currentIndex points at the most-recent.
     {
         try ctx.processMessage(.{ .id = 30, .method = "Page.getNavigationHistory" });
         try ctx.expectSentResult(.{
             .currentIndex = 2,
             .entries = &[_]NavigationEntry{
                 .{
-                    .id = 0,
+                    .id = 1,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html",
                     .title = "",
                     .transitionType = "other",
                 },
                 .{
-                    .id = 1,
+                    .id = 2,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html",
                     .title = "",
                     .transitionType = "other",
                 },
                 .{
-                    .id = 2,
+                    .id = 3,
                     .url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
                     .userTypedURL = "http://127.0.0.1:9582/src/browser/tests/cdp/dom3.html",
                     .title = "",
@@ -2568,7 +2619,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try ctx.processMessage(.{
             .id = 40,
             .method = "Page.navigateToHistoryEntry",
-            .params = .{ .entryId = 0 },
+            .params = .{ .entryId = 1 },
         });
         try testing.waitForPage(bc);
 
@@ -2581,7 +2632,7 @@ test "cdp.frame: getNavigationHistory + navigateToHistoryEntry" {
         try ctx.processMessage(.{
             .id = 41,
             .method = "Page.navigateToHistoryEntry",
-            .params = .{ .entryId = 1 },
+            .params = .{ .entryId = 2 },
         });
         try testing.waitForPage(bc);
 

@@ -34,7 +34,7 @@ pub const Proto = UIEvent;
 _proto: *UIEvent,
 _related_target: ?*EventTarget = null,
 
-pub const FocusEventOptions = struct {
+const FocusEventOptions = struct {
     relatedTarget: ?*EventTarget = null,
 };
 
@@ -76,7 +76,7 @@ pub fn asEvent(self: *FocusEvent) *Event {
     return self._proto.asEvent();
 }
 
-pub fn getRelatedTarget(self: *const FocusEvent) ?*EventTarget {
+fn getRelatedTarget(self: *const FocusEvent) ?*EventTarget {
     return self._related_target;
 }
 

@@ -76,6 +76,7 @@ const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRa
 
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
+const GlobalScope = @import("global_scope.zig").GlobalScope;
 
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
@@ -150,7 +151,6 @@ _element_rel_lists: Element.RelListLookup = .empty,
 _element_part_lists: Element.PartListLookup = .empty,
 _element_token_lists: Element.TokenListLookup = .empty,
 _element_shadow_roots: Element.ShadowRootLookup = .empty,
-_node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 _svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
@@ -254,9 +254,6 @@ _custom_element_creation: enum {
     // constructor must not run (you end up in an endless loop if the constructor
     // does this.innerHTML = '...', which happens).
     bare_context,
-    // The target document has no custom element registry (e.g. DOMParser). The
-    // element stays undefined until it's inserted into the frame's document.
-    undefined,
 } = .construct,
 
 // List of custom elements that were created before their definition was registered
@@ -363,7 +360,7 @@ _http_headers: std.ArrayList(HttpHeader) = .empty,
 _referrer: ?[]const u8 = null,
 referrer_policy: referrer.Policy = .default,
 
-pub const HttpHeader = struct {
+const HttpHeader = struct {
     name: []const u8,
     value: []const u8,
 };
@@ -460,18 +457,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     }
     self.window._cross_origin_wrapper = .{ .window = self.window };
 
-    self._http_owner = .{
-        .blob_urls = &page.blob_urls,
-        .origin = &self.origin,
-        .url = &self.url,
-        .parent = if (parent) |p| &p._http_owner else null,
-        .frame_id = frame_id,
-        .document_frame_id = frame_id,
-        .loader_id = self._loader_id,
-        .cookie_jar = &session.cookie_jar,
-        .notification = session.notification,
-        .performance = self.window._performance,
-    };
+    self._http_owner = GlobalScope.initHttpOwner(.{ .frame = self });
 
     self._style_manager = try StyleManager.init(self);
     errdefer self._style_manager.deinit();
@@ -494,6 +480,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     location.acquireRef();
     self.window._location = location;
 
+    lp.assert(document._page == page, "unexpected document page", .{});
     document._frame = self;
 
     if (comptime lp.IS_TEST == false) {
@@ -507,11 +494,6 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
                 }
             }.runIdleTasks, 200, .{ .name = "frame.runIdleTasks", .blocks_done = false });
         }
-    }
-
-    if (parent == null) {
-        // no point reporting this for each child page
-        session.browser.reportJsHeap();
     }
 }
 
@@ -586,9 +568,6 @@ pub fn deinit(self: *Frame) void {
     const browser = page.session.browser;
 
     browser.http_client.abortOwner(&self._http_owner);
-    if (self.parent == null) {
-        browser.reportJsHeap();
-    }
 
     // fired the last moment the js context is still alive
     page.session.notification.dispatch(.frame_destroyed, self);
@@ -599,6 +578,10 @@ pub fn deinit(self: *Frame) void {
     for (self.workers.items) |worker| {
         worker.deinit();
     }
+
+    // The document outlives the frame (it's nodes stay reachable from any other
+    // live frame)
+    self.document._frame = null;
 
     self._script_manager.base.shutdown = true;
 
@@ -1055,6 +1038,9 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
 
+        // `:target` matches off the fragment, which just changed.
+        target.styleChanged();
+
         try target.queueHashChange(old_url, target.url);
 
         // don't defer this, the caller is responsible for freeing it on error
@@ -1214,7 +1200,7 @@ pub fn documentIsLoaded(self: *Frame) void {
     };
 }
 
-pub fn _documentIsLoaded(self: *Frame) !void {
+fn _documentIsLoaded(self: *Frame) !void {
     try self.dispatchReadyStateChange();
 
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._page);
@@ -1247,7 +1233,7 @@ pub fn scriptsCompletedLoading(self: *Frame) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
+fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void {
     // When parsing HTML, fire any load event for an iframe on the next tick.
     const parsing_html = switch (self._parse_state) {
         .html => true,
@@ -1318,10 +1304,6 @@ pub fn documentIsComplete(self: *Frame) void {
     if (self._maybe_meta_refresh) {
         self._maybe_meta_refresh = false;
         self.metaRefreshOnLoad();
-    }
-
-    if (self.parent == null) {
-        self._session.browser.reportJsHeap();
     }
 }
 
@@ -1951,7 +1933,8 @@ pub fn scriptAddedCallback(self: *Frame, comptime from_parser: bool, script: *El
     }
 
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
-        log.err(.frame, "frame.scriptAddedCallback", .{
+        const level: log.Level = if (err == error.UrlBlocked) .warn else .err;
+        log.log(.frame, level, "frame.scriptAddedCallback", .{
             .err = err,
             .url = self.url,
             .src = script.asElement().getAttributeInterned("src"),
@@ -2179,11 +2162,18 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 
 pub fn domChanged(self: *Frame) void {
     self._page.dom_version += 1;
+    self.styleChanged();
 
     // A DOM change is our "rendering opportunity": re-evaluate the layout
     // observers. Both are no-ops unless something they track actually changed.
     observers.scheduleIntersectionChecks(self);
     observers.scheduleResizeChecks(self);
+}
+
+/// Stamps the cascade: any change that can alter a selector match or cascade
+/// result, including non-tree state that live collections never see.
+pub fn styleChanged(self: *Frame) void {
+    self._page.style_version += 1;
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -2596,20 +2586,9 @@ pub fn nodeComplete(self: *Frame, node: *Node) !void {
     return self.nodeIsReady(true, node);
 }
 
-// Sets the owner document for a node. Only stores entries for nodes whose owner
-// is NOT frame.document to minimize memory overhead.
-pub fn setNodeOwnerDocument(self: *Frame, node: *Node, owner: *Document) !void {
-    if (owner == self.document) {
-        // No need to store if it's the main document - remove if present
-        _ = self._node_owner_documents.remove(node);
-    } else {
-        try self._node_owner_documents.put(self.arena, node, owner);
-    }
-}
-
 // Recursively sets the owner document for a node and all its descendants
 pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner: *Document) !void {
-    try self.setNodeOwnerDocument(node, new_owner);
+    node._owner = new_owner._index;
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
@@ -2694,6 +2673,8 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
     child._parent = null;
 
+    Element.Html.Select.childRemoved(parent, child);
+
     // Update live ranges for removal (DOM spec remove steps 4-7)
     if (child_index_for_ranges) |idx| {
         self.updateRangesForNodeRemoval(parent, child, idx);
@@ -2741,7 +2722,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     // so ask it directly whether it's still in the document.
     if (self.document._active_element) |active| {
         if (active.asNode().isConnected() == false) {
-            self.document._active_element = null;
+            self.document.setActiveElement(null, self);
         }
     }
 
@@ -2811,7 +2792,7 @@ pub fn insertAllChildrenBefore(self: *Frame, fragment: *Node, parent: *Node, ref
     return self.moveAllChildren(fragment, parent, ref_node, .records);
 }
 
-pub const MoveChildrenNotify = enum { records, silent_parent };
+const MoveChildrenNotify = enum { records, silent_parent };
 
 // Moves every child of `source` into `parent` (before `ref_node`, or
 // appended). Per the DOM insert algorithm for fragments, observers get one
@@ -2903,7 +2884,7 @@ const InsertNodeOpts = struct {
 pub fn insertNodeRelative(self: *Frame, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
 }
-pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
+fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     // caller should have made sure this was the case
 
     lp.assert(child._parent == null, "Frame.insertNodeRelative parent", .{});
@@ -2922,6 +2903,8 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
         },
     }
     child._parent = parent;
+
+    Element.Html.Select.childInserted(parent, child);
 
     // Update live ranges for insertion (DOM spec insert step 6).
     // For .before/.after the child was inserted at a specific position;
@@ -2951,6 +2934,9 @@ pub fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *No
     // The parser path does its own (limited) notification and
     // connected-callback work, then returns.
     if (comptime from_parser) {
+        // Not domChanged: live collections keep their cursors mid-parse.
+        self.styleChanged();
+
         // Main-document parser insertions notify per node: scripts running
         // during parsing can observe the document. Fragment parses
         // (innerHTML et al.) stay silent; Node.setHTML queues one combined
@@ -3111,7 +3097,7 @@ pub fn attributeRemove(self: *Frame, element: *Element, name: String, old_value:
 }
 
 fn styleAttributeChanged(self: *Frame, element: *Element, value: ?[]const u8) void {
-    const style = element.getStyle(self) orelse return;
+    const style = element.existingStyle(self) orelse return;
     style.asCSSStyleDeclaration().styleAttributeChanged(value, self) catch |err| {
         log.err(.frame, "style attribute reparse", .{ .err = err, .type = self._type, .url = self.url });
     };
@@ -3169,7 +3155,7 @@ pub fn updateRangesForSplitText(self: *Frame, target: *Node, new_node: *Node, of
 /// Update all live ranges after a node insertion.
 /// Per DOM spec insert algorithm step 6: only applies when inserting before a
 /// non-null reference node.
-pub fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u32) void {
+fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3179,7 +3165,7 @@ pub fn updateRangesForNodeInsertion(self: *Frame, parent: *Node, child_index: u3
 
 /// Update all live ranges after a node removal.
 /// Per DOM spec remove algorithm steps 4-7.
-pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_index: u32) void {
+fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, child_index: u32) void {
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
@@ -3248,31 +3234,31 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             }
         }
 
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.scriptAddedCallback(from_parser, script) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "script", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         frame.iframeAddedCallback(iframe) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "iframe", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Meta)) |meta| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         meta.processRefresh(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "meta", .type = frame._type, .url = frame.url });
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         link.linkAddedCallback(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
-        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        const frame = if (comptime from_parser) self else (node.ownerFrame(self) orelse return);
         style.styleAddedCallback(frame) catch |err| {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "style", .type = frame._type });
             return error.StyleLoadError;
@@ -3406,7 +3392,7 @@ const IdleNotification = union(enum) {
     }
 };
 
-pub const NavigateReason = enum {
+const NavigateReason = enum {
     anchor,
     address_bar,
     form,
@@ -3475,7 +3461,7 @@ pub const QueuedNavigation = struct {
     navigation_type: NavigationType,
 };
 
-pub const TargetFrame = union(enum) {
+const TargetFrame = union(enum) {
     frame: *Frame,
     blank,
 };
@@ -3608,7 +3594,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const target: TargetFrame = blk: {
         const target_name = target_name_ orelse {
-            break :blk .{ .frame = form_element.ownerFrame(self) };
+            break :blk .{ .frame = form_element.ownerFrame(self) orelse return };
         };
         break :blk self.resolveTargetFrame(target_name);
     };
@@ -3775,7 +3761,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
     // no stray window.
     const target_frame = switch (target) {
         .frame => |f| f,
-        .blank => try form_element.ownerFrame(self).openBlankTarget(form_element, ""),
+        .blank => try (form_element.ownerFrame(self) orelse return).openBlankTarget(form_element, ""),
     };
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_frame });
 }

@@ -23,10 +23,10 @@ const libcurl = @import("../sys/libcurl.zig");
 const IpFilter = @This();
 
 /// Binary representation for bitwise CIDR comparison.
-pub const Ipv4Addr = [4]u8;
-pub const Ipv6Addr = [16]u8;
+const Ipv4Addr = [4]u8;
+const Ipv6Addr = [16]u8;
 
-pub const CidrV4 = struct {
+const CidrV4 = struct {
     network: u32,
     mask: u32,
 
@@ -42,7 +42,7 @@ pub const CidrV4 = struct {
     }
 };
 
-pub const CidrV6 = struct {
+const CidrV6 = struct {
     network_hi: u64,
     network_lo: u64,
     mask_hi: u64,

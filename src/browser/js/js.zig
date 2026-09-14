@@ -239,8 +239,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             } else {
                 const buffer_len = size * bits / 8;
                 const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
-                const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                array_buffer = newArrayBuffer(isolate, backing_store);
             }
 
             const handle: *const v8.Value = switch (comptime kind) {
@@ -272,13 +271,24 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             }
             const byte_offset = v8.v8__ArrayBufferView__ByteOffset(view);
             const array_buffer = v8.v8__ArrayBufferView__Buffer(view).?;
-            const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
-            const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-            const data = v8.v8__BackingStore__Data(backing_store).?;
+            const data = arrayBufferData(array_buffer).?;
             const base = @as([*]u8, @ptrCast(data)) + byte_offset;
             return @as([*]BackingInt, @ptrCast(@alignCast(base)))[0 .. byte_len / @sizeOf(BackingInt)];
         }
     };
+}
+
+fn newArrayBuffer(isolate: Isolate, backing_store: *v8.BackingStore) *const v8.ArrayBuffer {
+    var backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+}
+
+pub fn arrayBufferData(array_buffer: *const v8.ArrayBuffer) ?*anyopaque {
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    const backing_store = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return null;
+    return v8.v8__BackingStore__Data(backing_store);
 }
 
 // If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
@@ -364,13 +374,12 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len).?;
                     if (len > 0) {
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
                     }
-                    const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                    return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
+                    return @ptrCast(newArrayBuffer(isolate, backing_store));
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -395,8 +404,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                         const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
                         const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                        array_buffer = newArrayBuffer(isolate, backing_store);
                     }
 
                     switch (@typeInfo(value_type)) {
@@ -485,6 +493,48 @@ test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
     try std.testing.expectEqual(24, @sizeOf(TaggedOpaque));
 }
+
+test "js: ArrayBuffers crossing Zig don't keep a reference to their backing store" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    var ls: Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    // Every buffer must end up owned by its ArrayBuffer alone, otherwise
+    // it's never freed.
+    const created = ArrayBufferRef(.uint8).init(local, 16);
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+    _ = created.slice();
+    try testing.expectEqual(1, backingStoreRefs(created.handle));
+
+    const typed = simpleZigValueToJs(local.isolate, TypedArray(u8){ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(typed));
+
+    const buffer = simpleZigValueToJs(local.isolate, ArrayBuffer{ .values = "abc" }, true, false);
+    try testing.expectEqual(1, backingStoreRefs(buffer));
+
+    const from_js = try local.exec("new Uint8Array(8)", null);
+    _ = try from_js.toStringSmart();
+    _ = try from_js.toZig(TypedArray(u8));
+    try testing.expectEqual(1, backingStoreRefs(from_js.handle));
+}
+
+// References held on an ArrayBuffer's (or a view's) backing store, not
+// counting the one taken here to ask.
+fn backingStoreRefs(handle: *const v8.Value) i64 {
+    const array_buffer: *const v8.ArrayBuffer = if (v8.v8__Value__IsArrayBuffer(handle))
+        @ptrCast(handle)
+    else
+        v8.v8__ArrayBufferView__Buffer(@ptrCast(handle)).?;
+    var backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+    defer v8.std__shared_ptr__v8__BackingStore__reset(&backing_store_ptr);
+    return v8.std__shared_ptr__v8__BackingStore__use_count(&backing_store_ptr) - 1;
+}
+
+const testing = @import("../../testing.zig");
 
 // Every finalizable instance of Zig gets 1 FinalizerCallback registered in the
 // Page. This is to ensure that, if v8 doesn't finalize the value, we can

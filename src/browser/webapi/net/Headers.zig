@@ -27,6 +27,8 @@ _guard: Guard = .none,
 // What mutation JS can make
 pub const Guard = enum {
     none, // don't block anything
+    request, // block forbidden request headers
+    request_no_cors, // block anything but the no-cors safelist
     response, // block forbidden response headers
     immutable, // block everythig
 };
@@ -65,10 +67,25 @@ pub fn initGuarded(opts_: ?InitOpts, guard: Guard, exec: *const Execution) !*Hea
         list.delete("set-cookie2", null);
     }
 
-    return exec._factory.create(Headers{
+    const self = try exec._factory.create(Headers{
         ._list = list,
         ._guard = guard,
     });
+
+    if (guard == .request or guard == .request_no_cors) {
+        var i: usize = 0;
+        const list_entries = &self._list._entries;
+        while (i < list_entries.items.len) {
+            const entry = &list_entries.items[i];
+            if (try self.checkGuard(entry.name.str(), entry.value.str()) == .ignore) {
+                _ = list_entries.orderedRemove(i);
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    return self;
 }
 
 pub fn isForbiddenResponseHeaderName(name: []const u8) bool {
@@ -86,19 +103,138 @@ pub fn isForbiddenResponseHeaderName(name: []const u8) bool {
 
 const Mutation = enum { proceed, ignore };
 
-fn checkGuard(self: *const Headers, name: []const u8) !Mutation {
-    return switch (self._guard) {
-        .none => .proceed,
-        .immutable => error.TypeError,
-        .response => if (isForbiddenResponseHeaderName(name)) .ignore else .proceed,
+fn checkGuard(self: *const Headers, name: []const u8, value: ?[]const u8) !Mutation {
+    const allowed = switch (self._guard) {
+        .none => true,
+        .immutable => return error.TypeError,
+        .request => isForbiddenRequestHeader(name, value orelse "") == false,
+        .request_no_cors => if (value) |v|
+            isNoCorsSafelistedRequestHeader(name, v)
+        else
+            isNoCorsSafelistedRequestHeaderName(name) or isPrivilegedNoCorsRequestHeaderName(name),
+        .response => isForbiddenResponseHeaderName(name) == false,
     };
+    return if (allowed) .proceed else .ignore;
+}
+
+// https://fetch.spec.whatwg.org/#forbidden-request-header
+fn isForbiddenRequestHeader(name: []const u8, value: []const u8) bool {
+    const Set = std.StaticStringMapWithEql(void, std.static_string_map.eqlAsciiIgnoreCase);
+    const forbidden = Set.initComptime(.{
+        .{"accept-charset"},                 .{"accept-encoding"},
+        .{"access-control-request-headers"}, .{"access-control-request-method"},
+        .{"connection"},                     .{"content-length"},
+        .{"cookie"},                         .{"cookie2"},
+        .{"date"},                           .{"dnt"},
+        .{"expect"},                         .{"host"},
+        .{"keep-alive"},                     .{"origin"},
+        .{"referer"},                        .{"set-cookie"},
+        .{"te"},                             .{"trailer"},
+        .{"transfer-encoding"},              .{"upgrade"},
+        .{"via"},
+    });
+    if (forbidden.has(name)) {
+        return true;
+    }
+
+    if (std.ascii.startsWithIgnoreCase(name, "proxy-") or std.ascii.startsWithIgnoreCase(name, "sec-")) {
+        return true;
+    }
+
+    const Overrides = std.StaticStringMapWithEql(void, std.static_string_map.eqlAsciiIgnoreCase);
+    const overrides = Overrides.initComptime(.{
+        .{"x-http-method"}, .{"x-http-method-override"}, .{"x-method-override"},
+    });
+    if (overrides.has(name) == false) {
+        return false;
+    }
+
+    // value is a method override list.
+    var it = std.mem.splitScalar(u8, value, ',');
+    while (it.next()) |part| {
+        const method = std.mem.trim(u8, part, &Mime.HTTP_WHITESPACE);
+        if (std.ascii.eqlIgnoreCase(method, "connect")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(method, "trace")) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(method, "track")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// https://fetch.spec.whatwg.org/#no-cors-safelisted-request-header-name
+fn isNoCorsSafelistedRequestHeaderName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "accept") or
+        std.ascii.eqlIgnoreCase(name, "accept-language") or
+        std.ascii.eqlIgnoreCase(name, "content-language") or
+        std.ascii.eqlIgnoreCase(name, "content-type");
+}
+
+// https://fetch.spec.whatwg.org/#privileged-no-cors-request-header-name
+fn isPrivilegedNoCorsRequestHeaderName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "range") or std.ascii.eqlIgnoreCase(name, "authorization");
+}
+
+// https://fetch.spec.whatwg.org/#no-cors-safelisted-request-header
+fn isNoCorsSafelistedRequestHeader(name: []const u8, value: []const u8) bool {
+    if (value.len > 128) {
+        return false;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "accept")) {
+        return hasCorsUnsafeByte(value) == false;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "accept-language") or std.ascii.eqlIgnoreCase(name, "content-language")) {
+        for (value) |c| switch (c) {
+            '0'...'9', 'A'...'Z', 'a'...'z', ' ', '*', ',', '-', '.', ';', '=' => {},
+            else => return false,
+        };
+        return true;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "content-type") == false) {
+        return false;
+    }
+
+    if (hasCorsUnsafeByte(value)) {
+        return false;
+    }
+
+    // Only the essence matters, and only these three are safelisted. Anything
+    // that doesn't parse as a mime type can't match one of them.
+    const essence = std.mem.trim(u8, std.mem.sliceTo(value, ';'), &Mime.HTTP_WHITESPACE);
+    return std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded") or
+        std.ascii.eqlIgnoreCase(essence, "multipart/form-data") or
+        std.ascii.eqlIgnoreCase(essence, "text/plain");
+}
+
+// https://fetch.spec.whatwg.org/#cors-unsafe-request-header-byte
+fn hasCorsUnsafeByte(value: []const u8) bool {
+    for (value) |c| switch (c) {
+        0x00...0x08, 0x0a...0x1f => return true,
+        '"', '(', ')', ':', '<', '>', '?', '@', '[', '\\', ']', '{', '}', 0x7f => return true,
+        else => {},
+    };
+    return false;
 }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, exec: *const Execution) !void {
     const normalized_name = try validateAndNormalizeName(name, exec);
     const normalized_value = try normalizeValue(value, exec);
-    const mutation = try self.checkGuard(normalized_name);
-    if (mutation == .ignore) {
+
+    // The guard sees the combined value, since that's what a get would return
+    // once this append lands.
+    const combined = if (self._guard == .request_no_cors) blk: {
+        const existing = try self.get(normalized_name, exec) orelse break :blk normalized_value;
+        break :blk try std.mem.join(exec.local_arena, ", ", &.{ existing, normalized_value });
+    } else normalized_value;
+
+    if (try self.checkGuard(normalized_name, combined) == .ignore) {
         return;
     }
     try self._list.append(exec.arena, normalized_name, normalized_value);
@@ -106,8 +242,7 @@ pub fn append(self: *Headers, name: []const u8, value: []const u8, exec: *const 
 
 pub fn delete(self: *Headers, name: []const u8, exec: *const Execution) !void {
     const normalized_name = try validateAndNormalizeName(name, exec);
-    const mutation = try self.checkGuard(normalized_name);
-    if (mutation == .ignore) {
+    if (try self.checkGuard(normalized_name, null) == .ignore) {
         return;
     }
     self._list.delete(normalized_name, null);
@@ -126,7 +261,7 @@ pub fn get(self: *const Headers, name: []const u8, exec: *const Execution) !?[]c
     return try std.mem.join(exec.local_arena, ", ", all_values);
 }
 
-pub fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
+fn getSetCookie(self: *const Headers, exec: *const Execution) ![]const []const u8 {
     return self._list.getAll(exec.local_arena, "set-cookie");
 }
 
@@ -138,8 +273,7 @@ pub fn has(self: *const Headers, name: []const u8, exec: *const Execution) !bool
 pub fn set(self: *Headers, name: []const u8, value_: []const u8, exec: *const Execution) !void {
     const normalized_name = try validateAndNormalizeName(name, exec);
     const value = try normalizeValue(value_, exec);
-    const mutation = try self.checkGuard(normalized_name);
-    if (mutation == .ignore) {
+    if (try self.checkGuard(normalized_name, value) == .ignore) {
         return;
     }
     try self._list.set(exec.arena, normalized_name, value);

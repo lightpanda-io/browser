@@ -40,11 +40,11 @@ pub fn getState(_: *const History, frame: *Frame) !?js.Value {
     } else return null;
 }
 
-pub fn getScrollRestoration(self: *History) []const u8 {
+fn getScrollRestoration(self: *History) []const u8 {
     return @tagName(self._scroll_restoration);
 }
 
-pub fn setScrollRestoration(self: *History, str: []const u8) void {
+fn setScrollRestoration(self: *History, str: []const u8) void {
     if (std.meta.stringToEnum(ScrollRestoration, str)) |sr| {
         self._scroll_restoration = sr;
     }
@@ -64,6 +64,8 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,
@@ -72,7 +74,7 @@ pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8
     });
 }
 
-pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
+fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, frame: *Frame) !void {
     const session = frame._session;
     const arena = session.arena;
     const url = if (_url) |u|
@@ -86,6 +88,8 @@ pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const
     frame.url = url;
     // setHref == reinitializing.
     try frame.window._location._url.setHref(url, &frame.js.execution);
+    // `:target` matches off the fragment, which the new URL can change.
+    frame.styleChanged();
 
     session.notification.dispatch(.frame_navigated_within_document, &.{
         .url = url,

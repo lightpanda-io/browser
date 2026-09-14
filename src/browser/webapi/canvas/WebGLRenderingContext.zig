@@ -36,7 +36,7 @@ const WebGLRenderingContext = @This();
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
 /// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Using_Extensions#extension_list
-pub const Extension = union(enum) {
+const Extension = union(enum) {
     ANGLE_instanced_arrays: void,
     EXT_blend_minmax: void,
     EXT_clip_control: void,
@@ -113,8 +113,8 @@ pub const Extension = union(enum) {
     pub const Type = struct {
         pub const WEBGL_debug_renderer_info = struct {
             _: u8 = 0,
-            pub const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
-            pub const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
+            const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
+            const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
 
             pub const JsApi = struct {
                 pub const bridge = js.Bridge(WEBGL_debug_renderer_info);
@@ -133,8 +133,8 @@ pub const Extension = union(enum) {
 
         pub const WEBGL_lose_context = struct {
             _: u8 = 0,
-            pub fn loseContext(_: *const WEBGL_lose_context) void {}
-            pub fn restoreContext(_: *const WEBGL_lose_context) void {}
+            fn loseContext(_: *const WEBGL_lose_context) void {}
+            fn restoreContext(_: *const WEBGL_lose_context) void {}
 
             pub const JsApi = struct {
                 pub const bridge = js.Bridge(WEBGL_lose_context);
@@ -156,13 +156,13 @@ pub const Extension = union(enum) {
 /// This actually takes "GLenum" which, in fact, is a fancy way to say number.
 /// Return value also depends on what's being passed as `pname`; we don't really
 /// support any though.
-pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
+fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
     _ = pname;
     return "";
 }
 
 /// Enables a WebGL extension.
-pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
+fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
@@ -179,7 +179,7 @@ pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *F
 }
 
 /// Returns a list of all the supported WebGL extensions.
-pub fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
+fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u8 {
     return std.meta.fieldNames(Extension.Kind);
 }
 

@@ -39,7 +39,7 @@ _column_number: u32 = 0,
 _error: ?js.Value.Global = null,
 _arena: Allocator,
 
-pub const ErrorEventOptions = struct {
+const ErrorEventOptions = struct {
     colno: u32 = 0,
     @"error": ?js.Value.Global = null,
     filename: ?[]const u8 = null,
@@ -106,19 +106,19 @@ pub fn getMessage(self: *const ErrorEvent) []const u8 {
     return self._message;
 }
 
-pub fn getFilename(self: *const ErrorEvent) []const u8 {
+fn getFilename(self: *const ErrorEvent) []const u8 {
     return self._filename;
 }
 
-pub fn getLineNumber(self: *const ErrorEvent) u32 {
+fn getLineNumber(self: *const ErrorEvent) u32 {
     return self._line_number;
 }
 
-pub fn getColumnNumber(self: *const ErrorEvent) u32 {
+fn getColumnNumber(self: *const ErrorEvent) u32 {
     return self._column_number;
 }
 
-pub fn getError(self: *const ErrorEvent) ?js.Value.Global {
+fn getError(self: *const ErrorEvent) ?js.Value.Global {
     return self._error;
 }
 

@@ -131,7 +131,7 @@ pub const DownloadBehavior = enum {
     deny,
 };
 
-pub const CancelHook = struct {
+const CancelHook = struct {
     context: *anyopaque,
     check: *const fn (*anyopaque) bool,
 };
@@ -177,6 +177,19 @@ pub fn deinit(self: *Session) void {
     }
 
     self.closeAllPages();
+
+    // CorsGate/RobotsGate fetches are ownerless, so page/frame teardown above
+    // never reaches them.
+    //
+    // They still carry this notification and can outlive it, so clear the pointer here or
+    // Transfer.kill's later notify() dispatches through a freed Notification
+    // once the caller runs notification.deinit() after this returns.
+    var transfer_it = self.browser.http_client.transfers.valueIterator();
+    while (transfer_it.next()) |t| {
+        if (t.*.req.notification == self.notification) {
+            t.*.req.notification = null;
+        }
+    }
 
     self.cookie_jar.deinit();
 
@@ -366,7 +379,20 @@ pub fn createPage(self: *Session) !PageHandle {
     }
 
     const frame_id = self.nextFrameId();
-    _ = try self.installNewActivePage(frame_id);
+    const frame = try self.installNewActivePage(frame_id);
+
+    // https://html.spec.whatwg.org/multipage/document-sequences.html --
+    // Creating a new browsing context always produces an initial about:blank
+    // Document with its own session history entry, even before any real
+    // navigation happens. Without this, navigation.currentEntry crashes on
+    // a page that hasn't navigated yet.
+    _ = try self.navigation.pushEntry(
+        frame.url,
+        .{ .source = .navigation, .value = null },
+        frame,
+        false,
+    );
+    self.navigation._initial_entry = true;
 
     return .{ .session = self, .frame_id = frame_id };
 }

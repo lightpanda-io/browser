@@ -82,7 +82,7 @@ pub fn getHost(self: *Area, frame: *Frame) ![]const u8 {
     return host;
 }
 
-pub fn setHost(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHost(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHost(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -93,29 +93,29 @@ pub fn getHostname(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getHostname(href);
 }
 
-pub fn setHostname(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHostname(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHostname(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getUsername(self: *Area, frame: *Frame) ![]const u8 {
+fn getUsername(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getUsername(href);
 }
 
-pub fn setUsername(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setUsername(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setUsername(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
 }
 
-pub fn getPassword(self: *Area, frame: *Frame) ![]const u8 {
+fn getPassword(self: *Area, frame: *Frame) ![]const u8 {
     const href = try getResolvedHref(self, frame) orelse return "";
     return URL.getPassword(href);
 }
 
-pub fn setPassword(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setPassword(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPassword(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -138,7 +138,7 @@ pub fn getPort(self: *Area, frame: *Frame) ![]const u8 {
     return port;
 }
 
-pub fn setPort(self: *Area, value: ?[]const u8, frame: *Frame) !void {
+fn setPort(self: *Area, value: ?[]const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setPort(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -149,7 +149,7 @@ pub fn getSearch(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getSearch(href);
 }
 
-pub fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setSearch(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setSearch(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -160,7 +160,7 @@ pub fn getHash(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getHash(href);
 }
 
-pub fn setHash(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setHash(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setHash(href, value, frame.call_arena);
     try setHref(self, new_href, frame);
@@ -182,7 +182,7 @@ pub fn getProtocol(self: *Area, frame: *Frame) ![]const u8 {
     return URL.getProtocol(href);
 }
 
-pub fn setProtocol(self: *Area, value: []const u8, frame: *Frame) !void {
+fn setProtocol(self: *Area, value: []const u8, frame: *Frame) !void {
     const href = try getResolvedHref(self, frame) orelse return;
     const new_href = try URL.setProtocol(href, value, frame.call_arena);
     try setHref(self, new_href, frame);

@@ -46,7 +46,7 @@ pub fn getId(self: *const TextTrackCue) []const u8 {
     return self._id;
 }
 
-pub fn setId(self: *TextTrackCue, value: []const u8, frame: *Frame) !void {
+fn setId(self: *TextTrackCue, value: []const u8, frame: *Frame) !void {
     self._id = try frame.dupeString(value);
 }
 
@@ -54,39 +54,39 @@ pub fn getStartTime(self: *const TextTrackCue) f64 {
     return self._start_time;
 }
 
-pub fn setStartTime(self: *TextTrackCue, value: f64) void {
+fn setStartTime(self: *TextTrackCue, value: f64) void {
     self._start_time = value;
 }
 
-pub fn getEndTime(self: *const TextTrackCue) f64 {
+fn getEndTime(self: *const TextTrackCue) f64 {
     return self._end_time;
 }
 
-pub fn setEndTime(self: *TextTrackCue, value: f64) void {
+fn setEndTime(self: *TextTrackCue, value: f64) void {
     self._end_time = value;
 }
 
-pub fn getPauseOnExit(self: *const TextTrackCue) bool {
+fn getPauseOnExit(self: *const TextTrackCue) bool {
     return self._pause_on_exit;
 }
 
-pub fn setPauseOnExit(self: *TextTrackCue, value: bool) void {
+fn setPauseOnExit(self: *TextTrackCue, value: bool) void {
     self._pause_on_exit = value;
 }
 
-pub fn getOnEnter(self: *const TextTrackCue) ?js.Function.Global {
+fn getOnEnter(self: *const TextTrackCue) ?js.Function.Global {
     return self._on_enter;
 }
 
-pub fn setOnEnter(self: *TextTrackCue, cb: ?js.Function.Global) !void {
+fn setOnEnter(self: *TextTrackCue, cb: ?js.Function.Global) !void {
     self._on_enter = cb;
 }
 
-pub fn getOnExit(self: *const TextTrackCue) ?js.Function.Global {
+fn getOnExit(self: *const TextTrackCue) ?js.Function.Global {
     return self._on_exit;
 }
 
-pub fn setOnExit(self: *TextTrackCue, cb: ?js.Function.Global) !void {
+fn setOnExit(self: *TextTrackCue, cb: ?js.Function.Global) !void {
     self._on_exit = cb;
 }
 

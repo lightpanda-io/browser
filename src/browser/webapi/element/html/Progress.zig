@@ -20,7 +20,7 @@ pub fn asNode(self: *Progress) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getLabels(self: *Progress, frame: *Frame) !js.Array {
+fn getLabels(self: *Progress, frame: *Frame) !js.Array {
     return @import("Label.zig").getControlLabels(self.asElement(), frame);
 }
 

@@ -32,7 +32,7 @@ pub fn init(init_: Init, exec: *const Execution) !*ByteLengthQueuingStrategy {
     return exec._factory.create(ByteLengthQueuingStrategy{ ._high_water_mark = init_.highWaterMark });
 }
 
-pub fn getHighWaterMark(self: *const ByteLengthQueuingStrategy) f64 {
+fn getHighWaterMark(self: *const ByteLengthQueuingStrategy) f64 {
     return self._high_water_mark;
 }
 

@@ -182,9 +182,7 @@ const RobotsContext = struct {
             self.status = hdr.status;
         }
         lp.metrics.robots_status.incr(http.statusCategory(self.status));
-        if (transfer.getContentLength()) |cl| {
-            try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), cl);
-        }
+        try self.buffer.ensureTotalCapacityPrecise(self.arena.allocator(), transfer.bodyLen());
         return .proceed;
     }
 
@@ -216,6 +214,7 @@ const RobotsContext = struct {
                     };
                     if (robots) |r| {
                         try network.robot_store.put(robots_url, r);
+                        // BE CAREFUL: robots can be invalidated after this call
                     }
                 } else {
                     // Empty robots.txt means we can short-circuit the allowed path.

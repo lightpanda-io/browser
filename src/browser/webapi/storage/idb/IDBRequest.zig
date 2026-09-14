@@ -318,7 +318,7 @@ fn fireError(self: *IDBRequest, exec: *Execution) !void {
     }
 }
 
-pub fn getReadyState(self: *const IDBRequest) ReadyState {
+fn getReadyState(self: *const IDBRequest) ReadyState {
     return self._ready_state;
 }
 
@@ -330,7 +330,7 @@ const JsResult = union(enum) {
     database: *IDBDatabase,
 };
 
-pub fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
+fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
     if (self._ready_state == .pending) {
         return error.InvalidStateError;
     }
@@ -343,11 +343,11 @@ pub fn getResult(self: *const IDBRequest, exec: *Execution) !JsResult {
 
 // The bridge converts the active union variant (the store/index/cursor, or JS
 // null for an open/delete request).
-pub fn getSource(self: *const IDBRequest) Source {
+fn getSource(self: *const IDBRequest) Source {
     return self._source;
 }
 
-pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
+fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
     return switch (self._txn) {
         .none => null,
         .owned, .borrowed => |txn| txn,
@@ -356,7 +356,7 @@ pub fn getTransaction(self: *const IDBRequest) ?*IDBTransaction {
 
 // Return this as a DOMException directly. If we return an error, the bridge
 // *will* convert it to a DOMException, but it'll throw it, not return it.
-pub fn getError(self: *const IDBRequest) !?DOMException {
+fn getError(self: *const IDBRequest) !?DOMException {
     if (self._ready_state == .pending) {
         return error.InvalidStateError;
     }
@@ -369,19 +369,19 @@ pub fn getError(self: *const IDBRequest) !?DOMException {
     return DOMException.fromError(mapped) orelse DOMException.init(null, "UnknownError");
 }
 
-pub fn getOnSuccess(self: *const IDBRequest) ?js.Function.Global {
+fn getOnSuccess(self: *const IDBRequest) ?js.Function.Global {
     return self._on_success;
 }
 
-pub fn setOnSuccess(self: *IDBRequest, setter: ?FunctionSetter) void {
+fn setOnSuccess(self: *IDBRequest, setter: ?FunctionSetter) void {
     self._on_success = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const IDBRequest) ?js.Function.Global {
+fn getOnError(self: *const IDBRequest) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *IDBRequest, setter: ?FunctionSetter) void {
+fn setOnError(self: *IDBRequest, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
 }
 
@@ -402,7 +402,7 @@ fn getFunctionFromSetter(setter: ?FunctionSetter) ?js.Function.Global {
 }
 
 // A database operation, captured when a request method is called and run later.
-pub const Operation = union(enum) {
+const Operation = union(enum) {
     none,
     store_get: StoreQuery,
     store_get_key: StoreQuery,

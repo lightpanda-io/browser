@@ -47,7 +47,7 @@ const Agent = @This();
 
 /// Raised by init/listModels after they've printed a user-facing message to
 /// stderr; callers should exit non-zero without logging more.
-pub const UserError = error{
+const UserError = error{
     MissingApiKey,
     MissingProvider,
     ConflictingFlags,
@@ -409,7 +409,7 @@ fn globalTools() []const ProviderTool {
 /// streaming/HTTP probe and any code polling `Session.isCancelled`, then asks
 /// V8 to bail out of whatever JS is running. Both hooks are thread-safe
 /// (`Env.terminate` takes a mutex); no terminal touches from this context.
-pub fn requestCancel(self: *Agent) void {
+fn requestCancel(self: *Agent) void {
     self.cancel_requested.store(true, .release);
     self.http_interrupt.fire();
     {
@@ -499,7 +499,7 @@ fn streamHook(self: *Agent) ?zenai.provider.Client.TextDeltaHook {
 /// One agent turn: the prompt sent to the model, plus optional context — a
 /// recorder comment to write before the turn, file attachments to bundle into
 /// the first user message, and a display label used in error output.
-pub const TurnInput = struct {
+const TurnInput = struct {
     prompt: []const u8,
     record_comment: ?[]const u8 = null,
     capture_for_save: bool = false,

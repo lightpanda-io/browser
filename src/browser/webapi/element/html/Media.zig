@@ -34,7 +34,7 @@ const Media = @This();
 
 pub const Proto = HtmlElement;
 
-pub const ReadyState = enum(u16) {
+const ReadyState = enum(u16) {
     HAVE_NOTHING = 0,
     HAVE_METADATA = 1,
     HAVE_CURRENT_DATA = 2,
@@ -42,7 +42,7 @@ pub const ReadyState = enum(u16) {
     HAVE_ENOUGH_DATA = 4,
 };
 
-pub const NetworkState = enum(u16) {
+const NetworkState = enum(u16) {
     NETWORK_EMPTY = 0,
     NETWORK_IDLE = 1,
     NETWORK_LOADING = 2,
@@ -114,7 +114,7 @@ pub fn as(self: *Media, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
+fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
     const pos = std.mem.indexOfScalar(u8, mime_type, ';') orelse mime_type.len;
     const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
 
@@ -188,11 +188,11 @@ fn dispatchEvent(self: *Media, name: []const u8, frame: *Frame) !void {
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
-pub fn getPaused(self: *const Media) bool {
+fn getPaused(self: *const Media) bool {
     return self._paused;
 }
 
-pub fn getCurrentTime(self: *const Media) f64 {
+fn getCurrentTime(self: *const Media) f64 {
     return self._current_time;
 }
 
@@ -200,51 +200,51 @@ pub fn getDuration(_: *const Media) f64 {
     return std.math.nan(f64);
 }
 
-pub fn getReadyState(self: *const Media) u16 {
+fn getReadyState(self: *const Media) u16 {
     return @intFromEnum(self._ready_state);
 }
 
-pub fn getNetworkState(self: *const Media) u16 {
+fn getNetworkState(self: *const Media) u16 {
     return @intFromEnum(self._network_state);
 }
 
-pub fn getEnded(_: *const Media) bool {
+fn getEnded(_: *const Media) bool {
     return false;
 }
 
-pub fn getSeeking(_: *const Media) bool {
+fn getSeeking(_: *const Media) bool {
     return false;
 }
 
-pub fn getError(self: *const Media) ?*MediaError {
+fn getError(self: *const Media) ?*MediaError {
     return self._error;
 }
 
-pub fn getVolume(self: *const Media) f64 {
+fn getVolume(self: *const Media) f64 {
     return self._volume;
 }
 
-pub fn setVolume(self: *Media, value: f64) void {
+fn setVolume(self: *Media, value: f64) void {
     self._volume = @max(0.0, @min(1.0, value));
 }
 
-pub fn getMuted(self: *const Media) bool {
+fn getMuted(self: *const Media) bool {
     return self._muted;
 }
 
-pub fn setMuted(self: *Media, value: bool) void {
+fn setMuted(self: *Media, value: bool) void {
     self._muted = value;
 }
 
-pub fn getPlaybackRate(self: *const Media) f64 {
+fn getPlaybackRate(self: *const Media) f64 {
     return self._playback_rate;
 }
 
-pub fn setPlaybackRate(self: *Media, value: f64) void {
+fn setPlaybackRate(self: *Media, value: f64) void {
     self._playback_rate = value;
 }
 
-pub fn setCurrentTime(self: *Media, value: f64) void {
+fn setCurrentTime(self: *Media, value: f64) void {
     self._current_time = value;
 }
 
@@ -257,7 +257,7 @@ pub fn getSrc(self: *const Media, frame: *Frame) ![]const u8 {
     return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Media, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 

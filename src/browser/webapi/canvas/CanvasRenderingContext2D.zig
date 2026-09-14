@@ -38,23 +38,23 @@ const CanvasRenderingContext2D = @This();
 _canvas: *Canvas,
 _state: context2d.State = .{},
 
-pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
+fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
 }
 
-pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
     return self._state.getStyle(.fill, exec);
 }
 
-pub fn setFillStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
+fn setFillStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
     self._state.setStyle(.fill, value);
 }
 
-pub fn getStrokeStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
+fn getStrokeStyle(self: *const CanvasRenderingContext2D, exec: *const Execution) !context2d.StyleOutput {
     return self._state.getStyle(.stroke, exec);
 }
 
-pub fn setStrokeStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
+fn setStrokeStyle(self: *CanvasRenderingContext2D, value: context2d.StyleInput) void {
     self._state.setStyle(.stroke, value);
 }
 
@@ -63,7 +63,7 @@ const WidthOrImageData = union(enum) {
     image_data: *ImageData,
 };
 
-pub fn createImageData(
+fn createImageData(
     _: *const CanvasRenderingContext2D,
     width_or_image_data: WidthOrImageData,
     /// If `ImageData` variant preferred, this is null.
@@ -83,13 +83,13 @@ pub fn createImageData(
     }
 }
 
-pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
 
 // CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
 // just taken as a js.Value for now since we don't use it, and that's much easier.
-pub fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
 
-pub fn getImageData(
+fn getImageData(
     _: *const CanvasRenderingContext2D,
     _: i32, // sx
     _: i32, // sy
@@ -103,7 +103,7 @@ pub fn getImageData(
     return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
 }
 
-pub fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
+fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
     return self._state.font();
 }
 
@@ -119,32 +119,32 @@ pub fn setLineDash(self: *CanvasRenderingContext2D, segments: []const f64, exec:
     return self._state.setLineDash(segments, exec);
 }
 
-pub fn getLineDash(self: *const CanvasRenderingContext2D) []const f64 {
+fn getLineDash(self: *const CanvasRenderingContext2D) []const f64 {
     return self._state.lineDash();
 }
 
-pub fn roundRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: ?js.Value) void {}
+fn roundRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: ?js.Value) void {}
 pub fn ellipse(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
-pub fn isPointInPath(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value, _: ?js.Value) bool {
+fn isPointInPath(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value, _: ?js.Value) bool {
     return false;
 }
-pub fn isPointInStroke(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value) bool {
+fn isPointInStroke(_: *const CanvasRenderingContext2D, _: js.Value, _: ?js.Value, _: ?js.Value) bool {
     return false;
 }
 
-pub fn createLinearGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+fn createLinearGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
     return CanvasGradient.init(exec);
 }
 
-pub fn createRadialGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+fn createRadialGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
     return CanvasGradient.init(exec);
 }
 
-pub fn createConicGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
+fn createConicGradient(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: f64, exec: *const Execution) !*CanvasGradient {
     return CanvasGradient.init(exec);
 }
 
-pub fn createPattern(_: *const CanvasRenderingContext2D, _: js.Value, repetition_: ?[]const u8, exec: *const Execution) !*CanvasPattern {
+fn createPattern(_: *const CanvasRenderingContext2D, _: js.Value, repetition_: ?[]const u8, exec: *const Execution) !*CanvasPattern {
     const repetition = repetition_ orelse "repeat";
     const known = [_][]const u8{ "", "repeat", "repeat-x", "repeat-y", "no-repeat" };
     for (known) |k| {
@@ -159,25 +159,25 @@ pub fn scale(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn rotate(_: *CanvasRenderingContext2D, _: f64) void {}
 pub fn translate(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
-pub fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn beginPath(_: *CanvasRenderingContext2D) void {}
-pub fn closePath(_: *CanvasRenderingContext2D) void {}
-pub fn moveTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn lineTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn quadraticCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn bezierCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
+fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
+fn resetTransform(_: *CanvasRenderingContext2D) void {}
+fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn beginPath(_: *CanvasRenderingContext2D) void {}
+fn closePath(_: *CanvasRenderingContext2D) void {}
+fn moveTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
+fn lineTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
+fn quadraticCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+fn bezierCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn arc(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
-pub fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
+fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn fill(_: *CanvasRenderingContext2D) void {}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
-pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasRenderingContext2D);

@@ -150,13 +150,13 @@ pub const Reaction = union(enum) {
     adopted: Adopted,
     attribute_changed: AttributeChanged,
 
-    pub const Adopted = struct {
+    const Adopted = struct {
         element: *Element,
         old_document: *Document,
         new_document: *Document,
     };
 
-    pub const AttributeChanged = struct {
+    const AttributeChanged = struct {
         element: *Element,
         name: String,
         old_value: ?String,

@@ -785,7 +785,7 @@ const ReturnValue = struct {
         }
     }
 
-    pub fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
+    fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
         v8.v8__ReturnValue__Set(self.handle, handle);
     }
 };

@@ -103,7 +103,7 @@ pub fn reflectedConfigured(
     });
 }
 
-pub fn getUnitType(self: *Length) u16 {
+fn getUnitType(self: *Length) u16 {
     self.syncFromAttribute();
     return @intFromEnum(self._unit);
 }
@@ -134,12 +134,12 @@ pub fn setValue(self: *Length, value: f64, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn getValueInSpecifiedUnits(self: *Length) f64 {
+fn getValueInSpecifiedUnits(self: *Length) f64 {
     self.syncFromAttribute();
     return self._value;
 }
 
-pub fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void {
+fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     try ensureFinite(value);
     self.syncFromAttribute();
@@ -150,12 +150,12 @@ pub fn setValueInSpecifiedUnits(self: *Length, value: f64, frame: *Frame) !void 
     try self.writeBack(frame);
 }
 
-pub fn getValueAsString(self: *Length, frame: *Frame) ![]const u8 {
+fn getValueAsString(self: *Length, frame: *Frame) ![]const u8 {
     self.syncFromAttribute();
     return self.serialize(frame);
 }
 
-pub fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
+fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
     try self.ensureWritable();
     const parsed = parse(value.str()) catch return error.SyntaxError;
     self._value = parsed.value;
@@ -163,7 +163,7 @@ pub fn setValueAsString(self: *Length, value: String, frame: *Frame) !void {
     try self.writeBack(frame);
 }
 
-pub fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: *Frame) !void {
+fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: *Frame) !void {
     try self.ensureWritable();
     const unit = try checkedUnit(unit_type);
     try ensureFinite(value);
@@ -172,7 +172,7 @@ pub fn newValueSpecifiedUnits(self: *Length, unit_type: u16, value: f64, frame: 
     try self.writeBack(frame);
 }
 
-pub fn convertToSpecifiedUnits(self: *Length, unit_type: u16, frame: *Frame) !void {
+fn convertToSpecifiedUnits(self: *Length, unit_type: u16, frame: *Frame) !void {
     try self.ensureWritable();
     const target = try checkedUnit(unit_type);
     const absolute = self.getValue(frame);
@@ -290,8 +290,8 @@ fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
 fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, frame: *Frame, depth: u8) f64 {
     const factor = switch (parsed.unit) {
         .percentage => ancestorViewportDimensionAt(element, direction, frame, depth) / 100.0,
-        .em => element.ownerFrame(frame)._style_manager.computedFontSize(element),
-        .ex => element.ownerFrame(frame)._style_manager.computedFontSize(element) / 2.0,
+        .em => elementFontSize(element, frame),
+        .ex => elementFontSize(element, frame) / 2.0,
         else => units.absoluteLengthFactor(toShared(parsed.unit)).?,
     };
     return parsed.value * factor;
@@ -299,7 +299,12 @@ fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, 
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
     const element = self._element orelse return frame._style_manager.computedFontSize(null);
-    return element.ownerFrame(frame)._style_manager.computedFontSize(element);
+    return elementFontSize(element, frame);
+}
+
+fn elementFontSize(element: *Element, frame: *Frame) f64 {
+    const owner = element.ownerFrame(frame) orelse return frame._style_manager.computedFontSize(null);
+    return owner._style_manager.computedFontSize(element);
 }
 
 const Parsed = struct {

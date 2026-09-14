@@ -29,9 +29,10 @@ const CDP = @import("cdp/CDP.zig");
 const Driver = @import("Driver.zig");
 
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-// The worker's end of an upgraded connection (the loop's is Server.WebSocket).
+// The worker's end of an upgraded connection (the loop's is Server.Worker).
 // Reads/framing happen on the server run loop (readAvailable → inbox); the worker
 // thread is the sole writer (send*). The two sides touch disjoint state
 // (reader+inbox vs send_arena+socket write) so no lock is needed beyond the
@@ -49,11 +50,14 @@ const SEND_TIMEOUT_MS = 5_000;
 const INBOX_BACKLOG_MESSAGES = 32;
 
 inbox: *Inbox,
+allocator: Allocator,
 arena_pool: *ArenaPool,
 socket: posix.socket_t,
 protocol: Driver.Protocol,
 reader: WS.Reader,
 send_arena: ArenaAllocator,
+// Nested serialization must not reset an outer message's storage.
+send_depth: u32,
 send_timeout_ms: i32,
 max_inbox_backlog: usize,
 
@@ -64,6 +68,9 @@ pub fn init(
     protocol: Driver.Protocol,
     inbox: *Inbox,
 ) !void {
+    // The Link owns the socket from here on
+    errdefer sys_net.close(socket);
+
     if (lp.IS_TEST == false) {
         const socket_flags = try sys_net.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
@@ -77,9 +84,11 @@ pub fn init(
         .inbox = inbox,
         .socket = socket,
         .protocol = protocol,
+        .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .reader = try .init(allocator, config.cdpMaxMessageSize()),
         .send_arena = ArenaAllocator.init(allocator),
+        .send_depth = 0,
         .send_timeout_ms = SEND_TIMEOUT_MS,
         .max_inbox_backlog = @as(usize, config.cdpMaxMessageSize()) * INBOX_BACKLOG_MESSAGES,
     };
@@ -88,12 +97,43 @@ pub fn init(
 pub fn deinit(self: *Link) void {
     self.reader.deinit();
     self.send_arena.deinit();
+    sys_net.close(self.socket);
+}
+
+pub fn create(app: *App, socket: posix.socket_t, protocol: Driver.Protocol, inbox: *Inbox) !*Link {
+    const link = app.allocator.create(Link) catch |err| {
+        sys_net.close(socket);
+        return err;
+    };
+    errdefer app.allocator.destroy(link);
+
+    // init immediately takes ownership of the socket
+    try link.init(app, socket, protocol, inbox);
+    return link;
+}
+
+pub fn destroy(self: *Link) void {
+    const allocator = self.allocator;
+    self.deinit();
+    allocator.destroy(self);
+}
+
+// Pair every call with sendDone.
+pub fn acquireSendArena(self: *Link) Allocator {
+    self.send_depth += 1;
+    return self.send_arena.allocator();
+}
+
+pub fn releaseSendArena(self: *Link) void {
+    self.send_depth -= 1;
+    if (self.send_depth == 0) {
+        _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
+    }
 }
 
 pub fn send(self: *Link, data: []const u8) !void {
     var pos: usize = 0;
     const socket = self.socket;
-    defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
 
     while (pos < data.len) {
         const written = sys_net.write(socket, data[pos..]) catch |err| switch (err) {
@@ -134,7 +174,8 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
     var header_buf: [10]u8 = undefined;
     const header = WS.frameHeader(&header_buf, .pong, data.len);
 
-    const allocator = self.send_arena.allocator();
+    const allocator = self.acquireSendArena();
+    defer self.releaseSendArena();
     const framed = try allocator.alloc(u8, header.len + data.len);
     @memcpy(framed[0..header.len], header);
     @memcpy(framed[header.len..], data);
@@ -145,7 +186,8 @@ pub fn sendPong(self: *Link, data: []const u8) !void {
 // We serialize into a buffer whose first 10 bytes are reserved, then
 // backfill the header right-aligned and send the slice.
 pub fn sendJSON(self: *Link, message: anytype, opts: std.json.Stringify.Options) !void {
-    const allocator = self.send_arena.allocator();
+    const allocator = self.acquireSendArena();
+    defer self.releaseSendArena();
 
     var aw = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
     try aw.writer.writeAll(&[_]u8{0} ** 10);
@@ -299,8 +341,8 @@ test "link: send gives up when the peer stops reading" {
     if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
         return error.SocketPairFailed;
     }
+    // pair[1] is the link's, closed by its deinit
     defer sys_net.close(pair[0]);
-    defer sys_net.close(pair[1]);
 
     const small = std.mem.toBytes(@as(c_int, 4096));
     try posix.setsockopt(pair[0], posix.SOL.SOCKET, posix.SO.RCVBUF, &small);
@@ -335,13 +377,51 @@ test "link: send gives up when the peer stops reading" {
     try testing.expect(after & nonblocking != 0);
 }
 
+test "link: nested serialization preserves complete frames and recovers from errors" {
+    const Nested = struct {
+        link: *Link,
+        fail: bool,
+
+        pub fn jsonStringify(self: @This(), w: anytype) error{WriteFailed}!void {
+            try w.beginObject();
+            try w.objectField("head");
+            try w.write("outer head");
+            self.link.sendJSON(.{ .nested = "x" ** 64 }, .{}) catch return error.WriteFailed;
+            self.link.sendPong("ping") catch return error.WriteFailed;
+            self.link.sendJSON(.{ .nested = "y" ** 64 }, .{}) catch return error.WriteFailed;
+            if (self.fail) return error.WriteFailed;
+            try w.objectField("tail");
+            try w.write("outer tail" ** 128);
+            try w.endObject();
+        }
+    };
+
+    var ctx = try @import("cdp/testing.zig").context();
+    defer ctx.deinit();
+    const link = &ctx.cdp().link;
+
+    try link.sendJSON(Nested{ .link = link, .fail = false }, .{});
+    try ctx.expectSent(.{ .nested = "x" ** 64 }, .{ .index = 0 });
+    try ctx.expectSent(.{ .nested = "y" ** 64 }, .{ .index = 1 });
+    try ctx.expectSent(.{ .head = "outer head", .tail = "outer tail" ** 128 }, .{ .index = 2 });
+    try testing.expectEqual(0, link.send_depth);
+
+    try testing.expectError(error.WriteFailed, link.sendJSON(Nested{ .link = link, .fail = true }, .{}));
+    try testing.expectEqual(0, link.send_depth);
+    try link.sendJSON(.{ .recovered = true }, .{});
+    try testing.expectJson(.{ .nested = "x" ** 64 }, (try ctx.getSentMessage(3)).?);
+    try testing.expectJson(.{ .nested = "y" ** 64 }, (try ctx.getSentMessage(4)).?);
+    try ctx.expectSent(.{ .recovered = true }, .{ .index = 5 });
+    try testing.expectEqual(6, ctx.received.items.len);
+}
+
 test "link: stops reading once the worker's inbox backs up" {
     var pair: [2]posix.socket_t = undefined;
     if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
         return error.SocketPairFailed;
     }
+    // pair[1] is the link's, closed by its deinit
     defer sys_net.close(pair[0]);
-    defer sys_net.close(pair[1]);
 
     const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
     const flags = try sys_net.fcntl(pair[1], posix.F.GETFL, 0);

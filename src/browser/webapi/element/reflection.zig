@@ -29,7 +29,7 @@ const String = lp.String;
 
 const max_long: i64 = 2147483647;
 
-pub const UnsignedLongOpts = struct {
+const UnsignedLongOpts = struct {
     default: u32 = 0,
     // limited to only non-negative numbers greater than zero: 0 is
     // IndexSizeError on setting; with `fallback`, 0 becomes the default.
@@ -39,7 +39,7 @@ pub const UnsignedLongOpts = struct {
     clamp: ?struct { min: u32, max: u32 } = null,
 };
 
-pub const EnumOpts = struct {
+const EnumOpts = struct {
     // missing value default; null means the attribute reflects as null
     missing: ?[]const u8 = "",
     // invalid value default; defaults to `missing`

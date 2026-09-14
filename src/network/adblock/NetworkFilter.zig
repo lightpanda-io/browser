@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const domain = @import("domain.zig");
+const Regex = @import("Regex.zig");
 
 const NetworkFilter = @This();
 
@@ -38,6 +39,9 @@ exception: bool = false,
 important: bool = false,
 badfilter: bool = false,
 match_case: bool = false,
+/// The compiled `.regex` pattern, set by the blocker once it has read the
+/// literal; the parser never runs one.
+regex: ?*const Regex = null,
 first_party: bool = true,
 third_party: bool = true,
 hostname_anchor: bool = false,
@@ -48,7 +52,7 @@ generichide: bool = false,
 specifichide: bool = false,
 elemhide: bool = false,
 
-pub const PatternKind = enum {
+const PatternKind = enum {
     /// '*' or empty pattern, matches every URL (option-only filters).
     any,
     /// Pure hostname (`||example.com^`, bare hostname lines, hosts files).
@@ -81,7 +85,7 @@ pub const ResourceTypes = packed struct(u16) {
 
     /// Default type set of a filter with no type option: everything except
     /// top-level documents (matches uBO/adblock-rust semantics).
-    pub const all_network: ResourceTypes = .{
+    const all_network: ResourceTypes = .{
         .subdocument = true,
         .script = true,
         .stylesheet = true,

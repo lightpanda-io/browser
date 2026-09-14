@@ -141,7 +141,7 @@ pub fn import(
     return local.resolvePromise(crypto_key);
 }
 
-pub const CipherError = error{ InvalidAccessError, OperationError, NotSupported, OutOfMemory };
+const CipherError = error{ InvalidAccessError, OperationError, NotSupported, OutOfMemory };
 
 const Mode = enum { cbc, ctr, gcm };
 

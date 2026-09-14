@@ -284,6 +284,7 @@ fn isIdentStart(self: *Tokenizer) bool {
     var b = self.nextByteUnchecked();
     if (b == '-') {
         b = if (self.hasAtLeast(1)) self.byteAt(1) else return false;
+        if (b == '-') return true; // --custom-property
     }
 
     return switch (b) {

@@ -23,7 +23,7 @@ const MediaError = @This();
 _code: u16,
 _message: []const u8 = "",
 
-pub fn getCode(self: *const MediaError) u16 {
+fn getCode(self: *const MediaError) u16 {
     return self._code;
 }
 

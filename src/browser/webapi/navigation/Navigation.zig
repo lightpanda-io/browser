@@ -53,6 +53,11 @@ _entries: std.ArrayList(*NavigationHistoryEntry) = .empty,
 _next_entry_id: usize = 0,
 _activation: ?NavigationActivation = null,
 
+// True right after createPage seeds the synthetic initial about:blank
+// entry, and never otherwise. Per spec, the first real navigation away
+// from that initial entry replaces it.
+_initial_entry: bool = false,
+
 fn asEventTarget(self: *Navigation) *EventTarget {
     return self._proto;
 }
@@ -67,19 +72,19 @@ pub fn onRemoveFrame(self: *Navigation) void {
     }
 }
 
-pub fn getActivation(self: *const Navigation) ?NavigationActivation {
+fn getActivation(self: *const Navigation) ?NavigationActivation {
     return self._activation;
 }
 
-pub fn getCanGoBack(self: *const Navigation) bool {
+fn getCanGoBack(self: *const Navigation) bool {
     return self._index > 0;
 }
 
-pub fn getCanGoForward(self: *const Navigation) bool {
+fn getCanGoForward(self: *const Navigation) bool {
     return self._entries.items.len > self._index + 1;
 }
 
-pub fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
+fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
     if (self._entries.items.len > self._index) {
         return self._entries.items[self._index];
     } else return null;
@@ -94,7 +99,7 @@ pub fn getCurrentEntry(self: *Navigation) *NavigationHistoryEntry {
     return self.getCurrentEntryOrNull().?;
 }
 
-pub fn getTransition(_: *const Navigation) ?NavigationTransition {
+fn getTransition(_: *const Navigation) ?NavigationTransition {
     // For now, all transitions are just considered complete.
     return null;
 }
@@ -162,14 +167,19 @@ pub fn commitNavigation(self: *Navigation, frame: *Frame) !void {
     defer self._current_navigation_kind = null;
 
     const from_entry = self.getCurrentEntryOrNull();
+    const was_initial_entry = self._initial_entry;
     if (from_entry == null) {
         kind = .{ .push = null };
+    } else if (was_initial_entry) {
+        kind = .{ .replace = null };
     }
+    self._initial_entry = false;
 
     try self.updateEntries(url, kind, frame, false);
 
     self._activation = NavigationActivation{
-        ._from = from_entry,
+        // If we are navigating away from the initial about:blank, we have no from.
+        ._from = if (was_initial_entry) null else from_entry,
         ._entry = self.getCurrentEntry(),
         ._type = kind.toNavigationType(),
     };
@@ -414,7 +424,7 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
     return try self.navigateInner(_url, kind, frame);
 }
 
-pub const ReloadOptions = struct {
+const ReloadOptions = struct {
     info: ?js.Value = null,
     state: ?js.Value = null,
 };
@@ -439,7 +449,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     return self.navigateInner(entry._url, .reload, frame);
 }
 
-pub const TraverseToOptions = struct {
+const TraverseToOptions = struct {
     info: ?js.Value = null,
 };
 
@@ -457,11 +467,11 @@ pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions,
     return error.InvalidStateError;
 }
 
-pub const UpdateCurrentEntryOptions = struct {
+const UpdateCurrentEntryOptions = struct {
     state: js.Value,
 };
 
-pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, frame: *Frame) !void {
+fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, frame: *Frame) !void {
     const arena = frame._session.arena;
 
     const previous = self.getCurrentEntry();
@@ -493,7 +503,7 @@ fn getOnCurrentEntryChange(self: *Navigation) ?js.Function.Global {
     return self._on_currententrychange;
 }
 
-pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
+fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
     if (self._on_currententrychange) |old| old.release();
     if (listener) |listen| {
         self._on_currententrychange = try listen.persistWithThis(self);

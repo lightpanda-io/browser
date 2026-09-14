@@ -41,11 +41,11 @@ pub fn create(element: *Element, read_only: bool, frame: *Frame) !*PreserveAspec
     });
 }
 
-pub fn getAlign(self: *const PreserveAspectRatio) u16 {
+fn getAlign(self: *const PreserveAspectRatio) u16 {
     return self.current().alignment;
 }
 
-pub fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void {
+fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void {
     try self.ensureWritable();
     if (alignName(alignment) == null) return error.TypeError;
     var value = self.current();
@@ -53,11 +53,11 @@ pub fn setAlign(self: *PreserveAspectRatio, alignment: u16, frame: *Frame) !void
     try self.write(value, frame);
 }
 
-pub fn getMeetOrSlice(self: *const PreserveAspectRatio) u16 {
+fn getMeetOrSlice(self: *const PreserveAspectRatio) u16 {
     return self.current().meet_or_slice;
 }
 
-pub fn setMeetOrSlice(self: *PreserveAspectRatio, meet_or_slice: u16, frame: *Frame) !void {
+fn setMeetOrSlice(self: *PreserveAspectRatio, meet_or_slice: u16, frame: *Frame) !void {
     try self.ensureWritable();
     if (meetOrSliceName(meet_or_slice) == null) return error.TypeError;
     var value = self.current();

@@ -46,17 +46,17 @@ pub fn create(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrix {
     return self;
 }
 
-pub fn fromMatrix(other_: ?RO.DOMMatrixInit, page: *Page) !*DOMMatrix {
+fn fromMatrix(other_: ?RO.DOMMatrixInit, page: *Page) !*DOMMatrix {
     const parsed = try RO.fixupDict(other_ orelse .{});
     return create(parsed.m, parsed.is_2d, page);
 }
 
-pub fn fromFloat32Array(array: js.TypedArray(f32), page: *Page) !*DOMMatrix {
+fn fromFloat32Array(array: js.TypedArray(f32), page: *Page) !*DOMMatrix {
     const parsed = try RO.floatsToParsed(f32, array.values);
     return create(parsed.m, parsed.is_2d, page);
 }
 
-pub fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrix {
+fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrix {
     const parsed = try RO.floatsToParsed(f64, array.values);
     return create(parsed.m, parsed.is_2d, page);
 }
@@ -68,45 +68,45 @@ pub fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrix {
 // `_proto` (they could reuse the base getters — the receiver unwraps down the
 // prototype chain either way — but keeping the pair symmetric reads cleaner).
 
-pub fn getA(self: *const DOMMatrix) f64 {
+fn getA(self: *const DOMMatrix) f64 {
     return self._proto._m[0];
 }
-pub fn getB(self: *const DOMMatrix) f64 {
+fn getB(self: *const DOMMatrix) f64 {
     return self._proto._m[1];
 }
-pub fn getC(self: *const DOMMatrix) f64 {
+fn getC(self: *const DOMMatrix) f64 {
     return self._proto._m[4];
 }
-pub fn getD(self: *const DOMMatrix) f64 {
+fn getD(self: *const DOMMatrix) f64 {
     return self._proto._m[5];
 }
-pub fn getE(self: *const DOMMatrix) f64 {
+fn getE(self: *const DOMMatrix) f64 {
     return self._proto._m[12];
 }
-pub fn getF(self: *const DOMMatrix) f64 {
+fn getF(self: *const DOMMatrix) f64 {
     return self._proto._m[13];
 }
 
-pub fn setA(self: *DOMMatrix, v: f64) !void {
+fn setA(self: *DOMMatrix, v: f64) !void {
     try self.setElement(0, v);
 }
-pub fn setB(self: *DOMMatrix, v: f64) !void {
+fn setB(self: *DOMMatrix, v: f64) !void {
     try self.setElement(1, v);
 }
-pub fn setC(self: *DOMMatrix, v: f64) !void {
+fn setC(self: *DOMMatrix, v: f64) !void {
     try self.setElement(4, v);
 }
-pub fn setD(self: *DOMMatrix, v: f64) !void {
+fn setD(self: *DOMMatrix, v: f64) !void {
     try self.setElement(5, v);
 }
-pub fn setE(self: *DOMMatrix, v: f64) !void {
+fn setE(self: *DOMMatrix, v: f64) !void {
     try self.setElement(12, v);
 }
-pub fn setF(self: *DOMMatrix, v: f64) !void {
+fn setF(self: *DOMMatrix, v: f64) !void {
     try self.setElement(13, v);
 }
 
-pub fn translateSelf(self: *DOMMatrix, tx_: ?f64, ty_: ?f64, tz_: ?f64) !*DOMMatrix {
+fn translateSelf(self: *DOMMatrix, tx_: ?f64, ty_: ?f64, tz_: ?f64) !*DOMMatrix {
     const tz = tz_ orelse 0;
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(state.matrix, RO.translationMatrix(tx_ orelse 0, ty_ orelse 0, tz));
@@ -114,7 +114,7 @@ pub fn translateSelf(self: *DOMMatrix, tx_: ?f64, ty_: ?f64, tz_: ?f64) !*DOMMat
     return self.applyState(state);
 }
 
-pub fn scaleSelf(self: *DOMMatrix, sx_: ?f64, sy_: ?f64, sz_: ?f64, ox_: ?f64, oy_: ?f64, oz_: ?f64) !*DOMMatrix {
+fn scaleSelf(self: *DOMMatrix, sx_: ?f64, sy_: ?f64, sz_: ?f64, ox_: ?f64, oy_: ?f64, oz_: ?f64) !*DOMMatrix {
     const sx = sx_ orelse 1;
     const sy = sy_ orelse sx;
     const sz = sz_ orelse 1;
@@ -130,7 +130,7 @@ pub fn scaleSelf(self: *DOMMatrix, sx_: ?f64, sy_: ?f64, sz_: ?f64, ox_: ?f64, o
     return self.applyState(state);
 }
 
-pub fn scale3dSelf(self: *DOMMatrix, scale_: ?f64, ox_: ?f64, oy_: ?f64, oz_: ?f64) !*DOMMatrix {
+fn scale3dSelf(self: *DOMMatrix, scale_: ?f64, ox_: ?f64, oy_: ?f64, oz_: ?f64) !*DOMMatrix {
     const s = scale_ orelse 1;
     const ox = ox_ orelse 0;
     const oy = oy_ orelse 0;
@@ -144,7 +144,7 @@ pub fn scale3dSelf(self: *DOMMatrix, scale_: ?f64, ox_: ?f64, oy_: ?f64, oz_: ?f
     return self.applyState(state);
 }
 
-pub fn rotateSelf(self: *DOMMatrix, rx_: ?f64, ry_: ?f64, rz_: ?f64) !*DOMMatrix {
+fn rotateSelf(self: *DOMMatrix, rx_: ?f64, ry_: ?f64, rz_: ?f64) !*DOMMatrix {
     var state = self._proto.getState();
     if (ry_ == null and rz_ == null) {
         state.matrix = RO.multiplyMatrix(state.matrix, RO.rotateZMatrix(RO.toRadians(rx_ orelse 0, .deg)));
@@ -157,7 +157,7 @@ pub fn rotateSelf(self: *DOMMatrix, rx_: ?f64, ry_: ?f64, rz_: ?f64) !*DOMMatrix
     return self.applyState(state);
 }
 
-pub fn rotateFromVectorSelf(self: *DOMMatrix, x_: ?f64, y_: ?f64) !*DOMMatrix {
+fn rotateFromVectorSelf(self: *DOMMatrix, x_: ?f64, y_: ?f64) !*DOMMatrix {
     const x = x_ orelse 0;
     const y = y_ orelse 0;
     const rad = if (x == 0 and y == 0) 0 else std.math.atan2(y, x);
@@ -166,26 +166,26 @@ pub fn rotateFromVectorSelf(self: *DOMMatrix, x_: ?f64, y_: ?f64) !*DOMMatrix {
     return self.applyState(state);
 }
 
-pub fn rotateAxisAngleSelf(self: *DOMMatrix, x_: ?f64, y_: ?f64, z_: ?f64, angle_: ?f64) !*DOMMatrix {
+fn rotateAxisAngleSelf(self: *DOMMatrix, x_: ?f64, y_: ?f64, z_: ?f64, angle_: ?f64) !*DOMMatrix {
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(state.matrix, RO.axisAngleMatrix(x_ orelse 0, y_ orelse 0, z_ orelse 0, RO.toRadians(angle_ orelse 0, .deg)));
     if ((x_ orelse 0) != 0 or (y_ orelse 0) != 0) state.is_2d = false;
     return self.applyState(state);
 }
 
-pub fn skewXSelf(self: *DOMMatrix, sx_: ?f64) !*DOMMatrix {
+fn skewXSelf(self: *DOMMatrix, sx_: ?f64) !*DOMMatrix {
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(state.matrix, RO.skewMatrix(RO.toRadians(sx_ orelse 0, .deg), 0));
     return self.applyState(state);
 }
 
-pub fn skewYSelf(self: *DOMMatrix, sy_: ?f64) !*DOMMatrix {
+fn skewYSelf(self: *DOMMatrix, sy_: ?f64) !*DOMMatrix {
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(state.matrix, RO.skewMatrix(0, RO.toRadians(sy_ orelse 0, .deg)));
     return self.applyState(state);
 }
 
-pub fn multiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix {
+fn multiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix {
     const other = try RO.fixupDict(other_ orelse .{});
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(state.matrix, other.m);
@@ -193,7 +193,7 @@ pub fn multiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix {
     return self.applyState(state);
 }
 
-pub fn preMultiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix {
+fn preMultiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix {
     const other = try RO.fixupDict(other_ orelse .{});
     var state = self._proto.getState();
     state.matrix = RO.multiplyMatrix(other.m, state.matrix);
@@ -201,7 +201,7 @@ pub fn preMultiplySelf(self: *DOMMatrix, other_: ?RO.DOMMatrixInit) !*DOMMatrix 
     return self.applyState(state);
 }
 
-pub fn invertSelf(self: *DOMMatrix) !*DOMMatrix {
+fn invertSelf(self: *DOMMatrix) !*DOMMatrix {
     var state = self._proto.getState();
     if (RO.invertMatrix(state.matrix)) |v| {
         state.matrix = v;
@@ -212,7 +212,7 @@ pub fn invertSelf(self: *DOMMatrix) !*DOMMatrix {
     return self.applyState(state);
 }
 
-pub fn setMatrixValue(self: *DOMMatrix, transform: []const u8) !*DOMMatrix {
+fn setMatrixValue(self: *DOMMatrix, transform: []const u8) !*DOMMatrix {
     var state: RO.State = .{ .matrix = RO.identity(), .is_2d = true };
     try RO.parseTransformList(transform, &state.matrix, &state.is_2d);
     try self._proto.applyState(state);

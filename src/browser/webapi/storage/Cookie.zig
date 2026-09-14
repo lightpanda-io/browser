@@ -374,7 +374,7 @@ pub fn percentEncode(arena: Allocator, part: []const u8, comptime isValidChar: f
     return aw.written(); // @memory retains memory used before growing
 }
 
-pub fn isHostChar(c: u8) bool {
+fn isHostChar(c: u8) bool {
     return switch (c) {
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
         '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
@@ -384,7 +384,7 @@ pub fn isHostChar(c: u8) bool {
     };
 }
 
-pub fn isPathChar(c: u8) bool {
+fn isPathChar(c: u8) bool {
     return switch (c) {
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
         '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
@@ -631,7 +631,7 @@ pub const Jar = struct {
         }
     }
 
-    pub const LookupOpts = struct {
+    const LookupOpts = struct {
         is_http: bool,
         request_time: ?u64 = null,
         // `subresource` is the most restrictive, a caller who forgets to set

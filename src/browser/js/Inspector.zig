@@ -150,7 +150,7 @@ pub fn resetContextGroup(self: *const Inspector) void {
     v8.v8_inspector__Inspector__ResetContextGroup(self.handle, CONTEXT_GROUP_ID);
 }
 
-pub const RemoteObject = struct {
+const RemoteObject = struct {
     handle: *v8.RemoteObject,
 
     pub fn deinit(self: RemoteObject) void {

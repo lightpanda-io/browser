@@ -35,7 +35,7 @@ _tools: std.ArrayList(*Tool) = .empty,
 
 pub const init: ModelContext = .{};
 
-pub const Annotations = struct {
+const Annotations = struct {
     // Not in the W3C spec yet. The CDP `WebMCP.Annotation` type has an
     // `autosubmit` field; storing it here means the CDP follow-up won't have
     // to re-shape this struct.

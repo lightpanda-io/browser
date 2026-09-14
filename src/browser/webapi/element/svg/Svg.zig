@@ -82,17 +82,17 @@ pub fn getHeight(self: *Svg, frame: *Frame) !*AnimatedLength {
     return AnimatedLength.getOrCreate(self.asElement(), .svg_height, frame);
 }
 
-pub fn getPreserveAspectRatio(self: *Svg, frame: *Frame) !*AnimatedPreserveAspectRatio {
+fn getPreserveAspectRatio(self: *Svg, frame: *Frame) !*AnimatedPreserveAspectRatio {
     return AnimatedPreserveAspectRatio.getOrCreate(self.asElement(), frame);
 }
 
-pub fn createSVGPoint(_: *Svg, frame: *Frame) !*DOMPoint {
+fn createSVGPoint(_: *Svg, frame: *Frame) !*DOMPoint {
     const point = try DOMPoint.create(0, 0, 0, 1, frame._page);
     point._proto.restrict();
     return point;
 }
 
-pub fn createSVGMatrix(_: *Svg, frame: *Frame) !*DOMMatrix {
+fn createSVGMatrix(_: *Svg, frame: *Frame) !*DOMMatrix {
     const identity: [16]f64 = .{
         1, 0, 0, 0,
         0, 1, 0, 0,
@@ -102,27 +102,27 @@ pub fn createSVGMatrix(_: *Svg, frame: *Frame) !*DOMMatrix {
     return DOMMatrix.create(identity, true, frame._page);
 }
 
-pub fn createSVGRect(_: *Svg, frame: *Frame) !*DOMRect {
+fn createSVGRect(_: *Svg, frame: *Frame) !*DOMRect {
     return DOMRect.create(.{}, frame._factory);
 }
 
-pub fn createSVGNumber(_: *Svg, frame: *Frame) !*SvgNumber {
+fn createSVGNumber(_: *Svg, frame: *Frame) !*SvgNumber {
     return SvgNumber.detached(frame);
 }
 
-pub fn createSVGLength(_: *Svg, frame: *Frame) !*SvgLength {
+fn createSVGLength(_: *Svg, frame: *Frame) !*SvgLength {
     return SvgLength.detached(frame);
 }
 
-pub fn createSVGAngle(_: *Svg, frame: *Frame) !*SvgAngle {
+fn createSVGAngle(_: *Svg, frame: *Frame) !*SvgAngle {
     return SvgAngle.detached(frame);
 }
 
-pub fn createSVGTransform(_: *Svg, frame: *Frame) !*SvgTransform {
+fn createSVGTransform(_: *Svg, frame: *Frame) !*SvgTransform {
     return SvgTransform.detached(frame);
 }
 
-pub fn createSVGTransformFromMatrix(_: *Svg, init: ?SvgTransform.DOMMatrix2DInit, frame: *Frame) !*SvgTransform {
+fn createSVGTransformFromMatrix(_: *Svg, init: ?SvgTransform.DOMMatrix2DInit, frame: *Frame) !*SvgTransform {
     return SvgTransform.fromMatrix(init, frame);
 }
 

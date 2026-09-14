@@ -68,7 +68,7 @@ fn isInTree(self: *const Selection) bool {
     return anchor_node.isConnected() and focus_node.isConnected();
 }
 
-pub fn getAnchorNode(self: *const Selection) ?*Node {
+fn getAnchorNode(self: *const Selection) ?*Node {
     const range = self._range orelse return null;
 
     const node = switch (self._direction) {
@@ -79,7 +79,7 @@ pub fn getAnchorNode(self: *const Selection) ?*Node {
     return if (node.isConnected()) node else null;
 }
 
-pub fn getAnchorOffset(self: *const Selection) u32 {
+fn getAnchorOffset(self: *const Selection) u32 {
     const range = self._range orelse return 0;
 
     const anchor_node = self.getAnchorNode() orelse return 0;
@@ -91,11 +91,11 @@ pub fn getAnchorOffset(self: *const Selection) u32 {
     };
 }
 
-pub fn getDirection(self: *const Selection) []const u8 {
+fn getDirection(self: *const Selection) []const u8 {
     return @tagName(self._direction);
 }
 
-pub fn getFocusNode(self: *const Selection) ?*Node {
+fn getFocusNode(self: *const Selection) ?*Node {
     const range = self._range orelse return null;
 
     const node = switch (self._direction) {
@@ -106,7 +106,7 @@ pub fn getFocusNode(self: *const Selection) ?*Node {
     return if (node.isConnected()) node else null;
 }
 
-pub fn getFocusOffset(self: *const Selection) u32 {
+fn getFocusOffset(self: *const Selection) u32 {
     const range = self._range orelse return 0;
     const focus_node = self.getFocusNode() orelse return 0;
     if (!focus_node.isConnected()) return 0;
@@ -117,12 +117,12 @@ pub fn getFocusOffset(self: *const Selection) u32 {
     };
 }
 
-pub fn getIsCollapsed(self: *const Selection) bool {
+fn getIsCollapsed(self: *const Selection) bool {
     const range = self._range orelse return true;
     return range.asAbstractRange().getCollapsed();
 }
 
-pub fn getRangeCount(self: *const Selection) u32 {
+fn getRangeCount(self: *const Selection) u32 {
     if (self._range == null) {
         return 0;
     }
@@ -146,7 +146,7 @@ pub fn getType(self: *const Selection) []const u8 {
     return "Range";
 }
 
-pub fn addRange(self: *Selection, range: *Range, frame: *Frame) !void {
+fn addRange(self: *Selection, range: *Range, frame: *Frame) !void {
     if (self._range != null) {
         return;
     }
@@ -161,7 +161,7 @@ pub fn addRange(self: *Selection, range: *Range, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn removeRange(self: *Selection, range: *Range, frame: *Frame) !void {
+fn removeRange(self: *Selection, range: *Range, frame: *Frame) !void {
     const existing_range = self._range orelse return error.NotFound;
     if (existing_range != range) {
         return error.NotFound;
@@ -170,7 +170,7 @@ pub fn removeRange(self: *Selection, range: *Range, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn removeAllRanges(self: *Selection, frame: *Frame) !void {
+fn removeAllRanges(self: *Selection, frame: *Frame) !void {
     if (self._range == null) {
         return;
     }
@@ -180,7 +180,7 @@ pub fn removeAllRanges(self: *Selection, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn collapseToEnd(self: *Selection, frame: *Frame) !void {
+fn collapseToEnd(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return;
 
     const abstract = range.asAbstractRange();
@@ -196,7 +196,7 @@ pub fn collapseToEnd(self: *Selection, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn collapseToStart(self: *Selection, frame: *Frame) !void {
+fn collapseToStart(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return error.InvalidStateError;
 
     const abstract = range.asAbstractRange();
@@ -212,7 +212,7 @@ pub fn collapseToStart(self: *Selection, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
+fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
     const range = self._range orelse return false;
 
     if (partial) {
@@ -238,13 +238,13 @@ pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
     return false;
 }
 
-pub fn deleteFromDocument(self: *Selection, frame: *Frame) !void {
+fn deleteFromDocument(self: *Selection, frame: *Frame) !void {
     const range = self._range orelse return;
     try range.deleteContents(frame);
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void {
+fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void {
     const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 
@@ -293,7 +293,7 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, frame: *Frame) !void
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn getRangeAt(self: *Selection, index: u32) !*Range {
+fn getRangeAt(self: *Selection, index: u32) !*Range {
     if (index != 0) return error.IndexSizeError;
     if (!self.isInTree()) return error.IndexSizeError;
     const range = self._range orelse return error.IndexSizeError;
@@ -619,7 +619,7 @@ fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset
     }
 }
 
-pub fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
+fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
     if (parent._type == .document_type) return error.InvalidNodeType;
 
     // If the node is not contained in the document, do not change the selection
@@ -638,7 +638,7 @@ pub fn selectAllChildren(self: *Selection, parent: *Node, frame: *Frame) !void {
     try dispatchSelectionChangeEvent(frame);
 }
 
-pub fn setBaseAndExtent(
+fn setBaseAndExtent(
     self: *Selection,
     anchor_node: *Node,
     anchor_offset: u32,

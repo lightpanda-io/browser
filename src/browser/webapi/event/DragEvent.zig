@@ -35,7 +35,7 @@ pub const Proto = MouseEvent;
 _proto: *MouseEvent,
 _data_transfer: ?*DataTransfer,
 
-pub const DragEventOptions = struct {
+const DragEventOptions = struct {
     dataTransfer: ?*DataTransfer = null,
 };
 
@@ -112,7 +112,7 @@ pub fn asEvent(self: *DragEvent) *Event {
     return self._proto.asEvent();
 }
 
-pub fn getDataTransfer(self: *const DragEvent) ?*DataTransfer {
+fn getDataTransfer(self: *const DragEvent) ?*DataTransfer {
     return self._data_transfer;
 }
 

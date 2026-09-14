@@ -38,7 +38,7 @@ pub fn deinit(self: *SingleFlight) void {
     self.pending.deinit(self.allocator);
 }
 
-pub const EnterResult = enum { initial, queued };
+const EnterResult = enum { initial, queued };
 
 pub fn enter(self: *SingleFlight, key: []const u8, transfer: *Transfer, reason: Transfer.ParkedBy) !EnterResult {
     const gop = try self.pending.getOrPut(self.allocator, key);

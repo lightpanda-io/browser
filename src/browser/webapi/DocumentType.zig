@@ -32,13 +32,13 @@ _name: []const u8,
 _public_id: []const u8,
 _system_id: []const u8,
 
-pub fn init(qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+pub fn init(document: *const Node.Document, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
     const name = try frame.dupeString(qualified_name);
     // Firefox converts null to the string "null", not empty string
     const pub_id = if (public_id) |p| try frame.dupeString(p) else "null";
     const sys_id = if (system_id) |s| try frame.dupeString(s) else "null";
 
-    return frame._factory.node(DocumentType{
+    return frame._factory.node(document, DocumentType{
         ._proto = undefined,
         ._name = name,
         ._public_id = pub_id,
@@ -72,8 +72,8 @@ pub fn isEqualNode(self: *const DocumentType, other: *const DocumentType) bool {
         std.mem.eql(u8, self._system_id, other._system_id);
 }
 
-pub fn clone(self: *const DocumentType, frame: *Frame) !*DocumentType {
-    return .init(self._name, self._public_id, self._system_id, frame);
+pub fn clone(self: *const DocumentType, document: *const Node.Document, frame: *Frame) !*DocumentType {
+    return .init(document, self._name, self._public_id, self._system_id, frame);
 }
 
 pub fn remove(self: *DocumentType, frame: *Frame) !void {

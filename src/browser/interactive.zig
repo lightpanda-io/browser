@@ -29,7 +29,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const InteractivityType = enum {
+const InteractivityType = enum {
     native,
     aria,
     contenteditable,
@@ -37,7 +37,7 @@ pub const InteractivityType = enum {
     focusable,
 };
 
-pub const InteractiveElement = struct {
+const InteractiveElement = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -149,7 +149,7 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
-pub const FindFilter = struct {
+const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
     /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
@@ -180,14 +180,13 @@ fn walkInteractive(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(frame, arena);
 
-    var css_cache: Element.PointerEventsCache = .empty;
     var label_index: Label.LabelByForIndex = .{};
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
     if (root.is(Element)) |root_el| {
         // root is outside of the tree walk, so check its visibility upfront.
-        if (!root_el.checkVisibilityCached(null, frame, .scan)) {
+        if (!root_el.isVisible(frame)) {
             return &.{};
         }
     }
@@ -206,14 +205,14 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el, .scan)) {
+        if (frame._style_manager.hasDisplayNone(el)) {
             tw.skipChildren();
             continue;
         }
 
         const html_el = el.is(Element.Html) orelse continue;
 
-        const itype = classifyInteractivity(frame, el, html_el, listener_targets, &css_cache) orelse continue;
+        const itype = classifyInteractivity(frame, el, html_el, listener_targets) orelse continue;
 
         const axn = AXNode.fromNode(node);
         const role = axRole(axn);
@@ -298,9 +297,8 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
-    cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(cache, frame)) return null;
+    if (el.hasPointerEventsNone(frame)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {

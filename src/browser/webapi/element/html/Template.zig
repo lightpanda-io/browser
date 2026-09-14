@@ -57,7 +57,7 @@ pub fn setInnerHTML(self: *Template, html: []const u8, frame: *Frame) !void {
     return self._content.asNode().setHTML(html, .{ .context = self.asElement() }, frame);
 }
 
-pub fn getShadowRootMode(self: *const Template) []const u8 {
+fn getShadowRootMode(self: *const Template) []const u8 {
     const value = self.asConstElement().getAttributeSafe(.wrap("shadowrootmode")) orelse return "";
 
     if (std.ascii.eqlIgnoreCase(value, "open")) {
@@ -71,7 +71,7 @@ pub fn getShadowRootMode(self: *const Template) []const u8 {
     return "";
 }
 
-pub fn setShadowRootMode(self: *Template, value: []const u8, frame: *Frame) !void {
+fn setShadowRootMode(self: *Template, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(.wrap("shadowrootmode"), .wrap(value), frame);
 }
 
@@ -158,7 +158,7 @@ pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Template);
         // Create the template content DocumentFragment
-        self._content = try DocumentFragment.init(frame);
+        self._content = try DocumentFragment.init(node.getDocument(frame), frame);
     }
 
     // Per the HTML spec's cloning steps for <template>, a deep clone must
@@ -173,7 +173,7 @@ pub const Build = struct {
         const clone_content = clone._content.asNode();
         var child_it = source._content.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+            if (try child.cloneNodeForAppending(true, clone_content.getDocument(frame), frame)) |cloned_child| {
                 try frame.appendNode(clone_content, cloned_child, .{});
             }
         }

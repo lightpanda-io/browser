@@ -77,18 +77,18 @@ pub fn releaseRef(self: *URL, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn getUsername(self: *const URL) []const u8 {
+fn getUsername(self: *const URL) []const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     U.url_get_username(self._url, &out, &len);
     return out[0..len];
 }
 
-pub fn setUsername(self: *URL, value: []const u8) void {
+fn setUsername(self: *URL, value: []const u8) void {
     _ = U.url_set_username(self._url, value.ptr, value.len);
 }
 
-pub fn getPassword(self: *const URL) []const u8 {
+fn getPassword(self: *const URL) []const u8 {
     var out: [*]const u8 = undefined;
     var len: usize = 0;
     const res = U.url_get_password(self._url, &out, &len);
@@ -98,7 +98,7 @@ pub fn getPassword(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setPassword(self: *URL, value: []const u8) void {
+fn setPassword(self: *URL, value: []const u8) void {
     _ = U.url_set_password(self._url, value.ptr, value.len);
 }
 
@@ -122,7 +122,7 @@ pub fn getProtocol(self: *const URL) []const u8 {
     return out[0 .. len + 1];
 }
 
-pub fn setProtocol(self: *URL, value: []const u8) void {
+fn setProtocol(self: *URL, value: []const u8) void {
     _ = U.url_set_scheme(self._url, value.ptr, value.len);
 }
 
@@ -135,7 +135,7 @@ pub fn getHostname(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHostname(self: *URL, value: []const u8) void {
+fn setHostname(self: *URL, value: []const u8) void {
     _ = U.url_set_hostname(self._url, value.ptr, value.len);
 }
 
@@ -148,7 +148,7 @@ pub fn getHost(self: *const URL) []const u8 {
     return out[0..len];
 }
 
-pub fn setHost(self: *URL, value: []const u8) void {
+fn setHost(self: *URL, value: []const u8) void {
     _ = U.url_set_host(self._url, value.ptr, value.len);
 }
 
@@ -158,7 +158,7 @@ pub fn getPort(self: *URL) []const u8 {
 }
 
 /// Spec requires us to silently ignore errors of this setter.
-pub fn setPort(self: *URL, maybe_value: ?[]const u8) void {
+fn setPort(self: *URL, maybe_value: ?[]const u8) void {
     // A null or empty value clears the port.
     const value = maybe_value orelse {
         _ = U.url_set_port_to_null(self._url);
@@ -187,7 +187,7 @@ pub fn getSearch(self: *const URL, _: *const Execution) ![]const u8 {
     return (out - 1)[0 .. len + 1];
 }
 
-pub fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
+fn setSearch(self: *URL, value: []const u8, exec: *const Execution) !void {
     // Empty value clears the query entirely.
     if (value.len == 0) {
         // Reset searchParams.
@@ -227,7 +227,7 @@ pub fn getHash(self: *const URL) []const u8 {
     return (out - 1)[0 .. len + 1];
 }
 
-pub fn setHash(self: *URL, value: []const u8) void {
+fn setHash(self: *URL, value: []const u8) void {
     // An empty value clears the fragment entirely (removes the '#').
     if (value.len == 0) {
         U.url_set_fragment_to_null(self._url);
@@ -238,7 +238,7 @@ pub fn setHash(self: *URL, value: []const u8) void {
     _ = U.url_set_fragment(self._url, fragment.ptr, fragment.len);
 }
 
-pub fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
+fn getSearchParams(self: *URL, exec: *const Execution) !*URLSearchParams {
     if (self._search_params) |sp| {
         return sp;
     }
@@ -304,13 +304,13 @@ pub fn toString(self: *const URL, _: *const Execution) ![]const u8 {
     return out[0..len];
 }
 
-pub const canParse = @import("../URL.zig").canParse;
+const canParse = @import("../URL.zig").canParse;
 
-pub fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
+fn createObjectURL(blob: *Blob, exec: *const Execution) ![]const u8 {
     return exec.page.createBlobUrl(blob, exec.origin(), exec.frameId());
 }
 
-pub fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
+fn revokeObjectURL(url: []const u8, exec: *const Execution) void {
     if (Blob.urlBelongsToOrigin(url, exec.origin()) == false) {
         // different origin cannot revoke an object URL. Failure should
         // be silent

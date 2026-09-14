@@ -45,7 +45,7 @@ pub fn asNode(self: *Style) *Node {
 // Attribute-backed properties
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
-pub fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
+fn getSheet(self: *Style, frame: *Frame) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".

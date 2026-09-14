@@ -169,7 +169,7 @@ pub fn takeRecords(self: *PerformanceObserver) ![]*Performance.Entry {
     return records;
 }
 
-pub fn getSupportedEntryTypes() []const []const u8 {
+fn getSupportedEntryTypes() []const []const u8 {
     return &.{ "mark", "measure", "resource" };
 }
 
@@ -225,19 +225,19 @@ pub const JsApi = struct {
 /// List of performance events that were explicitly
 /// observed via the observe() method.
 /// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserverEntryList
-pub const EntryList = struct {
+const EntryList = struct {
     _entries: []*Performance.Entry,
 
-    pub fn getEntries(self: *const EntryList) []const *Performance.Entry {
+    fn getEntries(self: *const EntryList) []const *Performance.Entry {
         return self._entries;
     }
 
-    pub fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
+    fn getEntriesByType(self: *const EntryList, entry_type: []const u8, exec: *Execution) ![]const *Performance.Entry {
         const kind = Performance.Entry.Type.Enum.parse(entry_type) orelse return &.{};
         return Performance.filterEntriesByType(exec.local_arena, self._entries, kind);
     }
 
-    pub fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
+    fn getEntriesByName(self: *const EntryList, name: []const u8, entry_type: ?[]const u8, exec: *Execution) ![]const *Performance.Entry {
         const kind = if (entry_type) |t| (Performance.Entry.Type.Enum.parse(t) orelse return &.{}) else null;
         return Performance.filterEntriesByName(exec.local_arena, self._entries, name, kind);
     }

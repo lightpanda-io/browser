@@ -135,7 +135,7 @@ pub fn releaseReader(self: *ReadableStream) void {
     self._reader = null;
 }
 
-pub fn getAsyncIterator(self: *ReadableStream, exec: *const Execution) !*AsyncIterator {
+fn getAsyncIterator(self: *ReadableStream, exec: *const Execution) !*AsyncIterator {
     return AsyncIterator.init(self, exec);
 }
 
@@ -301,7 +301,7 @@ const PipeTransform = struct {
     writable: *WritableStream,
 };
 
-pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
+fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Execution) !*ReadableStream {
     if (self.getLocked()) {
         return exec.js.typeError("ReadableStream is locked");
     }
@@ -439,7 +439,7 @@ pub const JsApi = struct {
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
 
-pub const AsyncIterator = struct {
+const AsyncIterator = struct {
     _stream: *ReadableStream,
     _reader: *ReadableStreamDefaultReader,
 

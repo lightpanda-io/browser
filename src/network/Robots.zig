@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const log = lp.log;
 
-pub const CompiledPattern = struct {
+const CompiledPattern = struct {
     pattern: []const u8,
     ty: enum {
         prefix, // "/admin/" - prefix match
@@ -54,7 +54,7 @@ pub const CompiledPattern = struct {
     }
 };
 
-pub const Rule = union(enum) {
+const Rule = union(enum) {
     allow: CompiledPattern,
     disallow: CompiledPattern,
 
@@ -96,7 +96,7 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    pub const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
+    const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
 
     allocator: std.mem.Allocator,
     map: RobotsMap,
@@ -139,8 +139,17 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .{ .present = robots });
+        if (try self.putKey(url)) |value_ptr| {
+            // first time seeing this url, store the value
+            value_ptr.* = .{ .present = robots };
+            return;
+        }
+
+        // cannot overwrite an existing value, if it was `present`, we'd have
+        // to free the value but it might be being used.
+
+        var discarded = robots;
+        discarded.deinit(self.allocator);
     }
 
     // The returned slice is owned by the store
@@ -160,8 +169,12 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .allowed);
+        if (try self.putKey(url)) |value_ptr| {
+            // first time seeing this url, store the value
+            value_ptr.* = .allowed;
+        }
+        // cannot overwrite an existing value, if it was `present`, we'd have
+        // to free the value but it might be being used.
     }
 
     /// This URL is fully restricted from crawling.
@@ -169,8 +182,26 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const duped = try self.allocator.dupe(u8, url);
-        try self.map.put(self.allocator, duped, .disallowed);
+        if (try self.putKey(url)) |value_ptr| {
+            // first time seeing this url, store the value
+            value_ptr.* = .disallowed;
+        }
+        // cannot overwrite an existing value, if it was `present`, we'd have
+        // to free the value but it might be being used.
+    }
+
+    // The RobotStore is shared across Browsers. Two rowsers can request the
+    // same robots URL at the same time, and they'll race here. First one wins.
+    // Caller holds the mutex.
+    fn putKey(self: *RobotStore, url: []const u8) !?*RobotsEntry {
+        const gop = try self.map.getOrPut(self.allocator, url);
+        if (gop.found_existing) {
+            // already have a value, caller should not overwrite
+            return null;
+        }
+        errdefer _ = self.map.remove(url);
+        gop.key_ptr.* = try self.allocator.dupe(u8, url);
+        return gop.value_ptr;
     }
 };
 
@@ -417,7 +448,7 @@ fn parseRulesWithUserAgent(
     return .{ .rules = out_rules, .content_signals = out_signals };
 }
 
-pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
+fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
     const parsed = try parseRulesWithUserAgent(allocator, user_agent, bytes);
     const rules = parsed.rules;
 

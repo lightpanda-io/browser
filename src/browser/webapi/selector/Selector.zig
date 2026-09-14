@@ -414,6 +414,13 @@ pub const Selector = struct {
     first: Compound,
     segments: []const Segment,
 
+    pub fn rightmost(self: Selector) Compound {
+        if (self.segments.len == 0) {
+            return self.first;
+        }
+        return self.segments[self.segments.len - 1].compound;
+    }
+
     pub fn format(self: Selector, writer: *std.Io.Writer) !void {
         try self.first.format(writer);
         for (self.segments) |segment| {

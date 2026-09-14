@@ -32,7 +32,7 @@ pub const Property = struct {
     value: []const u8,
 };
 
-pub const AlternateLink = struct {
+const AlternateLink = struct {
     href: []const u8,
     hreflang: ?[]const u8,
     type: ?[]const u8,
@@ -41,12 +41,12 @@ pub const AlternateLink = struct {
 
 /// A relation discovered in the HTTP `Link:` response header (RFC 8288),
 /// restricted to the registered relations an agent can act on.
-pub const LinkRel = struct {
+const LinkRel = struct {
     rel: []const u8,
     href: []const u8,
 };
 
-pub const StructuredData = struct {
+const StructuredData = struct {
     json_ld: []const []const u8,
     open_graph: []const Property,
     twitter_card: []const Property,

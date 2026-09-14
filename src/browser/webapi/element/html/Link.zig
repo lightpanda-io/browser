@@ -67,11 +67,11 @@ pub fn setHref(self: *Link, value: []const u8, frame: *Frame) !void {
     }
 }
 
-pub fn getRel(self: *Link) []const u8 {
+fn getRel(self: *Link) []const u8 {
     return self.asElement().getAttributeInterned("rel") orelse return "";
 }
 
-pub fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
+fn setRel(self: *Link, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), frame);
 }
 
@@ -83,7 +83,7 @@ pub fn setMedia(self: *Link, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
-pub fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
+fn getSizes(self: *Link, frame: *Frame) !?*DOMTokenList {
     const element = self.asElement();
     if (element._namespace != .html) {
         return null;
@@ -107,6 +107,11 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
     }
 
     const element = self.asElement();
+
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (element.getDocument(frame)._frame == null) {
+        return;
+    }
 
     const href = element.getAttributeInterned("href") orelse return;
     if (href.len == 0) {

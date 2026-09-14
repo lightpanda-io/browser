@@ -27,14 +27,6 @@ _pad: bool = false,
 
 pub const init: CSS = .{};
 
-pub fn parseDimension(value: []const u8) ?f64 {
-    const parsed = units.parse(value) catch return null;
-    return switch (parsed.unit) {
-        .none, .px => parsed.value,
-        else => null,
-    };
-}
-
 // parseDimension plus viewport-relative units, which the faux layout
 // resolves against the page viewport.
 pub fn parseDimensionViewport(value: []const u8, frame: *Frame) ?f64 {
@@ -214,6 +206,7 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Css";
+        pub const class_string = "CSS";
 
         // Per the CSSOM spec, CSS is a namespace object — members are own
         // properties so Object.entries(CSS) returns them.

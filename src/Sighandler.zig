@@ -43,7 +43,7 @@ listeners: std.ArrayList(Listener) = .empty,
 /// listeners fire, the process never dies from signals — `/quit` exits.
 no_hard_exit: bool = false,
 
-pub const Listener = struct {
+const Listener = struct {
     args: []const u8,
     start: *const fn (context: *const anyopaque) void,
 };

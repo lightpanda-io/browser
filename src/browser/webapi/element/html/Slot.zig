@@ -46,7 +46,7 @@ pub fn assignedNodes(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) !
     return nodes.items;
 }
 
-pub fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Element {
+fn assignedElements(self: *Slot, opts_: ?AssignedNodesOptions, frame: *Frame) ![]const *Element {
     var elements: std.ArrayList(*Element) = .empty;
     const opts = opts_ orelse AssignedNodesOptions{};
     if (!opts.flatten) {

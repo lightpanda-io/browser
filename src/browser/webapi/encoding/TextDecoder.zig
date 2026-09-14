@@ -90,15 +90,15 @@ pub fn acquireRef(self: *TextDecoder) void {
     self._rc.acquire();
 }
 
-pub fn getIgnoreBOM(self: *const TextDecoder) bool {
+fn getIgnoreBOM(self: *const TextDecoder) bool {
     return self._ignore_bom;
 }
 
-pub fn getFatal(self: *const TextDecoder) bool {
+fn getFatal(self: *const TextDecoder) bool {
     return self._fatal;
 }
 
-pub fn getEncoding(self: *TextDecoder) ![]const u8 {
+fn getEncoding(self: *TextDecoder) ![]const u8 {
     // Spec requires lowercase encoding name
     // Allocate buffer for lowercase name on first access
     if (self._lowercase_name.len > 0) {

@@ -65,15 +65,17 @@ pub fn reset(self: *NodeRegistry) void {
 }
 
 /// Evict only the nodes owned by `frame`'s page, leaving sibling pages' node
-/// IDs valid. Must run before the page's arena is freed — attribution walks
-/// each node's live parent chain.
+/// IDs valid. Must run before the page's arena is freed — attribution reads
+/// each node's document.
 pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     const page = frame._page;
     var doomed: std.ArrayListUnmanaged(*Node) = .empty;
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
-        if (node.dom.ownerFrame(frame)._page == page) {
+        // The document table is the browser's, so a sibling page's node
+        // resolves correctly through this page's frame.
+        if (node.dom.getDocument(frame)._page == page) {
             doomed.append(arena, node) catch return;
         }
     }

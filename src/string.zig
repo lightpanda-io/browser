@@ -178,10 +178,6 @@ pub const String = extern struct {
         return p[0..ul];
     }
 
-    pub fn isDeleted(self: *const String) bool {
-        return self.len == tombstone;
-    }
-
     pub fn format(self: String, writer: *std.Io.Writer) !void {
         return writer.writeAll(self.str());
     }
@@ -224,15 +220,11 @@ pub const String = extern struct {
         };
     }
 
-    pub fn eqlSliceIgnoreCase(a: String, b: []const u8) bool {
-        return std.ascii.eqlIgnoreCase(a.str(), b);
-    }
-
     const EqualOrDeleted = union(enum) {
         deleted,
         equal: bool,
     };
-    pub fn eqlSliceOrDeleted(a: String, b: []const u8) EqualOrDeleted {
+    fn eqlSliceOrDeleted(a: String, b: []const u8) EqualOrDeleted {
         if (a.len == tombstone) {
             return .deleted;
         }

@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Frame = @import("Frame.zig");
+const RenderTree = @import("RenderTree.zig");
 const LimitedWriter = @import("../LimitedWriter.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
@@ -29,15 +30,21 @@ pub const Opts = struct {
     with_frames: bool = false,
     strip: Opts.Strip = .{},
     shadow: Opts.Shadow = .rendered,
+
     /// Soft cap: output is cut at a UTF-8 boundary and a truncation marker
     /// appended.
     max_bytes: ?u32 = null,
 
-    pub const Strip = packed struct(u4) {
+    // Nodes to remove (clutter remove, from RenderTree.resolve)
+    pruned: ?*const RenderTree.PruneSet = null,
+
+    pub const Strip = packed struct(u6) {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
         invisible: bool = false,
+        shell: bool = false,
+        clutter: bool = false,
     };
 
     pub const Shadow = union(enum) {
@@ -82,7 +89,7 @@ fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: 
                 }
             }
             // But if the doc has no child, or the first child isn't a doctype
-            // well force it.
+            // we'll force it.
             try writer.writeAll("<!DOCTYPE html>");
         }
 
@@ -107,9 +114,20 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) erro
     };
 }
 
+pub fn render(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
+    var o = opts;
+    o.strip = state.strip;
+    o.pruned = state.pruned;
+    if (state.root.is(Node.Document)) |doc| return root(doc, o, writer, frame);
+    return deep(state.root, o, writer, frame);
+}
+
 fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => {
+            if (opts.pruned) |set| {
+                if (set.contains(node)) return;
+            }
             const cd = node.subtype(Node.CData);
             if (node.is(Node.CData.Comment)) |_| {
                 try writer.writeAll("<!--");
@@ -131,7 +149,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         },
         .element => {
             const el = node.subtype(Node.Element);
-            if (shouldStripElement(el, opts.strip, frame)) {
+            if (shouldStripElement(el, opts.strip, opts.pruned, frame)) {
                 return;
             }
 
@@ -362,9 +380,9 @@ fn isVoidElement(el: *Node.Element) bool {
     };
 }
 
-pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) bool {
+pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, pruned: ?*const RenderTree.PruneSet, frame: *Frame) bool {
     // Fast path: with no strip flags set (every innerHTML/outerHTML call)
-    if (@as(u4, @bitCast(strip)) == 0) {
+    if (@as(u6, @bitCast(strip)) == 0) {
         return false;
     }
 
@@ -408,10 +426,103 @@ pub fn shouldStripElement(el: *Node.Element, strip: Opts.Strip, frame: *Frame) b
         if (std.mem.eql(u8, tag_name, "iframe")) return true;
     }
 
-    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el, .scan)) {
+    if (strip.invisible and frame._style_manager.hasAuthorDisplayNone(el)) {
         return true;
     }
 
+    if (strip.shell and isShellElement(el)) {
+        return true;
+    }
+
+    if (pruned) |set| {
+        if (set.contains(el.asNode())) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/// Page chrome by markup alone. <header> and <footer> only count at the page
+/// level: inside an article, section, main, nav or aside they belong to that
+/// content, which is also how the banner/contentinfo roles are assigned.
+pub fn isShellElement(el: *Node.Element) bool {
+    const tag = el.getTag();
+    switch (tag) {
+        .nav, .aside, .dialog => return true,
+        .header, .footer => return !hasSectioningAncestor(el),
+        else => {},
+    }
+    if (hasRole(el, &.{ "banner", "complementary", "contentinfo", "navigation", "search", "dialog", "alertdialog", "menu", "menubar" })) {
+        return true;
+    }
+    if (canHoldChrome(tag)) {
+        if (hasShellToken(el.getClassName()) or hasShellToken(el.getId())) {
+            return !hasSectioningAncestor(el);
+        }
+    }
+    return false;
+}
+
+// `td` stays in because table-based layout will do things like
+// <td class=sidebar>, but `tr`, `thead` and `li` because "header" is often used
+// to mean something other than the header of the site
+fn canHoldChrome(tag: Node.Element.Tag) bool {
+    return switch (tag) {
+        .div, .section, .ul, .ol, .form, .table, .td, .p => true,
+        else => false,
+    };
+}
+
+// Words that name page chrome and nothing else. "menu" is left out: it also
+// names content.
+const shell_tokens = [_][]const u8{ "header", "footer", "nav", "navbar", "navigation", "sidebar", "masthead" };
+
+fn hasShellToken(value: ?[]const u8) bool {
+    var it = std.mem.tokenizeAny(u8, value orelse return false, " \t\n\r");
+    while (it.next()) |token| {
+        for (shell_tokens) |shell_token| {
+            if (std.ascii.eqlIgnoreCase(token, shell_token)) return true;
+        }
+    }
+    return false;
+}
+fn hasSectioningAncestor(el: *Node.Element) bool {
+    var node = renderParent(el.asNode());
+    while (node) |n| : (node = renderParent(n)) {
+        if (n.is(Node.Element)) |ancestor| {
+            switch (ancestor.getTag()) {
+                .article, .aside, .main, .nav, .section => return true,
+                else => {},
+            }
+            if (hasRole(ancestor, &.{ "article", "complementary", "main", "navigation", "region" })) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// A shadow tree renders in place of its host, so the host continues the
+// ancestor chain that a shadow root's null parent would otherwise end.
+fn renderParent(node: *Node) ?*Node {
+    if (node.parentNode()) |parent| {
+        return parent;
+    }
+    const shadow = node.is(Node.ShadowRoot) orelse return null;
+    return shadow.getHost().asNode();
+}
+
+// ARIA `role` is a space-separated fallback list; the first token wins.
+fn hasRole(el: *Node.Element, roles: []const []const u8) bool {
+    const attr = el.getAttributeSafe(comptime .wrap("role")) orelse return false;
+    var it = std.mem.tokenizeAny(u8, attr, " \t\n\r");
+    const role = it.next() orelse return false;
+    for (roles) |candidate| {
+        if (std.ascii.eqlIgnoreCase(role, candidate)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -583,4 +694,50 @@ test "dump: strip.invisible removes author display:none elements" {
         \\<!DOCTYPE html>
         \\<html><head><style>.hidden{display:none}</style><link rel="stylesheet" href="data:text/css,"><script>var a=1;</script></head><body><h1>Title</h1><img><svg></svg><noscript>nojs</noscript><p>visible &amp; well</p></body></html>
     );
+}
+
+test "dump: strip.shell removes page chrome but keeps sectioned header/footer" {
+    try expectShellDump(
+        \\<header>H</header><nav>N</nav><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article><aside>A</aside><dialog>D</dialog><footer>F</footer>
+    ,
+        \\<div><main><header>MH</header><p>body</p><footer>MF</footer></main><article><footer>AF</footer></article></div>
+    );
+}
+
+test "dump: strip.shell honours chrome class and id tokens" {
+    try expectShellDump(
+        \\<div class="header">H</div><div id="Footer">F</div><div class="site navbar">N</div><div class="subheader">S</div><div class="post-footer">P</div><main><div class="header">MH</div><p>x</p></main><div class="menu">M</div>
+    ,
+        \\<div><div class="subheader">S</div><div class="post-footer">P</div><main><div class="header">MH</div><p>x</p></main><div class="menu">M</div></div>
+    );
+}
+
+test "dump: strip.shell honours landmark roles" {
+    try expectShellDump(
+        \\<div role="navigation">N</div><div role="BANNER search">B</div><section><div role="contentinfo">C</div></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div>
+    ,
+        \\<div><section></section><p>x</p><div role="region"><header>RH</header></div><div role="main"><footer>MF</footer></div></div>
+    );
+}
+
+test "dump: strip.shell's token rule only applies to chrome containers" {
+    try expectShellDump(
+        \\<table><thead><tr class="header"><td>Plan</td></tr></thead><tbody><tr><td>Basic</td><td class="sidebar">Legacy</td></tr></tbody></table><ul><li class="header">Item</li></ul>
+    ,
+        \\<div><table><thead><tr class="header"><td>Plan</td></tr></thead><tbody><tr><td>Basic</td></tr></tbody></table><ul><li class="header">Item</li></ul></div>
+    );
+}
+
+fn expectShellDump(html: []const u8, expected: []const u8) !void {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const div = try doc.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, div.asNode(), html);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(div.asNode(), .{ .strip = .{ .shell = true } }, &aw.writer, frame);
+    try testing.expectString(expected, aw.written());
 }

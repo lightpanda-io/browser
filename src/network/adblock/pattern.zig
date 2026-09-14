@@ -28,8 +28,11 @@ const NetworkFilter = @import("NetworkFilter.zig");
 /// The URL a request is matched against, with its hostname located once so
 /// every filter can reuse the offsets.
 pub const Url = struct {
-    /// Lowercased, fragment stripped.
+    /// Lowercased, fragment stripped: what patterns, stored lowercased, walk.
     text: []const u8,
+    /// Fragment stripped, case kept: what a regex reads, since `$match-case`
+    /// is only meaningful on the original.
+    raw: []const u8,
     host_start: u32,
     host_end: u32,
 
@@ -40,7 +43,7 @@ pub const Url = struct {
     /// Locates the hostname inside `url`: after "scheme://", up to the port,
     /// path, query or end. Offsets, not a slice, because the matcher needs to
     /// resume the pattern right where the hostname stops.
-    pub fn init(url: []const u8) Url {
+    pub fn init(url: []const u8, raw: []const u8) Url {
         var start: usize = 0;
         if (std.mem.indexOf(u8, url, "://")) |scheme| start = scheme + 3;
 
@@ -74,6 +77,7 @@ pub const Url = struct {
 
         return .{
             .text = url,
+            .raw = raw,
             .host_start = @intCast(start),
             .host_end = @intCast(host_end),
         };
@@ -86,8 +90,8 @@ pub fn matches(filter: *const NetworkFilter, url: Url) bool {
     switch (filter.kind) {
         // Option-only filters ("$script,domain=x") match any URL.
         .any => return true,
-        // Never indexed: there is no regex engine to run them with.
-        .regex => return false,
+        // uBO tests the raw URL; the case-insensitive flag is on the pattern.
+        .regex => return filter.regex.?.matches(url.raw),
         .hostname, .plain, .wildcard => {},
     }
 
@@ -235,28 +239,28 @@ const testing = @import("../../testing.zig");
 
 fn testMatch(arena: std.mem.Allocator, line: []const u8, url: []const u8) !bool {
     const filter = try NetworkFilter.parse(arena, line);
-    return matches(&filter, .init(url));
+    return matches(&filter, .init(url, url));
 }
 
 test "adblock.pattern: hostname location" {
-    var u: Url = .init("https://ads.example.com/x?y=1");
+    var u: Url = .init("https://ads.example.com/x?y=1", "");
     try testing.expectString("ads.example.com", u.hostname());
 
-    u = .init("https://ads.example.com:8443/x");
+    u = .init("https://ads.example.com:8443/x", "");
     try testing.expectString("ads.example.com", u.hostname());
 
-    u = .init("https://example.com");
+    u = .init("https://example.com", "");
     try testing.expectString("example.com", u.hostname());
 
-    u = .init("http://[::1]:9222/json");
+    u = .init("http://[::1]:9222/json", "");
     try testing.expectString("[::1]", u.hostname());
 
     // Credentials are not part of the host.
-    u = .init("https://user:pass@ads.example.com/x");
+    u = .init("https://user:pass@ads.example.com/x", "");
     try testing.expectString("ads.example.com", u.hostname());
 
     // A pattern is matched against whatever it is given, even a bare path.
-    u = .init("/relative/path");
+    u = .init("/relative/path", "");
     try testing.expectString("", u.hostname());
 }
 

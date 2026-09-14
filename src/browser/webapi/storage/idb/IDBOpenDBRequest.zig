@@ -33,19 +33,19 @@ _proto: *IDBRequest,
 // connections (see IDBFactory.OpenContext), so nothing ever blocks.
 _on_blocked: ?js.Function.Global = null,
 
-pub fn getOnBlocked(self: *const IDBOpenDBRequest) ?js.Function.Global {
+fn getOnBlocked(self: *const IDBOpenDBRequest) ?js.Function.Global {
     return self._on_blocked;
 }
 
-pub fn setOnBlocked(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
+fn setOnBlocked(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
     self._on_blocked = idb.functionFromSetter(setter);
 }
 
-pub fn getOnUpgradeNeeded(self: *const IDBOpenDBRequest) ?js.Function.Global {
+fn getOnUpgradeNeeded(self: *const IDBOpenDBRequest) ?js.Function.Global {
     return self._proto.getOnUpgradeNeeded();
 }
 
-pub fn setOnUpgradeNeeded(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
+fn setOnUpgradeNeeded(self: *IDBOpenDBRequest, setter: ?FunctionSetter) void {
     self._proto.setOnUpgradeNeeded(setter);
 }
 

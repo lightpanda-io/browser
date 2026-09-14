@@ -32,7 +32,7 @@ pub fn getSrc(self: *const Source, frame: *Frame) ![]const u8 {
     return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Source, value: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Source, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 

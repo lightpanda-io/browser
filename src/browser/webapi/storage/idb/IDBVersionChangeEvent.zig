@@ -70,11 +70,11 @@ pub fn asEvent(self: *IDBVersionChangeEvent) *Event {
     return self._proto;
 }
 
-pub fn getOldVersion(self: *const IDBVersionChangeEvent) u64 {
+fn getOldVersion(self: *const IDBVersionChangeEvent) u64 {
     return self._old_version;
 }
 
-pub fn getNewVersion(self: *const IDBVersionChangeEvent) ?u64 {
+fn getNewVersion(self: *const IDBVersionChangeEvent) ?u64 {
     return self._new_version;
 }
 

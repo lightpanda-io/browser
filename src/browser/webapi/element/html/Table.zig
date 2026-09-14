@@ -21,11 +21,11 @@ pub fn asNode(self: *Table) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getTBodies(self: *Table, frame: *Frame) collections.NodeLive(.child_tag) {
+fn getTBodies(self: *Table, frame: *Frame) collections.NodeLive(.child_tag) {
     return collections.NodeLive(.child_tag).init(self.asNode(), .tbody, frame);
 }
 
-pub fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
+fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
     if (index < -1) {
         return error.IndexSizeError;
     }
