@@ -50,8 +50,8 @@ pub const driver_guidance =
     \\  values are already in the tree — don't re-fetch via `nodeDetails`.
     \\- `nodeDetails(backendNodeId)` → a ready-to-use CSS `selector` that
     \\  resolves to one node, plus its id/class/attrs.
-    \\- `findElement(role, name)` → locate a candidate by role/name without
-    \\  parsing the whole tree.
+    \\- `findElement(role, name)` → locate a candidate by role and name (a
+    \\  substring, or `/regex/`) without parsing the whole tree.
     \\- `markdown(selector | backendNodeId)` → readable text for one
     \\  subtree. Use after `tree` has shown you where the interesting
     \\  region is.
@@ -683,7 +683,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
-                    \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+                    \\    "name": { "type": "string", "description": "Optional accessible name to match, case-insensitive: a substring, or a JavaScript-syntax regex written as /.../ (unanchored: use ^...$ for the whole name; prefix (?-i) for case-sensitive)." }
                     \\  }
                     \\}
                 ),
@@ -924,7 +924,7 @@ fn dispatch(
         .press => .{ .text = try execPress(arena, session, registry, substituted) },
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
         .setChecked => .{ .text = try execSetChecked(arena, session, registry, substituted) },
-        .findElement => .{ .text = try execFindElement(arena, session, registry, substituted) },
+        .findElement => execFindElement(arena, session, registry, substituted),
         .evaluate => execEvaluate(arena, session, registry, substituted),
         .extract => execExtract(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
@@ -2062,7 +2062,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         role: ?[]const u8 = null,
         name: ?[]const u8 = null,
@@ -2073,14 +2073,36 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const page = try requireFrame(session);
 
+    const pattern: ?[]const u8 = if (args.name) |name| regexBody(name) else null;
+    var diag: lp.Regex.Diagnostic = .{};
+    const name_regex: ?lp.Regex = if (pattern) |p|
+        lp.Regex.compile(session.browser.app.regex_context, p, .{ .case_insensitive = true, .unicode = true }, &diag) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRegex => return .{
+                .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ p, diag.message(), diag.offset }),
+                .is_error = true,
+            },
+        }
+    else
+        null;
+    defer if (name_regex) |re| re.deinit();
+
     const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
         .role = args.role,
-        .name = args.name,
+        .name = if (pattern == null) args.name else null,
+        .name_regex = name_regex,
     }) catch return ToolError.InternalError;
 
     lp.interactive.registerNodes(matched, registry) catch
         return ToolError.InternalError;
-    return renderJson(arena, matched);
+    return .{ .text = try renderJson(arena, matched) };
+}
+
+/// The body of a `/.../` literal, the spelling adblock lists use for a regex
+/// too. Unanchored, so a name that really is written that way still matches.
+fn regexBody(text: []const u8) ?[]const u8 {
+    if (text.len > 2 and text[0] == '/' and text[text.len - 1] == '/') return text[1 .. text.len - 1];
+    return null;
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {
