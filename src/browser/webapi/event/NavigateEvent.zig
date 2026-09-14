@@ -100,13 +100,16 @@ fn initWithTrusted(
 
     const info: ?js.Value.Global = if (opts.info) |v| try v.persist() else null;
 
+    const destination: *NavigationDestination = try arena.create(NavigationDestination);
+    destination.* = try opts.destination.dupe(arena.allocator());
+
     const event = try frame._factory.event(
         arena,
         typ,
         NavigateEvent{
             ._proto = undefined,
             ._navigation_type = navigation_type,
-            ._destination = opts.destination,
+            ._destination = destination,
             ._can_intercept = opts.canIntercept,
             ._user_initiated = opts.userInitiated,
             ._hash_change = opts.hashChange,

@@ -597,7 +597,7 @@ pub fn navigateSameDocument(
     const previous = self.getCurrentEntry();
     const hash_change = !std.mem.eql(u8, old_url, new_url);
 
-    const destination = switch (kind) {
+    var destination = switch (kind) {
         .traverse => |index| blk: {
             const entry = self._entries.items[index];
             break :blk try NavigationDestination.init(.{
@@ -606,17 +606,14 @@ pub fn navigateSameDocument(
                 .index = @intCast(index),
                 .same_document = true,
                 .url = url,
-            }, frame);
+            });
         },
-        else => try NavigationDestination.init(.{
-            .same_document = true,
-            .url = url,
-        }, frame),
+        else => try NavigationDestination.init(.{ .same_document = true, .url = url }),
         .reload => unreachable, // reload always routes through navigateInner's cross-document path.
     };
 
     const navigate_event = try self.fireNavigateEvent(
-        destination,
+        &destination,
         kind,
         false,
         hash_change,
@@ -624,7 +621,6 @@ pub fn navigateSameDocument(
         null,
         frame,
     );
-    defer navigate_event._destination._arena.release();
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
@@ -728,7 +724,7 @@ pub fn navigateInner(
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
 
-    const destination = switch (kind) {
+    var destination = switch (kind) {
         .traverse => |index| blk: {
             const entry = self._entries.items[index];
             break :blk try NavigationDestination.init(.{
@@ -737,16 +733,13 @@ pub fn navigateInner(
                 .index = @intCast(index),
                 .same_document = false,
                 .url = url,
-            }, frame);
+            });
         },
-        else => try NavigationDestination.init(.{
-            .same_document = false,
-            .url = url,
-        }, frame),
+        else => try NavigationDestination.init(.{ .same_document = false, .url = url }),
     };
 
     const navigate_event = try self.fireNavigateEvent(
-        destination,
+        &destination,
         kind,
         false,
         false,
@@ -754,7 +747,6 @@ pub fn navigateInner(
         null,
         frame,
     );
-    defer navigate_event._destination._arena.release();
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
