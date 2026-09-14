@@ -206,6 +206,7 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Css";
+        pub const class_string = "CSS";
 
         // Per the CSSOM spec, CSS is a namespace object — members are own
         // properties so Object.entries(CSS) returns them.
