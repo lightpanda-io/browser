@@ -3214,10 +3214,13 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
     // Scripts, iframes, links and styles activate on becoming connected;
     // appending them to a detached parent does nothing (they run/load later
     // if the subtree gets inserted into the document).
-    if (comptime from_parser == false) {
-        switch (node._type) {
-            .element => if (!node.isConnected()) return,
-            else => {},
+    if (node._type == .element) {
+        if (comptime from_parser) {
+            if (node.getDocument(self)._frame == null) {
+                return;
+            }
+        } else if (!node.isConnected()) {
+            return;
         }
     }
 

@@ -38,7 +38,7 @@ const String = lp.String;
 const IFrame = Element.Html.IFrame;
 
 pub fn createElementNS(document: *const Node.Document, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
-    const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator;
+    const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator or @TypeOf(attribute_iterator) == Parser.RebuiltAttributes;
     const frame = frameOf(document);
 
     switch (namespace) {
@@ -848,6 +848,7 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                     const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
                         ._tag_name = tag_name,
                         ._definition = definition,
+                        ._upgrade_candidate = creation == .construct,
                     });
                     if (creation == .construct) {
                         try realm._undefined_custom_elements.append(realm.arena, node.as(Element).is(Element.Html.Custom).?);
@@ -1102,6 +1103,13 @@ fn populateElementAttributes(frame: *Frame, element: *Element, list: anytype) !v
     if (@TypeOf(list) == *Element.Attribute.List or @TypeOf(list) == *const Element.Attribute.List) {
         // from cloneNode
         try element._attributes.cloneFrom(list, frame);
+        element.noteStyleAttribute();
+        return;
+    }
+
+    if (@TypeOf(list) == Parser.RebuiltAttributes) {
+        // from the parser, rebuilding an element in another document
+        try element._attributes.cloneFrom(list.list, frame);
         element.noteStyleAttribute();
         return;
     }

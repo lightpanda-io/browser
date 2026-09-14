@@ -44,6 +44,7 @@ _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
 _upgrade_failed: bool = false, // a failed upgrade is never retried
+_upgrade_candidate: bool = false, // listed in a frame's _undefined_custom_elements
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
@@ -83,7 +84,11 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
                 CustomElementRegistry.upgradeCustomElement(custom, definition, frame) catch {};
                 return;
             }
-            // Element is undefined and no definition exists yet — nothing to queue.
+
+            if (!custom._upgrade_candidate) {
+                custom._upgrade_candidate = true;
+                try frame._undefined_custom_elements.append(frame.arena, custom);
+            }
             return;
         }
 
