@@ -481,7 +481,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../testing.zig");
 test "WebApi: MutationObserver" {
-    testing.expectLog(&.{.frame, .frame});
+    testing.expectLog(&.{ .frame, .frame });
     try testing.htmlRunner("mutation_observer", .{});
 }
 
