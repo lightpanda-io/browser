@@ -55,6 +55,7 @@ arena_account: lp.Arena.Account = .{},
 
 // Our isolate's heap size as of the last reportJsHeap().
 last_reported_js_bytes: usize = 0,
+last_js_heap_sample_ms: u64 = 0,
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
@@ -234,6 +235,18 @@ pub fn reportJsHeap(self: *Browser) void {
     const bytes = self.env.isolate.getHeapStatistics().total_physical_size;
     lp.metrics.js_heap_physical_bytes.add(@as(i64, @intCast(bytes)) - @as(i64, @intCast(self.last_reported_js_bytes)));
     self.last_reported_js_bytes = bytes;
+}
+
+// Called every Runner tick
+pub fn sampleJsHeap(self: *Browser) void {
+    const now = lp.datetime.milliTimestamp(.boot);
+    if (now - self.last_js_heap_sample_ms < 1000) {
+        // a busy page ticks often, we don't need to track this more than once
+        // per second
+        return;
+    }
+    self.last_js_heap_sample_ms = now;
+    self.reportJsHeap();
 }
 
 pub fn runMicrotasks(self: *Browser) void {
