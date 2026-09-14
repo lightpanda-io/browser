@@ -204,7 +204,7 @@ pub const List = struct {
         return self.getEntryWithInternedName(name) != null;
     }
 
-    pub fn getAttribute(self: *const List, name: String, element: ?*Element, frame: *Frame) !?*Attribute {
+    pub fn getAttribute(self: *const List, name: String, element: *Element, frame: *Frame) !?*Attribute {
         const entry = (try self.getEntry(name, frame)) orelse return null;
         return self.getOrCreateAttribute(entry, element, frame);
     }
@@ -212,8 +212,8 @@ pub const List = struct {
     // Identity map access: a given (list, name) always yields the same
     // *Attribute until the attribute is removed. The map must be the
     // element's frame's, not the caller's frame.
-    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-        const owner = if (element) |el| (el.ownerFrame(frame) orelse frame) else frame;
+    pub fn getOrCreateAttribute(self: *const List, entry: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+        const owner = element.ownerFrame(frame) orelse frame;
         const gop = try owner._attribute_lookup.getOrPut(owner.arena, .{ .list = self, .name = entry._name_ptr });
         if (!gop.found_existing) {
             gop.value_ptr.* = try entry.toAttribute(element, owner);
@@ -496,10 +496,8 @@ pub const List = struct {
             return formatAttribute(self.name(), self.value(), writer);
         }
 
-        fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-            // Without an element, the attribute is the caller's document's.
-            const document = if (element) |el| el.getDocument(frame) else frame.document;
-            return frame._factory.node(document, Attribute{
+        fn toAttribute(self: *const Entry, element: *Element, frame: *Frame) !*Attribute {
+            return frame._factory.node(element.getDocument(frame), Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.

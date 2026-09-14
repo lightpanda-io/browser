@@ -81,11 +81,6 @@ fn registerDocument(self: *Factory, doc: *Document) !u32 {
     return index;
 }
 
-// Whether `ptr` lives in this page's node storage.
-pub fn owns(self: *const Factory, ptr: *const anyopaque) bool {
-    return self._slab.owns(ptr);
-}
-
 // this is a root object
 pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return self.eventTargetWithAllocator(self._slab.allocator(), child);

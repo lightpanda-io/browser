@@ -480,6 +480,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
     location.acquireRef();
     self.window._location = location;
 
+    lp.assert(document._page == page, "unexpected document page", .{});
     document._frame = self;
 
     if (comptime lp.IS_TEST == false) {
