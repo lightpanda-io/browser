@@ -167,7 +167,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
             return error.InvalidPrefixedCookie;
         }
 
-        if (!std.mem.startsWith(u8, url, "https://")) {
+        if (!URL.isPotentiallyTrustworthy(url)) {
             return error.InvalidPrefixedCookie;
         }
 
@@ -182,7 +182,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         if (secure == null) {
             return error.InvalidPrefixedCookie;
         }
-        if (!std.mem.startsWith(u8, url, "https://")) {
+        if (!URL.isPotentiallyTrustworthy(url)) {
             return error.InvalidPrefixedCookie;
         }
     }
@@ -450,8 +450,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, opts: MatchOpts) 
         return false;
     }
 
-    if (url.secure == false and self.secure) {
-        // secure cookie can only be sent over HTTPs
+    if (self.secure and !url.trustworthy) {
         return false;
     }
 
@@ -740,14 +739,15 @@ fn findSecondLevelDomain(host: []const u8) []const u8 {
 pub const PreparedUri = struct {
     host: []const u8, // Percent encoded, lower case
     path: []const u8, // Percent encoded
-    secure: bool, // True if scheme is https
+    trustworthy: bool, // May receive Secure cookies
 
     // init assumes url lifetime exceeds preparedUri one.
     pub fn init(url: [:0]const u8) PreparedUri {
+        const host = URL.getHostname(url);
         return .{
-            .host = URL.getHostname(url),
+            .host = host,
             .path = URL.getPathname(url),
-            .secure = URL.isSecure(url),
+            .trustworthy = URL.isSecure(url) or URL.isLoopbackHost(host),
         };
     }
 };
@@ -1059,6 +1059,25 @@ test "Jar: forRequest" {
     // the 'global2' cookie
 }
 
+test "Jar: forRequest Secure cookies on loopback origins" {
+    const expectCookies = struct {
+        fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
+            var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer aw.deinit();
+            try jar.forRequest(target_url, &aw.writer, opts);
+            try testing.expectEqual(expected, aw.written());
+        }
+    }.expect;
+
+    var jar = Jar.init(testing.allocator, null);
+    defer jar.deinit();
+
+    const now = lp.datetime.timestamp(.real);
+    const url = "http://127.0.0.1:3000/";
+    try jar.add(try Cookie.parse(testing.allocator, url, "s=1; Secure"), now, true);
+    try expectCookies("s=1", &jar, url, .{ .origin_url = .{ .url = url }, .is_http = true });
+}
+
 test "Jar: forRequest SameSite=Strict on cross-site navigation" {
     const expectCookies = struct {
         fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
@@ -1236,7 +1255,7 @@ test "Cookie: parse key=value" {
 
     // __Host- cookie-name-prefix rules:
     //   - must be Secure
-    //   - must be set from an https origin
+    //   - must be set from a potentially trustworthy origin (https or loopback)
     //   - must not have a Domain attribute
     //   - must have Path=/
     try expectAttribute(.{ .name = "__Host-abc", .value = "1" }, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/");
@@ -1247,10 +1266,16 @@ test "Cookie: parse key=value" {
     try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/foo");
     try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Host-abc=1; Secure; Path=/; Domain=lightpanda.io");
 
-    // __Secure- cookie-name-prefix rules: must be Secure and from https.
+    // __Secure- cookie-name-prefix rules: must be Secure and from a
+    // potentially trustworthy origin.
     try expectAttribute(.{ .name = "__Secure-abc", .value = "1" }, "https://lightpanda.io/", "__Secure-abc=1; Secure");
     try expectAttribute(.{ .name = "__SeCuRe-abc", .value = "1" }, "https://lightpanda.io/", "__SeCuRe-abc=1; Secure; Domain=lightpanda.io");
     try expectError(error.InvalidPrefixedCookie, "https://lightpanda.io/", "__Secure-abc=1");
+
+    // plain-http loopback
+    try expectAttribute(.{ .name = "__Host-abc" }, "http://127.0.0.1:3000/", "__Host-abc=1; Secure; Path=/");
+    try expectAttribute(.{ .name = "__Secure-abc" }, "http://localhost/", "__Secure-abc=1; Secure");
+    try expectError(error.InvalidPrefixedCookie, "http://localhost.evil.com/", "__Host-abc=1; Secure; Path=/");
     try expectError(error.InvalidPrefixedCookie, null, "__Secure-abc=1; Secure");
 
     // Empty Domain= is treated as no Domain and accepted on __Host-.
@@ -1521,7 +1546,7 @@ test "Cookie: appliesTo with empty domain" {
     const target = PreparedUri{
         .host = "example.com",
         .path = "/",
-        .secure = false,
+        .trustworthy = false,
     };
 
     try testing.expectEqual(false, cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }));
