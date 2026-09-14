@@ -221,6 +221,10 @@ pub fn as(self: *Element, comptime T: type) *T {
     return self.is(T).?;
 }
 
+pub fn getDocument(self: *Element, frame: *const Frame) *Node.Document {
+    return self.asNode().getDocument(frame);
+}
+
 pub fn asNode(self: *Element) *Node {
     return Factory.protoOf(self);
 }
@@ -568,7 +572,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
 
     var fragment: ?*Node = null;
     if (html.len > 0) {
-        const frag = (try Node.DocumentFragment.init(frame)).asNode();
+        const frag = (try Node.DocumentFragment.init(node.getDocument(frame), frame)).asNode();
         // The parent is the parse context (a fragment parent means body).
         try Frame.parse.fragment(frame, frag, html, .{ .context = parent.is(Element) });
         fragment = frag;
@@ -936,7 +940,7 @@ pub fn insertAdjacentText(
         error.AdjacentNoParent => return,
         else => return err,
     };
-    const text_node = try Frame.node_factory.createTextNode(frame, data);
+    const text_node = try Frame.node_factory.createTextNode(self.getDocument(frame), data);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 
@@ -1128,7 +1132,7 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
     var rm_ref_node = true;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
 
         // If a child is the ref node. We keep it at its own current position.
         if (child == ref_node) {
@@ -1290,7 +1294,7 @@ pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !vo
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
@@ -1301,7 +1305,7 @@ pub fn after(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !voi
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
@@ -1868,9 +1872,9 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
     return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
+pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
+    const node = try Frame.node_factory.createElementNS(document, self._namespace, tag_name, &self._attributes);
 
     // A namespace outside the built-in set lives in a side table; the clone
     // must report the same namespaceURI.
@@ -1901,7 +1905,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
             const cloned_shadow_node = cloned_shadow.asNode();
             var shadow_child_it = shadow.asNode().childrenIterator();
             while (shadow_child_it.next()) |child| {
-                if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
                     try frame.appendNode(cloned_shadow_node, cloned_child, .{});
                 }
             }
@@ -1911,7 +1915,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+            if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
                 try frame.appendNode(node, cloned_child, .{});
             }
         }

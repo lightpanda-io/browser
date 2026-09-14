@@ -567,7 +567,7 @@ fn getResponse(self: *XMLHttpRequest, exec: *const Execution) !?Response {
                     if (!final.isHTML()) {
                         return null;
                     }
-                    const document = try exec._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });
+                    const document = try exec._factory.genericDocument(.{});
                     try Frame.parse.htmlAsChildren(frame, document.asNode(), data);
                     break :blk .{ .document = document };
                 },

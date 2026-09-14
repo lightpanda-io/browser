@@ -23,21 +23,24 @@ const reflect = @import("reflect.zig");
 
 const SlabAllocator = @import("../slab.zig").SlabAllocator;
 
+const Page = @import("Page.zig");
 const Frame = @import("Frame.zig");
+const DocumentRegistry = @import("DocumentRegistry.zig");
+
 const Node = @import("webapi/Node.zig");
+const Blob = @import("webapi/Blob.zig");
 const Event = @import("webapi/Event.zig");
-const UIEvent = @import("webapi/event/UIEvent.zig");
-const MouseEvent = @import("webapi/event/MouseEvent.zig");
+const DOMRect = @import("webapi/DOMRect.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
+const UIEvent = @import("webapi/event/UIEvent.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const AbortSignal = @import("webapi/AbortSignal.zig");
-const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
-const IDBRequest = @import("webapi/storage/idb/IDBRequest.zig");
-const Blob = @import("webapi/Blob.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
-const DOMRect = @import("webapi/DOMRect.zig");
 const DOMRectReadOnly = @import("webapi/DOMRectReadOnly.zig");
+const IDBRequest = @import("webapi/storage/idb/IDBRequest.zig");
+const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -47,18 +50,35 @@ const Allocator = std.mem.Allocator;
 // Shared across all frames of a Page.
 const Factory = @This();
 
+_page: *Page,
 _arena: Allocator,
 _slab: SlabAllocator,
+_documents: std.ArrayList(u32) = .empty, // ids of the documents _we_ created
+_document_registry: *DocumentRegistry, // &browser.documents
 
-pub fn init(arena: Allocator) Factory {
+pub fn init(page: *Page, arena: Allocator, document_registry: *DocumentRegistry) Factory {
     return .{
+        ._page = page,
         ._arena = arena,
         ._slab = SlabAllocator.init(arena, 128),
+        ._document_registry = document_registry,
     };
+}
+
+pub fn deinit(self: *Factory) void {
+    for (self._documents.items) |index| {
+        self._document_registry.release(index);
+    }
 }
 
 pub fn storageAllocator(self: *Factory) Allocator {
     return self._slab.allocator();
+}
+
+fn registerDocument(self: *Factory, doc: *Document) !u32 {
+    const index = try self._document_registry.register(doc);
+    try self._documents.append(self._arena, index);
+    return index;
 }
 
 // this is a root object
@@ -224,6 +244,22 @@ fn AutoPrototypeChain(comptime types: []const type) type {
             chain.setLeaf(types.len - 1, leaf_value);
             return chain.get(types.len - 1);
         }
+
+        // Same, for a node chain: stamps the Node with its document.
+        fn createOwned(allocator: std.mem.Allocator, owner: u32, leaf_value: anytype) !*@TypeOf(leaf_value) {
+            comptime assert(types[1] == Node);
+            const chain = try PrototypeChain(types).allocate(allocator);
+
+            chain.setRoot();
+
+            inline for (1..types.len - 1) |i| {
+                chain.setMiddle(i);
+            }
+
+            chain.setLeaf(types.len - 1, leaf_value);
+            chain.get(1)._owner = owner;
+            return chain.get(types.len - 1);
+        }
     };
 }
 
@@ -303,24 +339,62 @@ pub fn domRect(self: *Factory, rect: DOMRectReadOnly.Data) !*DOMRect {
     return chain.get(1);
 }
 
-pub fn node(self: *Factory, child: anytype) !*@TypeOf(child) {
+pub fn node(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
+    comptime assert(@TypeOf(child) != Document);
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
         &.{ EventTarget, Node, @TypeOf(child) },
-    ).create(allocator, child);
+    ).createOwned(allocator, owner._index, child);
+}
+
+pub const DocumentOpts = struct {
+    url: ?[:0]const u8 = null,
+    charset: ?[]const u8 = null,
+};
+
+// A Document with no more specific type (`new Document()`, XHR's responseXML).
+pub fn genericDocument(self: *Factory, opts: DocumentOpts) !*Document {
+    const chain = try self.documentChain(&.{ EventTarget, Node, Document }, opts);
+    return chain.get(2);
+}
+
+// Documents: {EventTarget, Node, Document, [Leaf]}. The Document is registered
+// in the browser's table as it is built, so it knows its page and slot from
+// the start.
+fn documentChain(self: *Factory, comptime types: []const type, opts: DocumentOpts) !PrototypeChain(types) {
+    comptime assert(types[1] == Node and types[2] == Document);
+    const chain = try PrototypeChain(types).allocate(self._slab.allocator());
+    const doc = chain.get(2);
+    const index = try self.registerDocument(doc);
+
+    chain.setRoot();
+    chain.setMiddle(1);
+    chain.get(1)._owner = index;
+
+    doc.* = .{
+        ._proto = undefined,
+        ._type = if (comptime types.len == 3) .generic else typeInit(Document, chain.get(3)),
+        ._page = self._page,
+        ._index = index,
+        ._url = opts.url,
+        ._charset = opts.charset,
+    };
+    setProto(doc, chain.get(1));
+    return chain;
 }
 
 // CData nodes: {EventTarget, Node, CData, [Text,] Leaf}.
 // CData is special, it's _type is a bare tag, not a tagged union. A website can
 // have tens of thousands of Text nodes, and this allows a few optimization to
 // both reduce the # of allocations and the size
-pub fn cdataNode(self: *Factory, cd: Node.CData, leaf: anytype) !*Node.CData {
+pub fn cdataNode(self: *Factory, owner: *const Document, cd: Node.CData, leaf: anytype) !*Node.CData {
     const types = comptime prototypeTypes(@TypeOf(leaf));
     comptime assert(types[0] == EventTarget and types[1] == Node and types[2] == Node.CData);
 
     const chain = try PrototypeChain(types).allocate(self._slab.allocator());
     chain.setRoot();
     chain.setMiddle(1);
+    chain.get(1)._owner = owner._index;
 
     const cd_ptr = chain.get(2);
     cd_ptr.* = cd;
@@ -436,41 +510,40 @@ fn ChainedLeaf(comptime Values: type) type {
 }
 
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-    return try AutoPrototypeChain(
-        &.{ EventTarget, Node, Document, @TypeOf(child) },
-    ).create(allocator, child);
+    const chain = try self.documentChain(&.{ EventTarget, Node, Document, @TypeOf(child) }, .{});
+    chain.setLeaf(3, child);
+    return chain.get(3);
 }
 
-pub fn documentFragment(self: *Factory, child: anytype) !*@TypeOf(child) {
+pub fn documentFragment(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
         &.{ EventTarget, Node, Node.DocumentFragment, @TypeOf(child) },
-    ).create(allocator, child);
+    ).createOwned(allocator, owner._index, child);
 }
 
-pub fn element(self: *Factory, child: anytype) !*@TypeOf(child) {
+pub fn element(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
         &.{ EventTarget, Node, Element, @TypeOf(child) },
-    ).create(allocator, child);
+    ).createOwned(allocator, owner._index, child);
 }
 
-pub fn htmlElement(self: *Factory, child: anytype) !*@TypeOf(child) {
+pub fn htmlElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
         &.{ EventTarget, Node, Element, Element.Html, @TypeOf(child) },
-    ).create(allocator, child);
+    ).createOwned(allocator, owner._index, child);
 }
 
-pub fn htmlMediaElement(self: *Factory, child: anytype) !*@TypeOf(child) {
+pub fn htmlMediaElement(self: *Factory, owner: *const Document, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
         &.{ EventTarget, Node, Element, Element.Html, Element.Html.Media, @TypeOf(child) },
-    ).create(allocator, child);
+    ).createOwned(allocator, owner._index, child);
 }
 
-pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
+pub fn svgElement(self: *Factory, owner: *const Document, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
     const types = comptime svgPrototypeTypes(@TypeOf(child));
     const chain = try PrototypeChain(types).allocate(self._slab.allocator());
 
@@ -489,6 +562,7 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
         }
     }
     chain.setLeaf(types.len - 1, child);
+    chain.get(1)._owner = owner._index;
     return chain.get(types.len - 1);
 }
 

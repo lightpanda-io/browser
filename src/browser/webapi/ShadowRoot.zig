@@ -62,7 +62,7 @@ _removed_ids: std.StringHashMapUnmanaged(void) = .{},
 _adopted_style_sheets: ?js.Object.Global = null,
 
 pub fn init(host: *Element, opts: AttachOptions, frame: *Frame) !*ShadowRoot {
-    return frame._factory.documentFragment(ShadowRoot{
+    return frame._factory.documentFragment(host.getDocument(frame), ShadowRoot{
         ._proto = undefined,
         ._mode = opts.mode,
         ._host = host,

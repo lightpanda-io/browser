@@ -28,6 +28,8 @@ const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 const Session = @import("Session.zig");
 const Viewport = @import("Viewport.zig");
+const DocumentRegistry = @import("DocumentRegistry.zig");
+
 const Selector = @import("webapi/selector/Selector.zig");
 const Geolocation = @import("webapi/geolocation/Geolocation.zig");
 const PermissionState = @import("webapi/Permissions.zig").State;
@@ -72,6 +74,11 @@ renderer: ?*lp.screenshot.Renderer = null,
 
 // Runtime geolocation override
 geolocation_override: ?Geolocation.Override = null,
+
+// Every Document allocated in this browser session, allows nodes to refer to
+// documents by their index. (TODO: this will probably eventually be moved
+// to the Page, but we need other changes first)
+documents: DocumentRegistry,
 
 // used by sessions to allocate pages.
 page_pool: std.heap.MemoryPool(Page),
@@ -123,6 +130,7 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts) !void {
         .env = env,
         .session = null,
         .page_pool = .empty,
+        .documents = .init(allocator),
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = undefined,
@@ -155,6 +163,7 @@ pub fn deinit(self: *Browser) void {
     // fire — only now is it safe to free the pool backing their parameters.
     self.fc_identity_pool.deinit(allocator);
     self.page_pool.deinit(allocator);
+    self.documents.deinit();
     self.http_client.deinit();
     if (self.renderer) |r| r.deinit();
     self.clearPermissions();

@@ -108,6 +108,11 @@ pub fn linkAddedCallback(self: *Link, frame: *Frame) !void {
 
     const element = self.asElement();
 
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (element.getDocument(frame)._frame == null) {
+        return;
+    }
+
     const href = element.getAttributeInterned("href") orelse return;
     if (href.len == 0) {
         return;

@@ -181,7 +181,7 @@ pub fn init(self: *Page, session: *Session, frame_id: u32) !void {
         .frame = undefined,
         ._frame_arena = frame_arena,
         .frame_arena = frame_arena.allocator(),
-        .factory = Factory.init(frame_arena.allocator()),
+        .factory = Factory.init(self, frame_arena.allocator(), &session.browser.documents),
         .globals = .init(session.browser.app.allocator),
     };
     self.queued_navigation = &self.queued_navigation_1;
@@ -254,6 +254,7 @@ pub fn deinit(self: *Page) void {
         self.origins = .empty;
     }
 
+    self.factory.deinit();
     self._frame_arena.release();
 }
 

@@ -161,6 +161,11 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
 
 pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
+        // A document without a browsing context has no policy or refresh to set.
+        if (node.getDocument(frame)._frame == null) {
+            return;
+        }
+
         const self = node.as(Meta);
         const el = self.asElement();
 

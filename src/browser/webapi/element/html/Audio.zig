@@ -36,7 +36,7 @@ _pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Media else void = undefined,
 
 pub fn constructor(maybe_url: ?String, frame: *Frame) !*Media {
-    const node = try Frame.node_factory.createElementNS(frame, .html, "audio", null);
+    const node = try Frame.node_factory.createElementNS(frame.document, .html, "audio", null);
     const el = node.as(Element);
 
     // Always set to "auto" initially.

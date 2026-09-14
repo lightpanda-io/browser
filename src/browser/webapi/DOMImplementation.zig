@@ -39,11 +39,7 @@ fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8
         }
     }
 
-    const doctype = try DocumentType.init(qualified_name, public_id, system_id, frame);
-    if (self._document != frame.document) {
-        try frame.setNodeOwnerDocument(doctype.asNode(), self._document);
-    }
-    return doctype;
+    return DocumentType.init(self._document, qualified_name, public_id, system_id, frame);
 }
 
 fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
@@ -53,7 +49,7 @@ fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, fr
     document._charset = "UTF-8";
 
     {
-        const doctype = try frame._factory.node(DocumentType{
+        const doctype = try frame._factory.node(document, DocumentType{
             ._proto = undefined,
             ._name = "html",
             ._public_id = "",
@@ -62,20 +58,20 @@ fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, fr
         _ = try document.asNode().appendChild(doctype.asNode(), frame);
     }
 
-    const html_node = try Frame.node_factory.createElementNS(frame, .html, "html", null);
+    const html_node = try Frame.node_factory.createElementNS(document, .html, "html", null);
     _ = try document.asNode().appendChild(html_node, frame);
 
-    const head_node = try Frame.node_factory.createElementNS(frame, .html, "head", null);
+    const head_node = try Frame.node_factory.createElementNS(document, .html, "head", null);
     _ = try html_node.appendChild(head_node, frame);
 
     if (title) |t| {
-        const title_node = try Frame.node_factory.createElementNS(frame, .html, "title", null);
+        const title_node = try Frame.node_factory.createElementNS(document, .html, "title", null);
         _ = try head_node.appendChild(title_node, frame);
-        const text_node = try Frame.node_factory.createTextNode(frame, t.value);
+        const text_node = try Frame.node_factory.createTextNode(document, t.value);
         _ = try title_node.appendChild(text_node, frame);
     }
 
-    const body_node = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const body_node = try Frame.node_factory.createElementNS(document, .html, "body", null);
     _ = try html_node.appendChild(body_node, frame);
 
     return document;
@@ -119,7 +115,7 @@ fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([
     // Create and append root element if qualified_name provided
     if (qname.len > 0) {
         const namespace = Node.Element.Namespace.parse(namespace_);
-        const root = try Frame.node_factory.createElementNS(frame, namespace, qname, null);
+        const root = try Frame.node_factory.createElementNS(document, namespace, qname, null);
 
         // Store the original URI for unknown namespaces so namespaceURI and
         // lookupNamespaceURI can return it (mirrors Document.createElementNS).
