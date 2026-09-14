@@ -298,18 +298,18 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = true;
-            pressed_mask = buttonsMask(button);
+            pressed_mask = Frame.user_input.buttonsBitmask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, buttonsMask(button), frame);
+            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
             if (is_touch) {
                 dispatchTouch(el, "touchstart", frame);
             } else {
-                const suppressed = dispatchMouse(el, "mousedown", button, buttonsMask(button), click_count, frame);
+                const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
                     Frame.user_input.focusForMouseDown(frame, el) catch |err| {
                         log.warn(.app, "webdriver mousedown focus", .{ .err = err });
@@ -350,17 +350,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
 
 // The `buttons` bitmask bit for a WebDriver button number: the flag order does
 // not follow the button numbering (left=1, right=2, middle=4).
-fn buttonsMask(button: i32) u16 {
-    return switch (button) {
-        0 => 1,
-        1 => 4,
-        2 => 2,
-        3 => 8,
-        4 => 16,
-        else => 0,
-    };
-}
-
 // A click whose mousedown and mouseup landed on different elements fires at
 // their nearest common inclusive ancestor element.
 fn commonClickTarget(down: *Element, up: *Element) *Element {
