@@ -284,11 +284,13 @@ pub fn dispatchPointerRelease(frame: *Frame, target: *Element, x: f64, y: f64, b
 
 /// The primary-button click, dispatched as a PointerEvent — matching how
 /// the engine dispatches HTMLElement.click() and keyboard-triggered clicks.
-pub fn dispatchClickAsPointer(frame: *Frame, target: *Element, x: f64, y: f64, detail: u32, modifiers: Modifiers) !void {
-    _ = try dispatchPointerEventOn(frame, target, "click", x, y, mouse_button.main, 0, detail, modifiers);
+/// `buttons` is the mask still held when the click fires (nonzero when the
+/// primary button releases mid-chord, i.e. another button is still down).
+pub fn dispatchClickAsPointer(frame: *Frame, target: *Element, x: f64, y: f64, detail: u32, buttons: u16, modifiers: Modifiers) !void {
+    _ = try dispatchPointerEventOn(frame, target, "click", x, y, mouse_button.main, buttons, detail, modifiers);
 }
 
-pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
+pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse {
         // No gesture started on this page; don't leave a prior gesture's
         // state to be misread by the next mousePressed/mouseReleased.
@@ -315,17 +317,20 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
     const other_already_held = frame._page.input_pressed_buttons & ~button_bit != 0;
     frame._page.input_pressed_buttons |= button_bit;
     const buttons = frame._page.input_pressed_buttons;
+    // A caller that doesn't track click counts (or a CDP message that omits
+    // clickCount) sends 0 — preserved as-is rather than forced to 1, since
+    // Chrome and Firefox both fire mousedown with detail 0 in that case.
+    const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
 
     if (!other_already_held) {
         // Starts the gesture: full pointerdown, then (unless cancelled)
-        // mousedown and its focus default action. triggerMousePress takes
-        // no click-count parameter, so mousedown always fires with detail
-        // 0; only the release side (below) carries a click count.
-        // mousePressed/mouseReleased arrive as two independent CDP
-        // messages, so the release half can't observe this gesture's
-        // pointerdown directly — stash the outcome on the page first,
-        // before the fallible focus call, mirroring input_hover_target.
-        const press = try dispatchPointerPress(frame, target, x, y, button, 0, .{});
+        // mousedown (carrying click_count as its detail, matching Chrome and
+        // Firefox) and its focus default action. mousePressed/mouseReleased
+        // arrive as two independent CDP messages, so the release half can't
+        // observe this gesture's pointerdown directly — stash the outcome
+        // on the page first, before the fallible focus call, mirroring
+        // input_hover_target.
+        const press = try dispatchPointerPress(frame, target, x, y, button, detail, .{});
         frame._page.input_mousedown_suppressed = press.suppress_mouse;
         if (!press.suppress_mouse and !press.suppress_focus) {
             try focusForMouseDown(frame, target);
@@ -338,7 +343,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
         // the gesture's own pointerdown was already cancelled.
         _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, buttons, 0, .{});
         if (!frame._page.input_mousedown_suppressed) {
-            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, 0, .{});
+            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, detail, .{});
             if (!suppress_focus) {
                 try focusForMouseDown(frame, target);
             }
@@ -412,7 +417,7 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     // After mouseup, the activation event depends on the button.
     switch (button) {
         mouse_button.main => {
-            try dispatchClickAsPointer(frame, target, x, y, detail, .{});
+            try dispatchClickAsPointer(frame, target, x, y, detail, remaining, .{});
             // A second click in quick succession also fires dblclick.
             if (click_count == 2) {
                 _ = try dispatchMouseEventOn(frame, target, "dblclick", x, y, button, remaining, detail, .{});

@@ -125,7 +125,7 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     };
 
     switch (params.type) {
-        .mousePressed => try Frame.user_input.triggerMousePress(frame, params.x, params.y, button),
+        .mousePressed => try Frame.user_input.triggerMousePress(frame, params.x, params.y, button, params.clickCount),
         .mouseReleased => try Frame.user_input.triggerMouseRelease(frame, params.x, params.y, button, params.clickCount),
         .mouseMoved => try Frame.user_input.triggerMouseMove(frame, params.x, params.y),
         .mouseWheel => try Frame.user_input.triggerMouseWheel(frame, params.x, params.y, params.deltaX, params.deltaY),
@@ -502,9 +502,8 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
 
 // A CDP mousePressed/mouseReleased pair fires the full pointerdown/mousedown/
 // pointerup/mouseup/click sequence, matching actions.click's five-event
-// sequence (asserted in the MCP click test) except that mousedown's detail
-// (click count) is always 0 — triggerMousePress takes no click-count
-// parameter, so only the release half's mouseup/click carries one.
+// sequence (asserted in the MCP click test) — mousedown carries the press
+// message's own clickCount as its detail, matching Chrome and Firefox.
 test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full pointer/mouse sequence" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -541,8 +540,153 @@ test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full po
 
     const result = try ls.local.compileAndRun(
         \\JSON.stringify(window.seq) === JSON.stringify([
-        \\  'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:0::true',
+        \\  'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:1::true',
         \\  'pointerup:0:0:0:mouse:true', 'mouseup:0:0:1::true', 'click:0:0:1:mouse:true'
+        \\])
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+// clickCount 0 (the struct default, same as omitting the field entirely) is
+// preserved as mousedown's detail rather than forced to 1 — Chrome and
+// Firefox both fire detail 0 for an omitted/zero clickCount, distinct from
+// the detail-1 case a plain single click sends.
+test "cdp.input: dispatchMouseEvent mousePressed's mousedown detail matches the message's clickCount" {
+    const cases = .{
+        .{ .click_count = 0, .expect_detail = 0 },
+        .{ .click_count = 1, .expect_detail = 1 },
+        .{ .click_count = 2, .expect_detail = 2 },
+    };
+    inline for (cases) |case| {
+        var ctx = try testing.context();
+        defer ctx.deinit();
+
+        const bc = try ctx.loadBrowserContext(.{});
+        const page = try bc.session.createPage();
+        const frame = page.frame().?;
+
+        const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+        try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+        try testing.waitForPage(bc);
+
+        var ls: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        var try_catch: lp.js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        const rect_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+        const rect_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+        try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchMouseEvent",
+            .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = case.click_count },
+        });
+
+        const expected = std.fmt.comptimePrint("'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:{d}::true'", .{case.expect_detail});
+        const script = std.fmt.comptimePrint(
+            "JSON.stringify(window.seq) === JSON.stringify([{s}])",
+            .{expected},
+        );
+        const result = try ls.local.compileAndRun(script, null);
+        try testing.expect(result.isTrue());
+    }
+}
+
+// Independent check that clickCount is not press-only: a clickCount-2
+// press+release pair must carry detail 2 on mousedown, mouseup, and click,
+// and still fire dblclick from the release half.
+test "cdp.input: clickCount 2 on press and release puts detail 2 on mousedown, mouseup, click and fires dblclick" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawDbl = false;
+        \\document.getElementById('btn').addEventListener('dblclick', () => { window.sawDbl = true; });
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 2 },
+    });
+
+    const result = try ls.local.compileAndRun(
+        \\JSON.stringify(window.seq) === JSON.stringify([
+        \\  'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:2::true',
+        \\  'pointerup:0:0:0:mouse:true', 'mouseup:0:0:2::true', 'click:0:0:2:mouse:true'
+        \\]) && window.sawDbl === true
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+// The chorded-press branch has its own mousedown dispatch; clickCount must
+// reach it too, not only the first-button dispatchPointerPress path.
+test "cdp.input: a chorded mousedown carries the press message's clickCount as its detail" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 2 },
+    });
+
+    const result = try ls.local.compileAndRun(
+        \\JSON.stringify(window.seq) === JSON.stringify([
+        \\  'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:1::true',
+        \\  'mousedown:2:3:2::true'
         \\])
     , null);
     try testing.expect(result.isTrue());
@@ -596,6 +740,12 @@ test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across
 // (as pointermove), but pointerdown/pointerup fire only at the 0/nonzero
 // transitions, and a cancelled pointerdown's mouse-event suppression holds
 // for the whole gesture — https://www.w3.org/TR/pointerevents3/#chorded-button-interactions.
+// This asserts only the pointer events this PR owns. The pointer/mouse
+// events pin the same chord in real Chrome exactly; the *activation* order
+// below (contextmenu on release rather than on the right press, and a
+// trailing left click instead of auxclick) is a pre-existing, known
+// deviation from Chrome's chorded release switch, not something this test
+// claims is spec-correct.
 test "cdp.input: a mouse chord fires pointermove for the mid-gesture button change, not a second pointerdown/pointerup" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -643,6 +793,65 @@ test "cdp.input: a mouse chord fires pointermove for the mid-gesture button chan
     const result = try ls.local.compileAndRun(
         \\JSON.stringify(window.seqChord) === JSON.stringify([
         \\  'pointerdown:1', 'pointermove:3', 'pointermove:1', 'contextmenu:1', 'pointerup:0', 'click:0'
+        \\])
+    , null);
+    try testing.expect(result.isTrue());
+}
+
+// A primary-button release mid-chord (another button still held) reports
+// that held mask on its click, not 0 — the click is a PointerEvent and
+// PointerEvent.buttons reflects buttons still down after this one lifts.
+// Confirmed against real Chrome and Firefox: both report the held button on
+// this click too (and, like this PR, fire it as a genuine `click`, not
+// folding it into `auxclick`/`contextmenu`).
+test "cdp.input: a primary click fired mid-chord carries the still-held buttons mask" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('btnChord').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('btnChord').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mousePressed", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
+    // Left releases first this time, while right is still held.
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "left", .clickCount = 1 },
+    });
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseReleased", .x = rect_x, .y = rect_y, .button = "right", .clickCount = 1 },
+    });
+
+    const result = try ls.local.compileAndRun(
+        \\JSON.stringify(window.seqChord) === JSON.stringify([
+        \\  'pointerdown:1', 'pointermove:3', 'pointermove:2', 'click:2', 'pointerup:0', 'contextmenu:0'
         \\])
     , null);
     try testing.expect(result.isTrue());
