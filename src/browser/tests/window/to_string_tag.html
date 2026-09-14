@@ -9,6 +9,7 @@
     testing.expectEqual("[object HTMLDivElement]", Object.prototype.toString.call(HTMLDivElement.prototype));
     testing.expectEqual("[object HTMLDivElement]", Object.prototype.toString.call(document.createElement("div")));
     testing.expectEqual("[object HTMLUnknownElement]", Object.prototype.toString.call(document.createElement("bogus")));
+    testing.expectEqual("[object CSS]", Object.prototype.toString.call(CSS));
 </script>
 
 <script id=tag_descriptors>
