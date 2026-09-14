@@ -224,6 +224,27 @@ pub fn isSecure(raw: [:0]const u8) bool {
     return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
+/// Cryptographic scheme or loopback host. Browsers let such origins use
+/// secure-only features (Secure cookies, prefixed cookie names) so that
+/// plain-http local development behaves like production.
+pub fn isPotentiallyTrustworthy(raw: [:0]const u8) bool {
+    return isSecure(raw) or isLoopbackHost(getHostname(raw));
+}
+
+/// Chromium's net::IsLocalhost. Takes a hostname as returned by
+/// `getHostname`: no port, IPv6 literals still bracketed.
+pub fn isLoopbackHost(hostname: []const u8) bool {
+    const host = std.mem.trimEnd(u8, hostname, ".");
+    if (std.ascii.eqlIgnoreCase(host, "localhost") or std.ascii.endsWithIgnoreCase(host, ".localhost")) {
+        return true;
+    }
+    const address = std.Io.net.IpAddress.parseLiteral(host) catch return false;
+    return switch (address) {
+        .ip4 => |ip4| ip4.bytes[0] == 127,
+        .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &([_]u8{0} ** 15 ++ [_]u8{1})),
+    };
+}
+
 pub fn getHostname(raw: []const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return host;
@@ -1455,6 +1476,34 @@ test "URL: getHostname" {
     // IPv6 without port - must return full bracket notation
     try testing.expectEqualSlices(u8, "[::1]", getHostname("http://[::1]/path"));
     try testing.expectEqualSlices(u8, "[2001:db8::1]", getHostname("https://[2001:db8::1]/"));
+}
+
+test "URL: isPotentiallyTrustworthy" {
+    for ([_][:0]const u8{
+        "https://example.com/",
+        "http://localhost/",
+        "http://LOCALHOST:3000/x",
+        "http://localhost./",
+        "http://app.localhost/",
+        "http://127.0.0.1:8080/",
+        "http://127.255.255.254/",
+        "http://[::1]:9/",
+    }) |url| {
+        try testing.expect(isPotentiallyTrustworthy(url));
+    }
+
+    for ([_][:0]const u8{
+        "http://example.com/",
+        "http://notlocalhost/",
+        "http://localhost.evil.com/",
+        "http://127.0.0.1.evil.com/",
+        "http://128.0.0.1/",
+        "http://[::2]/",
+        "http://[::ffff:127.0.0.1]/",
+        "about:blank",
+    }) |url| {
+        try testing.expect(!isPotentiallyTrustworthy(url));
+    }
 }
 
 test "URL: getPort" {
