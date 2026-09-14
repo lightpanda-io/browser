@@ -500,10 +500,8 @@ test "cdp.input: dispatchMouseEvent right button fires contextmenu, double-click
     try testing.expect(result.isTrue());
 }
 
-// A CDP mousePressed/mouseReleased pair fires the full pointerdown/mousedown/
-// pointerup/mouseup/click sequence, matching actions.click's five-event
-// sequence (asserted in the MCP click test) — mousedown carries the press
-// message's own clickCount as its detail, matching Chrome and Firefox.
+// A CDP press/release pair fires the full pointer/mouse sequence, with
+// mousedown carrying the message's clickCount as its detail (matches Chrome).
 test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full pointer/mouse sequence" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -547,10 +545,8 @@ test "cdp.input: dispatchMouseEvent mousePressed/mouseReleased fires the full po
     try testing.expect(result.isTrue());
 }
 
-// clickCount 0 (the struct default, same as omitting the field entirely) is
-// preserved as mousedown's detail rather than forced to 1 — Chrome and
-// Firefox both fire detail 0 for an omitted/zero clickCount, distinct from
-// the detail-1 case a plain single click sends.
+// clickCount 0 (omitted) is preserved as mousedown's detail, not forced to 1:
+// Chrome and Firefox both fire detail 0 there, distinct from a detail-1 click.
 test "cdp.input: dispatchMouseEvent mousePressed's mousedown detail matches the message's clickCount" {
     const cases = .{
         .{ .click_count = 0, .expect_detail = 0 },
@@ -596,9 +592,8 @@ test "cdp.input: dispatchMouseEvent mousePressed's mousedown detail matches the 
     }
 }
 
-// Independent check that clickCount is not press-only: a clickCount-2
-// press+release pair must carry detail 2 on mousedown, mouseup, and click,
-// and still fire dblclick from the release half.
+// clickCount reaches the release half too: a clickCount-2 pair carries
+// detail 2 on mousedown/mouseup/click and fires dblclick.
 test "cdp.input: clickCount 2 on press and release puts detail 2 on mousedown, mouseup, click and fires dblclick" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -647,8 +642,7 @@ test "cdp.input: clickCount 2 on press and release puts detail 2 on mousedown, m
     try testing.expect(result.isTrue());
 }
 
-// The chorded-press branch has its own mousedown dispatch; clickCount must
-// reach it too, not only the first-button dispatchPointerPress path.
+// clickCount must reach the chorded-press mousedown, not only the first press.
 test "cdp.input: a chorded mousedown carries the press message's clickCount as its detail" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -692,9 +686,8 @@ test "cdp.input: a chorded mousedown carries the press message's clickCount as i
     try testing.expect(result.isTrue());
 }
 
-// mousePressed and mouseReleased are two independent CDP messages, so a
-// pointerdown cancelled on the press half must still suppress mouseup on the
-// release half, with no state carried by the caller between the two calls.
+// A pointerdown cancelled on the press message must still suppress mouseup on
+// the separate release message, with no state carried by the caller.
 test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across the split mousePressed/mouseReleased calls" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -735,17 +728,9 @@ test "cdp.input: a cancelled pointerdown suppresses mousedown and mouseup across
     try testing.expect(result.isTrue());
 }
 
-// A second button pressed while the first is still held is a chord on one
-// pointer, not two independent gestures: the aggregate buttons mask changes
-// (as pointermove), but pointerdown/pointerup fire only at the 0/nonzero
-// transitions, and a cancelled pointerdown's mouse-event suppression holds
-// for the whole gesture — https://www.w3.org/TR/pointerevents3/#chorded-button-interactions.
-// This asserts only the pointer events this PR owns. The pointer/mouse
-// events pin the same chord in real Chrome exactly; the *activation* order
-// below (contextmenu on release rather than on the right press, and a
-// trailing left click instead of auxclick) is a pre-existing, known
-// deviation from Chrome's chorded release switch, not something this test
-// claims is spec-correct.
+// Asserts only the pointer events: pointerdown/pointerup fire at the mask's
+// 0/nonzero transitions and a mid-gesture button change is a pointermove (the
+// activation order below is a pre-existing, non-spec deviation from Chrome).
 test "cdp.input: a mouse chord fires pointermove for the mid-gesture button change, not a second pointerdown/pointerup" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -798,12 +783,8 @@ test "cdp.input: a mouse chord fires pointermove for the mid-gesture button chan
     try testing.expect(result.isTrue());
 }
 
-// A primary-button release mid-chord (another button still held) reports
-// that held mask on its click, not 0 — the click is a PointerEvent and
-// PointerEvent.buttons reflects buttons still down after this one lifts.
-// Confirmed against real Chrome and Firefox: both report the held button on
-// this click too (and, like this PR, fire it as a genuine `click`, not
-// folding it into `auxclick`/`contextmenu`).
+// A primary release mid-chord reports the still-held mask on its click, not 0
+// (confirmed against Chrome and Firefox).
 test "cdp.input: a primary click fired mid-chord carries the still-held buttons mask" {
     var ctx = try testing.context();
     defer ctx.deinit();

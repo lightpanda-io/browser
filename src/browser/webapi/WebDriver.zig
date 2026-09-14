@@ -77,11 +77,7 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         log.warn(.app, "webdriver click press", .{ .err = err });
         return;
     };
-    if (!press.suppress_mouse and !press.suppress_focus) {
-        Frame.user_input.focusForMouseDown(frame, element) catch |err| {
-            log.warn(.app, "webdriver click focus", .{ .err = err });
-        };
-    }
+    try Frame.user_input.runMouseDownFocus(frame, element, press, "webdriver click focus");
     Frame.user_input.dispatchPointerRelease(frame, element, 0, 0, main, press.suppress_mouse, 1, modifiers) catch |err| {
         log.warn(.app, "webdriver click release", .{ .err = err });
         return;
@@ -348,8 +344,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
 }
 
-// The `buttons` bitmask bit for a WebDriver button number: the flag order does
-// not follow the button numbering (left=1, right=2, middle=4).
 // A click whose mousedown and mouseup landed on different elements fires at
 // their nearest common inclusive ancestor element.
 fn commonClickTarget(down: *Element, up: *Element) *Element {
