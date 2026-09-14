@@ -157,8 +157,10 @@ pub const JsApi = struct {
 pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Template);
-        // Create the template content DocumentFragment
-        self._content = try DocumentFragment.init(node.getDocument(frame), frame);
+        // The content DocumentFragment belongs to the inert template contents
+        // owner document, not to the template's own document.
+        const owner = try node.getDocument(frame).templateContentsOwner(frame);
+        self._content = try DocumentFragment.init(owner, frame);
     }
 
     // Per the HTML spec's cloning steps for <template>, a deep clone must

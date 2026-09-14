@@ -186,6 +186,10 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, frame: *Frame) !void {
 }
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, frame: *Frame) !void {
+    if (element.asNode().getDocument(frame)._frame == null) {
+        return;
+    }
+
     const custom = element.is(Custom) orelse {
         return Custom.checkAndAttachBuiltIn(element, frame);
     };
