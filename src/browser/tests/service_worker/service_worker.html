@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <body></body>
 <script src="../testing.js"></script>
+<script>
+  // A worker's script is fetched over HTTP, so how long it takes to leave
+  // `parsed` depends on the machine: wait on the state, never on time.
+  function workerReached(worker, state) {
+    return new Promise((resolve) => {
+      if (worker.state === state) return resolve();
+      worker.addEventListener('statechange', () => worker.state === state && resolve());
+    });
+  }
+</script>
 
 <script id="service_worker_container">
   {
@@ -25,7 +35,7 @@
       './realm-worker.js',
       { scope: './realm/' },
     );
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await workerReached(registration.installing, 'activated');
 
     const dedicated = new Worker('./realm-worker.js');
     const fromDedicated = await new Promise((resolve) => {
@@ -188,8 +198,7 @@
       './waiting-worker.js',
       { scope: './stuck/' },
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await workerReached(registration.installing, 'installing');
 
     state.resolve();
     await state.done(() => {
@@ -208,8 +217,7 @@
       './throwing-worker.js',
       { scope: './broken/' },
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await workerReached(registration.installing, 'redundant');
 
     state.resolve();
     await state.done(() => {
@@ -290,10 +298,7 @@
       { scope: './swap/' },
     );
     const worker = first.installing;
-    await new Promise((resolve) => {
-      if (worker.state === 'activated') resolve();
-      worker.addEventListener('statechange', () => worker.state === 'activated' && resolve());
-    });
+    await workerReached(worker, 'activated');
 
     const second = await navigator.serviceWorker.register(
       './waiting-worker.js',
@@ -344,7 +349,7 @@
   {
     const state = await testing.async();
     const reg = await navigator.serviceWorker.register('./identity-worker.js', { scope: './ident/' });
-    await new Promise((r) => setTimeout(r, 50));
+    await workerReached(reg.installing, 'activated');
     const again = await navigator.serviceWorker.getRegistration('./ident/');
     // The page itself isn't under ./ident/, so the broader default-scope
     // registration is the one that matches this document.
