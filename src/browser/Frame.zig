@@ -1026,24 +1026,19 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     // fragment). Identical URLs fall through and trigger a real reload.
     const is_fragment_navigation = !std.mem.eql(u8, target.url, resolved_url) and URL.eqlDocument(target.url, resolved_url);
     if (!opts.force and is_fragment_navigation) {
-        const old_url = target.url;
-        target.url = try target.arena.dupeZ(u8, resolved_url);
-
-        const location = try Location.init(target.url, target);
-        location.acquireRef();
-        target.window._location.releaseRef(target._page);
-        target.window._location = location;
-
-        if (target.parent == null) {
-            try session.navigation.updateEntries(target.url, opts.kind, target, true);
-        }
-
-        // `:target` matches off the fragment, which just changed.
+        const resolved_kind: NavigationKind = switch (opts.kind) {
+            .push => switch (nt) {
+                .script => .{ .replace = null },
+                else => opts.kind,
+            },
+            else => opts.kind,
+        };
+        _ = try session.navigation.navigateSameDocumentInternal(
+            resolved_url,
+            resolved_kind,
+            target,
+        );
         target.styleChanged();
-
-        try target.queueHashChange(old_url, target.url);
-
-        // don't defer this, the caller is responsible for freeing it on error
         arena.release();
         return;
     }
