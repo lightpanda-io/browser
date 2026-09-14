@@ -23,7 +23,6 @@ const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
 const Factory = @import("../Factory.zig");
-const StyleManager = @import("../StyleManager.zig");
 
 const CSS = @import("CSS.zig");
 const Node = @import("Node.zig");
@@ -220,6 +219,10 @@ pub fn is(self: *Element, comptime T: type) ?*T {
 
 pub fn as(self: *Element, comptime T: type) *T {
     return self.is(T).?;
+}
+
+pub fn getDocument(self: *Element, frame: *const Frame) *Node.Document {
+    return self.asNode().getDocument(frame);
 }
 
 pub fn asNode(self: *Element) *Node {
@@ -569,7 +572,7 @@ pub fn setOuterHTML(self: *Element, html: []const u8, frame: *Frame) !void {
 
     var fragment: ?*Node = null;
     if (html.len > 0) {
-        const frag = (try Node.DocumentFragment.init(frame)).asNode();
+        const frag = (try Node.DocumentFragment.init(node.getDocument(frame), frame)).asNode();
         // The parent is the parse context (a fragment parent means body).
         try Frame.parse.fragment(frame, frag, html, .{ .context = parent.is(Element) });
         fragment = frag;
@@ -630,32 +633,43 @@ pub fn setHTMLUnsafe(self: *Element, html: []const u8, frame: *Frame) !void {
     return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
 }
 
-pub fn getId(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("id")) orelse "";
+pub fn getId(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("id");
 }
 
 pub fn setId(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("id"), .wrap(value), frame);
 }
 
-pub fn getSlot(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("slot")) orelse "";
+// ** INTERN ONL **. Unlike other getters, e.g. getClassName, getSlot, this
+// isn't a WebApi (some individual types DO have a name getter, but not Element).
+// BUT, enough code internally needs this, that the helper exists.
+pub fn getName(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("name");
+}
+
+pub fn hasName(self: *const Element) bool {
+    return self.hasAttributeInterned("name");
+}
+
+pub fn getSlot(self: *const Element) ?[]const u8 {
+    return self.getAttributeSafe(comptime .wrap("slot"));
 }
 
 pub fn setSlot(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("slot"), .wrap(value), frame);
 }
 
-pub fn getDir(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("dir")) orelse "";
+pub fn getDir(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("dir");
 }
 
 pub fn setDir(self: *Element, value: []const u8, frame: *Frame) !void {
     return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), frame);
 }
 
-pub fn getClassName(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .wrap("class")) orelse "";
+pub fn getClassName(self: *const Element) ?[]const u8 {
+    return self.getAttributeInterned("class");
 }
 
 pub fn setClassName(self: *Element, value: []const u8, frame: *Frame) !void {
@@ -727,6 +741,16 @@ pub fn hasAttributeSafe(self: *const Element, name: String) bool {
     return self._attributes.hasSafe(name);
 }
 
+// Like getAttributeSafe, but faster! Only usable for values that are String.intern
+// so that the comparison becomes a single pointer equality.
+pub fn getAttributeInterned(self: *const Element, comptime name: []const u8) ?[]const u8 {
+    return self._attributes.getInterned(name);
+}
+
+pub fn hasAttributeInterned(self: *const Element, comptime name: []const u8) bool {
+    return self._attributes.hasInterned(name);
+}
+
 // Per HTML "concept-fe-disabled", only listed elements participate in the
 // disabled concept. Anything else (e.g. <div disabled>) has no disabled
 // state and never matches :disabled / :enabled.
@@ -742,7 +766,7 @@ pub fn isDisabled(self: *const Element) bool {
         return false;
     }
 
-    if (self.getAttributeSafe(comptime .wrap("disabled")) != null) {
+    if (self.getAttributeInterned("disabled") != null) {
         return true;
     }
 
@@ -754,7 +778,7 @@ pub fn isDisabled(self: *const Element) bool {
         if (self.asConstNode()._parent) |parent_node| {
             if (parent_node.is(Element)) |parent_el| {
                 if (parent_el.getTag() == .optgroup and
-                    parent_el.getAttributeSafe(comptime .wrap("disabled")) != null)
+                    parent_el.getAttributeInterned("disabled") != null)
                 {
                     return true;
                 }
@@ -769,7 +793,7 @@ pub fn isDisabled(self: *const Element) bool {
         current = node._parent;
         const ancestor = node.is(Element) orelse continue;
 
-        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+        if (ancestor.getTag() == .fieldset and ancestor.getAttributeInterned("disabled") != null) {
             var child = ancestor.firstElementChild();
             while (child) |c| {
                 if (c.getTag() == .legend) {
@@ -916,7 +940,7 @@ pub fn insertAdjacentText(
         error.AdjacentNoParent => return,
         else => return err,
     };
-    const text_node = try Frame.node_factory.createTextNode(frame, data);
+    const text_node = try Frame.node_factory.createTextNode(self.getDocument(frame), data);
     _ = try target_node.insertBefore(text_node, prev_node, frame);
 }
 
@@ -925,8 +949,7 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, frame: *Frame) !?*Attr
         if (el == self) {
             return attr;
         }
-        attr._element = null;
-        _ = try el.removeAttributeNode(attr, frame);
+        return error.InUseAttribute;
     }
 
     return self._attributes.putAttribute(attr, self, frame);
@@ -982,7 +1005,7 @@ pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.Named
 // the caller's: attributeChange (which resyncs it) is dispatched on the owner
 // frame, and a same-origin script can reach an element in another frame.
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse frame;
     const gop = try owner._element_styles.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
@@ -991,11 +1014,29 @@ pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     return gop.value_ptr.*;
 }
 
-pub fn getStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+pub fn existingStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     if (!self._flags.has_inline_style) {
         return null;
     }
-    return self.ownerFrame(frame)._element_styles.get(self);
+    return (self.ownerFrame(frame) orelse frame)._element_styles.get(self);
+}
+
+/// The inline style object, parsed from the style attribute on first use;
+/// null when the element has neither.
+pub fn inlineStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
+    if (!self._flags.has_inline_style) {
+        return null;
+    }
+    if (self.existingStyle(frame)) |style| {
+        return style;
+    }
+    if (self.getAttributeInterned("style") == null) {
+        return null;
+    }
+    return self.getOrCreateStyle(frame) catch |err| {
+        log.err(.browser, "inline style parse", .{ .err = err });
+        return null;
+    };
 }
 
 // Marks the element as possibly having inline style once a `style` attribute
@@ -1091,7 +1132,7 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame
     var rm_ref_node = true;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
 
         // If a child is the ref node. We keep it at its own current position.
         if (child == ref_node) {
@@ -1133,30 +1174,65 @@ pub fn remove(self: *Element, frame: *Frame) void {
     frame.removeNode(parent, node, .{ .reconnect_to = null });
 }
 
+// The tabindex of a focusable area, or null when the element can't take focus
+// at all. A negative value is still focusable, just skipped by sequential
+// focus navigation.
+// https://html.spec.whatwg.org/multipage/interaction.html#focusable-area
+pub fn focusTabIndex(self: *Element) ?i32 {
+    if (self.isDisabled()) {
+        return null;
+    }
+    if (self.is(Html) == null) {
+        return null;
+    }
+
+    if (self.getAttributeInterned("tabindex")) |attr| {
+        return Html.parseInteger(attr) orelse 0;
+    }
+
+    return switch (self.getTag()) {
+        .button, .select, .textarea, .iframe => 0,
+        .input => if (self.as(Html.Input)._input_type != .hidden) 0 else null,
+        .anchor, .area => if (self.getAttributeInterned("href") != null) 0 else null,
+        else => null,
+    };
+}
+
+// A focusable area that can take focus right now: connected and being rendered.
+pub fn isFocusable(self: *Element, frame: *Frame) bool {
+    if (self.focusTabIndex() == null) {
+        return false;
+    }
+    if (self.asNode().isConnected() == false) {
+        return false;
+    }
+    return self.isVisible(frame);
+}
+
 pub fn focus(self: *Element, frame: *Frame) !void {
     if (self.asNode().isConnected() == false) {
         // a disconnected node cannot take focus
         return;
     }
 
+    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    const old_active = doc._active_element;
+    if (old_active == self) {
+        return;
+    }
+
     // Per HTML spec §6.4.4, an element must be "being rendered" (not
     // display:none on self or any ancestor) to be focusable.
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return;
     }
 
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
-    const old_active = doc._active_element;
-    doc._active_element = self;
+    doc.setActiveElement(self, frame);
 
     if (old_active) |old| {
-        if (old == self) {
-            return;
-        }
-
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)
@@ -1183,7 +1259,7 @@ pub fn blur(self: *Element, frame: *Frame) !void {
     const doc = self.asNode().ownerDocument(frame) orelse frame.document;
     if (doc._active_element != self) return;
 
-    doc._active_element = null;
+    doc.setActiveElement(null, frame);
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
@@ -1218,7 +1294,7 @@ pub fn before(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !vo
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
@@ -1229,7 +1305,7 @@ pub fn after(self: *Element, nodes: []const Node.NodeOrText, frame: *Frame) !voi
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
@@ -1329,29 +1405,17 @@ pub fn parentElement(self: *Element) ?*Element {
     return self.asNode().parentElement();
 }
 
-/// Cache for visibility checks - re-exported from StyleManager for convenience.
-pub const VisibilityCache = StyleManager.VisibilityCache;
-
-/// Cache for pointer-events checks - re-exported from StyleManager for convenience.
-pub const PointerEventsCache = StyleManager.PointerEventsCache;
-
 // Style checks go through the StyleManager of the element's own frame, not
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
-pub fn hasPointerEventsNone(self: *Element, cache: ?*PointerEventsCache, frame: *Frame) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self, cache);
+pub fn hasPointerEventsNone(self: *Element, frame: *Frame) bool {
+    const owner = self.ownerFrame(frame) orelse return false;
+    return owner._style_manager.hasPointerEventsNone(self);
 }
 
-pub fn checkVisibilityCached(self: *Element, cache: ?*VisibilityCache, frame: *Frame, comptime access: StyleManager.InlineAccess) bool {
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, cache, .{}, access);
-}
-
-// The element's own display:none only, no ancestor walk. For a child or
-// sibling of an element already known to be visible, that is the whole
-// answer: they share the visible ancestor chain — and the owner frame, which
-// the caller resolves once rather than per element.
-fn isVisibleSelf(self: *Element, style_manager: *StyleManager) bool {
-    return !style_manager.hasDisplayNone(self, .materialize);
+pub fn isVisible(self: *Element, frame: *Frame) bool {
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1362,10 +1426,11 @@ const CheckVisibilityOpts = struct {
 };
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, null, .{
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
-    }, .materialize);
+    });
 }
 
 pub const Axis = enum {
@@ -1380,7 +1445,7 @@ pub const Axis = enum {
 };
 
 pub fn getElementAxis(self: *Element, frame: *Frame, comptime axis: Axis) Axis.State {
-    if (self.getStyle(frame)) |style| {
+    if (self.inlineStyle(frame)) |style| {
         const decl = style.asCSSStyleDeclaration();
         if (CSS.parseDimensionViewport(decl.getPropertyValue(@tagName(axis), frame), frame)) |v| {
             return .{ .value = v, .explicit = true };
@@ -1419,7 +1484,7 @@ pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
 }
 
 fn clientAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.viewportAxis(frame, axis) orelse self.boxAxis(frame, axis);
@@ -1467,7 +1532,7 @@ pub fn getBoundingClientRect(self: *Element, frame: *Frame) !*DOMRect {
 // getBoundingClientRect, getClientRects, and IntersectionObserver. A DOMRect is
 // only materialized at the JS boundary.
 pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return .{};
     }
     return self.boundingClientRectValuesForVisible(frame);
@@ -1484,7 +1549,7 @@ pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect
 }
 
 pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return &.{};
     }
     const rects = try frame.local_arena.alloc(*DOMRect, 1);
@@ -1498,13 +1563,13 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
 // owner frame first so the state, the fired events and the document
 // comparison stay in the element's frame.
 pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return 0;
     const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1517,13 +1582,13 @@ pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return 0;
     const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1536,7 +1601,7 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
 
@@ -1553,7 +1618,7 @@ pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
 }
 
 pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
 
@@ -1576,7 +1641,7 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // The dummy layout engine has no line-breaking, and an element only overflows
 // horizontally when its children don't wrap (white-space:nowrap, a flex row, an
 // inline-block strip), so the single-row assumption covers the case that
-// matters. We can't detect the layout mode to do better: getStyle() sees only
+// matters. We can't detect the layout mode to do better: existingStyle() sees only
 // the inline `style=` attribute, and the computed cascade resolves stylesheet
 // rules for `display:none` and `visibility` alone.
 //
@@ -1598,12 +1663,13 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // script actually consists of.
 fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
 
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
         if (node.is(Element)) |el| {
-            if (el.isVisibleSelf(style_manager)) {
+            if (!style_manager.hasDisplayNone(el)) {
                 total += el.getElementAxis(frame, axis).value;
             }
         }
@@ -1615,35 +1681,35 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
 // Unlike clientHeight, the root's offsetHeight is its box (the document
 // extent), so it stays on the synthetic root default.
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.boxAxis(frame, .height);
 }
 
 pub fn getOffsetWidth(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.boxAxis(frame, .width);
 }
 
 pub fn getOffsetTop(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
 pub fn getOffsetLeft(self: *Element, frame: *Frame) f64 {
-    if (!self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.isVisible(frame)) {
         return 0.0;
     }
     return self.horizontalPosition(frame);
 }
 
 pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
-    if (!self.asNode().isConnected() or !self.checkVisibilityCached(null, frame, .materialize)) {
+    if (!self.asNode().isConnected() or !self.isVisible(frame)) {
         return null;
     }
 
@@ -1684,7 +1750,7 @@ pub fn getOffsetParent(self: *Element, frame: *Frame) ?*Element {
 }
 
 fn positionStyle(self: *Element, frame: *Frame) []const u8 {
-    const style = self.getStyle(frame) orelse return "";
+    const style = self.inlineStyle(frame) orelse return "";
     return style.asCSSStyleDeclaration().getPropertyValue("position", frame);
 }
 
@@ -1766,15 +1832,16 @@ fn countSubtreeNodes(node: *Node) f64 {
 pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var x: f64 = 0.0;
     var current = self.asNode();
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
 
-    if (self.getStyle(frame)) |style| {
+    if (self.inlineStyle(frame)) |style| {
         x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
     }
 
     while (current.parentNode()) |parent| {
         if (parent.is(Element)) |el| {
-            if (el.getStyle(frame)) |style| {
+            if (el.inlineStyle(frame)) |style| {
                 x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
             }
         }
@@ -1782,7 +1849,7 @@ pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
         while (sibling) |s| : (sibling = s.nextSibling()) {
             if (s == current) break;
             if (s.is(Element)) |el| {
-                if (el.isVisibleSelf(style_manager)) {
+                if (!style_manager.hasDisplayNone(el)) {
                     x += el.getElementAxis(frame, .width).value;
                 }
             }
@@ -1805,9 +1872,9 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, frame: *Fr
     return self.asNode().getElementsByClassName(class_name, frame);
 }
 
-pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
+pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
     const tag_name = self.getTagNameDump();
-    const node = try Frame.node_factory.createElementNS(frame, self._namespace, tag_name, &self._attributes);
+    const node = try Frame.node_factory.createElementNS(document, self._namespace, tag_name, &self._attributes);
 
     // A namespace outside the built-in set lives in a side table; the clone
     // must report the same namespaceURI.
@@ -1838,7 +1905,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
             const cloned_shadow_node = cloned_shadow.asNode();
             var shadow_child_it = shadow.asNode().childrenIterator();
             while (shadow_child_it.next()) |child| {
-                if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
                     try frame.appendNode(cloned_shadow_node, cloned_child, .{});
                 }
             }
@@ -1848,7 +1915,7 @@ pub fn clone(self: *Element, deep: bool, frame: *Frame) !*Node {
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+            if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
                 try frame.appendNode(node, cloned_child, .{});
             }
         }
@@ -1894,7 +1961,7 @@ const ScrollToOpts = union(enum) {
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1919,7 +1986,7 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1930,8 +1997,8 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     };
     const old_x = gop.value_ptr.x;
     const old_y = gop.value_ptr.y;
-    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) + dx));
-    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) + dy));
+    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) +| dx));
+    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) +| dy));
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }
@@ -2129,8 +2196,8 @@ pub fn getTag(self: *const Element) Tag {
     };
 }
 
-pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
-    return self.asConstNode().ownerFrame(default);
+pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
+    return self.asConstNode().ownerFrame(frame);
 }
 
 pub const Tag = enum {
@@ -2395,8 +2462,16 @@ pub const JsApi = struct {
     }
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
-    pub const id = bridge.accessor(Element.getId, Element.setId, .{ .ce_reactions = true });
-    pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{ .ce_reactions = true });
+    pub const id = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getId() orelse "";
+        }
+    }.wrap, Element.setId, .{ .ce_reactions = true });
+    pub const slot = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getSlot() orelse "";
+        }
+    }.wrap, Element.setSlot, .{ .ce_reactions = true });
     pub const role = ariaAccessor("role");
     pub const ariaAtomic = ariaAccessor("aria-atomic");
     pub const ariaAutoComplete = ariaAccessor("aria-autocomplete");
@@ -2441,8 +2516,16 @@ pub const JsApi = struct {
     pub const ariaValueMin = ariaAccessor("aria-valuemin");
     pub const ariaValueNow = ariaAccessor("aria-valuenow");
     pub const ariaValueText = ariaAccessor("aria-valuetext");
-    pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{ .ce_reactions = true });
-    pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{ .ce_reactions = true });
+    pub const dir = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getDir() orelse "";
+        }
+    }.wrap, Element.setDir, .{ .ce_reactions = true });
+    pub const className = bridge.accessor(struct {
+        fn wrap(self: *const Element) []const u8 {
+            return self.getClassName() orelse "";
+        }
+    }.wrap, Element.setClassName, .{ .ce_reactions = true });
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{ .ce_reactions = true });
     pub const part = bridge.accessor(Element.getPartList, null, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});

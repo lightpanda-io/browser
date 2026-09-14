@@ -48,7 +48,7 @@ _restricted: bool = false,
 
 pub const Coordinate = enum { x, y, z, w };
 
-pub const Attachment = struct {
+const Attachment = struct {
     owner: *anyopaque,
     mutate: *const fn (*anyopaque, *DOMPointReadOnly, Coordinate, f64) anyerror!void,
 };
@@ -84,7 +84,7 @@ pub fn releaseRef(self: *DOMPointReadOnly, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn createBare(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPointReadOnly {
+fn createBare(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPointReadOnly {
     return page.factory.create(buildValue(x, y, z, w));
 }
 
@@ -99,7 +99,7 @@ pub fn buildValue(x: f64, y: f64, z: f64, w: f64) DOMPointReadOnly {
     };
 }
 
-pub fn fromPoint(other_: ?DOMPointInit, page: *Page) !*DOMPointReadOnly {
+fn fromPoint(other_: ?DOMPointInit, page: *Page) !*DOMPointReadOnly {
     const other: DOMPointInit = other_ orelse .{};
     return createBare(other.x, other.y, other.z, other.w, page);
 }
@@ -119,7 +119,7 @@ pub fn structuredDeserialize(reader: *js.StructuredReader, page: *Page) !*DOMPoi
     return createBare(x, y, z, w, page);
 }
 
-pub fn matrixTransform(self: *const DOMPointReadOnly, matrix_: ?Matrix.DOMMatrixInit, page: *Page) !*DOMPoint {
+fn matrixTransform(self: *const DOMPointReadOnly, matrix_: ?Matrix.DOMMatrixInit, page: *Page) !*DOMPoint {
     const m = (try Matrix.fixupDict(matrix_ orelse .{})).m;
     const x = self._x;
     const y = self._y;
@@ -140,10 +140,10 @@ pub fn getX(self: *const DOMPointReadOnly) f64 {
 pub fn getY(self: *const DOMPointReadOnly) f64 {
     return self._y;
 }
-pub fn getZ(self: *const DOMPointReadOnly) f64 {
+fn getZ(self: *const DOMPointReadOnly) f64 {
     return self._z;
 }
-pub fn getW(self: *const DOMPointReadOnly) f64 {
+fn getW(self: *const DOMPointReadOnly) f64 {
     return self._w;
 }
 

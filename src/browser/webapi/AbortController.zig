@@ -33,7 +33,7 @@ pub fn init(exec: *const Execution) !*AbortController {
     });
 }
 
-pub fn getSignal(self: *const AbortController) *AbortSignal {
+fn getSignal(self: *const AbortController) *AbortSignal {
     return self._signal;
 }
 

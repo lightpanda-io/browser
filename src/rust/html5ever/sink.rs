@@ -25,7 +25,7 @@ use crate::types::*;
 
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::StrTendril;
-use html5ever::{Attribute, QualName};
+use html5ever::{local_name, Attribute, QualName};
 
 type Arena<'arena> = &'arena typed_arena::Arena<ElementData>;
 
@@ -350,7 +350,7 @@ impl<'arena> TreeSink for Sink<'arena> {
         // so anything other than "open" is treated as "closed".
         let mode_is_open = attrs
             .iter()
-            .find(|a| a.name.local.as_ref() == "shadowrootmode")
+            .find(|a| a.name.local == local_name!("shadowrootmode"))
             .map(|a| a.value.as_ref() == "open")
             .unwrap_or(true);
         unsafe {

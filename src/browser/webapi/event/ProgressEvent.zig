@@ -74,15 +74,15 @@ pub fn asEvent(self: *ProgressEvent) *Event {
     return self._proto;
 }
 
-pub fn getTotal(self: *const ProgressEvent) usize {
+fn getTotal(self: *const ProgressEvent) usize {
     return self._total;
 }
 
-pub fn getLoaded(self: *const ProgressEvent) usize {
+fn getLoaded(self: *const ProgressEvent) usize {
     return self._loaded;
 }
 
-pub fn getLengthComputable(self: *const ProgressEvent) bool {
+fn getLengthComputable(self: *const ProgressEvent) bool {
     return self._length_computable;
 }
 

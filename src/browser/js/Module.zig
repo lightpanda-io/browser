@@ -107,10 +107,6 @@ pub fn getModuleNamespace(self: Module) js.Value {
     };
 }
 
-pub fn getScriptId(self: Module) u32 {
-    return @intCast(v8.v8__Module__ScriptId(self.handle));
-}
-
 pub fn persist(self: Module) !Global {
     var ctx = self.local.ctx;
     var global: v8.Global = undefined;

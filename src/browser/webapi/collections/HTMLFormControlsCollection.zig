@@ -55,12 +55,12 @@ pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, frame: *Frame
     return self._proto.getAtIndex(index, frame);
 }
 
-pub const NamedItemResult = union(enum) {
+const NamedItemResult = union(enum) {
     element: *Element,
     radio_node_list: *RadioNodeList,
 };
 
-pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
+fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Frame) !?NamedItemResult {
     if (name.len == 0) {
         return null;
     }
@@ -74,21 +74,7 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Fr
 
     var it = try self.iterator();
     while (it.next()) |element| {
-        const is_match = blk: {
-            if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
-                if (std.mem.eql(u8, id, name)) {
-                    break :blk true;
-                }
-            }
-            if (element.getAttributeSafe(comptime .wrap("name"))) |elem_name| {
-                if (std.mem.eql(u8, elem_name, name)) {
-                    break :blk true;
-                }
-            }
-            break :blk false;
-        };
-
-        if (is_match) {
+        if (matchesName(element, name)) {
             if (first_element == null) {
                 first_element = element;
             }
@@ -126,6 +112,20 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, frame: *Fr
     return .{ .element = first_element.? };
 }
 
+fn matchesName(element: *Element, name: []const u8) bool {
+    if (element.getId()) |id| {
+        if (std.mem.eql(u8, id, name)) {
+            return true;
+        }
+    }
+    if (element.getName()) |elem_name| {
+        if (std.mem.eql(u8, elem_name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // used internally, by HTMLFormControlsCollection and RadioNodeList
 pub fn iterator(self: *HTMLFormControlsCollection) !Iterator {
     const form_collection = self._proto._data.form;
@@ -161,6 +161,30 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(HTMLFormControlsCollection.length, null, .{});
     pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(HTMLFormControlsCollection.namedItem, null, null, null, null, .{ .null_as_undefined = true });
+    pub const @"[str]" = bridge.namedIndexed(HTMLFormControlsCollection.namedItem, null, null, null, struct {
+        fn wrap(self: *HTMLFormControlsCollection, name: []const u8) !u32 {
+            if (try hasNamed(self, name)) {
+                // Named properties are [LegacyUnenumerableNamedProperties]
+                return js.v8.DontEnum;
+            }
+            return error.NotHandled;
+        }
+    }.wrap, .{ .null_as_undefined = true });
+
     pub const namedItem = bridge.function(HTMLFormControlsCollection.namedItem, .{});
+
+    // Presence only, `namedItem` is relativel expensive / RC'd
+    fn hasNamed(self: *HTMLFormControlsCollection, name: []const u8) !bool {
+        if (name.len == 0) {
+            return false;
+        }
+
+        var it = try self.iterator();
+        while (it.next()) |element| {
+            if (matchesName(element, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };

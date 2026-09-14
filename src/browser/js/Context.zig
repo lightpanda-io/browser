@@ -145,7 +145,7 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
-pub fn fromC(c_context: *const v8.Context) ?*Context {
+fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
@@ -256,7 +256,7 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     }
 }
 
-pub const IdentityResult = struct {
+const IdentityResult = struct {
     value_ptr: *v8.Global,
     found_existing: bool,
 };
@@ -1188,7 +1188,7 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
 }
 
 // == Profiler ==
-pub fn startCpuProfiler(self: *Context) void {
+fn startCpuProfiler(self: *Context) void {
     if (comptime !lp.IS_DEBUG) {
         // Still testing this out, don't have it properly exposed, so add this
         // guard for the time being to prevent any accidental/weird prod issues.
@@ -1208,7 +1208,7 @@ pub fn startCpuProfiler(self: *Context) void {
     self.cpu_profiler = cpu_profiler;
 }
 
-pub fn stopCpuProfiler(self: *Context) ![]const u8 {
+fn stopCpuProfiler(self: *Context) ![]const u8 {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
@@ -1219,7 +1219,7 @@ pub fn stopCpuProfiler(self: *Context) ![]const u8 {
     return (js.String{ .local = &ls.local, .handle = string_handle }).toSlice();
 }
 
-pub fn startHeapProfiler(self: *Context) void {
+fn startHeapProfiler(self: *Context) void {
     if (comptime !lp.IS_DEBUG) {
         @compileError("Heap Profiling is only available in debug builds");
     }
@@ -1238,7 +1238,7 @@ pub fn startHeapProfiler(self: *Context) void {
     self.heap_profiler = heap_profiler;
 }
 
-pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
+fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();

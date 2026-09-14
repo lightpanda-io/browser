@@ -19,7 +19,7 @@
 const std = @import("std");
 const Io = std.Io;
 
-pub fn isHexColor(value: []const u8) bool {
+fn isHexColor(value: []const u8) bool {
     if (value.len == 0) {
         return false;
     }
@@ -287,12 +287,12 @@ pub const RGBA = packed struct(u32) {
     }
 
     /// Returns true if `Color` is opaque.
-    pub inline fn isOpaque(self: *const RGBA) bool {
+    inline fn isOpaque(self: *const RGBA) bool {
         return self.a == std.math.maxInt(u8);
     }
 
     /// Returns the normalized alpha value.
-    pub inline fn normalizedAlpha(self: *const RGBA) f32 {
+    inline fn normalizedAlpha(self: *const RGBA) f32 {
         return @as(f32, @floatFromInt(self.a)) / 255;
     }
 };

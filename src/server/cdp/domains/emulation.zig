@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../../Config.zig");
+const Mime = @import("../../../browser/Mime.zig");
 const js = @import("../../../browser/js/js.zig");
 
 const log = lp.log;
@@ -106,20 +107,6 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
             .value = v,
         });
     }
-    if (params.screenWidth) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenWidth",
-            .value = v,
-        });
-    }
-    if (params.screenHeight) |v| {
-        if (v != 0) log.warn(.not_implemented, "setDeviceMetricsOverride", .{
-            .cdp_cmd = "Emulation.setDeviceMetricsOverride",
-            .param = "screenHeight",
-            .value = v,
-        });
-    }
 
     // The override is stored on the Browser so it persists across page
     // navigations for the whole CDP connection.
@@ -134,6 +121,8 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
         .scale = if (dsf > 0) dsf else current.scale,
+        .screen_width = if (params.screenWidth orelse 0 > 0) params.screenWidth else current.screen_width,
+        .screen_height = if (params.screenHeight orelse 0 > 0) params.screenHeight else current.screen_height,
     });
 
     return cmd.sendResult(null, .{});
@@ -157,24 +146,33 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         platform: ?[]const u8 = null,
     })) orelse return error.InvalidParams;
 
-    if (params.acceptLanguage) |v| {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "acceptLanguage", .value = v });
-    }
     if (params.platform) |v| {
         log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
     }
 
     const ua = params.userAgent;
-    Config.validateUserAgent(ua) catch |err| switch (err) {
+    const reserved = if (Config.validateUserAgent(ua)) false else |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
-        error.Reserved => {
-            log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
-            return cmd.sendResult(null, .{});
-        },
+        error.Reserved => true,
     };
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = &cmd.cdp.browser.http_client;
+
+    // Applied even when the user agent is refused below: Playwright always
+    // sends a Mozilla user agent alongside the locale it was asked for.
+    if (params.acceptLanguage) |accept_language| {
+        if (!Mime.isHttpHeaderValue(accept_language)) {
+            return cmd.sendError(-32602, "Accept-Language contains CR, LF or NUL", .{});
+        }
+        try http_client.setAcceptLanguageOverride(accept_language);
+    }
+
+    if (reserved) {
+        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "userAgent", .value = ua, .info = "User agent must not contain Mozilla" });
+        return cmd.sendResult(null, .{});
+    }
+
     try http_client.setUserAgentOverride(ua);
     bc.user_agent_changed = true;
 
@@ -211,8 +209,10 @@ fn clearGeolocationOverride(cmd: *CDP.Command) !void {
     return cmd.sendResult(null, .{});
 }
 
-// Accepted so drivers can finish context setup; Intl/Date keep the host's
-// locale and timezone.
+// Accepted so drivers can finish context setup; Intl/Date keep the process
+// locale and timezone (--locale, --timezone). Changing them at runtime needs
+// zig-v8-fork bindings for Isolate::DateTimeConfigurationChangeNotification
+// and the ICU default locale.
 fn setLocaleOverride(cmd: *CDP.Command) !void {
     const Params = struct { locale: ?[]const u8 = null };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -294,6 +294,39 @@ test "cdp.Emulation: viewport override fires matchMedia change events" {
     frame.js.localScope(&ls);
     defer ls.deinit();
     const v = try ls.local.exec("events.join() === 'onchange:(max-width: 500px),listener:true,onchange:(max-width: 500px),listener:false'", null);
+    try testing.expect(v.toBool());
+}
+
+test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach window.screen" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-SCR", .url = "hi.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false, .screenWidth = 2560, .screenHeight = 1440 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    var v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1280 && innerHeight === 720", null);
+    try testing.expect(v.toBool());
+
+    // 0 keeps the current value, as for width/height.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 1024, .height = 0, .deviceScaleFactor = 0, .mobile = false, .screenWidth = 0, .screenHeight = 0 },
+    });
+    v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1024 && innerHeight === 720", null);
+    try testing.expect(v.toBool());
+
+    try ctx.processMessage(.{ .id = 3, .method = "Emulation.clearDeviceMetricsOverride" });
+    v = try ls.local.exec("screen.width === innerWidth && screen.height === innerHeight", null);
     try testing.expect(v.toBool());
 }
 
@@ -379,6 +412,61 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 5 });
+}
+
+test "cdp.Emulation: setUserAgentOverride acceptLanguage drives navigator.languages" {
+    testing.silenceLog(&.{.not_implemented});
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    var bc = try ctx.loadBrowserContext(.{ .id = "BID-AL", .url = "hi.html", .target_id = "FID-00000000AL".* });
+    const frame = bc.mainFrame() orelse unreachable;
+
+    // The default locale reaches both navigator and ICU.
+    try expectJs(frame, "navigator.language === 'en-US' && navigator.languages.join() === 'en-US,en'");
+    try expectJs(frame, "Intl.DateTimeFormat().resolvedOptions().locale === navigator.language");
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "de-DE,de;q=0.9, en;q=0.8" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try expectJs(frame, "navigator.language === 'de-DE' && navigator.languages.join() === 'de-DE,de,en'");
+    try std.testing.expectEqualStrings("de-DE,de;q=0.9, en;q=0.8", ctx.cdp().browser.http_client.getAcceptLanguage());
+
+    // A Mozilla user agent is refused, the language still applies.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "Mozilla/5.0", .acceptLanguage = "fr-FR" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try expectJs(frame, "navigator.language === 'fr-FR' && navigator.languages.length === 1");
+    try std.testing.expectEqualStrings("CustomBot/2.0", ctx.cdp().browser.http_client.getUserAgent());
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try expectJs(frame, "navigator.language === '' && navigator.languages.length === 0");
+
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{ .userAgent = "CustomBot/2.0", .acceptLanguage = "en\r\nX-Injected: 1" },
+    });
+    try ctx.expectSentError(-32602, "Accept-Language contains CR, LF or NUL", .{ .id = 4 });
+}
+
+fn expectJs(frame: *lp.Frame, expression: [:0]const u8) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const value = try ls.local.exec(expression, null);
+    try testing.expect(value.toBool());
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {

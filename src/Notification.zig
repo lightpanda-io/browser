@@ -253,7 +253,7 @@ pub const RequestDone = struct {
 };
 
 pub const RequestFail = struct {
-    pub const BlockedReason = enum {
+    const BlockedReason = enum {
         inspector,
     };
 

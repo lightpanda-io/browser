@@ -104,59 +104,59 @@ pub fn inlineHandler(self: *const XMLHttpRequestEventTarget, typ: lp.String) ?js
     return null;
 }
 
-pub fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnAbort(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_abort = cb;
 }
 
-pub fn getOnError(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnError(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnError(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_error = cb;
 }
 
-pub fn getOnLoad(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnLoad(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnLoad(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_load = cb;
 }
 
-pub fn getOnLoadEnd(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnLoadEnd(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load_end;
 }
 
-pub fn setOnLoadEnd(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnLoadEnd(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_load_end = cb;
 }
 
-pub fn getOnLoadStart(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnLoadStart(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load_start;
 }
 
-pub fn setOnLoadStart(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnLoadStart(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_load_start = cb;
 }
 
-pub fn getOnProgress(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnProgress(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_progress;
 }
 
-pub fn setOnProgress(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
+fn setOnProgress(self: *XMLHttpRequestEventTarget, cb: ?js.Function.Global) !void {
     self._on_progress = cb;
 }
 
-pub fn getOnTimeout(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
+fn getOnTimeout(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_timeout;
 }
 
-pub fn setOnTimeout(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
+fn setOnTimeout(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
         self._on_timeout = try cb.persistWithThis(self);
     } else {

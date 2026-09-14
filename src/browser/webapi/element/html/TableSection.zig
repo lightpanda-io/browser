@@ -25,7 +25,7 @@ pub fn asNode(self: *TableSection) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getRows(self: *TableSection, frame: *Frame) collections.NodeLive(.child_tag) {
+fn getRows(self: *TableSection, frame: *Frame) collections.NodeLive(.child_tag) {
     return collections.NodeLive(.child_tag).init(self.asNode(), .tr, frame);
 }
 

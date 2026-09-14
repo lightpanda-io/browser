@@ -57,6 +57,6 @@ pub fn getPoints(self: *Polyline, frame: *Frame) !*PointList {
     return PointList.getOrCreate(self.asElement(), .base, frame);
 }
 
-pub fn getAnimatedPoints(self: *Polyline, frame: *Frame) !*PointList {
+fn getAnimatedPoints(self: *Polyline, frame: *Frame) !*PointList {
     return PointList.getOrCreate(self.asElement(), .animated, frame);
 }

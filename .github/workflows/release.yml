@@ -231,3 +231,40 @@ jobs:
             gh workflow run "Update Formula" \
               --repo lightpanda-io/homebrew-browser \
               --field tag="${{ env.RELEASE }}"
+
+  update-python-package:
+    # Version tags only (never nightly): create the matching release on
+    # lightpanda-python. That repo's wheels workflow triggers on its release
+    # event, bundles this release's binaries, and publishes to PyPI once a
+    # maintainer approves the `pypi` environment deployment there.
+    if: github.ref_type == 'tag'
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate token for lightpanda-python
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: lightpanda-python
+
+      - name: Create the matching lightpanda-python release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHON_REPO: lightpanda-io/lightpanda-python
+        run: |
+          if ! echo "$RELEASE" | grep -qE '^v?[0-9]+(\.[0-9]+)+$'; then
+            echo "tag $RELEASE is not version-shaped; not releasing to PyPI"
+            exit 0
+          fi
+          if gh release view "$RELEASE" --repo "$PYTHON_REPO" >/dev/null 2>&1; then
+            echo "release $RELEASE already exists on $PYTHON_REPO; nothing to do"
+            exit 0
+          fi
+          gh release create "$RELEASE" --repo "$PYTHON_REPO" \
+            --title "$RELEASE" \
+            --notes "Bundles [lightpanda-io/browser ${RELEASE}](https://github.com/lightpanda-io/browser/releases/tag/${RELEASE}). Install with \`pip install lightpanda\`."
+          echo "created; the release event starts the wheels build, whose publish waits for pypi environment approval"

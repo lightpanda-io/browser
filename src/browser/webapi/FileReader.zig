@@ -101,79 +101,79 @@ fn asEventTarget(self: *FileReader) *EventTarget {
     return self._proto;
 }
 
-pub fn getOnAbort(self: *const FileReader) ?js.Function.Global {
+fn getOnAbort(self: *const FileReader) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnAbort(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_abort = cb;
 }
 
-pub fn getOnError(self: *const FileReader) ?js.Function.Global {
+fn getOnError(self: *const FileReader) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnError(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_error = cb;
 }
 
-pub fn getOnLoad(self: *const FileReader) ?js.Function.Global {
+fn getOnLoad(self: *const FileReader) ?js.Function.Global {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnLoad(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_load = cb;
 }
 
-pub fn getOnLoadEnd(self: *const FileReader) ?js.Function.Global {
+fn getOnLoadEnd(self: *const FileReader) ?js.Function.Global {
     return self._on_load_end;
 }
 
-pub fn setOnLoadEnd(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnLoadEnd(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_load_end = cb;
 }
 
-pub fn getOnLoadStart(self: *const FileReader) ?js.Function.Global {
+fn getOnLoadStart(self: *const FileReader) ?js.Function.Global {
     return self._on_load_start;
 }
 
-pub fn setOnLoadStart(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnLoadStart(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_load_start = cb;
 }
 
-pub fn getOnProgress(self: *const FileReader) ?js.Function.Global {
+fn getOnProgress(self: *const FileReader) ?js.Function.Global {
     return self._on_progress;
 }
 
-pub fn setOnProgress(self: *FileReader, cb: ?js.Function.Global) !void {
+fn setOnProgress(self: *FileReader, cb: ?js.Function.Global) !void {
     self._on_progress = cb;
 }
 
-pub fn getReadyState(self: *const FileReader) u8 {
+fn getReadyState(self: *const FileReader) u8 {
     return @intFromEnum(self._ready_state);
 }
 
-pub fn getResult(self: *const FileReader) ?Result {
+fn getResult(self: *const FileReader) ?Result {
     return self._result;
 }
 
-pub fn getError(self: *const FileReader) ?[]const u8 {
+fn getError(self: *const FileReader) ?[]const u8 {
     return self._error;
 }
 
-pub fn readAsArrayBuffer(self: *FileReader, blob: *Blob) !void {
+fn readAsArrayBuffer(self: *FileReader, blob: *Blob) !void {
     try self.readInternal(blob, .arraybuffer, null);
 }
 
-pub fn readAsBinaryString(self: *FileReader, blob: *Blob) !void {
+fn readAsBinaryString(self: *FileReader, blob: *Blob) !void {
     try self.readInternal(blob, .binary_string, null);
 }
 
-pub fn readAsText(self: *FileReader, blob: *Blob, encoding_: ?[]const u8) !void {
+fn readAsText(self: *FileReader, blob: *Blob, encoding_: ?[]const u8) !void {
     try self.readInternal(blob, .text, encoding_);
 }
 
-pub fn readAsDataURL(self: *FileReader, blob: *Blob) !void {
+fn readAsDataURL(self: *FileReader, blob: *Blob) !void {
     try self.readInternal(blob, .data_url, null);
 }
 

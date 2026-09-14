@@ -111,17 +111,17 @@ pub const JsApi = struct {
     pub const getPointAtLength = bridge.function(Geometry.getPointAtLength, .{});
 };
 
-pub fn getPathLength(self: *Geometry, frame: *Frame) !*AnimatedNumber {
+fn getPathLength(self: *Geometry, frame: *Frame) !*AnimatedNumber {
     return AnimatedNumber.getOrCreate(self.asElement(), .path_length, frame);
 }
 
-pub fn getTotalLength(self: *Geometry, frame: *Frame) !f64 {
+fn getTotalLength(self: *Geometry, frame: *Frame) !f64 {
     var path = try self.buildPath(frame);
     defer path.deinit(frame.local_arena);
     return path.totalLength(frame.local_arena);
 }
 
-pub fn getPointAtLength(self: *Geometry, distance: f64, frame: *Frame) !*DOMPoint {
+fn getPointAtLength(self: *Geometry, distance: f64, frame: *Frame) !*DOMPoint {
     if (!std.math.isFinite(distance)) return error.TypeError;
     var path = try self.buildPath(frame);
     defer path.deinit(frame.local_arena);

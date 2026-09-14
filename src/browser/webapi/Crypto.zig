@@ -29,7 +29,7 @@ pub const init: Crypto = .{};
 
 // We take a js.Value, because we want to return the same instance, not a new
 // TypedArray
-pub fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
+fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Execution) !js.Object {
     const value = js_obj.toValue();
     if (value.isFloat16Array() or value.isFloat32Array() or value.isFloat64Array() or (value.isArrayBufferView() and !value.isTypedArray())) {
         // only integer TypedArrays are supported
@@ -45,13 +45,13 @@ pub fn getRandomValues(_: *const Crypto, js_obj: js.Object, exec: *const js.Exec
     return js_obj;
 }
 
-pub fn randomUUID(_: *const Crypto) ![36]u8 {
+fn randomUUID(_: *const Crypto) ![36]u8 {
     var hex: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&hex);
     return hex;
 }
 
-pub fn getSubtle(self: *Crypto) *SubtleCrypto {
+fn getSubtle(self: *Crypto) *SubtleCrypto {
     return &self._subtle;
 }
 

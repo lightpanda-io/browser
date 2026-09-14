@@ -18,7 +18,7 @@
 
 pub const Url = anyopaque;
 
-pub const OwnedString = extern struct {
+const OwnedString = extern struct {
     ptr: [*]const u8,
     len: usize,
 

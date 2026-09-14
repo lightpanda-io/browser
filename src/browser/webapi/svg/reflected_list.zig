@@ -188,7 +188,7 @@ pub fn Mixin(comptime List: type, comptime Item: type, comptime hooks: anytype) 
         // removeItem's return value has no JS wrapper until the bridge wraps
         // it after we return. By the next operation, anything still reachable
         // holds its own ref.
-        pub fn releaseRetired(self: *List, page: *Page) void {
+        fn releaseRetired(self: *List, page: *Page) void {
             for (self._retired.items) |item| {
                 hooks.releaseItem(item, page);
             }

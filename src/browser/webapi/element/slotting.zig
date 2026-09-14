@@ -59,7 +59,7 @@ pub fn findSlot(slottable: *Node, comptime open_only: bool, frame: *Frame) ?*Slo
 
     const slottable_name = blk: {
         const el = slottable.is(Element) orelse break :blk "";
-        break :blk el.getAttributeSafe(comptime .wrap("slot")) orelse "";
+        break :blk el.getSlot() orelse "";
     };
     return findNamedSlot(shadow_node, slottable_name);
 }

@@ -113,16 +113,16 @@ pub fn now(self: *const Performance) f64 {
     return @as(f64, @floatFromInt(elapsed)) / 1000.0;
 }
 
-pub fn getTimeOrigin(self: *const Performance) f64 {
+fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
     return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
 }
 
-pub fn getNavigation(self: *Performance) *PerformanceNavigation {
+fn getNavigation(self: *Performance) *PerformanceNavigation {
     return &self._navigation;
 }
 
-pub fn getEventCounts(self: *Performance) *EventCounts {
+fn getEventCounts(self: *Performance) *EventCounts {
     return &self._event_counts;
 }
 
@@ -222,7 +222,7 @@ pub fn measure(
     return m;
 }
 
-pub fn clearMarks(self: *Performance, mark_name: ?[]const u8) void {
+fn clearMarks(self: *Performance, mark_name: ?[]const u8) void {
     var i: usize = 0;
     while (i < self._entries.items.len) {
         const entry = self._entries.items[i];
@@ -234,7 +234,7 @@ pub fn clearMarks(self: *Performance, mark_name: ?[]const u8) void {
     }
 }
 
-pub fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
+fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
     var i: usize = 0;
     while (i < self._entries.items.len) {
         const entry = self._entries.items[i];
@@ -246,16 +246,16 @@ pub fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
     }
 }
 
-pub fn setResourceTimingBufferSize(self: *Performance, max_size: u32) void {
+fn setResourceTimingBufferSize(self: *Performance, max_size: u32) void {
     self._resource_buffer_size = max_size;
 }
 
-pub fn clearResourceTimings(self: *Performance) void {
+fn clearResourceTimings(self: *Performance) void {
     self._resources.clearRetainingCapacity();
 }
 
 // All times are microseconds
-pub const ResourceInfo = struct {
+const ResourceInfo = struct {
     name: []const u8,
     initiator: []const u8, // static string
     protocol: []const u8, // static string
@@ -633,11 +633,11 @@ pub fn inlineHandler(self: *const Performance, typ: lp.String) ?js.Function.Glob
     return null;
 }
 
-pub fn getOnResourceTimingBufferFull(self: *const Performance) ?js.Function.Global {
+fn getOnResourceTimingBufferFull(self: *const Performance) ?js.Function.Global {
     return self._on_buffer_full;
 }
 
-pub fn setOnResourceTimingBufferFull(self: *Performance, cb: ?js.Function.Global) void {
+fn setOnResourceTimingBufferFull(self: *Performance, cb: ?js.Function.Global) void {
     self._on_buffer_full = cb;
 }
 
@@ -805,11 +805,11 @@ pub const Entry = struct {
         };
     };
 
-    pub fn getDuration(self: *const Entry) f64 {
+    fn getDuration(self: *const Entry) f64 {
         return self._duration;
     }
 
-    pub fn getEntryType(self: *const Entry) []const u8 {
+    fn getEntryType(self: *const Entry) []const u8 {
         return switch (self._type) {
             else => |t| @tagName(t),
         };
@@ -819,7 +819,7 @@ pub const Entry = struct {
         return self._name;
     }
 
-    pub fn getStartTime(self: *const Entry) f64 {
+    fn getStartTime(self: *const Entry) f64 {
         return self._start_time;
     }
 
@@ -853,7 +853,7 @@ pub const Entry = struct {
     };
 };
 
-pub const Mark = struct {
+const Mark = struct {
     pub const Proto = Entry;
 
     _proto: *Entry,
@@ -885,7 +885,7 @@ pub const Mark = struct {
         return m;
     }
 
-    pub fn getDetail(self: *const Mark) ?js.Value.Global {
+    fn getDetail(self: *const Mark) ?js.Value.Global {
         return self._detail;
     }
 
@@ -901,7 +901,7 @@ pub const Mark = struct {
     };
 };
 
-pub const Measure = struct {
+const Measure = struct {
     pub const Proto = Entry;
 
     _proto: *Entry,
@@ -949,7 +949,7 @@ pub const Measure = struct {
         return m;
     }
 
-    pub fn getDetail(self: *const Measure) ?js.Value.Global {
+    fn getDetail(self: *const Measure) ?js.Value.Global {
         return self._detail;
     }
 
@@ -967,7 +967,7 @@ pub const Measure = struct {
 
 /// PerformanceResourceTiming — one per fetch the HTTP client completed for
 /// this document (or worker).
-pub const ResourceTiming = struct {
+const ResourceTiming = struct {
     pub const Proto = Entry;
 
     _proto: *Entry,
@@ -992,97 +992,97 @@ pub const ResourceTiming = struct {
     _content_type: []const u8,
     _content_encoding: []const u8,
 
-    pub fn getInitiatorType(self: *const ResourceTiming) []const u8 {
+    fn getInitiatorType(self: *const ResourceTiming) []const u8 {
         return self._initiator_type;
     }
 
-    pub fn getNextHopProtocol(self: *const ResourceTiming) []const u8 {
+    fn getNextHopProtocol(self: *const ResourceTiming) []const u8 {
         return self._next_hop_protocol;
     }
 
-    pub fn getDeliveryType(self: *const ResourceTiming) []const u8 {
+    fn getDeliveryType(self: *const ResourceTiming) []const u8 {
         return self._delivery_type;
     }
 
-    pub fn getWorkerStart(_: *const ResourceTiming) f64 {
+    fn getWorkerStart(_: *const ResourceTiming) f64 {
         // @ServiceWorker
         return 0;
     }
 
-    pub fn getRedirectStart(self: *const ResourceTiming) f64 {
+    fn getRedirectStart(self: *const ResourceTiming) f64 {
         return self._redirect_start;
     }
 
-    pub fn getRedirectEnd(self: *const ResourceTiming) f64 {
+    fn getRedirectEnd(self: *const ResourceTiming) f64 {
         return self._redirect_end;
     }
 
-    pub fn getFetchStart(self: *const ResourceTiming) f64 {
+    fn getFetchStart(self: *const ResourceTiming) f64 {
         return self._fetch_start;
     }
 
-    pub fn getDomainLookupStart(self: *const ResourceTiming) f64 {
+    fn getDomainLookupStart(self: *const ResourceTiming) f64 {
         return self._domain_lookup_start;
     }
 
-    pub fn getDomainLookupEnd(self: *const ResourceTiming) f64 {
+    fn getDomainLookupEnd(self: *const ResourceTiming) f64 {
         return self._domain_lookup_end;
     }
 
-    pub fn getConnectStart(self: *const ResourceTiming) f64 {
+    fn getConnectStart(self: *const ResourceTiming) f64 {
         return self._connect_start;
     }
 
-    pub fn getConnectEnd(self: *const ResourceTiming) f64 {
+    fn getConnectEnd(self: *const ResourceTiming) f64 {
         return self._connect_end;
     }
 
-    pub fn getSecureConnectionStart(self: *const ResourceTiming) f64 {
+    fn getSecureConnectionStart(self: *const ResourceTiming) f64 {
         return self._secure_connection_start;
     }
 
-    pub fn getRequestStart(self: *const ResourceTiming) f64 {
+    fn getRequestStart(self: *const ResourceTiming) f64 {
         return self._request_start;
     }
 
-    pub fn getResponseStart(self: *const ResourceTiming) f64 {
+    fn getResponseStart(self: *const ResourceTiming) f64 {
         return self._response_start;
     }
 
-    pub fn getResponseEnd(self: *const ResourceTiming) f64 {
+    fn getResponseEnd(self: *const ResourceTiming) f64 {
         return self._response_end;
     }
 
-    pub fn getFirstInterimResponseStart(_: *const ResourceTiming) f64 {
+    fn getFirstInterimResponseStart(_: *const ResourceTiming) f64 {
         // 1xx are consumed by libcurl
         return 0;
     }
 
-    pub fn getFinalResponseHeadersStart(self: *const ResourceTiming) f64 {
+    fn getFinalResponseHeadersStart(self: *const ResourceTiming) f64 {
         return self._response_start;
     }
 
-    pub fn getTransferSize(self: *const ResourceTiming) u64 {
+    fn getTransferSize(self: *const ResourceTiming) u64 {
         return self._transfer_size;
     }
 
-    pub fn getEncodedBodySize(self: *const ResourceTiming) u64 {
+    fn getEncodedBodySize(self: *const ResourceTiming) u64 {
         return self._encoded_body_size;
     }
 
-    pub fn getDecodedBodySize(self: *const ResourceTiming) u64 {
+    fn getDecodedBodySize(self: *const ResourceTiming) u64 {
         return self._decoded_body_size;
     }
 
-    pub fn getResponseStatus(self: *const ResourceTiming) u16 {
+    fn getResponseStatus(self: *const ResourceTiming) u16 {
         return self._response_status;
     }
 
-    pub fn getContentType(self: *const ResourceTiming) []const u8 {
+    fn getContentType(self: *const ResourceTiming) []const u8 {
         return self._content_type;
     }
 
-    pub fn getContentEncoding(self: *const ResourceTiming) []const u8 {
+    fn getContentEncoding(self: *const ResourceTiming) []const u8 {
         return self._content_encoding;
     }
 

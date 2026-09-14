@@ -39,7 +39,7 @@ pub fn create(x: f64, y: f64, z: f64, w: f64, page: *Page) !*DOMPoint {
     return self;
 }
 
-pub fn fromPoint(other_: ?RO.DOMPointInit, page: *Page) !*DOMPoint {
+fn fromPoint(other_: ?RO.DOMPointInit, page: *Page) !*DOMPoint {
     const other: RO.DOMPointInit = other_ orelse .{};
     return create(other.x, other.y, other.z, other.w, page);
 }
@@ -69,23 +69,23 @@ pub fn getX(self: *const DOMPoint) f64 {
 pub fn getY(self: *const DOMPoint) f64 {
     return self._proto._y;
 }
-pub fn getZ(self: *const DOMPoint) f64 {
+fn getZ(self: *const DOMPoint) f64 {
     return self._proto._z;
 }
-pub fn getW(self: *const DOMPoint) f64 {
+fn getW(self: *const DOMPoint) f64 {
     return self._proto._w;
 }
 
-pub fn setX(self: *DOMPoint, v: f64) !void {
+fn setX(self: *DOMPoint, v: f64) !void {
     try self._proto.setCoordinate(.x, v);
 }
-pub fn setY(self: *DOMPoint, v: f64) !void {
+fn setY(self: *DOMPoint, v: f64) !void {
     try self._proto.setCoordinate(.y, v);
 }
-pub fn setZ(self: *DOMPoint, v: f64) !void {
+fn setZ(self: *DOMPoint, v: f64) !void {
     try self._proto.setCoordinate(.z, v);
 }
-pub fn setW(self: *DOMPoint, v: f64) !void {
+fn setW(self: *DOMPoint, v: f64) !void {
     try self._proto.setCoordinate(.w, v);
 }
 

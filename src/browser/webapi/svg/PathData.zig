@@ -94,9 +94,9 @@ pub const Bounds = struct {
 };
 
 pub const Line = struct { start: Point, end: Point };
-pub const Quadratic = struct { start: Point, control: Point, end: Point };
-pub const Cubic = struct { start: Point, control1: Point, control2: Point, end: Point };
-pub const Arc = struct {
+const Quadratic = struct { start: Point, control: Point, end: Point };
+const Cubic = struct { start: Point, control1: Point, control2: Point, end: Point };
+const Arc = struct {
     start: Point,
     end: Point,
     center: Point,
@@ -107,7 +107,7 @@ pub const Arc = struct {
     delta: f64,
 };
 
-pub const Segment = union(enum) {
+const Segment = union(enum) {
     line: Line,
     quadratic: Quadratic,
     cubic: Cubic,

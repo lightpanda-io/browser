@@ -25,7 +25,7 @@ pub fn init() IdleDeadline {
     return .{};
 }
 
-pub fn timeRemaining(_: *const IdleDeadline) f64 {
+fn timeRemaining(_: *const IdleDeadline) f64 {
     // Return a fixed 50ms.
     // This allows idle callbacks to perform work without complex
     // timing infrastructure.

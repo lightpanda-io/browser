@@ -21,7 +21,7 @@ _complete: bool = true,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
-    const node = try Frame.node_factory.createElementNS(frame, .html, "img", null);
+    const node = try Frame.node_factory.createElementNS(frame.document, .html, "img", null);
     const el = node.as(Element);
 
     if (w_) |w| blk: {
@@ -47,38 +47,38 @@ pub fn asNode(self: *Image) *Node {
 
 pub fn getSrc(self: *const Image, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
+    const src = element.getAttributeInterned("src") orelse return "";
     if (src.len == 0) {
         return "";
     }
     return element.asConstNode().resolveURLReflect(src, frame, .{});
 }
 
-pub fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
+fn setSrc(self: *Image, value: []const u8, frame: *Frame) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), frame);
 }
 
-pub fn getLoading(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("loading")) orelse "eager";
+fn getLoading(self: *const Image) []const u8 {
+    return self.asConstElement().getAttributeInterned("loading") orelse "eager";
 }
 
-pub fn setLoading(self: *Image, value: []const u8, frame: *Frame) !void {
+fn setLoading(self: *Image, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), frame);
 }
 
-pub fn getNaturalWidth(_: *const Image) u32 {
+fn getNaturalWidth(_: *const Image) u32 {
     // this is a valid response under a number of normal conditions, but could
     // be used to detect the nature of Browser.
     return 0;
 }
 
-pub fn getNaturalHeight(_: *const Image) u32 {
+fn getNaturalHeight(_: *const Image) u32 {
     // this is a valid response under a number of normal conditions, but could
     // be used to detect the nature of Browser.
     return 0;
 }
 
-pub fn getComplete(self: *const Image) bool {
+fn getComplete(self: *const Image) bool {
     return self._complete;
 }
 
@@ -90,10 +90,15 @@ pub fn decode(_: *const Image, frame: *Frame) !js.Promise {
 /// The one funnel for "this element's src became current": parser-created
 /// images, `img.src = ...` and `setAttribute`/`removeAttribute("src")` all
 /// land here.
-pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
+fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     // if we're planning on navigating to another frame, don't trigger a load event
     // or start fetching a resource.
     if (frame.isGoingAway()) {
+        return;
+    }
+
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (self.asElement().getDocument(frame)._frame == null) {
         return;
     }
 
@@ -102,7 +107,7 @@ pub fn imageAddedCallback(self: *Image, frame: *Frame) !void {
 
     const element = self.asElement();
     // Exit if src not set.
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
+    const src = element.getAttributeInterned("src") orelse return;
     if (src.len == 0) return;
 
     // If image loading not desired, we just do fake "load" event.

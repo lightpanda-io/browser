@@ -256,13 +256,12 @@ pub fn toStringSmart(self: Value) ![]const u8 {
         return self.toStringSlice();
     }
 
-    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return "");
+    const buffer = array_buffer orelse return "";
     if (byte_len == 0) {
         return &[_]u8{};
     }
 
-    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr) orelse return "";
-    const data = v8.v8__BackingStore__Data(backing_store_handle) orelse return "";
+    const data = js.arrayBufferData(buffer) orelse return "";
     const base = @as([*]const u8, @ptrCast(data)) + byte_offset;
 
     return base[0..byte_len];

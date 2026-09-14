@@ -113,8 +113,8 @@ pub const BodyInit = union(enum) {
                 };
             },
             .stream => |stream| {
-                // Response special-cases `.stream` before extract. Request/XHR
-                // paths buffer a closed stream synchronously; a stream that
+                // Response and Request special-case `.stream` before extract.
+                // XHR buffers a closed stream synchronously; a stream that
                 // can't be drained here - still open, or already used as a
                 // body - rejects rather than send Content-Length: 0.
                 const bytes = try stream.collectBodyBytes(arena);
@@ -128,7 +128,7 @@ pub const BodyInit = union(enum) {
 // `content_type`, when non-null, is the spec-mandated default Content-Type
 // for the body source — callers MUST only apply it if the user has not
 // already set a Content-Type header (per Fetch §6.5).
-pub const Extracted = struct {
+const Extracted = struct {
     bytes: []const u8,
     content_type: ?[]const u8,
 };

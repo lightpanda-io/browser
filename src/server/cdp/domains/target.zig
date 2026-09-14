@@ -726,6 +726,43 @@ test "cdp.target: createTarget" {
     }
 }
 
+// A freshly created blank target (the default CDP Target.createTarget) is
+// left unnavigated until a real navigation happens, so Navigation._entries
+// is empty. Reading history.state/navigation.currentEntry there used to hit
+// the hard `lp.assert(len > 0, ...)` in Navigation.getCurrentEntry and crash
+// the whole process instead of just failing the one command.
+test "cdp.target: history.state on freshly created blank target doesn't crash" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+
+    try ctx.processMessage(.{ .id = 42, .method = "Runtime.enable", .sessionId = session_id });
+    try ctx.processMessage(.{ .id = 43, .method = "Runtime.evaluate", .sessionId = session_id, .params = .{
+        .expression = "history.state",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "object", .subtype = "null", .value = null } }, .{ .id = 43 });
+}
+
+test "cdp.target: navigation.currentEntry on freshly created blank target doesn't crash" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+
+    try ctx.processMessage(.{ .id = 42, .method = "Runtime.enable", .sessionId = session_id });
+    try ctx.processMessage(.{ .id = 43, .method = "Runtime.evaluate", .sessionId = session_id, .params = .{
+        .expression = "navigation.currentEntry.url",
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "about:blank" } }, .{ .id = 43 });
+}
+
 // A browser-target session (Target.attachToBrowserTarget) is distinct from
 // the page-target session. It used to be stored in bc.session_id, which broke
 // the "no target => no session_id" invariant asserted in createTarget.

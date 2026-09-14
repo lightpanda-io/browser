@@ -275,7 +275,7 @@ pub const Location = enum(i32) {
     DOM_KEY_LOCATION_NUMPAD = 3,
 };
 
-pub const KeyboardEventOptions = struct {
+const KeyboardEventOptions = struct {
     altKey: bool = false,
     charCode: u32 = 0,
     code: ?[]const u8 = null,
@@ -356,7 +356,7 @@ pub fn getCtrlKey(self: *const KeyboardEvent) bool {
     return self._ctrl_key;
 }
 
-pub fn getIsComposing(self: *const KeyboardEvent) bool {
+fn getIsComposing(self: *const KeyboardEvent) bool {
     return self._is_composing;
 }
 
@@ -364,7 +364,7 @@ pub fn getKey(self: *const KeyboardEvent) Key {
     return self._key;
 }
 
-pub fn getCode(self: *const KeyboardEvent) []const u8 {
+fn getCode(self: *const KeyboardEvent) []const u8 {
     return self._code;
 }
 
@@ -376,7 +376,7 @@ pub fn getMetaKey(self: *const KeyboardEvent) bool {
     return self._meta_key;
 }
 
-pub fn getRepeat(self: *const KeyboardEvent) bool {
+fn getRepeat(self: *const KeyboardEvent) bool {
     return self._repeat;
 }
 
@@ -392,7 +392,7 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
 // Chrome returns 0 for synthetic events (those created via
 // `new KeyboardEvent(...)` rather than dispatched by the user agent), so we
 // gate on `_is_trusted` to match.
-pub fn getCharCode(self: *const KeyboardEvent) u32 {
+fn getCharCode(self: *const KeyboardEvent) u32 {
     const event = self._proto._proto;
     // Synthetic events report the (legacy) KeyboardEventInit value.
     if (event._is_trusted == false) return self._char_code_init;
@@ -409,7 +409,7 @@ pub fn getKeyCode(self: *const KeyboardEvent) u32 {
     return self._key.keyCode();
 }
 
-pub fn initKeyboardEvent(
+fn initKeyboardEvent(
     self: *KeyboardEvent,
     typ: []const u8,
     bubbles: ?bool,
@@ -442,7 +442,7 @@ pub fn initKeyboardEvent(
     self._meta_key = meta_key orelse false;
 }
 
-pub fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
+fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
     const key = try Key.fromString(self._proto._proto._arena.allocator(), str);
 
     switch (key) {

@@ -48,42 +48,42 @@ pub fn asNode(self: *Meta) *Node {
 }
 
 pub fn getName(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse return "";
+    return self.asElement().getName() orelse "";
 }
 
-pub fn setName(self: *Meta, value: []const u8, frame: *Frame) !void {
+fn setName(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
-pub fn getHttpEquiv(self: *Meta) []const u8 {
+fn getHttpEquiv(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("http-equiv")) orelse return "";
 }
 
-pub fn setHttpEquiv(self: *Meta, value: []const u8, frame: *Frame) !void {
+fn setHttpEquiv(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("http-equiv"), .wrap(value), frame);
 }
 
 pub fn getContent(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("content")) orelse return "";
+    return self.asElement().getAttributeInterned("content") orelse return "";
 }
 
-pub fn setContent(self: *Meta, value: []const u8, frame: *Frame) !void {
+fn setContent(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("content"), .wrap(value), frame);
 }
 
-pub fn getMedia(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
+fn getMedia(self: *Meta) []const u8 {
+    return self.asElement().getAttributeInterned("media") orelse return "";
 }
 
-pub fn setMedia(self: *Meta, value: []const u8, frame: *Frame) !void {
+fn setMedia(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), frame);
 }
 
-pub fn getScheme(self: *Meta) []const u8 {
+fn getScheme(self: *Meta) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("scheme")) orelse return "";
 }
 
-pub fn setScheme(self: *Meta, value: []const u8, frame: *Frame) !void {
+fn setScheme(self: *Meta, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("scheme"), .wrap(value), frame);
 }
 
@@ -161,13 +161,18 @@ fn immediateRefreshTarget(content: []const u8) ?[]const u8 {
 
 pub const Build = struct {
     pub fn created(node: *Node, frame: *Frame) !void {
+        // A document without a browsing context has no policy or refresh to set.
+        if (node.getDocument(frame)._frame == null) {
+            return;
+        }
+
         const self = node.as(Meta);
         const el = self.asElement();
 
         // <meta name=referrer> sets the document's referrer policy.
-        if (el.getAttributeSafe(comptime .wrap("name"))) |name| {
+        if (el.getName()) |name| {
             if (std.ascii.eqlIgnoreCase(name, "referrer")) {
-                if (el.getAttributeSafe(comptime .wrap("content"))) |content| {
+                if (el.getAttributeInterned("content")) |content| {
                     if (referrer.parseMeta(content)) |rp| {
                         frame.referrer_policy = rp;
                     }
@@ -187,7 +192,7 @@ pub const Build = struct {
         if (!name.eql(comptime .wrap("http-equiv")) and !name.eql(comptime .wrap("content"))) {
             return;
         }
-        return element.as(Meta).processRefresh(element.asNode().ownerFrame(frame));
+        return element.as(Meta).processRefresh(element.asNode().ownerFrame(frame) orelse return);
     }
 };
 

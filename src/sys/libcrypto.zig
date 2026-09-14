@@ -20,16 +20,16 @@
 
 const std = @import("std");
 
-pub const struct_env_md_st = opaque {};
+const struct_env_md_st = opaque {};
 pub const EVP_MD = struct_env_md_st;
-pub const struct_engine_st = opaque {};
-pub const ENGINE = struct_engine_st;
-pub const struct_ec_key_st = opaque {};
-pub const EC_KEY = struct_ec_key_st;
-pub const struct_evp_pkey_st = opaque {};
+const struct_engine_st = opaque {};
+const ENGINE = struct_engine_st;
+const struct_ec_key_st = opaque {};
+const EC_KEY = struct_ec_key_st;
+const struct_evp_pkey_st = opaque {};
 pub const EVP_PKEY = struct_evp_pkey_st;
-pub const struct_evp_pkey_ctx_st = opaque {};
-pub const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
+const struct_evp_pkey_ctx_st = opaque {};
+const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
 
 pub extern fn RAND_bytes(buf: [*]u8, len: usize) c_int;
 
@@ -84,8 +84,8 @@ pub const X25519_PUBLIC_VALUE_LEN = 32;
 
 pub extern fn X25519_keypair(out_public_value: *[32]u8, out_private_key: *[32]u8) void;
 
-pub const struct_ec_point_st = opaque {};
-pub const EC_POINT = struct_ec_point_st;
+const struct_ec_point_st = opaque {};
+const EC_POINT = struct_ec_point_st;
 
 pub const EVP_CIPHER = opaque {};
 pub const EVP_CIPHER_CTX = opaque {};
@@ -137,9 +137,9 @@ pub extern fn EC_KEY_set_public_key(key: *EC_KEY, point: *const EC_POINT) c_int;
 pub extern fn d2i_PUBKEY(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 pub extern fn d2i_AutoPrivateKey(out: ?*?*EVP_PKEY, inp: *[*c]const u8, len: c_long) ?*EVP_PKEY;
 
-pub const NID_X25519 = @as(c_int, 948);
+const NID_X25519 = @as(c_int, 948);
 pub const EVP_PKEY_X25519 = NID_X25519;
-pub const NID_ED25519 = 949;
+const NID_ED25519 = 949;
 pub const EVP_PKEY_ED25519 = NID_ED25519;
 
 pub extern fn EVP_PKEY_new_raw_private_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) ?*EVP_PKEY;
@@ -156,16 +156,16 @@ pub extern fn EVP_DigestSign(ctx: ?*EVP_MD_CTX, sig: [*c]u8, sig_len: *usize, da
 pub extern fn EVP_Digest(data: ?*const anyopaque, len: usize, md_out: [*c]u8, md_out_size: [*c]c_uint, @"type": ?*const EVP_MD, impl: ?*ENGINE) c_int;
 pub extern fn EVP_MD_CTX_new() ?*EVP_MD_CTX;
 pub extern fn EVP_MD_CTX_free(ctx: ?*EVP_MD_CTX) void;
-pub const struct_evp_md_ctx_st = opaque {};
-pub const EVP_MD_CTX = struct_evp_md_ctx_st;
+const struct_evp_md_ctx_st = opaque {};
+const EVP_MD_CTX = struct_evp_md_ctx_st;
 
-pub const struct_x509_st = opaque {};
+const struct_x509_st = opaque {};
 pub const X509 = struct_x509_st;
 
 pub extern fn X509_free(x509: ?*X509) void;
 pub extern fn d2i_X509(out: [*c]?*X509, inp: *[*]const u8, len: c_long) ?*X509;
 
-pub const struct_x509_store_st = opaque {};
+const struct_x509_store_st = opaque {};
 pub const X509_STORE = struct_x509_store_st;
 
 pub extern fn X509_STORE_new() ?*X509_STORE;
@@ -173,7 +173,7 @@ pub extern fn X509_STORE_free(store: *X509_STORE) void;
 pub extern fn X509_STORE_add_cert(store: ?*X509_STORE, x: ?*X509) c_int;
 pub extern fn X509_STORE_load_locations(store: *X509_STORE, file: ?[*:0]const u8, dir: ?[*:0]const u8) c_int;
 
-pub const struct_ssl_ctx_st = opaque {};
+const struct_ssl_ctx_st = opaque {};
 pub const SSL_CTX = struct_ssl_ctx_st;
 pub extern fn SSL_CTX_set1_verify_cert_store(ctx: ?*SSL_CTX, store: ?*X509_STORE) c_int;
 

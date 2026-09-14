@@ -27,7 +27,7 @@ const StorageManager = @This();
 
 _pad: bool = false,
 
-pub fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
+fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
     const est = try exec._factory.create(StorageEstimate{
         ._usage = 0,
         ._quota = 1024 * 1024 * 1024, // 1 GiB

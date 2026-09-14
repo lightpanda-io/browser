@@ -130,7 +130,7 @@ fn keyPathBlocksAutoIncrement(kp: Key.KeyPath) bool {
 }
 
 // Only callable while the upgrade transaction is live and active, hence the checks
-pub fn deleteObjectStore(self: *IDBDatabase, name: []const u8, _: *Execution) !void {
+fn deleteObjectStore(self: *IDBDatabase, name: []const u8, _: *Execution) !void {
     const txn = self._txn orelse return error.InvalidStateError;
     if (txn._settled) {
         return error.InvalidStateError;
@@ -258,22 +258,22 @@ pub fn getObjectStoreNames(self: *IDBDatabase, exec: *Execution) !*DOMStringList
     return list;
 }
 
-pub fn getOnError(self: *const IDBDatabase) ?js.Function.Global {
+fn getOnError(self: *const IDBDatabase) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *IDBDatabase, setter: ?FunctionSetter) void {
+fn setOnError(self: *IDBDatabase, setter: ?FunctionSetter) void {
     self._on_error = if (setter) |s| switch (s) {
         .func => |f| f,
         .anything => null,
     } else null;
 }
 
-pub fn getOnAbort(self: *const IDBDatabase) ?js.Function.Global {
+fn getOnAbort(self: *const IDBDatabase) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *IDBDatabase, setter: ?FunctionSetter) void {
+fn setOnAbort(self: *IDBDatabase, setter: ?FunctionSetter) void {
     self._on_abort = if (setter) |s| switch (s) {
         .func => |f| f,
         .anything => null,

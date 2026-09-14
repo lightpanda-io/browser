@@ -20,11 +20,11 @@ pub fn asNode(self: *Font) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getColor(self: *Font) []const u8 {
+fn getColor(self: *Font) []const u8 {
     return self.asElement().getAttributeSafe(comptime .wrap("color")) orelse "";
 }
 
-pub fn setColor(self: *Font, value: js.Value, frame: *Frame) !void {
+fn setColor(self: *Font, value: js.Value, frame: *Frame) !void {
     // color is `[LegacyNullToEmptyString] DOMString`: a JS null becomes "",
     // not the string "null".
     const str: []const u8 = if (value.isNull()) "" else try value.toZig([]const u8);

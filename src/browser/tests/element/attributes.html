@@ -2,6 +2,7 @@
 <script src="../testing.js"></script>
 
 <div id=attr1 ClasS="sHow"></div>
+<div id=nnm class=box data-role=widget></div>
 
 <script id=attributes>
   const el1 = $('#attr1');
@@ -166,54 +167,19 @@
 }
 </script>
 
-<script id=invalidAttributeNames>
+<script id=validAttributeNames>
 {
+  // Neither Chrome nor Firefox checks the XML Name production here, so names
+  // it rejects still go through. '\v' is deliberate: it is not HTML
+  // whitespace, and both browsers take it. Kept in its own script block: a
+  // setAttribute that wrongly throws kills the block, and the runner only
+  // catches that while the block has recorded no assertion of its own.
   const div = document.createElement('div');
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('0abc', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('123', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('-invalid', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('.foo', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('my attr', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('my@attr', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('attr!', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('~', 'value'));
-
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.setAttribute('', 'value'));
+  for (const name of ['0abc', '123', '-invalid', '.foo', 'my@attr', 'attr!', '~', '<x', '::x', 'a\vb', 'é']) {
+    div.setAttribute(name, 'value');
+    testing.expectEqual('value', div.getAttribute(name));
+    testing.expectEqual(name, document.createAttribute(name).name);
+  }
 
   div.setAttribute('valid-name', 'value1');
   testing.expectEqual('value1', div.getAttribute('valid-name'));
@@ -229,21 +195,30 @@
 
   div.setAttribute('data-test-123', 'value5');
   testing.expectEqual('value5', div.getAttribute('data-test-123'));
+}
+</script>
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('.invalid'));
+<script id=invalidAttributeNames>
+{
+  // What both browsers do reject: an empty name, and the characters that
+  // would break attribute serialization.
+  const div = document.createElement('div');
+  for (const name of ['', 'my attr', 'a\tb', 'a\nb', 'a\fb', 'a\rb', 'a\0b', 'a=b', 'a/b', 'a>b']) {
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => div.setAttribute(name, 'value'));
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('0invalid'));
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => div.toggleAttribute(name));
 
-  testing.withError((err) => {
-    testing.expectEqual(5, err.code);
-    testing.expectEqual("InvalidCharacterError", err.name);
-  }, () => div.toggleAttribute('-invalid'));
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute(name));
+  }
 }
 </script>
 
@@ -266,6 +241,100 @@
   }
 </script>
 
+<div id=clone-src class=c data-x=1></div>
+<div id=clone-dst></div>
+<script id=attributeNodeClone>
+  {
+    const src = $('#clone-src');
+    const dst = $('#clone-dst');
+
+    const original = src.getAttributeNode('data-x');
+    const clone = original.cloneNode();
+    testing.expectEqual('data-x', clone.name);
+    testing.expectEqual('1', clone.value);
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(src, original.ownerElement);
+
+    testing.expectEqual(null, dst.setAttributeNode(clone));
+    testing.expectEqual(dst, clone.ownerElement);
+    testing.expectEqual('1', dst.getAttribute('data-x'));
+    testing.expectEqual('1', src.getAttribute('data-x'));
+
+    testing.withError((err) => {
+      testing.expectEqual(10, err.code);
+      testing.expectEqual('InUseAttributeError', err.name);
+    }, () => dst.setAttributeNode(src.getAttributeNode('class')));
+    testing.expectEqual(src, src.getAttributeNode('class').ownerElement);
+    testing.expectEqual(false, dst.hasAttribute('class'));
+
+    const replacement = original.cloneNode();
+    replacement.value = '2';
+    testing.expectEqual(clone, dst.setAttributeNode(replacement));
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(dst, replacement.ownerElement);
+    testing.expectEqual('2', dst.getAttribute('data-x'));
+  }
+</script>
+
+<div id=set-named-src class=c data-y=1></div>
+<div id=set-named-dst></div>
+<script id=setNamedItemInUse>
+  {
+    const src = $('#set-named-src');
+    const dst = $('#set-named-dst');
+
+    // setNamedItem runs the same "set an attribute" steps as setAttributeNode
+    testing.withError((err) => {
+      testing.expectEqual(10, err.code);
+      testing.expectEqual('InUseAttributeError', err.name);
+    }, () => dst.attributes.setNamedItem(src.getAttributeNode('data-y')));
+    testing.expectEqual(src, src.getAttributeNode('data-y').ownerElement);
+    testing.expectEqual('1', src.getAttribute('data-y'));
+    testing.expectEqual(false, dst.hasAttribute('data-y'));
+
+    const moved = src.attributes.removeNamedItem('data-y');
+    testing.expectEqual(null, moved.ownerElement);
+    testing.expectEqual(null, dst.attributes.setNamedItem(moved));
+    testing.expectEqual(dst, moved.ownerElement);
+    testing.expectEqual('1', dst.getAttribute('data-y'));
+  }
+</script>
+
+<div id=detach-owner data-z=1></div>
+<script id=removeAttributeDetaches>
+  {
+    const el = $('#detach-owner');
+    const other = document.createElement('div');
+
+    const attr = el.getAttributeNode('data-z');
+    el.removeAttribute('data-z');
+    testing.expectEqual(null, attr.ownerElement);
+
+    // free to move now, and to come back to the element it left
+    testing.expectEqual(null, other.setAttributeNode(attr));
+    testing.expectEqual(other, attr.ownerElement);
+    testing.expectEqual('1', other.getAttribute('data-z'));
+
+    other.removeAttribute('data-z');
+    testing.expectEqual(null, el.setAttributeNode(attr));
+    testing.expectEqual(el, attr.ownerElement);
+    testing.expectEqual('1', el.getAttribute('data-z'));
+  }
+</script>
+
+<script id=attributeNodeCloneOwnerDocument>
+  {
+    const doc = new DOMParser().parseFromString('<p id=x data-q=7>hi</p>', 'text/html');
+    const attr = doc.getElementById('x').getAttributeNode('data-q');
+    testing.expectEqual(doc, attr.ownerDocument);
+
+    // the copy has no owner element, but keeps the node document
+    const clone = attr.cloneNode();
+    testing.expectEqual(null, clone.ownerElement);
+    testing.expectEqual(doc, clone.ownerDocument);
+  }
+</script>
+
 <div id="nsa"></div>
 <script id=non-string-attr>
   {
@@ -280,4 +349,83 @@
     nsa.setAttribute('arr', []);
     testing.expectEqual('', nsa.getAttribute('arr'));
   }
+</script>
+
+<script id=reflect-absent>
+  {
+    // id/class/dir/slot reflect as '' when the content attribute is ABSENT.
+    // Internally these getters return an optional, so absent and
+    // present-but-empty are distinct there; through the IDL they are not.
+    const el = document.createElement('div');
+    testing.expectEqual('', el.id);
+    testing.expectEqual('', el.className);
+    testing.expectEqual('', el.dir);
+    testing.expectEqual('', el.slot);
+    testing.expectEqual(false, el.hasAttribute('id'));
+    testing.expectEqual(false, el.hasAttribute('class'));
+    testing.expectEqual(false, el.hasAttribute('slot'));
+
+    // present-but-empty reflects identically, but the attribute now exists
+    el.setAttribute('id', '');
+    el.setAttribute('class', '');
+    el.setAttribute('slot', '');
+    testing.expectEqual('', el.id);
+    testing.expectEqual('', el.className);
+    testing.expectEqual('', el.slot);
+    testing.expectEqual(true, el.hasAttribute('id'));
+    testing.expectEqual(true, el.hasAttribute('class'));
+    testing.expectEqual(true, el.hasAttribute('slot'));
+
+    // setters round-trip through the content attribute
+    el.id = 'x';
+    el.className = 'a b';
+    el.slot = 's';
+    testing.expectEqual('x', el.id);
+    testing.expectEqual('a b', el.className);
+    testing.expectEqual('s', el.slot);
+    testing.expectEqual('x', el.getAttribute('id'));
+    testing.expectEqual('a b', el.getAttribute('class'));
+    testing.expectEqual('s', el.getAttribute('slot'));
+  }
+</script>
+
+<script id=named_node_map_presence>
+{
+  const attrs = $('#nnm').attributes;
+
+  testing.expectEqual(true, 'id' in attrs);
+  testing.expectEqual(true, 'data-role' in attrs);
+  testing.expectEqual(true, Object.hasOwn(attrs, 'class'));
+
+  testing.expectEqual(false, 'nonExistent' in attrs);
+  testing.expectEqual(false, Object.hasOwn(attrs, 'nonExistent'));
+
+  // presence tracks the attribute list
+  $('#nnm').setAttribute('title', 'hi');
+  testing.expectEqual(true, 'title' in attrs);
+  $('#nnm').removeAttribute('title');
+  testing.expectEqual(false, 'title' in attrs);
+
+  // inherited members are found by `in`, but are not own properties
+  testing.expectEqual(true, 'length' in attrs);
+  testing.expectEqual(false, Object.hasOwn(attrs, 'length'));
+}
+</script>
+
+<script id=named_node_map_enumeration>
+{
+  const attrs = $('#nnm').attributes;
+
+  // [LegacyUnenumerableNamedProperties]: only the indices enumerate...
+  testing.expectEqual('0,1,2', Object.keys(attrs).join(','));
+
+  // ...but the names are still own properties
+  const own = Object.getOwnPropertyNames(attrs);
+  testing.expectEqual(true, own.includes('id'));
+  testing.expectEqual(true, own.includes('class'));
+  testing.expectEqual(true, own.includes('data-role'));
+
+  testing.expectEqual(false, Object.getOwnPropertyDescriptor(attrs, 'id').enumerable);
+  testing.expectEqual('id', Object.getOwnPropertyDescriptor(attrs, 'id').value.name);
+}
 </script>

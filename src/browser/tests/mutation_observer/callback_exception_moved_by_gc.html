@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=observerThrowsObjectMovedByGc>
+  {
+    const target = document.createElement('div');
+    new MutationObserver(() => {
+      throw {
+        get message() {
+          const keep = [];
+          for (let round = 0; round < 8; round++) {
+            const junk = [];
+            for (let i = 0; i < 300000; i++) junk.push({ i, s: 'x' + i });
+            keep.push(junk);
+          }
+          return 'moved' + keep.length;
+        },
+        stack: 'stack',
+      };
+    }).observe(target, { attributes: true });
+    target.setAttribute('x', '1');
+    testing.expectEqual('1', target.getAttribute('x'));
+  }
+</script>
+
+<script id=stillAlive>
+  testing.expectEqual(3, 1 + 2);
+</script>

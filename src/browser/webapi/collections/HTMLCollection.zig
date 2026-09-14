@@ -291,13 +291,13 @@ pub const JsApi = struct {
         const len = self.length(frame);
         for (0..len) |i| {
             const element = self.getAtIndex(i, frame) orelse break;
-            if (element.getAttributeSafe(comptime .wrap("id"))) |id| {
+            if (element.getId()) |id| {
                 if (id.len > 0 and !contains(names.items, id)) {
                     try names.append(arena, id);
                 }
             }
             if (element._namespace == .html) {
-                if (element.getAttributeSafe(comptime .wrap("name"))) |name| {
+                if (element.getName()) |name| {
                     if (name.len > 0 and !contains(names.items, name)) {
                         try names.append(arena, name);
                     }

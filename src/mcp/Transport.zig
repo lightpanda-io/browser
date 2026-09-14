@@ -47,7 +47,7 @@ pub fn retarget(self: *Self, writer: *std.Io.Writer) void {
     self.writer = writer;
 }
 
-pub fn sendResponse(self: *Self, response: anytype) !void {
+fn sendResponse(self: *Self, response: anytype) !void {
     self.mutex.lockUncancelable(lp.io);
     defer self.mutex.unlock(lp.io);
 

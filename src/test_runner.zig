@@ -435,7 +435,7 @@ const Env = struct {
 };
 
 pub const panic = std.debug.FullPanic(struct {
-    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
         if (current_test) |ct| {
             std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n", .{ BORDER, ct });
             if (RUNNER.subtests.getLastOrNull()) |st| {
@@ -467,7 +467,7 @@ fn isAfterEach(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterEach");
 }
 
-pub const TrackingAllocator = struct {
+const TrackingAllocator = struct {
     parent_allocator: Allocator,
     free_count: usize = 0,
     allocated_bytes: usize = 0,

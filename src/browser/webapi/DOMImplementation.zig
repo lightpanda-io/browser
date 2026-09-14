@@ -29,7 +29,7 @@ const DOMImplementation = @This();
 // it are owned by that document, not necessarily the frame's main document.
 _document: *Document,
 
-pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
+fn createDocumentType(self: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, frame: *Frame) !*DocumentType {
     // Per spec, qualifiedName must match the doctype name production: any
     // characters except ASCII whitespace or '>'.
     for (qualified_name) |c| {
@@ -39,21 +39,17 @@ pub fn createDocumentType(self: *const DOMImplementation, qualified_name: []cons
         }
     }
 
-    const doctype = try DocumentType.init(qualified_name, public_id, system_id, frame);
-    if (self._document != frame.document) {
-        try frame.setNodeOwnerDocument(doctype.asNode(), self._document);
-    }
-    return doctype;
+    return DocumentType.init(self._document, qualified_name, public_id, system_id, frame);
 }
 
-pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
+fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, frame: *Frame) !*Document {
     const document = (try frame._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
     document._url = "about:blank";
     document._charset = "UTF-8";
 
     {
-        const doctype = try frame._factory.node(DocumentType{
+        const doctype = try frame._factory.node(document, DocumentType{
             ._proto = undefined,
             ._name = "html",
             ._public_id = "",
@@ -62,26 +58,26 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString
         _ = try document.asNode().appendChild(doctype.asNode(), frame);
     }
 
-    const html_node = try Frame.node_factory.createElementNS(frame, .html, "html", null);
+    const html_node = try Frame.node_factory.createElementNS(document, .html, "html", null);
     _ = try document.asNode().appendChild(html_node, frame);
 
-    const head_node = try Frame.node_factory.createElementNS(frame, .html, "head", null);
+    const head_node = try Frame.node_factory.createElementNS(document, .html, "head", null);
     _ = try html_node.appendChild(head_node, frame);
 
     if (title) |t| {
-        const title_node = try Frame.node_factory.createElementNS(frame, .html, "title", null);
+        const title_node = try Frame.node_factory.createElementNS(document, .html, "title", null);
         _ = try head_node.appendChild(title_node, frame);
-        const text_node = try Frame.node_factory.createTextNode(frame, t.value);
+        const text_node = try Frame.node_factory.createTextNode(document, t.value);
         _ = try title_node.appendChild(text_node, frame);
     }
 
-    const body_node = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const body_node = try Frame.node_factory.createElementNS(document, .html, "body", null);
     _ = try html_node.appendChild(body_node, frame);
 
     return document;
 }
 
-pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([]const u8), qualified_name_: js.Value, doctype: ?*DocumentType, frame: *Frame) !*Document {
+fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([]const u8), qualified_name_: js.Value, doctype: ?*DocumentType, frame: *Frame) !*Document {
     // Both namespace (nullable) and qualifiedName are required arguments.
     const namespace_ = namespace_nullable.value;
 
@@ -119,7 +115,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullab
     // Create and append root element if qualified_name provided
     if (qname.len > 0) {
         const namespace = Node.Element.Namespace.parse(namespace_);
-        const root = try Frame.node_factory.createElementNS(frame, namespace, qname, null);
+        const root = try Frame.node_factory.createElementNS(document, namespace, qname, null);
 
         // Store the original URI for unknown namespaces so namespaceURI and
         // lookupNamespaceURI can return it (mirrors Document.createElementNS).
@@ -136,7 +132,7 @@ pub fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullab
     return document;
 }
 
-pub fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) bool {
+fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) bool {
     // Modern DOM spec says this should always return true
     // This method is deprecated and kept for compatibility only
     return true;

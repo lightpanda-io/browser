@@ -215,7 +215,7 @@ pub const SlabAllocator = struct {
         self.slabs.deinit(self.child_allocator);
     }
 
-    pub const ResetKind = enum {
+    const ResetKind = enum {
         /// Free all chunks and release all memory.
         clear,
         /// Keep all chunks, reset trees to reuse memory.
@@ -312,7 +312,7 @@ pub const SlabAllocator = struct {
         }
     };
 
-    pub fn getStats(self: *Self, a: std.mem.Allocator) !Stats {
+    fn getStats(self: *Self, a: std.mem.Allocator) !Stats {
         var slab_stats: std.ArrayList(Slab.Stats) = try .initCapacity(a, self.slabs.entries.len);
         errdefer slab_stats.deinit(a);
 
@@ -358,7 +358,7 @@ pub const SlabAllocator = struct {
         return stats;
     }
 
-    pub const vtable = Allocator.VTable{
+    const vtable = Allocator.VTable{
         .alloc = alloc,
         .free = free,
         .remap = Allocator.noRemap,

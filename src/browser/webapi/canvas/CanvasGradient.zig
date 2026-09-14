@@ -29,7 +29,7 @@ pub fn init(exec: *const Execution) !*CanvasGradient {
     return exec._factory.create(CanvasGradient{});
 }
 
-pub fn addColorStop(self: *CanvasGradient, offset: f64, _: []const u8) !void {
+fn addColorStop(self: *CanvasGradient, offset: f64, _: []const u8) !void {
     if (!(offset >= 0 and offset <= 1)) return error.IndexSizeError;
     self._stops += 1;
 }

@@ -34,3 +34,63 @@
   testing.expectEqual(false, anotherDoc.contains(anotherNewNode));
   testing.expectEqual(false, newDoc.contains(newNode));
 </script>
+
+<script id=detached_keeps_document>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div><p>x</p></div>', 'text/html');
+  const el = doc.createElement('span');
+  testing.expectEqual(doc, el.ownerDocument);
+  testing.expectEqual(doc, doc.createTextNode('x').ownerDocument);
+  testing.expectEqual(doc, doc.createComment('x').ownerDocument);
+  testing.expectEqual(doc, doc.createDocumentFragment().ownerDocument);
+  testing.expectEqual(doc, doc.createAttribute('a').ownerDocument);
+  testing.expectEqual(doc, el.cloneNode(true).ownerDocument);
+
+  // Removal does not change the node document
+  const div = doc.querySelector('div');
+  div.remove();
+  testing.expectEqual(doc, div.ownerDocument);
+  testing.expectEqual(doc, div.firstChild.ownerDocument);
+
+  // Insertion into another document adopts the whole subtree
+  document.body.appendChild(div);
+  testing.expectEqual(document, div.ownerDocument);
+  testing.expectEqual(document, div.firstChild.ownerDocument);
+  div.remove();
+  testing.expectEqual(document, div.ownerDocument);
+
+  // Attributes follow their element
+  div.setAttribute('a', '1');
+  testing.expectEqual(document, div.getAttributeNode('a').ownerDocument);
+  const attr = doc.createAttribute('b');
+  div.setAttributeNode(attr);
+  testing.expectEqual(document, attr.ownerDocument);
+}
+</script>
+
+<script id=iframe_document type=module>
+{
+  const state = await testing.async();
+
+  const f = document.createElement('iframe');
+  f.srcdoc = '<p>hello</p>';
+  f.onload = () => state.resolve(f);
+  document.body.appendChild(f);
+
+  await state.done((f) => {
+    const doc = f.contentDocument;
+    // Created from the parent's realm, owned by the iframe's document
+    const el = doc.createElement('div');
+    testing.expectEqual(doc, el.ownerDocument);
+    testing.expectEqual(doc, doc.createTextNode('x').ownerDocument);
+    testing.expectEqual(doc, doc.querySelector('p').cloneNode().ownerDocument);
+
+    testing.expectEqual(document, document.adoptNode(el).ownerDocument);
+    testing.expectEqual(doc, doc.adoptNode(el).ownerDocument);
+    const imported = document.importNode(doc.querySelector('p'), true);
+    testing.expectEqual(document, imported.ownerDocument);
+    testing.expectEqual(document, imported.firstChild.ownerDocument);
+  });
+}
+</script>

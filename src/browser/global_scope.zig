@@ -19,8 +19,10 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const Notification = @import("../Notification.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
+const Blob = @import("webapi/Blob.zig");
 const Event = @import("webapi/Event.zig");
 const Console = @import("webapi/Console.zig");
 const Cookie = @import("webapi/storage/Cookie.zig");
@@ -126,6 +128,21 @@ pub const GlobalScope = union(enum) {
         return self.httpOwner().siteForCookies();
     }
 
+    pub fn cookieJar(self: GlobalScope) *Cookie.Jar {
+        return &self.session().cookie_jar;
+    }
+
+    pub fn notification(self: GlobalScope) *Notification {
+        return self.session().notification;
+    }
+
+    // The Page-level blob: URL store, shared by every global on the page.
+    pub fn blobUrls(self: GlobalScope) *const Blob.UrlMap {
+        return switch (self) {
+            inline else => |g| &g._page.blob_urls,
+        };
+    }
+
     // HttpClient.Owner of the current global (Frame or WGS). Used by code
     // that needs to register an in-flight network operation against the
     // owning scope without caring whether it's a Frame or a Worker — e.g.
@@ -133,6 +150,28 @@ pub const GlobalScope = union(enum) {
     pub fn httpOwner(self: GlobalScope) *HttpClient.Owner {
         return switch (self) {
             inline else => |g| &g._http_owner,
+        };
+    }
+
+    // Create an HttpClient.Owner from the GlobalScope
+    pub fn initHttpOwner(self: GlobalScope) HttpClient.Owner {
+        return switch (self) {
+            .frame => |frame| .{
+                .scope = self,
+                .url = &frame.url,
+                .parent = if (frame.parent) |p| &p._http_owner else null,
+                .frame_id = frame._frame_id,
+                .document_frame_id = frame._frame_id,
+                .loader_id = frame._loader_id,
+            },
+            .worker => |worker| .{
+                .scope = self,
+                .url = null,
+                .parent = &worker._frame._http_owner,
+                .frame_id = worker._frame_id,
+                .document_frame_id = worker._frame._frame_id,
+                .loader_id = worker._loader_id,
+            },
         };
     }
 

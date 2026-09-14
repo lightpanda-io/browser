@@ -38,7 +38,7 @@ pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
 }
 
-pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
+fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
     if (self._orientation) |orientation| {
         return orientation;
     }
@@ -48,11 +48,13 @@ pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
 }
 
 pub fn getWidth(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().width;
+    const viewport = frame._page.getViewport();
+    return viewport.screen_width orelse viewport.width;
 }
 
 pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().height;
+    const viewport = frame._page.getViewport();
+    return viewport.screen_height orelse viewport.height;
 }
 
 pub const JsApi = struct {

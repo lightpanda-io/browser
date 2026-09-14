@@ -24,12 +24,12 @@ pub fn asNode(self: *Base) *Node {
 
 pub fn getHref(self: *Base, frame: *Frame) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
+    const href = element.getAttributeInterned("href") orelse return "";
     if (href.len == 0) {
         return "";
     }
-    const owner = element.asConstNode().ownerFrame(frame);
-    return URL.resolve(frame.local_arena, owner.url, href, .{});
+    const doc = element.asConstNode().ownerDocument(frame).?;
+    return URL.resolve(frame.local_arena, doc.getURL(frame), href, .{});
 }
 
 pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
@@ -45,12 +45,12 @@ pub fn setHref(self: *Base, value: []const u8, frame: *Frame) !void {
         return;
     }
 
-    const owner = node.ownerFrame(frame);
+    const owner = node.ownerFrame(frame) orelse return;
     const first = (try owner.document.querySelector(comptime .wrap("base[href]"), owner)) orelse {
         owner.base_url = null;
         return;
     };
-    const href = first.getAttributeSafe(comptime .wrap("href")) orelse {
+    const href = first.getAttributeInterned("href") orelse {
         owner.base_url = null;
         return;
     };

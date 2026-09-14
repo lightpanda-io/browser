@@ -125,7 +125,7 @@ pub fn setData(self: *DataTransfer, format: []const u8, data: []const u8) !void 
     try self._items.append(self._arena.allocator(), it);
 }
 
-pub fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
+fn clearData(self: *DataTransfer, format_: ?[]const u8, frame: *Frame) !void {
     if (format_) |format| {
         const norm = try normalizeFormat(frame.local_arena, format);
         var i: usize = 0;
@@ -209,15 +209,15 @@ fn rebuildFiles(self: *DataTransfer, frame: *Frame) !void {
 
 // --- accessors ---
 
-pub fn getFiles(self: *DataTransfer) *FileList {
+fn getFiles(self: *DataTransfer) *FileList {
     return self._files;
 }
 
-pub fn getItems(self: *DataTransfer) *DataTransferItemList {
+fn getItems(self: *DataTransfer) *DataTransferItemList {
     return self._item_list;
 }
 
-pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
+fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var has_files = false;
     for (self._items.items) |it| {
@@ -232,11 +232,11 @@ pub fn getTypes(self: *DataTransfer, frame: *Frame) ![][]const u8 {
     return out.toOwnedSlice(frame.local_arena);
 }
 
-pub fn getDropEffect(self: *const DataTransfer) []const u8 {
+fn getDropEffect(self: *const DataTransfer) []const u8 {
     return self._drop_effect;
 }
 
-pub fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
+fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
     inline for (.{ "none", "copy", "link", "move" }) |valid| {
         if (std.mem.eql(u8, value, valid)) {
             self._drop_effect = valid;
@@ -245,11 +245,11 @@ pub fn setDropEffect(self: *DataTransfer, value: []const u8) !void {
     }
 }
 
-pub fn getEffectAllowed(self: *const DataTransfer) []const u8 {
+fn getEffectAllowed(self: *const DataTransfer) []const u8 {
     return self._effect_allowed;
 }
 
-pub fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
+fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
     inline for (.{ "none", "copy", "copyLink", "copyMove", "link", "linkMove", "move", "all", "uninitialized" }) |valid| {
         if (std.mem.eql(u8, value, valid)) {
             self._effect_allowed = valid;
@@ -260,7 +260,7 @@ pub fn setEffectAllowed(self: *DataTransfer, value: []const u8) !void {
 
 // https://html.spec.whatwg.org/multipage/dnd.html#dom-datatransfer-setdragimage
 // No-op: Lightpanda has no rendered drag feedback.
-pub fn setDragImage(_: *DataTransfer, _: js.Value, _: i32, _: i32) void {}
+fn setDragImage(_: *DataTransfer, _: js.Value, _: i32, _: i32) void {}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DataTransfer);

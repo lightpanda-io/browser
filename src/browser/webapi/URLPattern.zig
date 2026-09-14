@@ -185,11 +185,11 @@ pub fn getProtocol(self: *const URLPattern) []const u8 {
     return self._protocol.pattern_string;
 }
 
-pub fn getUsername(self: *const URLPattern) []const u8 {
+fn getUsername(self: *const URLPattern) []const u8 {
     return self._username.pattern_string;
 }
 
-pub fn getPassword(self: *const URLPattern) []const u8 {
+fn getPassword(self: *const URLPattern) []const u8 {
     return self._password.pattern_string;
 }
 
@@ -213,7 +213,7 @@ pub fn getHash(self: *const URLPattern) []const u8 {
     return self._hash.pattern_string;
 }
 
-pub fn getHasRegExpGroups(self: *const URLPattern) bool {
+fn getHasRegExpGroups(self: *const URLPattern) bool {
     inline for (component_names) |name| {
         if (@field(self, "_" ++ name).has_regexp_groups) {
             return true;
@@ -222,15 +222,15 @@ pub fn getHasRegExpGroups(self: *const URLPattern) bool {
     return false;
 }
 
-pub fn testFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !bool {
+fn testFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !bool {
     return (try self.match(input, base_url, exec)) != null;
 }
 
-pub fn execFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !?Result {
+fn execFn(self: *const URLPattern, input: ?Input, base_url: ?[]const u8, exec: *const Execution) !?Result {
     return self.match(input, base_url, exec);
 }
 
-pub const ComponentName = enum {
+const ComponentName = enum {
     protocol,
     username,
     password,
@@ -251,7 +251,7 @@ fn getComponent(self: *const URLPattern, name: ComponentName) *const Component {
 
 // Tentative (Chromium-only, WPT urlpattern-compare.tentative): orders two
 // patterns' components by specificity.
-pub fn compareComponent(name: ComponentName, left: *const URLPattern, right: *const URLPattern, exec: *const Execution) !i32 {
+fn compareComponent(name: ComponentName, left: *const URLPattern, right: *const URLPattern, exec: *const Execution) !i32 {
     const env: Env = .{ .arena = exec.local_arena, .local = exec.js.local.? };
     return left.getComponent(name).compare(right.getComponent(name), env);
 }
@@ -1362,7 +1362,7 @@ const Part = struct {
             };
         }
     };
-    pub const Modifier = enum {
+    const Modifier = enum {
         none,
         optional,
         zero_or_more,

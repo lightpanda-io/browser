@@ -81,11 +81,11 @@ pub fn asEvent(self: *PromiseRejectionEvent) *Event {
     return self._proto;
 }
 
-pub fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
+fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Global {
     return self._reason;
 }
 
-pub fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
+fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Global {
     return self._promise;
 }
 

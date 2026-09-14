@@ -189,11 +189,11 @@ pub fn close(self: *SharedWorkerGlobalScope) void {
     self._closed = true;
 }
 
-pub fn getOnConnect(self: *const SharedWorkerGlobalScope) ?js.Function.Global {
+fn getOnConnect(self: *const SharedWorkerGlobalScope) ?js.Function.Global {
     return self._on_connect;
 }
 
-pub fn setOnConnect(self: *SharedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
+fn setOnConnect(self: *SharedWorkerGlobalScope, setter: ?WorkerGlobalScope.FunctionSetter) void {
     self._on_connect = WorkerGlobalScope.getFunctionFromSetter(setter);
 }
 
@@ -209,9 +209,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
         return .abort;
     }
 
-    if (transfer.getContentLength()) |cl| {
-        try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), cl);
-    }
+    try self._script_buffer.ensureTotalCapacityPrecise(self._script_arena.?.allocator(), transfer.bodyLen());
 
     return .proceed;
 }

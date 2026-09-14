@@ -32,7 +32,7 @@ pub fn init(init_: Init, exec: *const Execution) !*CountQueuingStrategy {
     return exec._factory.create(CountQueuingStrategy{ ._high_water_mark = init_.highWaterMark });
 }
 
-pub fn getHighWaterMark(self: *const CountQueuingStrategy) f64 {
+fn getHighWaterMark(self: *const CountQueuingStrategy) f64 {
     return self._high_water_mark;
 }
 

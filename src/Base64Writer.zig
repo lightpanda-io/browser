@@ -31,7 +31,7 @@ pending_len: u2 = 0,
 pending: [3]u8 = undefined,
 codec: *const std.base64.Base64Encoder,
 
-pub const Codec = enum {
+const Codec = enum {
     standard,
     standard_no_pad,
     url_safe,

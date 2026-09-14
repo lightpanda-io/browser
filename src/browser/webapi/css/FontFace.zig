@@ -54,7 +54,7 @@ pub fn acquireRef(self: *FontFace) void {
     self._rc.acquire();
 }
 
-pub fn getFamily(self: *const FontFace) []const u8 {
+fn getFamily(self: *const FontFace) []const u8 {
     return self._family;
 }
 
@@ -64,7 +64,7 @@ pub fn load(_: *FontFace, frame: *Frame) !js.Promise {
 }
 
 // loaded - returns an already-resolved Promise.
-pub fn getLoaded(_: *FontFace, frame: *Frame) !js.Promise {
+fn getLoaded(_: *FontFace, frame: *Frame) !js.Promise {
     return frame.js.local.?.resolvePromise({});
 }
 

@@ -40,7 +40,7 @@ fields: []const FieldEntry,
 hints: []const HintSlot,
 parameters: std.json.Value,
 
-pub const FieldType = enum { string, integer, number, boolean, other };
+const FieldType = enum { string, integer, number, boolean, other };
 
 pub const FieldEntry = struct {
     name: []const u8,
@@ -63,7 +63,7 @@ pub const FieldEntry = struct {
 
 /// REPL argument-syntax hint slot. `fragment` is pre-rendered as `<name>`
 /// for required and `[name=…]` for optional.
-pub const HintSlot = struct {
+const HintSlot = struct {
     name: []const u8,
     required: bool,
     fragment: []const u8,
@@ -126,7 +126,7 @@ pub fn findField(self: Schema, key: []const u8) ?FieldEntry {
 
 /// Rename keys in `obj` to canonical casing. Unknown keys pass through;
 /// keys that collide on the canonical form return `error.DuplicateField`.
-pub fn normalizeKeys(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
+fn normalizeKeys(self: Schema, arena: std.mem.Allocator, obj: *std.json.ObjectMap) !void {
     const Rename = struct { from: []const u8, to: []const u8 };
     var renames: std.ArrayList(Rename) = .empty;
     var it = obj.iterator();
@@ -163,7 +163,7 @@ pub fn skipForFormat(self: Schema, key: []const u8, v: std.json.Value) bool {
     return std.mem.eql(u8, key, "backendNodeId");
 }
 
-pub fn visibleArgCount(self: Schema, args: std.json.ObjectMap) usize {
+fn visibleArgCount(self: Schema, args: std.json.ObjectMap) usize {
     var n: usize = 0;
     for (self.fields) |f| {
         const v = args.get(f.name) orelse continue;

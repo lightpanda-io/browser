@@ -65,17 +65,6 @@ pub fn newString(self: *const Local, str: []const u8) js.String {
     };
 }
 
-// Creates a JS string by mapping each input byte 0..255 directly to a JS
-// code unit, with no UTF-8 decoding. Use this when handing back binary data
-// (e.g. atob output) — passing those bytes through `newString` would treat
-// any byte 0x80..0xFF as malformed UTF-8 and replace it with U+FFFD.
-pub fn newOneByteString(self: *const Local, bytes: []const u8) js.String {
-    return .{
-        .local = self,
-        .handle = self.isolate.initOneByteStringHandle(bytes),
-    };
-}
-
 pub fn newObject(self: *const Local) js.Object {
     return .{
         .local = self,
@@ -203,7 +192,7 @@ pub fn compile(self: *const Local, src: []const u8, name: ?[]const u8) !js.Scrip
     return result.script;
 }
 
-pub const CompileResult = struct {
+const CompileResult = struct {
     script: js.Script,
     // True only when `cached_data` was supplied AND V8 rejected it (source,
     // V8 version, or flag mismatch) and recompiled from source. Always false
@@ -924,13 +913,12 @@ fn jsValueToArrayBufferSlice(comptime T: type, any_view: bool, js_val: js.Value)
         byte_offset = 0;
     }
 
-    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
+    const buffer = array_buffer orelse return null;
     if (byte_len == 0) {
         return &[_]T{};
     }
 
-    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
-    const data = v8.v8__BackingStore__Data(backing_store_handle);
+    const data = js.arrayBufferData(buffer);
     const base = @as([*]u8, @ptrCast(data)) + byte_offset;
 
     // 2. Validate alignment
@@ -1326,7 +1314,7 @@ const Resolved = struct {
         release_ref_from_zig: *const fn (ptr_id: usize, page: *Page) void,
     };
 };
-pub fn resolveValue(value: anytype) Resolved {
+fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
     if (!@hasField(T, "_type")) {
         return resolveT(T, value);
@@ -1670,13 +1658,6 @@ pub fn newException(self: *const Local, ex: anytype) js.Exception {
     return .{
         .local = self,
         .handle = js_val.handle,
-    };
-}
-
-pub fn getGlobal(self: *const Local) js.Object {
-    return .{
-        .local = self,
-        .handle = v8.v8__Context__Global(self.handle).?,
     };
 }
 

@@ -25,7 +25,7 @@ const Node = @import("webapi/Node.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const SelectOption = struct {
+const SelectOption = struct {
     value: []const u8,
     text: []const u8,
 
@@ -39,7 +39,7 @@ pub const SelectOption = struct {
     }
 };
 
-pub const FormField = struct {
+const FormField = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     tag_name: []const u8,
@@ -101,7 +101,7 @@ pub const FormField = struct {
     }
 };
 
-pub const FormInfo = struct {
+const FormInfo = struct {
     backendNodeId: ?u32 = null,
     node: *Node,
     action: ?[]const u8,
@@ -169,7 +169,7 @@ pub fn collectForms(
         const fields = try collectFormFields(arena, form, frame);
         if (fields.len == 0) continue;
 
-        const action_attr = el.getAttributeSafe(comptime .wrap("action"));
+        const action_attr = el.getAttributeInterned("action");
         const method_str = form.getMethod();
 
         try forms.append(arena, .{
@@ -204,12 +204,12 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "input",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = input._input_type.toString(),
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = input.getRedactedValue(),
-                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
             continue;
@@ -219,12 +219,12 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "textarea",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = null,
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = textarea.getValue(),
-                .placeholder = el.getAttributeSafe(comptime .wrap("placeholder")),
+                .placeholder = el.getAttributeInterned("placeholder"),
                 .options = &.{},
             });
             continue;
@@ -236,9 +236,9 @@ fn collectFormFields(
             try fields.append(arena, .{
                 .node = node,
                 .tag_name = "select",
-                .name = el.getAttributeSafe(comptime .wrap("name")),
+                .name = el.getName(),
                 .input_type = null,
-                .required = el.getAttributeSafe(comptime .wrap("required")) != null,
+                .required = el.getAttributeInterned("required") != null,
                 .disabled = is_disabled,
                 .value = select.getValue(frame),
                 .placeholder = null,

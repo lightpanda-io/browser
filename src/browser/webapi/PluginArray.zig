@@ -78,14 +78,22 @@ pub const JsApi = struct {
     pub const length = bridge.property(0, .{ .template = false });
     pub const refresh = bridge.function(PluginArray.refresh, .{});
     pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
-    pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, null, null, .{ .null_as_undefined = true });
-    pub const item = bridge.function(_item, .{});
-    fn _item(self: *const PluginArray, index: i32) ?*Plugin {
-        if (index < 0) {
-            return null;
+    pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, null, struct {
+        fn wrap(_: *const PluginArray, _: []const u8) !u32 {
+            // No plugin is ever exposed, so there are no named properties.
+            return error.NotHandled;
         }
-        return self.getAtIndex(@intCast(index));
-    }
+    }.wrap, .{ .null_as_undefined = true });
+
+    pub const item = bridge.function(struct {
+        fn wrap(self: *const PluginArray, index: i32) ?*Plugin {
+            if (index < 0) {
+                return null;
+            }
+            return self.getAtIndex(@intCast(index));
+        }
+    }.wrap, .{});
+
     pub const namedItem = bridge.function(PluginArray.getByName, .{});
     pub const symbol_iterator = bridge.iterator(PluginArray.values, .{});
 };

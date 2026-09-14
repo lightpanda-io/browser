@@ -23,7 +23,7 @@ pub fn asNode(self: *Label) *Node {
 }
 
 pub fn getControl(self: *Label, frame: *Frame) ?*Element {
-    if (self.asElement().getAttributeSafe(comptime .wrap("for"))) |id| {
+    if (self.asElement().getAttributeInterned("for")) |id| {
         const el = frame.getElementByIdFromNode(self.asElement().asNode(), id) orelse return null;
         if (!isLabelable(el)) {
             return null;
@@ -72,7 +72,7 @@ pub const LabelByForIndex = struct {
             var it = TreeWalker.Full.Elements.init(root, .{});
             while (it.next()) |el| {
                 if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (for_attr.len == 0) continue;
                 const gop = try self.map.getOrPut(allocator, for_attr);
                 if (!gop.found_existing) gop.value_ptr.* = el;
@@ -92,14 +92,14 @@ pub fn getControlLabels(control: *Element, frame: *Frame) !js.Array {
     var arr = local.newArray(0);
     var idx: u32 = 0;
 
-    if (control.getAttributeSafe(comptime .wrap("id"))) |id_value| {
+    if (control.getId()) |id_value| {
         if (id_value.len > 0) {
             const doc = control.asNode().ownerDocument(frame);
             const search_root: *Node = if (doc) |d| d.asNode() else control.asNode();
             var it = TreeWalker.Full.Elements.init(search_root, .{});
             while (it.next()) |el| {
                 if (el.getTag() != .label) continue;
-                const for_attr = el.getAttributeSafe(comptime .wrap("for")) orelse continue;
+                const for_attr = el.getAttributeInterned("for") orelse continue;
                 if (!std.mem.eql(u8, for_attr, id_value)) continue;
                 _ = try arr.set(idx, el, .{});
                 idx += 1;

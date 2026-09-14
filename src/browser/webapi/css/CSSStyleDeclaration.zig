@@ -44,7 +44,7 @@ pub fn parseInlineStyle(self: *CSSStyleDeclaration, frame: *Frame) !void {
         return;
     }
     const el = self._element orelse return;
-    const attr_value = el.getAttributeSafe(comptime .wrap("style")) orelse return;
+    const attr_value = el.getAttributeInterned("style") orelse return;
     try self.applyDeclarations(attr_value, frame);
 }
 
@@ -82,11 +82,17 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     // tree builders (Playwright ariaSnapshot) consult on every element.
     if (self._is_computed) {
         if (self._element) |element| {
-            const style_manager = &element.ownerFrame(frame)._style_manager;
-            if (wrapped.eql(comptime .wrap("display"))) {
-                if (style_manager.hasDisplayNone(element, .materialize)) return "none";
-            } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                if (style_manager.hasVisibilityHiddenInherited(element)) return "hidden";
+            if (element.ownerFrame(frame)) |owner| {
+                const style_manager = &owner._style_manager;
+                if (wrapped.eql(comptime .wrap("display"))) {
+                    if (style_manager.hasDisplayNone(element)) {
+                        return "none";
+                    }
+                } else if (wrapped.eql(comptime .wrap("visibility"))) {
+                    if (style_manager.hasVisibilityHiddenInherited(element)) {
+                        return "hidden";
+                    }
+                }
             }
         }
     }
@@ -95,23 +101,31 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         // Only return default values for computed styles
         if (self._is_computed) {
             if (self._element) |element| {
-                // Resolve inline `style=` declarations through the element's
-                // parsed inline style, so computed values match `el.style`.
-                if (element.ownerFrame(frame)._style_manager.inlineStyleValue(element, wrapped)) |value| {
-                    return value;
-                }
+                if (element.ownerFrame(frame)) |owner| {
+                    const style_manager = &owner._style_manager;
 
-                // Computed width/height must agree with the synthetic layout
-                // metrics. Returning "" makes measurement code see
-                // contradictory sizes — jQuery's "shrink text until it fits"
-                // loops then never terminate. jQuery's .width() reads this
-                // value, so it must also carry clientWidth's content fallback
-                // or append-until-wide marquee loops never terminate.
-                if (wrapped.eql(comptime .wrap("width"))) {
-                    return resolvedDimension(element, .width, frame);
-                }
-                if (wrapped.eql(comptime .wrap("height"))) {
-                    return resolvedDimension(element, .height, frame);
+                    if (isCustomProperty(normalized)) {
+                        return style_manager.customPropertyValue(element, wrapped) orelse "";
+                    }
+
+                    // Resolve inline `style=` declarations through the element's
+                    // parsed inline style, so computed values match `el.style`.
+                    if (style_manager.inlineStyleValue(element, wrapped)) |value| {
+                        return value;
+                    }
+
+                    // Computed width/height must agree with the synthetic layout
+                    // metrics. Returning "" makes measurement code see
+                    // contradictory sizes — jQuery's "shrink text until it fits"
+                    // loops then never terminate. jQuery's .width() reads this
+                    // value, so it must also carry clientWidth's content fallback
+                    // or append-until-wide marquee loops never terminate.
+                    if (wrapped.eql(comptime .wrap("width"))) {
+                        return resolvedDimension(element, .width, frame);
+                    }
+                    if (wrapped.eql(comptime .wrap("height"))) {
+                        return resolvedDimension(element, .height, frame);
+                    }
                 }
             }
             return getDefaultPropertyValue(self, wrapped);
@@ -122,7 +136,7 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
-    if (!element.checkVisibilityCached(null, frame, .materialize)) {
+    if (!element.isVisible(frame)) {
         return "auto";
     }
     const value = switch (dimension) {
@@ -258,16 +272,16 @@ fn clearProperties(self: *CSSStyleDeclaration, frame: *Frame) void {
     }
 }
 
-pub fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
+fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
     return self.getPropertyValue("float", frame);
 }
 
-pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
     try self.setPropertyImpl("float", value_ orelse "", false, frame);
     try self.syncStyleAttribute(frame);
 }
 
-pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(frame.local_arena);
     try self.format(&buf.writer);
     return buf.written();
@@ -292,6 +306,20 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     }
 }
 
+pub fn iterator(self: *const CSSStyleDeclaration) Iterator {
+    return .{ .node = self._properties.first };
+}
+
+pub const Iterator = struct {
+    node: ?*std.DoublyLinkedList.Node,
+
+    pub fn next(self: *Iterator) ?*Property {
+        const node = self.node orelse return null;
+        self.node = node.next;
+        return Property.fromNodeLink(node);
+    }
+};
+
 pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
     var node = self._properties.first;
     while (node) |n| {
@@ -305,11 +333,20 @@ pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
 }
 
 fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
+    if (isCustomProperty(name)) {
+        // Custom properties are case-sensitive
+        return name;
+    }
+
     if (name.len > buf.len) {
         log.info(.dom, "css.long.name", .{ .name = name });
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+fn isCustomProperty(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "--");
 }
 
 // Normalize CSS property values for canonical serialization

@@ -61,7 +61,7 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
     return self._key;
 }
 
-pub fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
+fn sameDocument(self: *const NavigationHistoryEntry, frame: *Frame) bool {
     const got_url = self._url orelse return false;
     return URL.eqlDocument(got_url, frame.base());
 }
@@ -70,7 +70,7 @@ pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
     return self._url;
 }
 
-pub const StateReturn = union(enum) { value: ?js.Value, undefined: void };
+const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 
 pub fn getState(self: *const NavigationHistoryEntry, frame: *Frame) !StateReturn {
     if (self._state.source == .navigation) {
@@ -93,7 +93,7 @@ fn getOnDispose(self: *const NavigationHistoryEntry) ?js.Function.Global {
     return self._on_dispose;
 }
 
-pub fn setOnDispose(self: *NavigationHistoryEntry, cb_: ?js.Function) !void {
+fn setOnDispose(self: *NavigationHistoryEntry, cb_: ?js.Function) !void {
     if (self._on_dispose) |od| od.release();
     if (cb_) |cb| {
         self._on_dispose = try cb.persistWithThis(self);

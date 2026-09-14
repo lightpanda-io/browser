@@ -15,7 +15,7 @@ const log = lp.log;
 
 const CSSStyleSheet = @This();
 
-pub const CSSError = error{
+const CSSError = error{
     OutOfMemory,
     IndexSizeError,
     WriteFailed,
@@ -50,15 +50,15 @@ pub fn getTitle(self: *const CSSStyleSheet) []const u8 {
     return self._title;
 }
 
-pub fn getDisabled(self: *const CSSStyleSheet) bool {
+fn getDisabled(self: *const CSSStyleSheet) bool {
     return self._disabled;
 }
 
-pub fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
+fn setDisabled(self: *CSSStyleSheet, disabled: bool) void {
     self._disabled = disabled;
 }
 
-pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
+fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
     if (self._css_rules) |rules| return rules;
 
     const rules = try CSSRuleList.init(frame);
@@ -66,15 +66,16 @@ pub fn getCssRules(self: *CSSStyleSheet, frame: *Frame) !*CSSRuleList {
 
     if (self.getOwnerNode()) |owner| {
         if (owner.is(Element.Html.Style)) |style| {
+            // Same cascade as the text StyleManager already parsed: no notify.
             const text = try style.asNode().getTextContentAlloc(frame.local_arena);
-            try self.replaceSync(text, frame);
+            try self.parseInto(text, frame);
         }
     }
 
     return rules;
 }
 
-pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
+fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
     return self._owner_rule;
 }
 
@@ -114,9 +115,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
         log.debug(.not_implemented, "insertRule clamped index", .{});
     }
     try rules.insert(index, inserted, frame);
-
-    // Notify StyleManager that rules have changed
-    frame._style_manager.sheetModified();
+    frame._style_manager.ruleInserted(self, inserted);
 
     return index;
 }
@@ -151,7 +150,7 @@ fn atRuleTypeFor(keyword_with_prefix: []const u8) CSSRule.Type {
     return .unknown;
 }
 
-pub fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
+fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
     const rules = try self.getCssRules(frame);
     try rules.remove(index);
 
@@ -167,7 +166,12 @@ pub fn replace(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!j
 pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
     const rules = try self.getCssRules(frame);
     rules.clear();
+    try self.parseInto(text, frame);
+    frame._style_manager.sheetModified();
+}
 
+fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {
+    const rules = try self.getCssRules(frame);
     var it = Parser.parseStylesheet(text);
     var index: u32 = 0;
     while (it.next()) |parsed_rule| {
@@ -187,9 +191,6 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSErr
         try rules.insert(index, inserted, frame);
         index += 1;
     }
-
-    // Notify StyleManager that rules have changed
-    frame._style_manager.sheetModified();
 }
 
 pub const JsApi = struct {

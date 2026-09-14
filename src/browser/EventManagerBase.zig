@@ -190,7 +190,7 @@ pub fn removeListener(self: *EventManagerBase, list: *std.DoublyLinkedList, list
 }
 
 /// Check if there are any listeners registered for a target/type combination.
-pub fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
+fn hasListeners(self: *EventManagerBase, target: *EventTarget, typ: []const u8) bool {
     return self.lookup.get(.{
         .event_target = @intFromPtr(target),
         .type_string = .wrap(typ),
@@ -540,14 +540,14 @@ pub const Function = union(enum) {
     string: String,
     object: js.Object.Global,
 
-    pub fn eqlFunction(self: Function, func: js.Function) bool {
+    fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
             .value => |v| v.isEqual(func),
             else => false,
         };
     }
 
-    pub fn eqlObject(self: Function, obj: js.Object) bool {
+    fn eqlObject(self: Function, obj: js.Object) bool {
         return switch (self) {
             .object => |o| return o.isEqual(obj),
             else => false,

@@ -698,19 +698,14 @@ pub const Script = struct {
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManagerBase.Header buffer", .{ .capacity = self.source.remote.capacity });
 
-        const content_length = transfer.getContentLength();
+        const body_len = transfer.bodyLen();
         if (self.source_arena == null) {
             // A redirect re-runs this callback; keep the arena we already have.
-            self.source_arena = if (content_length) |cl|
-                try self.manager.acquireArena(cl, "SM.source")
-            else
-                try self.manager.acquireArena(.large, "SM.source");
+            self.source_arena = try self.manager.acquireArena(body_len, "SM.source");
         }
 
         var buffer: std.ArrayList(u8) = .empty;
-        if (content_length) |cl| {
-            try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), cl);
-        }
+        try buffer.ensureTotalCapacityPrecise(self.sourceAllocator(), body_len);
         self.source = .{ .remote = buffer };
         return .proceed;
     }
@@ -993,11 +988,11 @@ pub const Script = struct {
     }
 };
 
-pub const ImportAsync = struct {
+const ImportAsync = struct {
     data: *anyopaque,
     callback: ImportAsync.Callback,
 
-    pub const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
+    const Callback = *const fn (ptr: *anyopaque, result: anyerror!ModuleSource) void;
 };
 
 pub const ModuleSource = struct {
@@ -1016,7 +1011,7 @@ pub const ModuleSource = struct {
     }
 };
 
-pub const ImportedModule = struct {
+const ImportedModule = struct {
     waiters: u16 = 1,
     // Created by a <link rel=modulepreload> hint and not yet claimed by a real
     // import. While set, the single waiter slot belongs to the hint, which

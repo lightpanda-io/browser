@@ -56,15 +56,15 @@ pub fn getWidth(self: *const TextMetrics) f64 {
     return self._width;
 }
 
-pub fn getAscent(self: *const TextMetrics) f64 {
+fn getAscent(self: *const TextMetrics) f64 {
     return self._ascent;
 }
 
-pub fn getDescent(self: *const TextMetrics) f64 {
+fn getDescent(self: *const TextMetrics) f64 {
     return self._descent;
 }
 
-pub fn getIdeographicBaseline(self: *const TextMetrics) f64 {
+fn getIdeographicBaseline(self: *const TextMetrics) f64 {
     return -self._descent;
 }
 

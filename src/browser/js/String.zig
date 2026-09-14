@@ -58,12 +58,6 @@ pub fn toSliceWithAlloc(self: String, allocator: Allocator) ![]u8 {
     return self._toSlice(false, allocator);
 }
 
-// e.g. after a header byte — instead of allocating a temporary and copying.
-pub fn toSliceWithBuf(self: String, buf: []u8) []u8 {
-    const n = v8.v8__String__WriteUtf8(self.handle, self.local.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    return buf[0..@intCast(n)];
-}
-
 fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !(if (null_terminate) [:0]u8 else []u8) {
     const local = self.local;
     const handle = self.handle;
@@ -136,13 +130,6 @@ pub fn format(self: String, writer: *std.Io.Writer) !void {
 
 pub fn len(self: String) usize {
     return @intCast(v8.v8__String__Utf8Length(self.handle, self.local.isolate.handle));
-}
-
-// JS-level character (code unit) count, independent of encoding. Equivalent
-// to `s.length` in JavaScript. Use this — not `len()` — when allocating a
-// buffer for one-byte / Latin-1 reads.
-pub fn lenChars(self: String) usize {
-    return @intCast(v8.v8__String__Length(self.handle));
 }
 
 // True iff every code unit in the string fits in a single byte (codepoint

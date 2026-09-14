@@ -52,13 +52,11 @@ _parent: ?*Node = null,
 _first_child: ?*Node = null,
 _next: ?*Node = null,
 _prev: ?*Node = null,
+_owner: u32 = undefined, // owner document index
 // In debug, set so that we can check that we have a proper contiguous block
 // of memory for the entire chain (and thus, simple pointer arithmetics will
 // work to resolve the proto).
 _proto_canary: if (lp.IS_DEBUG) *EventTarget else void = undefined,
-
-// Lookup for nodes that have a different owner document than frame.document
-pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
 
 pub const Type = enum(u8) {
     cdata,
@@ -708,60 +706,38 @@ pub fn ownerDocument(self: *const Node, frame: *const Frame) ?*Document {
         return null;
     }
 
-    // An attribute node has no parent; its owner follows its element's
-    // (including across adoption into another document).
+    // An attribute node follows its element (including across adoption).
     if (self._type == .attribute) {
         if (self.subtype(Element.Attribute)._element) |element| {
             return element.asNode().ownerDocument(frame);
         }
     }
 
-    // The root of the tree that a node belongs to is its owner.
-    var current = self;
-    while (current._parent) |parent| {
-        current = parent;
-    }
-
-    // If the root is a document, then that's our owner.
-    if (current._type == .document) {
-        return current.subtype(Document);
-    }
-
-    // A shadow tree's root is a parent-less ShadowRoot fragment; its owner
-    // is the host's owner document.
-    if (current._type == .document_fragment) {
-        if (current.subtype(DocumentFragment).is(ShadowRoot)) |sr| {
-            return sr._host.asNode().ownerDocument(frame);
-        }
-    }
-
-    // Otherwise, this is a detached node. Check if it has a specific owner
-    // document registered (for nodes created via non-main documents).
-    if (frame._node_owner_documents.get(@constCast(self))) |owner| {
-        return owner;
-    }
-
-    // Default to the main document for detached nodes without a specific owner.
-    return frame.document;
+    // The table is the browser's, so any frame of it will do.
+    return frame._session.browser.documents.get(self._owner);
 }
 
-fn ownerDocumentIncludingSelf(self: *const Node, frame: *const Frame) ?*Document {
+// The spec's "node document": every node has one, a document's is itself.
+// `frame` only reaches the registry; any frame will do.
+pub fn getDocument(self: *const Node, frame: *const Frame) *Document {
     if (self._type == .document) {
         return self.subtype(Document);
     }
-    return self.ownerDocument(frame);
+    const doc = self.ownerDocument(frame);
+    lp.assert(doc != null, "null node document", .{ .type = self.getNodeType() });
+    return doc.?;
 }
 
-// Returns the Frame that owns this node's tree. Used to tie cached state of
-// "live" collections (NodeList, HTMLCollection, etc.) to the right frame's DOM
-// version: cross-realm callers must invalidate based on mutations through the
-// node's owning frame, not the caller's frame.
+// Returns the Frame that owns this node's tree, or null when the node's
+// document has none: a DOMParser/XHR/createHTMLDocument document, or one
+// whose frame has since navigated away. Used to tie per-frame state (the
+// StyleManager, live-collection versions, the event manager, ...) to the
+// right frame: cross-realm callers must not use the calling frame's.
 //
-// Falls back to `default` when the node has no associated document yet (e.g.,
-// freshly created and detached) or its document has no frame.
-pub fn ownerFrame(self: *const Node, default: *Frame) *Frame {
-    const doc = self.ownerDocumentIncludingSelf(default) orelse return default;
-    return doc._frame orelse default;
+// `frame` only locates the document table; it is never returned as a
+// fallback.
+pub fn ownerFrame(self: *const Node, frame: *const Frame) ?*Frame {
+    return self.getDocument(frame)._frame;
 }
 
 pub const ResolveURLOpts = struct {
@@ -771,11 +747,11 @@ pub const ResolveURLOpts = struct {
 // Resolve a URL relative to this node's owning document.
 // Uses the document's charset for query string encoding (with NCR fallback for unmappable chars).
 pub fn resolveURL(self: *const Node, url: anytype, frame: *Frame, opts: ResolveURLOpts) ![:0]const u8 {
-    const owner_frame = self.ownerFrame(frame);
     const allocator = opts.allocator orelse frame.call_arena;
-    const doc: ?*const Document = self.ownerDocumentIncludingSelf(frame);
-    const encoding = if (doc) |d| d.getCharset() else owner_frame.charset;
-    return URL.resolve(allocator, owner_frame.base(), url, .{ .encoding = encoding });
+    const doc = self.getDocument(frame);
+    // A frameless document (DOMParser, XHR) has no <base>; its URL is the base.
+    const base = if (doc._frame) |owner| owner.base() else doc.getURL(frame);
+    return URL.resolve(allocator, base, url, .{ .encoding = doc.getCharset() });
 }
 
 // Same as `resolveURL` but can't return `TypeError`, this is needed for multiple
@@ -788,10 +764,7 @@ pub fn resolveURLReflect(self: *const Node, url: []const u8, frame: *Frame, opts
 }
 
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, frame: *const Frame) bool {
-    // Get the root document for each node
-    const self_doc = self.ownerDocumentIncludingSelf(frame);
-    const other_doc = other.ownerDocumentIncludingSelf(frame);
-    return self_doc == other_doc;
+    return self.getDocument(frame) == other.getDocument(frame);
 }
 
 pub fn hasChildNodes(self: *const Node) bool {
@@ -1207,25 +1180,31 @@ const CloneError = error{
     CompilationError,
     JsException,
     ExecutionTerminated,
+    QuotaExceeded,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
+    return self.cloneNodeInto(deep_ orelse false, self.getDocument(frame), frame);
+}
+
+// The spec's clone: the copy belongs to `document`, importNode's target or
+// the original's own document.
+pub fn cloneNodeInto(self: *Node, deep: bool, document: *const Document, frame: *Frame) CloneError!*Node {
     if (self.is(ShadowRoot) != null) {
         return error.NotSupported;
     }
 
-    const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => {
             const cd = self.subtype(CData);
             const data = cd.getData().str();
             return switch (cd._type) {
-                .text => Frame.node_factory.createTextNode(frame, data),
-                .cdata_section => Frame.node_factory.createCDATASection(frame, data),
-                .comment => Frame.node_factory.createComment(frame, data),
-                .processing_instruction => Frame.node_factory.createProcessingInstruction(frame, cd.subtype(CData.ProcessingInstruction)._target, data),
+                .text => Frame.node_factory.createTextNode(document, data),
+                .cdata_section => Frame.node_factory.createCDATASection(document, data),
+                .comment => Frame.node_factory.createComment(document, data),
+                .processing_instruction => Frame.node_factory.createProcessingInstruction(document, cd.subtype(CData.ProcessingInstruction)._target, data),
             };
         },
-        .element => return self.subtype(Element).clone(deep, frame),
+        .element => return self.subtype(Element).clone(deep, document, frame),
         .document => {
             const doc = self.subtype(Document);
             const cloned = switch (doc._type) {
@@ -1238,7 +1217,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
             if (deep) {
                 var child_it = self.childrenIterator();
                 while (child_it.next()) |child| {
-                    if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+                    if (try child.cloneNodeForAppending(true, cloned, frame)) |cloned_child| {
                         _ = cloned.asNode().appendChild(cloned_child, frame) catch return error.CloneError;
                     }
                 }
@@ -1246,12 +1225,12 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
             return cloned.asNode();
         },
         .document_type => {
-            const cloned = self.subtype(DocumentType).clone(frame) catch return error.CloneError;
+            const cloned = self.subtype(DocumentType).clone(document, frame) catch return error.CloneError;
             return cloned.asNode();
         },
-        .document_fragment => return self.subtype(DocumentFragment).cloneFragment(deep, frame),
+        .document_fragment => return self.subtype(DocumentFragment).cloneFragment(deep, document, frame),
         .attribute => {
-            const cloned = self.subtype(Element.Attribute).clone(frame) catch return error.CloneError;
+            const cloned = self.subtype(Element.Attribute).clone(document, frame) catch return error.CloneError;
             return cloned.asNode();
         },
     }
@@ -1263,7 +1242,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
 ///
 /// This helper is used when iterating over children to clone them. The typical pattern is:
 ///   while (child_it.next()) |child| {
-///       if (try child.cloneNodeForAppending(true, frame)) |cloned| {
+///       if (try child.cloneNodeForAppending(true, document, frame)) |cloned| {
 ///           try frame.appendNode(parent, cloned, opts);
 ///       }
 ///   }
@@ -1272,8 +1251,8 @@ pub fn cloneNode(self: *Node, deep_: ?bool, frame: *Frame) CloneError!*Node {
 /// constructor (which runs during cloning per the HTML spec) explicitly attaches the element
 /// somewhere. In that case, we respect the constructor's decision and return null to signal
 /// that the cloned node should not be appended to our intended parent.
-pub fn cloneNodeForAppending(self: *Node, deep: bool, frame: *Frame) CloneError!?*Node {
-    const cloned = try self.cloneNode(deep, frame);
+pub fn cloneNodeForAppending(self: *Node, deep: bool, document: *const Document, frame: *Frame) CloneError!?*Node {
+    const cloned = try self.cloneNodeInto(deep, document, frame);
     if (cloned._parent != null) {
         return null;
     }
@@ -1480,7 +1459,7 @@ pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame
         try class_names.append(arena, try frame.dupeString(name));
     }
 
-    const quirks = if (self.ownerDocumentIncludingSelf(frame)) |doc| doc.isQuirksMode() else false;
+    const quirks = self.getDocument(frame).isQuirksMode();
     return collections.NodeLive(.class_name).init(self, .{
         .names = class_names.items,
         .case_insensitive = quirks,
@@ -1492,11 +1471,11 @@ pub fn getElementsByClassName(self: *Node, class_name: []const u8, frame: *Frame
 // observe its later siblings inserted (and can remove them before they run).
 pub fn appendNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
     if (nodes.len == 1) {
-        const child = try nodes[0].toNode(frame);
+        const child = try nodes[0].toNode(self.getDocument(frame));
         _ = try self.appendChild(child, frame);
         return;
     }
-    const fragment = try DocumentFragment.init(frame);
+    const fragment = try DocumentFragment.init(self.getDocument(frame), frame);
     const fragment_node = fragment.asNode();
     // The fragment is internal — JS never sees it, and no mutation record
     // targets it — so it can be reclaimed once its children have moved out.
@@ -1504,7 +1483,7 @@ pub fn appendNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void 
     // it (per spec), so it must live on.
     defer if (fragment_node.firstChild() == null) frame._factory.destroy(fragment);
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try fragment_node.appendChild(child, frame);
     }
     _ = try self.appendChild(fragment_node, frame);
@@ -1512,15 +1491,15 @@ pub fn appendNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void 
 
 pub fn prependNodes(self: *Node, nodes: []const NodeOrText, frame: *Frame) !void {
     if (nodes.len == 1) {
-        const child = try nodes[0].toNode(frame);
+        const child = try nodes[0].toNode(self.getDocument(frame));
         _ = try self.insertBefore(child, self.firstChild(), frame);
         return;
     }
-    const fragment = try DocumentFragment.init(frame);
+    const fragment = try DocumentFragment.init(self.getDocument(frame), frame);
     const fragment_node = fragment.asNode();
     defer if (fragment_node.firstChild() == null) frame._factory.destroy(fragment);
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
         _ = try fragment_node.appendChild(child, frame);
     }
     // The reference child is evaluated after converting nodes into the
@@ -1536,7 +1515,7 @@ pub fn replaceChildren(self: *Node, nodes: []const NodeOrText, frame: *Frame) !v
     var children_to_add: std.ArrayList(*Node) = .empty;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self.getDocument(frame));
 
         // DocumentFragments contribute their children, not themselves
         if (child.is(DocumentFragment)) |frag| {
@@ -1791,7 +1770,7 @@ pub const JsApi = struct {
 
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
     fn _baseURI(self: *Node, frame: *const Frame) []const u8 {
-        const doc = self.ownerDocumentIncludingSelf(frame) orelse return frame.base();
+        const doc = self.getDocument(frame);
         if (doc._frame) |doc_frame| {
             return doc_frame.base();
         }
@@ -1843,10 +1822,10 @@ pub const NodeOrText = union(enum) {
         }
     }
 
-    pub fn toNode(self: *const NodeOrText, frame: *Frame) !*Node {
+    pub fn toNode(self: *const NodeOrText, document: *const Document) !*Node {
         return switch (self.*) {
             .node => |n| n,
-            .text => |txt| Frame.node_factory.createTextNode(frame, txt),
+            .text => |txt| Frame.node_factory.createTextNode(document, txt),
         };
     }
 

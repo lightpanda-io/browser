@@ -209,7 +209,7 @@ pub fn @"continue"(self: *IDBCursor, key_arg: ?js.Value, exec: *Execution) !void
     }
 }
 
-pub fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: js.Value, exec: *Execution) !void {
+fn continuePrimaryKey(self: *IDBCursor, key_arg: js.Value, primary_key_arg: js.Value, exec: *Execution) !void {
     // Only meaningful on an index cursor with a directed (non-unique) direction.
     if (self._index_id == null or self._direction.unique()) {
         return error.InvalidAccessError;
@@ -313,17 +313,17 @@ pub fn getKey(self: *const IDBCursor, exec: *Execution) !?js.Value {
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getPrimaryKey(self: *const IDBCursor, exec: *Execution) !?js.Value {
+fn getPrimaryKey(self: *const IDBCursor, exec: *Execution) !?js.Value {
     const encoded = self._primary_key orelse return null;
     return try Key.decodeToJs(exec.call_arena, exec.js.local.?, encoded);
 }
 
-pub fn getDirection(self: *const IDBCursor) Direction {
+fn getDirection(self: *const IDBCursor) Direction {
     return self._direction;
 }
 
 // The bridge converts the active union variant (the IDBObjectStore/IDBIndex).
-pub fn getSource(self: *const IDBCursor) Source {
+fn getSource(self: *const IDBCursor) Source {
     return self._source;
 }
 

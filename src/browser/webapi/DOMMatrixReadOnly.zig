@@ -56,7 +56,7 @@ pub const State = struct {
 
 // The owner decides whether a write is allowed; a matrix that belongs to an
 // animVal SVGTransform is rejected by the transform, not here.
-pub const Attachment = struct {
+const Attachment = struct {
     owner: *anyopaque,
     mutate: *const fn (*anyopaque, *DOMMatrixReadOnly, State) anyerror!void,
 };
@@ -78,7 +78,7 @@ pub fn releaseRef(self: *DOMMatrixReadOnly, page: *Page) void {
     self._rc.release(self, page);
 }
 
-pub fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
+fn createBare(m: [16]f64, is_2d: bool, page: *Page) !*DOMMatrixReadOnly {
     const arena = try page.getArena(.tiny, "DOMMatrix");
     errdefer arena.release();
 
@@ -194,17 +194,17 @@ pub fn floatsToParsed(comptime T: type, values: []const T) !Parsed {
     return error.TypeError;
 }
 
-pub fn fromMatrix(other_: ?DOMMatrixInit, page: *Page) !*DOMMatrixReadOnly {
+fn fromMatrix(other_: ?DOMMatrixInit, page: *Page) !*DOMMatrixReadOnly {
     const parsed = try fixupDict(other_ orelse .{});
     return createBare(parsed.m, parsed.is_2d, page);
 }
 
-pub fn fromFloat32Array(array: js.TypedArray(f32), page: *Page) !*DOMMatrixReadOnly {
+fn fromFloat32Array(array: js.TypedArray(f32), page: *Page) !*DOMMatrixReadOnly {
     const parsed = try floatsToParsed(f32, array.values);
     return createBare(parsed.m, parsed.is_2d, page);
 }
 
-pub fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrixReadOnly {
+fn fromFloat64Array(array: js.TypedArray(f64), page: *Page) !*DOMMatrixReadOnly {
     const parsed = try floatsToParsed(f64, array.values);
     return createBare(parsed.m, parsed.is_2d, page);
 }
@@ -350,9 +350,9 @@ pub fn invertMatrix(m: [16]f64) ?[16]f64 {
     return out;
 }
 
-pub const TransformSyntax = enum { css, svg };
+const TransformSyntax = enum { css, svg };
 
-pub const TransformKind = enum {
+const TransformKind = enum {
     matrix,
     matrix3d,
     translate,
@@ -384,7 +384,7 @@ pub const ParsedTransform = struct {
     is_2d: bool,
 };
 
-pub const TransformFunction = struct {
+const TransformFunction = struct {
     name: []const u8,
     arguments: []const u8,
 };
@@ -629,30 +629,30 @@ pub fn toRadians(value: f64, unit: ParsedValue.Unit) f64 {
     };
 }
 
-pub fn getA(self: *const DOMMatrixReadOnly) f64 {
+fn getA(self: *const DOMMatrixReadOnly) f64 {
     return self._m[0];
 }
-pub fn getB(self: *const DOMMatrixReadOnly) f64 {
+fn getB(self: *const DOMMatrixReadOnly) f64 {
     return self._m[1];
 }
-pub fn getC(self: *const DOMMatrixReadOnly) f64 {
+fn getC(self: *const DOMMatrixReadOnly) f64 {
     return self._m[4];
 }
-pub fn getD(self: *const DOMMatrixReadOnly) f64 {
+fn getD(self: *const DOMMatrixReadOnly) f64 {
     return self._m[5];
 }
-pub fn getE(self: *const DOMMatrixReadOnly) f64 {
+fn getE(self: *const DOMMatrixReadOnly) f64 {
     return self._m[12];
 }
-pub fn getF(self: *const DOMMatrixReadOnly) f64 {
+fn getF(self: *const DOMMatrixReadOnly) f64 {
     return self._m[13];
 }
 
-pub fn getIs2D(self: *const DOMMatrixReadOnly) bool {
+fn getIs2D(self: *const DOMMatrixReadOnly) bool {
     return self._is_2d;
 }
 
-pub fn getIsIdentity(self: *const DOMMatrixReadOnly) bool {
+fn getIsIdentity(self: *const DOMMatrixReadOnly) bool {
     const id = identity();
     for (0..16) |i| {
         if (self._m[i] != id[i]) {
@@ -684,7 +684,7 @@ pub fn scale(self: *const DOMMatrixReadOnly, sx_: ?f64, sy_: ?f64, sz_: ?f64, ox
     return DOMMatrix.create(m, self._is_2d and sz == 1 and oz == 0, page);
 }
 
-pub fn scaleNonUniform(self: *const DOMMatrixReadOnly, sx_: ?f64, sy_: ?f64, page: *Page) !*DOMMatrix {
+fn scaleNonUniform(self: *const DOMMatrixReadOnly, sx_: ?f64, sy_: ?f64, page: *Page) !*DOMMatrix {
     const sx = sx_ orelse 1;
     const sy = sy_ orelse 1;
     return DOMMatrix.create(multiplyMatrix(self._m, scaleMatrix(sx, sy, 1)), self._is_2d, page);
@@ -716,14 +716,14 @@ pub fn rotate(self: *const DOMMatrixReadOnly, rx_: ?f64, ry_: ?f64, rz_: ?f64, p
     return DOMMatrix.create(out, is_2d, page);
 }
 
-pub fn rotateFromVector(self: *const DOMMatrixReadOnly, x_: ?f64, y_: ?f64, page: *Page) !*DOMMatrix {
+fn rotateFromVector(self: *const DOMMatrixReadOnly, x_: ?f64, y_: ?f64, page: *Page) !*DOMMatrix {
     const x = x_ orelse 0;
     const y = y_ orelse 0;
     const rad = if (x == 0 and y == 0) 0 else std.math.atan2(y, x);
     return DOMMatrix.create(multiplyMatrix(self._m, rotateZMatrix(rad)), self._is_2d, page);
 }
 
-pub fn rotateAxisAngle(self: *const DOMMatrixReadOnly, x_: ?f64, y_: ?f64, z_: ?f64, angle_: ?f64, page: *Page) !*DOMMatrix {
+fn rotateAxisAngle(self: *const DOMMatrixReadOnly, x_: ?f64, y_: ?f64, z_: ?f64, angle_: ?f64, page: *Page) !*DOMMatrix {
     return DOMMatrix.create(
         multiplyMatrix(self._m, axisAngleMatrix(x_ orelse 0, y_ orelse 0, z_ orelse 0, toRadians(angle_ orelse 0, .deg))),
         // Only a rotation purely about the z axis stays 2D.
@@ -745,15 +745,15 @@ pub fn multiply(self: *const DOMMatrixReadOnly, other_: ?DOMMatrixInit, page: *P
     return DOMMatrix.create(multiplyMatrix(self._m, other.m), self._is_2d and other.is_2d, page);
 }
 
-pub fn flipX(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
+fn flipX(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
     return DOMMatrix.create(multiplyMatrix(self._m, scaleMatrix(-1, 1, 1)), self._is_2d, page);
 }
 
-pub fn flipY(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
+fn flipY(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
     return DOMMatrix.create(multiplyMatrix(self._m, scaleMatrix(1, -1, 1)), self._is_2d, page);
 }
 
-pub fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
+fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
     if (invertMatrix(self._m)) |v| {
         return DOMMatrix.create(v, self._is_2d, page);
     }
@@ -761,7 +761,7 @@ pub fn inverse(self: *const DOMMatrixReadOnly, page: *Page) !*DOMMatrix {
     return DOMMatrix.create(.{std.math.nan(f64)} ** 16, false, page);
 }
 
-pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f32) {
+fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f32) {
     const out = try exec.local_arena.alloc(f32, 16);
     for (0..16) |i| {
         out[i] = @floatCast(self._m[i]);
@@ -769,7 +769,7 @@ pub fn toFloat32Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution)
     return .{ .values = out };
 }
 
-pub fn toFloat64Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f64) {
+fn toFloat64Array(self: *const DOMMatrixReadOnly, exec: *const js.Execution) !js.TypedArray(f64) {
     const out = try exec.local_arena.dupe(f64, &self._m);
     return .{ .values = out };
 }

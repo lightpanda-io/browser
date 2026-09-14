@@ -30,9 +30,8 @@ const Certificates = @import("Certificates.zig");
 const log = lp.log;
 const posix = std.posix;
 
-pub const ENABLE_DEBUG = false;
+const ENABLE_DEBUG = false;
 
-pub const WaitFd = libcurl.CurlWaitFd;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
@@ -96,7 +95,7 @@ pub const Header = struct {
         return null;
     }
 
-    pub const ParamIterator = struct {
+    const ParamIterator = struct {
         rest: []const u8,
 
         pub fn next(self: *ParamIterator) ?Param {
@@ -349,6 +348,11 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(easy, .copy_post_fields, body.ptr);
     }
 
+    pub fn setNoBody(self: *const Connection) !void {
+        const easy = self._easy;
+        try libcurl.curl_easy_setopt(easy, .no_body, true);
+    }
+
     pub fn setGetMode(self: *const Connection) !void {
         try libcurl.curl_easy_setopt(self._easy, .http_get, true);
     }
@@ -455,6 +459,9 @@ pub const Connection = struct {
         // timeouts
         try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
         try libcurl.curl_easy_setopt(self._easy, .connect_timeout_ms, config.httpConnectTimeout());
+
+        // Otherwise requests issued before ALPN settles each open a socket.
+        try libcurl.curl_easy_setopt(self._easy, .pipewait, true);
 
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
@@ -573,12 +580,6 @@ pub const Connection = struct {
             return 0;
         }
         return @intCast(status);
-    }
-
-    pub fn getRedirectCount(self: *const Connection) !u32 {
-        var count: c_long = undefined;
-        try libcurl.curl_easy_getinfo(self._easy, .redirect_count, &count);
-        return @intCast(count);
     }
 
     // -1 when the transfer used no connection.

@@ -32,10 +32,6 @@ pub const Proto = Media;
 _pad: bool = false,
 _proto_canary: if (lp.IS_DEBUG) *Media else void = undefined,
 
-pub fn asMedia(self: *Video) *Media {
-    return Factory.protoOf(self);
-}
-
 pub fn asElement(self: *Video) *Element {
     return Factory.protoOf(self).asElement();
 }
@@ -48,15 +44,15 @@ pub fn asNode(self: *Video) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getVideoWidth(_: *const Video) u32 {
+fn getVideoWidth(_: *const Video) u32 {
     return 0;
 }
 
-pub fn getVideoHeight(_: *const Video) u32 {
+fn getVideoHeight(_: *const Video) u32 {
     return 0;
 }
 
-pub fn getPoster(self: *const Video, frame: *Frame) ![]const u8 {
+fn getPoster(self: *const Video, frame: *Frame) ![]const u8 {
     const element = self.asConstElement();
     const poster = element.getAttributeSafe(comptime .wrap("poster")) orelse return "";
     if (poster.len == 0) {
@@ -65,7 +61,7 @@ pub fn getPoster(self: *const Video, frame: *Frame) ![]const u8 {
     return element.asConstNode().resolveURLReflect(poster, frame, .{});
 }
 
-pub fn setPoster(self: *Video, value: []const u8, frame: *Frame) !void {
+fn setPoster(self: *Video, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("poster"), .wrap(value), frame);
 }
 
