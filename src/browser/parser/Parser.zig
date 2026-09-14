@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const h5e = @import("html5ever.zig");
 
+const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
@@ -29,6 +30,8 @@ pub const QualName = h5e.QualName;
 pub const AttributeIterator = h5e.AttributeIterator;
 
 const Allocator = std.mem.Allocator;
+
+const CHECKPOINT_INTERVAL = 1024;
 const TERMINATE_CHECK_INTERVAL = 1024;
 
 pub const ParsedNode = struct {
@@ -86,6 +89,7 @@ context: ?*Element = null,
 xml_error: bool = false,
 terminated: bool = false,
 appends_until_terminate_check: u16 = TERMINATE_CHECK_INTERVAL,
+inserted_since_checkpoint: u16 = 0,
 
 pub const Options = struct {
     allow_declarative_shadow: bool = false,
@@ -157,6 +161,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
     // until (and unless) a second chunk arrives.
     const new_text = try Frame.node_factory.createTextNode(self.frame, txt);
     try self.frame.appendNew(parent, new_text);
+    self.inserted_since_checkpoint +|= 1;
     self.pending_text = .{
         .parent = parent,
         .text_node = new_text.is(CData.Text).?.asCData(),
@@ -713,6 +718,8 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
             // before the insertion so that connectedCallback (etc.) sees the
             // final data on the preceding text sibling.
             try self.flushPendingText();
+            self.maybeCheckpoint();
+            self.inserted_since_checkpoint +|= 1;
             const child = getNode(cpn);
             if (child._parent) |previous_parent| {
                 // html5ever says this can't happen, but we might be screwing up
@@ -843,6 +850,26 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+fn maybeCheckpoint(self: *Parser) void {
+    if (self.inserted_since_checkpoint < CHECKPOINT_INTERVAL) {
+        return;
+    }
+
+    // only the navigation parse, and only at an empty JS stack: a fragment
+    // parse, document.write or a parse run by a script must not drain the
+    // queue mid-task.
+    const frame = self.frame;
+    if (frame.js.call_depth != 0 or frame._load_state != .parsing or frame._parse_mode != .document) {
+        return;
+    }
+    self.inserted_since_checkpoint = 0;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    ls.local.runMicrotasks();
 }
 
 // v8's terminate isn't pre-emptive. A parse of unbounded input
