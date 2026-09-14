@@ -190,7 +190,7 @@ pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions) !void {
     if (!self._can_intercept) {
         return error.InvalidStateError;
     }
-    if (!self._proto.getCancelable()) {
+    if (!self._proto._cancelable) {
         return error.InvalidStateError;
     }
 
