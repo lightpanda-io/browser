@@ -551,6 +551,17 @@
 }
 </script>
 
+<script id=noBrowsingContext>
+{
+  // The parsed document has no browsing context, so its <base> belongs to
+  // it alone: the page's base URL is untouched.
+  const base = document.baseURI;
+  const doc = new DOMParser().parseFromString('<base href="http://other.example/x/">', 'text/html');
+  testing.expectEqual('BASE', doc.querySelector('base').tagName);
+  testing.expectEqual(base, document.baseURI);
+}
+</script>
+
 <script id=invalidType>
 {
   let err = null;

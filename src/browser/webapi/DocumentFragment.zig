@@ -54,8 +54,8 @@ pub fn as(self: *DocumentFragment, comptime T: type) *T {
     return self.is(T).?;
 }
 
-pub fn init(frame: *Frame) !*DocumentFragment {
-    return frame._factory.node(DocumentFragment{
+pub fn init(document: *const Node.Document, frame: *Frame) !*DocumentFragment {
+    return frame._factory.node(document, DocumentFragment{
         ._type = .generic,
         ._proto = undefined,
     });
@@ -129,7 +129,7 @@ fn getChildElementCount(self: *DocumentFragment) usize {
 pub fn append(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *Frame) !void {
     const parent = self.asNode();
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(parent.getDocument(frame));
         _ = try parent.appendChild(child, frame);
     }
 }
@@ -139,7 +139,7 @@ pub fn prepend(self: *DocumentFragment, nodes: []const Node.NodeOrText, frame: *
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(frame);
+        const child = try nodes[i].toNode(parent.getDocument(frame));
         _ = try parent.insertBefore(child, parent.firstChild(), frame);
     }
 }
@@ -171,14 +171,14 @@ pub fn setHTMLUnsafe(self: *DocumentFragment, html: []const u8, frame: *Frame) !
     return parent.setHTML(html, .{ .allow_declarative_shadow = true }, frame);
 }
 
-pub fn cloneFragment(self: *DocumentFragment, deep: bool, frame: *Frame) !*Node {
-    const fragment = try DocumentFragment.init(frame);
+pub fn cloneFragment(self: *DocumentFragment, deep: bool, document: *const Node.Document, frame: *Frame) !*Node {
+    const fragment = try DocumentFragment.init(document, frame);
     const fragment_node = fragment.asNode();
 
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, frame)) |cloned_child| {
+            if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
                 try frame.appendNode(fragment_node, cloned_child, .{});
             }
         }
@@ -196,7 +196,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(DocumentFragment.init, .{});
+    pub const constructor = bridge.constructor(_constructor, .{});
+    fn _constructor(frame: *Frame) !*DocumentFragment {
+        return init(frame.document, frame);
+    }
 
     pub const getElementById = bridge.function(_getElementById, .{});
     fn _getElementById(self: *DocumentFragment, value_: ?js.Value) !?*Element {

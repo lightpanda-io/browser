@@ -365,6 +365,20 @@ pub const SlabAllocator = struct {
         .resize = Allocator.noResize,
     };
 
+    // Whether `ptr` was allocated from one of this allocator's chunks.
+    pub fn owns(self: *const Self, ptr: *const anyopaque) bool {
+        const addr = @intFromPtr(ptr);
+        for (self.slabs.values()) |*slab| {
+            for (slab.chunks.items) |chunk| {
+                const start = @intFromPtr(chunk.ptr);
+                if (addr >= start and addr < start + chunk.len) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     pub fn allocator(self: *Self) Allocator {
         return .{
             .ptr = self,

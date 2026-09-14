@@ -24,6 +24,7 @@ const public_suffix_list = @import("../../data/public_suffix_list.zig");
 
 const URL = @import("../URL.zig");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
 const Parser = @import("../parser/Parser.zig");
 
@@ -54,6 +55,8 @@ pub const Proto = Node;
 
 _type: Type,
 _proto: *Node,
+_page: *Page,
+_index: u32, // browser.documents index
 _frame: ?*Frame = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 // content type override for documents created via DOMImplementation.createDocument
@@ -373,7 +376,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
-    const node = try self.createElementNode(ns, normalized_name, frame);
+    const node = try self.createElementNode(ns, normalized_name);
     const element = node.as(Element);
 
     const options = options_ orelse return element;
@@ -389,7 +392,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     _ = try validateAndExtract(namespace, name, .element);
     const ns = Element.Namespace.parse(namespace);
     // Per spec, createElementNS does NOT lowercase (unlike createElement).
-    const node = try self.createElementNode(ns, name, frame);
+    const node = try self.createElementNode(ns, name);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
@@ -401,40 +404,26 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     return node.as(Element);
 }
 
-fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8, frame: *Frame) !*Node {
-    const previous_creation = frame._custom_element_creation;
-    if (self._frame == null) {
-        // a document without a browser context, e.g. DOMParser, has no custom
-        // element registry
-        frame._custom_element_creation = .undefined;
-    }
-    defer frame._custom_element_creation = previous_creation;
-
-    const node = try Frame.node_factory.createElementNS(frame, ns, name, null);
-
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+fn createElementNode(self: *Document, ns: Element.Namespace, name: []const u8) !*Node {
+    return Frame.node_factory.createElementNS(self, ns, name, null);
 }
 
-fn createAttribute(_: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
+fn createAttribute(self: *const Document, name: String.Global, frame: *Frame) !?*Element.Attribute {
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
     });
 }
 
-pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
+pub fn createAttributeNS(self: *const Document, namespace: []const u8, name: String.Global, frame: *Frame) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
         log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
     try Element.Attribute.validateAttributeName(name.str);
-    return frame._factory.node(Element.Attribute{
+    return frame._factory.node(self, Element.Attribute{
         ._name = name.str,
         ._value = String.empty,
         ._element = null,
@@ -522,52 +511,26 @@ fn getImplementation(self: *Document, frame: *Frame) !*DOMImplementation {
 }
 
 fn createDocumentFragment(self: *Document, frame: *Frame) !*Node.DocumentFragment {
-    const frag = try Node.DocumentFragment.init(frame);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(frag.asNode(), self);
-    }
-    return frag;
+    return Node.DocumentFragment.init(self, frame);
 }
 
-pub fn createComment(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createComment(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createComment(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createComment(self, data);
 }
 
-pub fn createTextNode(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createTextNode(frame, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createTextNode(self: *Document, data: []const u8) !*Node {
+    return Frame.node_factory.createTextNode(self, data);
 }
 
-pub fn createCDATASection(self: *Document, data: []const u8, frame: *Frame) !*Node {
-    const node = switch (self._type) {
-        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
-        .xml => try Frame.node_factory.createCDATASection(frame, data),
-        .generic => try Frame.node_factory.createCDATASection(frame, data),
+pub fn createCDATASection(self: *Document, data: []const u8) !*Node {
+    return switch (self._type) {
+        .html => error.NotSupported, // cannot create a CDataSection in an HTMLDocument
+        .xml, .generic => Frame.node_factory.createCDATASection(self, data),
     };
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
 }
 
-pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8, frame: *Frame) !*Node {
-    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
-    // Track owner document if it's not the main document
-    if (self != frame.document) {
-        try frame.setNodeOwnerDocument(node, self);
-    }
-    return node;
+pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8) !*Node {
+    return Frame.node_factory.createProcessingInstruction(self, target, data);
 }
 
 const Range = @import("Range.zig");
@@ -801,7 +764,7 @@ fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
         return error.HierarchyError;
     }
 
-    const old_owner = node.ownerDocument(frame) orelse frame.document;
+    const old_owner = node.ownerDocument(frame).?;
 
     if (node._parent) |parent| {
         frame.removeNode(parent, node, .{ .reconnect_to = null });
@@ -814,12 +777,12 @@ fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
     return node;
 }
 
-fn importNode(_: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
+fn importNode(self: *const Document, node: *Node, deep_: ?bool, frame: *Frame) !*Node {
     if (node._type == .document) {
         return error.NotSupported;
     }
 
-    return node.cloneNode(deep_, frame);
+    return node.cloneNodeInto(deep_ orelse false, self, frame);
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !void {
@@ -829,7 +792,7 @@ pub fn append(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !v
     frame.domChanged();
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(self);
 
         // DocumentFragments are special - append all their children
         if (child.is(Node.DocumentFragment)) |_| {
@@ -855,7 +818,7 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, frame: *Frame) !
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
-        const child = try nodes[i].toNode(frame);
+        const child = try nodes[i].toNode(self);
 
         // DocumentFragments are special - need to insert all their children
         if (child.is(Node.DocumentFragment)) |frag| {
@@ -1089,7 +1052,7 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
 
     // Our implementation is hacky. We'll write to a DocumentFragment, then
     // append its children.
-    const fragment = try Node.DocumentFragment.init(frame);
+    const fragment = try Node.DocumentFragment.init(self, frame);
     const fragment_node = fragment.asNode();
 
     const previous_parse_mode = frame._parse_mode;
@@ -1517,9 +1480,9 @@ fn _injectBlank(self: *Document, frame: *Frame) !void {
         std.debug.assert(self.asNode()._first_child == null);
     }
 
-    const html = try Frame.node_factory.createElementNS(frame, .html, "html", null);
-    const head = try Frame.node_factory.createElementNS(frame, .html, "head", null);
-    const body = try Frame.node_factory.createElementNS(frame, .html, "body", null);
+    const html = try Frame.node_factory.createElementNS(self, .html, "html", null);
+    const head = try Frame.node_factory.createElementNS(self, .html, "head", null);
+    const body = try Frame.node_factory.createElementNS(self, .html, "body", null);
     try frame.appendNode(html, head, .{});
     try frame.appendNode(html, body, .{});
     try frame.appendNode(self.asNode(), html, .{});
@@ -1542,12 +1505,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(_constructor, .{});
     fn _constructor(frame: *Frame) !*Document {
-        return frame._factory.node(Document{
-            ._proto = undefined,
-            ._type = .generic,
-            ._url = "about:blank",
-            ._charset = "UTF-8",
-        });
+        return frame._factory.genericDocument(.{ .url = "about:blank", .charset = "UTF-8" });
     }
 
     pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});

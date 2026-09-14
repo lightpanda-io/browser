@@ -329,7 +329,7 @@ pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer, frame: *Frame) !
 }
 
 pub fn setInnerText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
-    const items = try renderedTextFragment(text, frame);
+    const items = try renderedTextFragment(self.asNode().getDocument(frame), text, frame);
     try self.asElement().replaceChildren(items, frame);
 }
 
@@ -346,7 +346,7 @@ pub fn setOuterText(self: *HtmlElement, text: []const u8, frame: *Frame) !void {
     const prev = node.previousSibling();
     const next = node.nextSibling();
 
-    var items: []const Node.NodeOrText = try renderedTextFragment(text, frame);
+    var items: []const Node.NodeOrText = try renderedTextFragment(node.getDocument(frame), text, frame);
     if (items.len == 0) {
         // A fragment with no node still replaces the element with an empty Text
         // node so surrounding text can merge with it.
@@ -389,7 +389,7 @@ pub fn insertAdjacentHTML(
     else
         null;
 
-    const fragment = (try DocumentFragment.init(frame)).asNode();
+    const fragment = (try DocumentFragment.init(self.asNode().getDocument(frame), frame)).asNode();
     try Frame.parse.fragment(frame, fragment, html, .{ .context = context });
 
     const target_node, const prev_node = try self.asNode().findAdjacentNodes(position, .html);
@@ -1797,7 +1797,7 @@ fn mergeTextNodes(left_node: *Node, right_node: *Node, frame: *Frame) !bool {
     return true;
 }
 
-fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
+fn renderedTextFragment(document: *const Node.Document, value: []const u8, frame: *Frame) ![]Node.NodeOrText {
     const arena = frame.local_arena;
     var nodes: std.ArrayList(Node.NodeOrText) = .empty;
 
@@ -1816,7 +1816,7 @@ fn renderedTextFragment(value: []const u8, frame: *Frame) ![]Node.NodeOrText {
         // break (so "\r\n" is one <br> but "\n\n" is two).
         const break_len: usize = if (rest[0] == '\r' and rest.len > 1 and rest[1] == '\n') 2 else 1;
 
-        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(frame, .html, "br", null) });
+        try nodes.append(arena, .{ .node = try Frame.node_factory.createElementNS(document, .html, "br", null) });
         rest = rest[break_len..];
     }
 }

@@ -73,8 +73,9 @@ pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
-        const owner = node.dom.ownerFrame(frame) orelse frame;
-        if (owner._page == page) {
+        // Nodes live in their page's slab. A sibling page's node must not be
+        // resolved through this page's frames, so attribute by storage.
+        if (page.factory.owns(node.dom)) {
             doomed.append(arena, node) catch return;
         }
     }

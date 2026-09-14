@@ -21,7 +21,7 @@ _complete: bool = true,
 _proto_canary: if (lp.IS_DEBUG) *HtmlElement else void = undefined,
 
 pub fn constructor(w_: ?u32, h_: ?u32, frame: *Frame) !*Image {
-    const node = try Frame.node_factory.createElementNS(frame, .html, "img", null);
+    const node = try Frame.node_factory.createElementNS(frame.document, .html, "img", null);
     const el = node.as(Element);
 
     if (w_) |w| blk: {
@@ -94,6 +94,11 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     // if we're planning on navigating to another frame, don't trigger a load event
     // or start fetching a resource.
     if (frame.isGoingAway()) {
+        return;
+    }
+
+    // A document without a browsing context (DOMParser et al.) loads nothing.
+    if (self.asElement().getDocument(frame)._frame == null) {
         return;
     }
 

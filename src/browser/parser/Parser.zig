@@ -57,8 +57,9 @@ const Parser = @This();
 
 frame: *Frame,
 err: ?Error,
-container: ParsedNode,
 arena: Allocator,
+container: ParsedNode,
+document: *Node.Document,
 strings: std.StringHashMapUnmanaged(void),
 pending_text: ?PendingText,
 // One buffer reused across every text run in this parser. clearRetainingCapacity
@@ -96,6 +97,7 @@ pub fn init(arena: Allocator, node: *Node, frame: *Frame, opts: Options) Parser 
     return .{
         .err = null,
         .frame = frame,
+        .document = node.getDocument(frame),
         .strings = .empty,
         .arena = arena,
         .container = ParsedNode{
@@ -155,7 +157,7 @@ fn appendTextChunk(self: *Parser, parent: *Node, txt: []const u8) !void {
 
     // Fresh text run: the first chunk lives on _data only. buf stays empty
     // until (and unless) a second chunk arrives.
-    const new_text = try Frame.node_factory.createTextNode(self.frame, txt);
+    const new_text = try Frame.node_factory.createTextNode(self.document, txt);
     try self.frame.appendNew(parent, new_text);
     self.pending_text = .{
         .parent = parent,
@@ -493,9 +495,10 @@ fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualNa
 // create.
 fn createContextElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    const previous_creation = self.frame._custom_element_creation;
-    self.frame._custom_element_creation = .bare_context;
-    defer self.frame._custom_element_creation = previous_creation;
+    const frame = self.document._frame orelse self.frame;
+    const previous_creation = frame._custom_element_creation;
+    frame._custom_element_creation = .bare_context;
+    defer frame._custom_element_creation = previous_creation;
     return self._createElementCallback(data, qname, attributes, .unknown) catch |err| {
         self.err = .{ .err = err, .source = .create_element };
         return null;
@@ -522,7 +525,7 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     } else local;
     const namespace_string = qname.ns.slice();
     const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
-    const node = try Frame.node_factory.createElementNS(frame, namespace, name, attributes);
+    const node = try Frame.node_factory.createElementNS(self.document, namespace, name, attributes);
     if (namespace == .unknown and namespace_string.len > 0) {
         // Same as Document.createElementNS: keep the URI so namespaceURI and
         // lookupNamespaceURI can return it.
@@ -547,8 +550,7 @@ fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*a
     };
 }
 fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
-    const frame = self.frame;
-    const node = try Frame.node_factory.createComment(frame, str);
+    const node = try Frame.node_factory.createComment(self.document, str);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -567,8 +569,7 @@ fn createProcessingInstruction(ctx: *anyopaque, target: h5e.StringSlice, data: h
     };
 }
 fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const u8) !*anyopaque {
-    const frame = self.frame;
-    const node = try Frame.node_factory.createProcessingInstruction(frame, target, data);
+    const node = try Frame.node_factory.createProcessingInstruction(self.document, target, data);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,
@@ -593,7 +594,7 @@ fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const 
 
     // Create the DocumentType node
     const DocumentType = @import("../webapi/DocumentType.zig");
-    const doctype = try frame._factory.node(DocumentType{
+    const doctype = try frame._factory.node(self.document, DocumentType{
         ._proto = undefined,
         ._name = try frame.dupeString(name),
         ._public_id = try frame.dupeString(public_id),
@@ -801,7 +802,7 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
             }
             break :blk child;
         },
-        .text => |txt| try Frame.node_factory.createTextNode(self.frame, txt),
+        .text => |txt| try Frame.node_factory.createTextNode(self.document, txt),
         .failed => return,
     };
     try self.frame.insertNodeRelative(parent, node, .{ .before = sibling }, .{});

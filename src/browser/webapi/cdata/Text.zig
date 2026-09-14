@@ -40,7 +40,7 @@ pub fn asCData(self: *const Text) *CData {
 }
 
 pub fn init(str: ?js.NullableString, frame: *Frame) !*Text {
-    const node = try Frame.node_factory.createTextNode(frame, if (str) |s| s.value else "");
+    const node = try Frame.node_factory.createTextNode(frame.document, if (str) |s| s.value else "");
     return node.as(Text);
 }
 
@@ -91,7 +91,7 @@ pub fn splitText(self: *Text, offset: usize, frame: *Frame) !*Text {
     const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 
     const new_data = data[byte_offset..];
-    const new_node = try Frame.node_factory.createTextNode(frame, new_data);
+    const new_node = try Frame.node_factory.createTextNode(Factory.protoOf(self).asNode().getDocument(frame), new_data);
     const new_text = new_node.as(Text);
 
     const node = Factory.protoOf(self).asNode();

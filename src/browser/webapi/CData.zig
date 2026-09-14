@@ -444,7 +444,7 @@ pub fn before(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void
     const parent = node.parentNode() orelse return;
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(node.getDocument(frame));
         _ = try parent.insertBefore(child, node, frame);
     }
 }
@@ -455,7 +455,7 @@ pub fn after(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) !void 
     const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(node.getDocument(frame));
         _ = try parent.insertBefore(child, viable_next, frame);
     }
 }
@@ -466,7 +466,7 @@ pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, frame: *Frame) 
 
     var rm_ref_node = true;
     for (nodes) |node_or_text| {
-        const child = try node_or_text.toNode(frame);
+        const child = try node_or_text.toNode(ref_node.getDocument(frame));
         if (child == ref_node) {
             rm_ref_node = false;
             continue;

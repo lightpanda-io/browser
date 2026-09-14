@@ -88,20 +88,12 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
 
-pub fn clone(self: *const Attribute, frame: *Frame) !*Attribute {
-    const cloned = try frame._factory.node(Attribute{
+pub fn clone(self: *const Attribute, document: *const Node.Document, frame: *Frame) !*Attribute {
+    return frame._factory.node(document, Attribute{
         ._element = null,
         ._name = self._name,
         ._value = self._value,
     });
-
-    if (self._element) |el| {
-        // cloned has no element, we need to store its document
-        if (el.asNode().ownerDocument(frame)) |doc| {
-            try frame.setNodeOwnerDocument(cloned.asNode(), doc);
-        }
-    }
-    return cloned;
 }
 
 pub const JsApi = struct {
@@ -505,7 +497,9 @@ pub const List = struct {
         }
 
         fn toAttribute(self: *const Entry, element: ?*Element, frame: *Frame) !*Attribute {
-            return frame._factory.node(Attribute{
+            // Without an element, the attribute is the caller's document's.
+            const document = if (element) |el| el.getDocument(frame) else frame.document;
+            return frame._factory.node(document, Attribute{
                 ._element = element,
                 // The entry's bytes outlive the entry itself, so the
                 // Attribute can wrap them without duping.

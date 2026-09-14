@@ -151,7 +151,6 @@ _element_rel_lists: Element.RelListLookup = .empty,
 _element_part_lists: Element.PartListLookup = .empty,
 _element_token_lists: Element.TokenListLookup = .empty,
 _element_shadow_roots: Element.ShadowRootLookup = .empty,
-_node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
 _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 _svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
@@ -255,9 +254,6 @@ _custom_element_creation: enum {
     // constructor must not run (you end up in an endless loop if the constructor
     // does this.innerHTML = '...', which happens).
     bare_context,
-    // The target document has no custom element registry (e.g. DOMParser). The
-    // element stays undefined until it's inserted into the frame's document.
-    undefined,
 } = .construct,
 
 // List of custom elements that were created before their definition was registered
@@ -2598,20 +2594,9 @@ pub fn nodeComplete(self: *Frame, node: *Node) !void {
     return self.nodeIsReady(true, node);
 }
 
-// Sets the owner document for a node. Only stores entries for nodes whose owner
-// is NOT frame.document to minimize memory overhead.
-pub fn setNodeOwnerDocument(self: *Frame, node: *Node, owner: *Document) !void {
-    if (owner == self.document) {
-        // No need to store if it's the main document - remove if present
-        _ = self._node_owner_documents.remove(node);
-    } else {
-        try self._node_owner_documents.put(self.arena, node, owner);
-    }
-}
-
 // Recursively sets the owner document for a node and all its descendants
 pub fn adoptNodeTree(self: *Frame, node: *Node, old_owner: *Document, new_owner: *Document) !void {
-    try self.setNodeOwnerDocument(node, new_owner);
+    node._owner = new_owner._index;
 
     // Per spec, adopted steps run on each element after its document is set.
     if (node.is(Element)) |el| {
