@@ -55,11 +55,7 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
         lp.log.err(.app, "click press failed", .{ .err = err });
         return error.ActionFailed;
     };
-    if (!press_result.suppress_mouse and !press_result.suppress_focus) {
-        Frame.user_input.focusForMouseDown(frame, el) catch |err| {
-            lp.log.warn(.app, "click mousedown focus", .{ .err = err });
-        };
-    }
+    try Frame.user_input.runMouseDownFocus(frame, el, press_result, "click mousedown focus");
 
     Frame.user_input.dispatchPointerRelease(frame, el, 0, 0, main, press_result.suppress_mouse, 1, .{}) catch |err| {
         lp.log.err(.app, "click release failed", .{ .err = err });

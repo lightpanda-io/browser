@@ -180,10 +180,7 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
     };
 }
 
-/// Dispatch a single trusted mouse event of the given type on `target`, carrying
-/// the pressed button and pointer position. `detail` is the click count (used for
-/// click/dblclick); 0 for events where it does not apply. Reports whether the
-/// event was cancelled via preventDefault().
+/// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
 fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, buttons: u16, detail: u32, modifiers: Modifiers) !bool {
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
@@ -202,9 +199,8 @@ fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u
     return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
-/// Dispatch a single trusted pointer event of the given type on `target`.
-/// This engine only ever synthesizes mouse-sourced pointer input, so
-/// pointerType is always "mouse" and pointerId/isPrimary are fixed.
+/// Dispatch a trusted pointer event (always mouse-sourced: pointerType,
+/// pointerId, isPrimary fixed); returns whether preventDefault() cancelled it.
 fn dispatchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, buttons: u16, detail: u32, modifiers: Modifiers) !bool {
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
@@ -240,26 +236,52 @@ pub fn buttonsBitmask(button: i32) u16 {
     };
 }
 
+/// Held-button mask and suppression flag for the single synthetic mouse
+/// pointer, tracked across the split press/release messages of one gesture so
+/// a chord is told apart from a new gesture.
+pub const PointerButtons = struct {
+    /// Mask of buttons currently held.
+    held: u16 = 0,
+    /// Whether the gesture's opening pointerdown suppressed the compat mouse
+    /// events; held for the whole gesture so each split message reads it here.
+    mousedown_suppressed: bool = false,
+
+    /// `starts_gesture` is false for a chorded press (another button held).
+    pub fn press(self: *PointerButtons, button: i32) struct { starts_gesture: bool, held: u16 } {
+        const bit = buttonsBitmask(button);
+        const starts_gesture = self.held & ~bit == 0;
+        self.held |= bit;
+        return .{ .starts_gesture = starts_gesture, .held = self.held };
+    }
+
+    /// `ends_gesture` is the last held button releasing, which clears the
+    /// suppression flag; `was_suppressed` is that flag for this gesture.
+    pub fn release(self: *PointerButtons, button: i32) struct { ends_gesture: bool, held: u16, was_suppressed: bool } {
+        const was_suppressed = self.mousedown_suppressed;
+        self.held &= ~buttonsBitmask(button);
+        const ends_gesture = self.held == 0;
+        if (ends_gesture) self.mousedown_suppressed = false;
+        return .{ .ends_gesture = ends_gesture, .held = self.held, .was_suppressed = was_suppressed };
+    }
+
+    /// Discards an in-progress gesture (a press/release that hit no element).
+    pub fn reset(self: *PointerButtons) void {
+        self.* = .{};
+    }
+};
+
 pub const PressResult = struct {
-    /// Whether pointerdown's preventDefault() suppressed the compatibility
-    /// mousedown fired here, and (the caller should record this) the
-    /// paired mouseup on release.
+    /// pointerdown's preventDefault() suppressed the compat mousedown here and
+    /// the paired mouseup on release.
     suppress_mouse: bool,
-    /// Whether mousedown's own preventDefault() suppressed just its focus
-    /// default action. Only meaningful when `suppress_mouse` is false —
-    /// mousedown itself never fires when it is true.
+    /// mousedown's preventDefault() suppressed its focus default action (only
+    /// meaningful when suppress_mouse is false).
     suppress_focus: bool,
 };
 
-/// The trusted press half of a click gesture, shared by `actions.click`,
-/// `WebDriver.click`, and the CDP `Input.dispatchMouseEvent` (`mousePressed`)
-/// path: pointerdown, then — unless its preventDefault() suppresses the
-/// compatibility mouse event — mousedown. `mouse_detail` is mousedown's
-/// click count (0 where the caller doesn't track one; pointerdown itself is
-/// always detail 0, per spec). Does not itself run the focus default
-/// action: `focusForMouseDown` can fail, and the three callers don't agree
-/// on what a failure there should mean for the click, so each runs it (or
-/// not) against `PressResult` with its own error handling.
+/// Press half: pointerdown, then mousedown unless preventDefault() suppressed
+/// it; doesn't run the focus default action (callers disagree on how a focus
+/// failure should affect the click).
 pub fn dispatchPointerPress(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, mouse_detail: u32, modifiers: Modifiers) !PressResult {
     const buttons = buttonsBitmask(button);
     const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", x, y, button, buttons, 0, modifiers);
@@ -270,11 +292,19 @@ pub fn dispatchPointerPress(frame: *Frame, target: *Element, x: f64, y: f64, but
     return .{ .suppress_mouse = suppress_mouse, .suppress_focus = suppress_focus };
 }
 
-/// The release half of a click gesture: pointerup, then mouseup (carrying
-/// `mouse_detail`, its click count) unless the paired pointerdown suppressed
-/// it (`suppress_mouse`, from `dispatchPointerPress`). Click still fires
-/// even when suppressed — callers dispatch it separately via
-/// `dispatchClickAsPointer`.
+/// Runs mousedown's focus default action unless the gesture suppressed it;
+/// `warn_label` logs a focus failure and continues, null propagates it.
+pub fn runMouseDownFocus(frame: *Frame, target: *Element, press: PressResult, comptime warn_label: ?[]const u8) !void {
+    if (press.suppress_mouse or press.suppress_focus) return;
+    if (warn_label) |label| {
+        focusForMouseDown(frame, target) catch |err| log.warn(.app, label, .{ .err = err });
+    } else {
+        try focusForMouseDown(frame, target);
+    }
+}
+
+/// Release half: pointerup, then mouseup unless the paired pointerdown
+/// suppressed it (click fires separately via dispatchClickAsPointer).
 pub fn dispatchPointerRelease(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, suppress_mouse: bool, mouse_detail: u32, modifiers: Modifiers) !void {
     _ = try dispatchPointerEventOn(frame, target, "pointerup", x, y, button, 0, 0, modifiers);
     if (!suppress_mouse) {
@@ -282,20 +312,16 @@ pub fn dispatchPointerRelease(frame: *Frame, target: *Element, x: f64, y: f64, b
     }
 }
 
-/// The primary-button click, dispatched as a PointerEvent — matching how
-/// the engine dispatches HTMLElement.click() and keyboard-triggered clicks.
-/// `buttons` is the mask still held when the click fires (nonzero when the
-/// primary button releases mid-chord, i.e. another button is still down).
+/// Primary-button click as a PointerEvent (matching HTMLElement.click());
+/// `buttons` is the mask still held, nonzero on a mid-chord primary release.
 pub fn dispatchClickAsPointer(frame: *Frame, target: *Element, x: f64, y: f64, detail: u32, buttons: u16, modifiers: Modifiers) !void {
     _ = try dispatchPointerEventOn(frame, target, "click", x, y, mouse_button.main, buttons, detail, modifiers);
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse {
-        // No gesture started on this page; don't leave a prior gesture's
-        // state to be misread by the next mousePressed/mouseReleased.
-        frame._page.input_pressed_buttons = 0;
-        frame._page.input_mousedown_suppressed = false;
+        // Don't leave a prior gesture's state for the next message to misread.
+        frame._page.input_pointer.reset();
         return;
     };
     if (comptime lp.IS_DEBUG) {
@@ -309,44 +335,24 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         });
     }
 
-    const button_bit = buttonsBitmask(button);
-    // Whether some *other* button was already down — the same button
-    // pressed again without a release in between (some callers do this
-    // deliberately to simulate two independent, unrelated presses) starts a
-    // fresh gesture rather than continuing a chord.
-    const other_already_held = frame._page.input_pressed_buttons & ~button_bit != 0;
-    frame._page.input_pressed_buttons |= button_bit;
-    // A caller that doesn't track click counts (or a CDP message that omits
-    // clickCount) sends 0 — preserved as-is rather than forced to 1, since
-    // Chrome and Firefox both fire mousedown with detail 0 in that case.
+    const gesture = frame._page.input_pointer.press(button);
+    // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
+    // both fire mousedown with detail 0 in that case.
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
 
-    if (!other_already_held) {
-        // Starts the gesture: full pointerdown, then (unless cancelled)
-        // mousedown (carrying click_count as its detail, matching Chrome and
-        // Firefox) and its focus default action. mousePressed/mouseReleased
-        // arrive as two independent CDP messages, so the release half can't
-        // observe this gesture's pointerdown directly — stash the outcome
-        // on the page first, before the fallible focus call, mirroring
-        // input_hover_target.
+    if (gesture.starts_gesture) {
+        // Stash the pointerdown outcome before the fallible focus call: the
+        // release half is a separate message and can't observe it otherwise.
         const press = try dispatchPointerPress(frame, target, x, y, button, detail, .{});
-        frame._page.input_mousedown_suppressed = press.suppress_mouse;
-        if (!press.suppress_mouse and !press.suppress_focus) {
-            try focusForMouseDown(frame, target);
-        }
+        frame._page.input_pointer.mousedown_suppressed = press.suppress_mouse;
+        try runMouseDownFocus(frame, target, press, null);
     } else {
-        // A chorded press: another button going down while one is already
-        // held is a buttons-mask change on the same pointer, not a second
-        // pointerdown — https://www.w3.org/TR/pointerevents3/#chorded-button-interactions.
-        // The compatibility mousedown for this button still fires unless
-        // the gesture's own pointerdown was already cancelled.
-        const buttons = frame._page.input_pressed_buttons;
-        _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, buttons, 0, .{});
-        if (!frame._page.input_mousedown_suppressed) {
-            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, detail, .{});
-            if (!suppress_focus) {
-                try focusForMouseDown(frame, target);
-            }
+        // A chorded press is a buttons-mask change (pointermove), not a second
+        // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
+        _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, gesture.held, 0, .{});
+        if (!frame._page.input_pointer.mousedown_suppressed) {
+            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, gesture.held, detail, .{});
+            try runMouseDownFocus(frame, target, .{ .suppress_mouse = false, .suppress_focus = suppress_focus }, null);
         }
     }
 }
@@ -376,16 +382,12 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
 }
 
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
-    // Consumed unconditionally, before any early return below, so a
-    // mouseReleased that misses every element (or a later error) can never
-    // leave this gesture's state to be misread by the next one.
-    const was_suppressed = frame._page.input_mousedown_suppressed;
-    const remaining = frame._page.input_pressed_buttons & ~buttonsBitmask(button);
-    frame._page.input_pressed_buttons = remaining;
-    const ends_gesture = remaining == 0;
-    if (ends_gesture) {
-        frame._page.input_mousedown_suppressed = false;
-    }
+    // Consume the state before any early return, so a release that misses
+    // every element can't leave it for the next message to misread.
+    const gesture = frame._page.input_pointer.release(button);
+    const remaining = gesture.held;
+    const ends_gesture = gesture.ends_gesture;
+    const was_suppressed = gesture.was_suppressed;
 
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
     if (comptime lp.IS_DEBUG) {
@@ -404,8 +406,8 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     if (ends_gesture) {
         try dispatchPointerRelease(frame, target, x, y, button, was_suppressed, detail, .{});
     } else {
-        // A chorded release: another button remains held, so this is a
-        // buttons-mask change on the same pointer, not pointerup.
+        // A chorded release (another button still held) is a buttons-mask
+        // change, not pointerup.
         _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, remaining, 0, .{});
         if (!was_suppressed) {
             _ = try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, remaining, detail, .{});
