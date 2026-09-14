@@ -1001,7 +1001,7 @@ pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.Named
 // the caller's: attributeChange (which resyncs it) is dispatched on the owner
 // frame, and a same-origin script can reach an element in another frame.
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse frame;
     const gop = try owner._element_styles.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
@@ -1014,7 +1014,7 @@ pub fn existingStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     if (!self._flags.has_inline_style) {
         return null;
     }
-    return self.ownerFrame(frame)._element_styles.get(self);
+    return (self.ownerFrame(frame) orelse frame)._element_styles.get(self);
 }
 
 /// The inline style object, parsed from the style attribute on first use;
@@ -1405,11 +1405,13 @@ pub fn parentElement(self: *Element) ?*Element {
 // the caller's: its stylesheets and materialized inline styles are per-frame,
 // and a same-origin script can reach an element in another frame.
 pub fn hasPointerEventsNone(self: *Element, frame: *Frame) bool {
-    return self.ownerFrame(frame)._style_manager.hasPointerEventsNone(self);
+    const owner = self.ownerFrame(frame) orelse return false;
+    return owner._style_manager.hasPointerEventsNone(self);
 }
 
 pub fn isVisible(self: *Element, frame: *Frame) bool {
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{});
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{});
 }
 
 const CheckVisibilityOpts = struct {
@@ -1420,7 +1422,8 @@ const CheckVisibilityOpts = struct {
 };
 pub fn checkVisibility(self: *Element, opts_: ?CheckVisibilityOpts, frame: *Frame) bool {
     const opts = opts_ orelse CheckVisibilityOpts{};
-    return !self.ownerFrame(frame)._style_manager.isHidden(self, .{
+    const owner = self.ownerFrame(frame) orelse return false;
+    return !owner._style_manager.isHidden(self, .{
         .check_opacity = opts.checkOpacity or opts.opacityProperty,
         .check_visibility = opts.visibilityProperty or opts.checkVisibilityCSS,
     });
@@ -1556,13 +1559,13 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
 // owner frame first so the state, the fired events and the document
 // comparison stay in the element's frame.
 pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return 0;
     const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1575,13 +1578,13 @@ pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return 0;
     const pos = owner._element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1656,7 +1659,8 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
 // script actually consists of.
 fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
     var total: f64 = 0;
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
 
     var child = self.asNode().firstChild();
     while (child) |node| : (child = node.nextSibling()) {
@@ -1824,7 +1828,8 @@ fn countSubtreeNodes(node: *Node) f64 {
 pub fn horizontalPosition(self: *Element, frame: *Frame) f64 {
     var x: f64 = 0.0;
     var current = self.asNode();
-    const style_manager = &self.ownerFrame(frame)._style_manager;
+    const owner = self.ownerFrame(frame) orelse return 0;
+    const style_manager = &owner._style_manager;
 
     if (self.inlineStyle(frame)) |style| {
         x += CSS.parseTranslateX(style.asCSSStyleDeclaration().getPropertyValue("transform", frame));
@@ -1952,7 +1957,7 @@ const ScrollToOpts = union(enum) {
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -1977,7 +1982,7 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts orelse return;
-    const owner = self.ownerFrame(frame);
+    const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
@@ -2187,8 +2192,8 @@ pub fn getTag(self: *const Element) Tag {
     };
 }
 
-pub fn ownerFrame(self: *const Element, default: *Frame) *Frame {
-    return self.asConstNode().ownerFrame(default);
+pub fn ownerFrame(self: *const Element, frame: *const Frame) ?*Frame {
+    return self.asConstNode().ownerFrame(frame);
 }
 
 pub const Tag = enum {

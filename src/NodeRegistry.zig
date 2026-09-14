@@ -73,7 +73,8 @@ pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {
         const node = node_ptr.*;
-        if (node.dom.ownerFrame(frame)._page == page) {
+        const owner = node.dom.ownerFrame(frame) orelse frame;
+        if (owner._page == page) {
             doomed.append(arena, node) catch return;
         }
     }

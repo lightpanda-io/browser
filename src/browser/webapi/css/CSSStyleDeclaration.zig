@@ -82,15 +82,16 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
     // tree builders (Playwright ariaSnapshot) consult on every element.
     if (self._is_computed) {
         if (self._element) |element| {
-            if (wrapped.eql(comptime .wrap("display"))) {
-                const style_manager = &element.ownerFrame(frame)._style_manager;
-                if (style_manager.hasDisplayNone(element)) {
-                    return "none";
-                }
-            } else if (wrapped.eql(comptime .wrap("visibility"))) {
-                const style_manager = &element.ownerFrame(frame)._style_manager;
-                if (style_manager.hasVisibilityHiddenInherited(element)) {
-                    return "hidden";
+            if (element.ownerFrame(frame)) |owner| {
+                const style_manager = &owner._style_manager;
+                if (wrapped.eql(comptime .wrap("display"))) {
+                    if (style_manager.hasDisplayNone(element)) {
+                        return "none";
+                    }
+                } else if (wrapped.eql(comptime .wrap("visibility"))) {
+                    if (style_manager.hasVisibilityHiddenInherited(element)) {
+                        return "hidden";
+                    }
                 }
             }
         }
@@ -100,29 +101,31 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         // Only return default values for computed styles
         if (self._is_computed) {
             if (self._element) |element| {
-                const style_manager = &element.ownerFrame(frame)._style_manager;
+                if (element.ownerFrame(frame)) |owner| {
+                    const style_manager = &owner._style_manager;
 
-                if (isCustomProperty(normalized)) {
-                    return style_manager.customPropertyValue(element, wrapped) orelse "";
-                }
+                    if (isCustomProperty(normalized)) {
+                        return style_manager.customPropertyValue(element, wrapped) orelse "";
+                    }
 
-                // Resolve inline `style=` declarations through the element's
-                // parsed inline style, so computed values match `el.style`.
-                if (style_manager.inlineStyleValue(element, wrapped)) |value| {
-                    return value;
-                }
+                    // Resolve inline `style=` declarations through the element's
+                    // parsed inline style, so computed values match `el.style`.
+                    if (style_manager.inlineStyleValue(element, wrapped)) |value| {
+                        return value;
+                    }
 
-                // Computed width/height must agree with the synthetic layout
-                // metrics. Returning "" makes measurement code see
-                // contradictory sizes — jQuery's "shrink text until it fits"
-                // loops then never terminate. jQuery's .width() reads this
-                // value, so it must also carry clientWidth's content fallback
-                // or append-until-wide marquee loops never terminate.
-                if (wrapped.eql(comptime .wrap("width"))) {
-                    return resolvedDimension(element, .width, frame);
-                }
-                if (wrapped.eql(comptime .wrap("height"))) {
-                    return resolvedDimension(element, .height, frame);
+                    // Computed width/height must agree with the synthetic layout
+                    // metrics. Returning "" makes measurement code see
+                    // contradictory sizes — jQuery's "shrink text until it fits"
+                    // loops then never terminate. jQuery's .width() reads this
+                    // value, so it must also carry clientWidth's content fallback
+                    // or append-until-wide marquee loops never terminate.
+                    if (wrapped.eql(comptime .wrap("width"))) {
+                        return resolvedDimension(element, .width, frame);
+                    }
+                    if (wrapped.eql(comptime .wrap("height"))) {
+                        return resolvedDimension(element, .height, frame);
+                    }
                 }
             }
             return getDefaultPropertyValue(self, wrapped);

@@ -631,7 +631,7 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
         // Navigating to a javascript: URL evaluates the script in the
         // node's frame as a queued task. (A string completion value
         // would replace the document; we ignore results.)
-        return runJavascriptUrl(target.ownerFrame(frame), href["javascript:".len..]);
+        return runJavascriptUrl(target.ownerFrame(frame) orelse return, href["javascript:".len..]);
     }
 
     if (try element.hasAttribute(comptime .wrap("download"), frame)) {
@@ -641,13 +641,13 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
 
     const target_frame = blk: {
         if (target_name.len == 0) {
-            break :blk target.ownerFrame(frame);
+            break :blk target.ownerFrame(frame) orelse return;
         }
         break :blk switch (frame.resolveTargetFrame(target_name)) {
             .frame => |f| f,
             .blank => {
                 try element.focus(frame);
-                _ = try target.ownerFrame(frame).openBlankTarget(element, href);
+                _ = try (target.ownerFrame(frame) orelse return).openBlankTarget(element, href);
                 return;
             },
         };

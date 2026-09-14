@@ -56,7 +56,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .label_index = &label_index,
-        .owner_frame = self.dom_node.ownerFrame(self.frame),
+        .owner_frame = self.dom_node.ownerFrame(self.frame) orelse self.frame,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
@@ -76,7 +76,7 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .label_index = &label_index,
-        .owner_frame = self.dom_node.ownerFrame(self.frame),
+        .owner_frame = self.dom_node.ownerFrame(self.frame) orelse self.frame,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
@@ -108,7 +108,7 @@ const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
     listener_targets: interactive.ListenerTargetMap,
     label_index: *Label.LabelByForIndex,
-    owner_frame: *Frame, // node's ow frame, not the callers
+    owner_frame: *Frame, // node's own frame, not the caller's (the dumped frame when the node's document has none)
 };
 
 fn walk(
