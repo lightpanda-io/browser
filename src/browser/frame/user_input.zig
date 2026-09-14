@@ -229,7 +229,7 @@ fn dispatchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const
 
 /// MouseEvent/PointerEvent.buttons bitmask for a MouseEvent.button value.
 /// https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/buttons
-fn buttonsBitmask(button: i32) u16 {
+pub fn buttonsBitmask(button: i32) u16 {
     return switch (button) {
         mouse_button.main => 1,
         mouse_button.secondary => 2,
@@ -316,7 +316,6 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
     // fresh gesture rather than continuing a chord.
     const other_already_held = frame._page.input_pressed_buttons & ~button_bit != 0;
     frame._page.input_pressed_buttons |= button_bit;
-    const buttons = frame._page.input_pressed_buttons;
     // A caller that doesn't track click counts (or a CDP message that omits
     // clickCount) sends 0 — preserved as-is rather than forced to 1, since
     // Chrome and Firefox both fire mousedown with detail 0 in that case.
@@ -341,6 +340,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         // pointerdown — https://www.w3.org/TR/pointerevents3/#chorded-button-interactions.
         // The compatibility mousedown for this button still fires unless
         // the gesture's own pointerdown was already cancelled.
+        const buttons = frame._page.input_pressed_buttons;
         _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, buttons, 0, .{});
         if (!frame._page.input_mousedown_suppressed) {
             const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, detail, .{});
@@ -402,8 +402,6 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
 
     if (ends_gesture) {
-        // The last held button releasing ends the gesture: full pointerup,
-        // then (unless suppressed) mouseup.
         try dispatchPointerRelease(frame, target, x, y, button, was_suppressed, detail, .{});
     } else {
         // A chorded release: another button remains held, so this is a
