@@ -969,7 +969,11 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
             },
             else => opts.kind,
         };
-        _ = try session.navigation.navigateSameDocument(resolved_url, resolved_kind, target);
+        _ = try session.navigation.navigateSameDocumentInternal(
+            resolved_url,
+            resolved_kind,
+            target,
+        );
         target.styleChanged();
         arena.release();
         return;

@@ -583,10 +583,34 @@ pub fn navigateSameDocument(
     kind: NavigationKind,
     frame: *Frame,
 ) !NavigationReturn {
+    return self.navigateSameDocumentWithLocal(url, kind, frame, frame.js.local.?);
+}
+
+pub fn navigateSameDocumentInternal(
+    self: *Navigation,
+    url: [:0]const u8,
+    kind: NavigationKind,
+    frame: *Frame,
+) !NavigationReturn {
+    if (frame.js.local) |local| {
+        return self.navigateSameDocumentWithLocal(url, kind, frame, local);
+    }
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    return self.navigateSameDocumentWithLocal(url, kind, frame, &ls.local);
+}
+
+pub fn navigateSameDocumentWithLocal(
+    self: *Navigation,
+    url: [:0]const u8,
+    kind: NavigationKind,
+    frame: *Frame,
+    local: *const js.Local,
+) !NavigationReturn {
     self.abortPendingNavigation(frame);
 
     const arena = frame._session.arena;
-    const local = frame.js.local.?;
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
 
