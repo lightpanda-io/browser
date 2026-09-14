@@ -422,7 +422,7 @@ fn fireNavigateEvent(
     info: ?js.Value,
     frame: *Frame,
 ) !*NavigateEvent {
-    const event = try NavigateEvent.initTrusted(
+    const navigate_event = try NavigateEvent.initTrusted(
         .wrap("navigate"),
         .{
             .cancelable = true,
@@ -438,8 +438,11 @@ fn fireNavigateEvent(
         frame,
     );
 
+    const event = navigate_event.asEvent();
+    event.acquireRef();
+
     if (self._on_navigate) |on| {
-        try self.dispatch(on, event.asEvent(), frame);
+        try self.dispatch(on, event, frame);
 
         lp.log.warn(.browser, "navigate event", .{
             .cancelable = true,
@@ -453,13 +456,10 @@ fn fireNavigateEvent(
             .hasUAVisualTransition = false,
         });
     } else {
-        try frame._event_manager.dispatch(
-            self.asEventTarget(),
-            event.asEvent(),
-        );
+        try frame._event_manager.dispatch(self.asEventTarget(), event);
     }
 
-    return event;
+    return navigate_event;
 }
 
 fn resolveFinished(self: *Navigation, resolver: js.PromiseResolver, comptime source: []const u8, frame: *Frame) void {
@@ -621,6 +621,7 @@ pub fn navigateSameDocument(
         null,
         frame,
     );
+    defer navigate_event._proto.releaseRef(frame._page);
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
@@ -747,6 +748,7 @@ pub fn navigateInner(
         null,
         frame,
     );
+    defer navigate_event._proto.releaseRef(frame._page);
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
