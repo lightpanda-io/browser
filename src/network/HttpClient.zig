@@ -3208,6 +3208,8 @@ pub const Transfer = struct {
         try conn.setMethod(req.method);
         if (req.body) |b| {
             try conn.setBody(b);
+        } else if (req.method == .HEAD) {
+            try conn.setNoBody();
         } else {
             try conn.setGetMode();
         }
