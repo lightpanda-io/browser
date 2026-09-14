@@ -66,7 +66,7 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
         return error.ActionFailed;
     };
 
-    Frame.user_input.dispatchClickAsPointer(frame, el, 0, 0, 1, .{}) catch |err| {
+    Frame.user_input.dispatchClickAsPointer(frame, el, 0, 0, 1, 0, .{}) catch |err| {
         lp.log.err(.app, "click click failed", .{ .err = err });
         return error.ActionFailed;
     };

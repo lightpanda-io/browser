@@ -84,7 +84,7 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         log.warn(.app, "webdriver click release", .{ .err = err });
         return;
     };
-    Frame.user_input.dispatchClickAsPointer(frame, element, 0, 0, 1, modifiers) catch |err| {
+    Frame.user_input.dispatchClickAsPointer(frame, element, 0, 0, 1, 0, modifiers) catch |err| {
         log.warn(.app, "webdriver click click", .{ .err = err });
     };
 }

@@ -570,7 +570,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             pointer.last_click_x = pointer.x;
             pointer.last_click_y = pointer.y;
 
-            try user_input.triggerMousePress(frame, pointer.x, pointer.y, button);
+            try user_input.triggerMousePress(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
         .pointer_up => |button| {
             const pointer = &source.pointer;
