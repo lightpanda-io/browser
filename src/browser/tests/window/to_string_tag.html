@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=class_string>
+    testing.expectEqual("Window", window[Symbol.toStringTag]);
+    testing.expectEqual("[object Window]", Object.prototype.toString.call(window));
+    testing.expectEqual("[object Window]", String(window));
+    testing.expectEqual("[object Window]", Object.prototype.toString.call(Window.prototype));
+    testing.expectEqual("[object HTMLDivElement]", Object.prototype.toString.call(HTMLDivElement.prototype));
+    testing.expectEqual("[object HTMLDivElement]", Object.prototype.toString.call(document.createElement("div")));
+    testing.expectEqual("[object HTMLUnknownElement]", Object.prototype.toString.call(document.createElement("bogus")));
+</script>
+
+<script id=tag_descriptors>
+    for (const [object, tag] of [
+        [Window.prototype, "Window"],
+        [HTMLElement.prototype, "HTMLElement"],
+        [HTMLDivElement.prototype, "HTMLDivElement"],
+        [console, "console"],
+    ]) {
+        const descriptor = Object.getOwnPropertyDescriptor(object, Symbol.toStringTag);
+        testing.expectEqual(true, descriptor !== undefined);
+        testing.expectEqual(tag, descriptor.value);
+        testing.expectEqual(false, descriptor.writable);
+        testing.expectEqual(false, descriptor.enumerable);
+        testing.expectEqual(true, descriptor.configurable);
+    }
+    testing.expectEqual(false, Object.prototype.hasOwnProperty.call(window, Symbol.toStringTag));
+    testing.expectEqual(false, Object.prototype.hasOwnProperty.call(document.createElement("div"), Symbol.toStringTag));
+    testing.expectEqual("[object console]", Object.prototype.toString.call(console));
+    testing.expectEqual(true, Object.prototype.hasOwnProperty.call(CSS, Symbol.toStringTag));
+</script>
+
+<script id=deep_clone_terminates>
+    class TaggedElement extends HTMLElement {}
+    customElements.define("tagged-element", TaggedElement);
+    const custom = new TaggedElement();
+    const generic = document.createElement("section");
+    testing.expectEqual("[object HTMLElement]", Object.prototype.toString.call(custom));
+    testing.expectEqual("[object HTMLElement]", Object.prototype.toString.call(generic));
+    custom.self = custom;
+    generic.self = generic;
+
+    const kind = (value) => Object.prototype.toString.call(value).slice(8, -1).toLowerCase();
+    let visits = 0;
+    const clone = (value) => {
+        if (++visits > 32) throw new Error("clone recursed into a host object");
+        if (kind(value) === "array") return value.map(clone);
+        if (kind(value) === "object") {
+            const out = {};
+            for (const key in value) out[key] = clone(value[key]);
+            return out;
+        }
+        return value;
+    };
+    for (const target of [window, custom, generic]) {
+        visits = 0;
+        const input = { target, items: [target], nested: { label: "value" } };
+        const copy = clone(input);
+        testing.expectEqual(true, copy.target === target);
+        testing.expectEqual(true, copy.items[0] === target);
+        testing.expectEqual(true, copy !== input);
+        testing.expectEqual(true, copy.items !== input.items);
+        testing.expectEqual(true, copy.nested !== input.nested);
+        testing.expectEqual("value", copy.nested.label);
+        testing.expectEqual(6, visits);
+    }
+</script>
