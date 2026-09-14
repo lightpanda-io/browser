@@ -245,8 +245,9 @@ pub const LoadResources = packed struct(u4) {
     stylesheet: bool = false,
 };
 
-const ExperimentalFeatures = packed struct(u1) {
+pub const ExperimentalFeatures = packed struct(u2) {
     cors: bool = false,
+    serviceworker: bool = false,
 };
 
 /// Common CLI args.

@@ -36,6 +36,7 @@ pub const Runner = @import("Runner.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Frame.QueuedNavigation;
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("webapi/ServiceWorkerGlobalScope.zig");
 
 const log = lp.log;
 const ArenaPool = App.ArenaPool;
@@ -74,6 +75,10 @@ pages: std.ArrayList(*Page) = .empty,
 // Owned by the Page that creates it.
 shared_workers: std.StringHashMapUnmanaged(*SharedWorkerGlobalScope) = .empty,
 
+// url => SWGS. The SWGS is owned by the page, but can be shared with other
+// pages by url.
+service_workers: std.StringHashMapUnmanaged(*ServiceWorkerGlobalScope) = .empty,
+
 _page_destruction_queue: std.ArrayList(*Page) = .empty,
 
 // Round-robin cursor for fair page iteration (processQueuedNavigation)
@@ -104,6 +109,9 @@ _console_capture: bool = false,
 
 // configured external resources (images, stylesheet, worker, iframe) to load
 load_resources: Config.LoadResources,
+
+// opt-in unstable features (--experimental-features)
+experimental_features: Config.ExperimentalFeatures,
 
 /// Caller-supplied cancellation probe. `Runner._wait` polls it between
 /// ticks; once `check` returns true the wait returns `error.Cancelled`.
@@ -167,6 +175,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
         ._console_messages = .init(allocator),
         .load_resources = browser.app.config.loadResources(),
+        .experimental_features = browser.app.config.experimentalFeatures(),
     };
     errdefer self._console_messages.deinit();
 }

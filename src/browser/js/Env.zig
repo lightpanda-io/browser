@@ -27,10 +27,12 @@ const Platform = @import("Platform.zig");
 const Inspector = @import("Inspector.zig");
 
 const App = @import("../../App.zig");
+
 const Frame = @import("../Frame.zig");
 const Window = @import("../webapi/Window.zig");
 const WorkerGlobalScope = @import("../webapi/WorkerGlobalScope.zig");
 const SharedWorkerGlobalScope = @import("../webapi/SharedWorkerGlobalScope.zig");
+const ServiceWorkerGlobalScope = @import("../webapi/ServiceWorkerGlobalScope.zig");
 const DedicatedWorkerGlobalScope = @import("../webapi/DedicatedWorkerGlobalScope.zig");
 
 const v8 = js.v8;
@@ -90,8 +92,11 @@ templates: []*const v8.FunctionTemplate,
 inspector: ?*Inspector,
 
 // We can store data in a v8::Object's Private data bag. The keys are v8::Private
-// which an be created once per isolaet.
+// which an be created once per isolate.
 private_symbols: PrivateSymbols,
+
+// Interned names for `hideServiceWorker`.
+disabled_api_names: DisabledApiNames,
 
 microtask_queues_are_running: bool,
 
@@ -177,6 +182,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     errdefer allocator.free(templates);
 
     var private_symbols: PrivateSymbols = undefined;
+    var disabled_api_names: DisabledApiNames = undefined;
     {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
@@ -194,6 +200,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         }
 
         private_symbols = PrivateSymbols.init(isolate_handle);
+        disabled_api_names = DisabledApiNames.init(isolate_handle);
     }
 
     var inspector: ?*js.Inspector = null;
@@ -212,6 +219,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .isolate_params = params,
         .inspector = inspector,
         .private_symbols = private_symbols,
+        .disabled_api_names = disabled_api_names,
         .microtask_queues_are_running = false,
         .eternal_function_templates = eternal_function_templates,
     };
@@ -293,10 +301,11 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     };
 
     // Restore the context from the snapshot
-    // (0 = Page, 1 = DedicatedWorker, 2 = SharedWorker)
+    // (0 = Page, 1 = DedicatedWorker, 2 = SharedWorker, 3 = ServiceWorker)
     const snapshot_index: u32 = if (comptime is_frame) 0 else switch (global._type) {
         .dedicated => 1,
         .shared => 2,
+        .service => 3,
     };
     const v8_context = v8.v8__Context__FromSnapshot__Config(isolate.handle, snapshot_index, &.{
         .global_template = null,
@@ -310,6 +319,12 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 
     // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
+
+    if (comptime is_frame) {
+        if (global._session.experimental_features.serviceworker == false) {
+            self.hideServiceWorker(v8_context, global_obj);
+        }
+    }
 
     // Store our TAO inside the internal field of the global object. This
     // maps the v8::Object -> Zig instance.
@@ -330,6 +345,12 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
             .value = @ptrCast(scope),
             .prototype_chain = (&SharedWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
             .prototype_len = @intCast(SharedWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
+            .subtype = null,
+        },
+        .service => |scope| .{
+            .value = @ptrCast(scope),
+            .prototype_chain = (&ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain).ptr,
+            .prototype_len = @intCast(ServiceWorkerGlobalScope.JsApi.Meta.prototype_chain.len),
             .subtype = null,
         },
     };
@@ -399,6 +420,28 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     try self.contexts.append(self.allocator, context);
 
     return context;
+}
+
+// When ServiceWorkers are disabled (as they are by default), this must be false:
+//     'serviceWorker' in navigator
+// If you disable ServiceWorkers in FireFox (about:config) this is the behavior
+// you get, and it seems to be the safest way to not break sites. BUT, the
+// accessor is baked into the snapshot, so every frame context deletes it from
+// its own Navigator.prototype (2 Gets + 1 Delete).
+// (If this proves to be an issue, we could swap the logic, and dynamically ADD
+// it when it is enabled, but that's a lot more code).
+fn hideServiceWorker(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    const isolate = self.isolate.handle;
+    const names = &self.disabled_api_names;
+
+    const constructor = v8.v8__Object__Get(global_obj, v8_context, @ptrCast(names.get(isolate, "navigator"))) orelse return;
+    const prototype = v8.v8__Object__Get(@ptrCast(constructor), v8_context, @ptrCast(names.get(isolate, "prototype"))) orelse return;
+
+    var deleted: v8.MaybeBool = undefined;
+    v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, "service_worker")), &deleted);
+    if (deleted.has_value == false or deleted.value == false) {
+        log.warn(.js, "failed to hide navigator.serviceWorker", .{});
+    }
 }
 
 pub fn destroyContext(self: *Env, context: *Context) void {
@@ -710,6 +753,30 @@ fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callcon
     log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
+
+const DisabledApiNames = struct {
+    navigator: v8.Eternal,
+    prototype: v8.Eternal,
+    service_worker: v8.Eternal,
+
+    fn init(isolate: *v8.Isolate) DisabledApiNames {
+        var self: DisabledApiNames = undefined;
+        intern(isolate, &self.navigator, "Navigator");
+        intern(isolate, &self.prototype, "prototype");
+        intern(isolate, &self.service_worker, "serviceWorker");
+        return self;
+    }
+
+    fn intern(isolate: *v8.Isolate, out: *v8.Eternal, comptime name: [:0]const u8) void {
+        const str = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, name.len);
+        v8.v8__Eternal__New(isolate, @ptrCast(str), out);
+    }
+
+    fn get(self: *const DisabledApiNames, isolate: *v8.Isolate, comptime field: []const u8) *const v8.String {
+        const eternal = &@field(self, field);
+        return @ptrCast(@alignCast(v8.v8__Eternal__Get(@constCast(eternal), isolate).?));
+    }
+};
 
 const PrivateSymbols = struct {
     const Private = @import("Private.zig");

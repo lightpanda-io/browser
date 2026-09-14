@@ -37,6 +37,7 @@ const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
 const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
 const AnimatedString = @import("webapi/svg/AnimatedString.zig");
 const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
+const ServiceWorkerGlobalScope = @import("webapi/ServiceWorkerGlobalScope.zig");
 const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 
 const Allocator = std.mem.Allocator;
@@ -202,6 +203,11 @@ closed_frames: std.ArrayList(*Frame) = .empty,
 // session.shared_workers so other pages can connect).
 shared_workers: std.ArrayList(*SharedWorkerGlobalScope) = .empty,
 
+// ServiceWorkerGlobalScopes created by this Page's frames. The page "owns" it,
+// but it's also shared with the Session so that two registers with the same URL
+// return the same SWGS, even across pages (but the owning page will tear it down)
+service_workers: std.ArrayList(*ServiceWorkerGlobalScope) = .empty,
+
 // In-flight navigation for a root page. When not null, this page will "replace"
 // the referenced page once the response header arrives. This is necessary
 // because, during navigation, both the "old" and "new" pages remain addressable
@@ -284,6 +290,11 @@ pub fn deinit(self: *Page) void {
         scope.deinit();
     }
     self.shared_workers = .empty;
+
+    for (self.service_workers.items) |scope| {
+        scope.deinit();
+    }
+    self.service_workers = .empty;
 
     {
         if (comptime lp.IS_DEBUG) {
