@@ -338,7 +338,10 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32) !void {
         // the gesture's own pointerdown was already cancelled.
         _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, buttons, 0, .{});
         if (!frame._page.input_mousedown_suppressed) {
-            _ = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, 0, .{});
+            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, 0, .{});
+            if (!suppress_focus) {
+                try focusForMouseDown(frame, target);
+            }
         }
     }
 }

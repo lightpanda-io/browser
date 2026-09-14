@@ -744,6 +744,61 @@ test "cdp.input: a mouse chord fires pointermove for the mid-gesture button chan
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: chorded mousedown focuses its target unless pointerdown or mousedown was cancelled" {
+    inline for (.{ "none", "mousedown", "pointerdown" }) |cancel| {
+        var ctx = try testing.context();
+        defer ctx.deinit();
+
+        const bc = try ctx.loadBrowserContext(.{});
+        const page = try bc.session.createPage();
+        const frame = page.frame().?;
+        try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+        try testing.waitForPage(bc);
+
+        var ls: lp.js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        var try_catch: lp.js.TryCatch = undefined;
+        try_catch.init(&ls.local);
+        defer try_catch.deinit();
+
+        _ = try ls.local.compileAndRun("window.cancelAt = '" ++ cancel ++ "';" ++
+            \\document.getElementById('inp').focus();
+            \\document.getElementById('inp').addEventListener('pointerdown', e => {
+            \\  if (window.cancelAt === 'pointerdown') e.preventDefault();
+            \\});
+            \\window.chordMouseDowns = 0;
+            \\document.getElementById('keyTarget').addEventListener('mousedown', e => {
+            \\  window.chordMouseDowns++;
+            \\  if (window.cancelAt === 'mousedown') e.preventDefault();
+            \\});
+        , null);
+
+        const first_x = try (try ls.local.compileAndRun("document.getElementById('inp').getBoundingClientRect().x", null)).toF64();
+        const first_y = try (try ls.local.compileAndRun("document.getElementById('inp').getBoundingClientRect().y", null)).toF64();
+        const second_x = try (try ls.local.compileAndRun("document.getElementById('keyTarget').getBoundingClientRect().x", null)).toF64();
+        const second_y = try (try ls.local.compileAndRun("document.getElementById('keyTarget').getBoundingClientRect().y", null)).toF64();
+        try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchMouseEvent",
+            .params = .{ .type = "mousePressed", .x = first_x, .y = first_y, .button = "left" },
+        });
+        try ctx.processMessage(.{
+            .id = 2,
+            .method = "Input.dispatchMouseEvent",
+            .params = .{ .type = "mousePressed", .x = second_x, .y = second_y, .button = "right" },
+        });
+
+        // Check before any release/click activation can change focus.
+        const result = try ls.local.compileAndRun(
+            \\document.activeElement.id === (window.cancelAt === 'none' ? 'keyTarget' : 'inp') &&
+            \\window.chordMouseDowns === (window.cancelAt === 'pointerdown' ? 0 : 1)
+        , null);
+        try testing.expect(result.isTrue());
+    }
+}
+
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
     var ctx = try testing.context();
     defer ctx.deinit();
