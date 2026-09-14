@@ -180,45 +180,56 @@ fn dispatchBoundaryEvent(frame: *Frame, target: *Element, comptime mouse_typ: []
     };
 }
 
+/// Event fields for the trusted mouse/pointer dispatchers, bundled so `button`
+/// (which button changed) and `buttons` (the held mask) can't be transposed.
+const PointerInput = struct {
+    x: f64,
+    y: f64,
+    button: i32 = mouse_button.main,
+    buttons: u16 = 0,
+    detail: u32 = 0,
+    modifiers: Modifiers = .{},
+};
+
 /// Dispatch a trusted mouse event; returns whether preventDefault() cancelled it.
-fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, buttons: u16, detail: u32, modifiers: Modifiers) !bool {
+fn dispatchMouseEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, in: PointerInput) !bool {
     const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = x,
-        .clientY = y,
-        .button = button,
-        .buttons = buttons,
-        .detail = detail,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
+        .clientX = in.x,
+        .clientY = in.y,
+        .button = in.button,
+        .buttons = in.buttons,
+        .detail = in.detail,
+        .ctrlKey = in.modifiers.ctrl,
+        .shiftKey = in.modifiers.shift,
+        .altKey = in.modifiers.alt,
+        .metaKey = in.modifiers.meta,
     }, frame);
     return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
 
 /// Dispatch a trusted pointer event (always mouse-sourced: pointerType,
 /// pointerId, isPrimary fixed); returns whether preventDefault() cancelled it.
-fn dispatchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, x: f64, y: f64, button: i32, buttons: u16, detail: u32, modifiers: Modifiers) !bool {
+fn dispatchPointerEventOn(frame: *Frame, target: *Element, comptime typ: []const u8, in: PointerInput) !bool {
     const event: *PointerEvent = try .initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
-        .clientX = x,
-        .clientY = y,
-        .button = button,
-        .buttons = buttons,
-        .detail = detail,
+        .clientX = in.x,
+        .clientY = in.y,
+        .button = in.button,
+        .buttons = in.buttons,
+        .detail = in.detail,
         .pointerId = 1,
         .pointerType = "mouse",
         .isPrimary = true,
-        .pressure = if (buttons != 0) 0.5 else 0.0,
-        .ctrlKey = modifiers.ctrl,
-        .shiftKey = modifiers.shift,
-        .altKey = modifiers.alt,
-        .metaKey = modifiers.meta,
+        .pressure = if (in.buttons != 0) 0.5 else 0.0,
+        .ctrlKey = in.modifiers.ctrl,
+        .shiftKey = in.modifiers.shift,
+        .altKey = in.modifiers.alt,
+        .metaKey = in.modifiers.meta,
     }, frame);
     return frame._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent());
 }
@@ -284,11 +295,11 @@ pub const PressResult = struct {
 /// failure should affect the click).
 pub fn dispatchPointerPress(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, mouse_detail: u32, modifiers: Modifiers) !PressResult {
     const buttons = buttonsBitmask(button);
-    const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", x, y, button, buttons, 0, modifiers);
+    const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", .{ .x = x, .y = y, .button = button, .buttons = buttons, .modifiers = modifiers });
     const suppress_focus = if (suppress_mouse)
         true
     else
-        try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, buttons, mouse_detail, modifiers);
+        try dispatchMouseEventOn(frame, target, "mousedown", .{ .x = x, .y = y, .button = button, .buttons = buttons, .detail = mouse_detail, .modifiers = modifiers });
     return .{ .suppress_mouse = suppress_mouse, .suppress_focus = suppress_focus };
 }
 
@@ -306,16 +317,16 @@ pub fn runMouseDownFocus(frame: *Frame, target: *Element, press: PressResult, co
 /// Release half: pointerup, then mouseup unless the paired pointerdown
 /// suppressed it (click fires separately via dispatchClickAsPointer).
 pub fn dispatchPointerRelease(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, suppress_mouse: bool, mouse_detail: u32, modifiers: Modifiers) !void {
-    _ = try dispatchPointerEventOn(frame, target, "pointerup", x, y, button, 0, 0, modifiers);
+    _ = try dispatchPointerEventOn(frame, target, "pointerup", .{ .x = x, .y = y, .button = button, .modifiers = modifiers });
     if (!suppress_mouse) {
-        _ = try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, 0, mouse_detail, modifiers);
+        _ = try dispatchMouseEventOn(frame, target, "mouseup", .{ .x = x, .y = y, .button = button, .detail = mouse_detail, .modifiers = modifiers });
     }
 }
 
 /// Primary-button click as a PointerEvent (matching HTMLElement.click());
 /// `buttons` is the mask still held, nonzero on a mid-chord primary release.
 pub fn dispatchClickAsPointer(frame: *Frame, target: *Element, x: f64, y: f64, detail: u32, buttons: u16, modifiers: Modifiers) !void {
-    _ = try dispatchPointerEventOn(frame, target, "click", x, y, mouse_button.main, buttons, detail, modifiers);
+    _ = try dispatchPointerEventOn(frame, target, "click", .{ .x = x, .y = y, .buttons = buttons, .detail = detail, .modifiers = modifiers });
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
@@ -349,9 +360,9 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
     } else {
         // A chorded press is a buttons-mask change (pointermove), not a second
         // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
-        _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, gesture.held, 0, .{});
+        _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = gesture.held });
         if (!frame._page.input_pointer.mousedown_suppressed) {
-            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", x, y, button, gesture.held, detail, .{});
+            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", .{ .x = x, .y = y, .button = button, .buttons = gesture.held, .detail = detail });
             try runMouseDownFocus(frame, target, .{ .suppress_mouse = false, .suppress_focus = suppress_focus }, null);
         }
     }
@@ -408,9 +419,9 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     } else {
         // A chorded release (another button still held) is a buttons-mask
         // change, not pointerup.
-        _ = try dispatchPointerEventOn(frame, target, "pointermove", x, y, button, remaining, 0, .{});
+        _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = remaining });
         if (!was_suppressed) {
-            _ = try dispatchMouseEventOn(frame, target, "mouseup", x, y, button, remaining, detail, .{});
+            _ = try dispatchMouseEventOn(frame, target, "mouseup", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail });
         }
     }
 
@@ -420,11 +431,11 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
             try dispatchClickAsPointer(frame, target, x, y, detail, remaining, .{});
             // A second click in quick succession also fires dblclick.
             if (click_count == 2) {
-                _ = try dispatchMouseEventOn(frame, target, "dblclick", x, y, button, remaining, detail, .{});
+                _ = try dispatchMouseEventOn(frame, target, "dblclick", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail });
             }
         },
-        mouse_button.auxiliary => _ = try dispatchMouseEventOn(frame, target, "auxclick", x, y, button, remaining, detail, .{}),
-        mouse_button.secondary => _ = try dispatchMouseEventOn(frame, target, "contextmenu", x, y, button, remaining, detail, .{}),
+        mouse_button.auxiliary => _ = try dispatchMouseEventOn(frame, target, "auxclick", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail }),
+        mouse_button.secondary => _ = try dispatchMouseEventOn(frame, target, "contextmenu", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail }),
         else => {},
     }
 }
