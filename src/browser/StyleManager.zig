@@ -39,13 +39,14 @@ const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
-// Tracks visibility-relevant CSS rules from <style> elements.
+// Tracks the CSS properties the renderless layout acts on (display, visibility,
+// opacity, pointer-events) from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
 const Tag = Element.Tag;
 const Input = Element.Html.Input;
-const RuleList = std.MultiArrayList(VisibilityRule);
+const RuleList = std.MultiArrayList(TrackedRule);
 
 frame: *Frame,
 
@@ -362,14 +363,14 @@ fn isValidLayerComponent(component: []const u8) bool {
     return true;
 }
 
-/// Compute every layer's rank and apply it to every VisibilityRule we have.
+/// Compute every layer's rank and apply it to every TrackedRule we have.
 /// We can only do this now that we've parsed every parsed every sheet since
 /// @layer statement can change the ordering/
 fn finalizeLayerRanks(self: *StyleManager, build_arena: Allocator) Allocator.Error!void {
     const layers = self.layers.items;
 
     if (layers.len == 0) {
-        // No layers. Every VisibilityRule already has the correct layerless
+        // No layers. Every TrackedRule already has the correct layerless
         // priority, and with no layers, there's nothing to adjust.
         return;
     }
@@ -484,14 +485,14 @@ fn addRawRule(self: *StyleManager, build_arena: Allocator, selector_text: []cons
     _ = try self.addSelectorRules(selector_text, props, customs.map.values(), layer);
 }
 
-// Visibility rules get one VisibilityRule per selector (not per selector list)
+// Tracked rules get one TrackedRule per selector (not per selector list)
 // so each has correct specificity, bucketed by their rightmost selector part.
 // Custom properties are keyed by name instead, and lazily parse the selector.
 // Returns whether the rule set any tracked property.
 fn addSelectorRules(
     self: *StyleManager,
     selector_text: []const u8,
-    props: VisibilityProperties,
+    props: TrackedProperties,
     customs: []const CustomDeclaration,
     layer: u16,
 ) !bool {
@@ -523,13 +524,13 @@ fn addSelectorRules(
     if (relevant) {
         const selectors = SelectorParser.parseList(arena, selector_text) catch &.{};
         for (selectors) |selector| {
-            try self.addVisibilityRule(selector, props, layer);
+            try self.addTrackedRule(selector, props, layer);
         }
     }
     return self.next_doc_order != before;
 }
 
-fn addVisibilityRule(self: *StyleManager, selector: Selector.Selector, props: VisibilityProperties, layer: u16) !void {
+fn addTrackedRule(self: *StyleManager, selector: Selector.Selector, props: TrackedProperties, layer: u16) !void {
     const key = getBucketKey(selector.rightmost()) orelse return;
     const priority = try self.nextPriority(layer);
     try self.bucket(key, .{
@@ -550,7 +551,7 @@ fn nextPriority(self: *StyleManager, layer: u16) !u64 {
     return priority;
 }
 
-fn bucket(self: *StyleManager, key: BucketKey, rule: VisibilityRule) !void {
+fn bucket(self: *StyleManager, key: BucketKey, rule: TrackedRule) !void {
     const allocator = self.arena.allocator();
     const list: *RuleList = switch (key) {
         .id => |id| (try self.id_rules.getOrPutValue(allocator, id, .empty)).value_ptr,
@@ -742,7 +743,7 @@ fn ownProps(self: *StyleManager, el: *Element) Props {
     return gop.value_ptr.*;
 }
 
-const property_fields = std.meta.fieldNames(VisibilityProperties);
+const property_fields = std.meta.fieldNames(TrackedProperties);
 
 // INLINE_PRIORITY can't be beaten, so allInline ends the rule scan early.
 const Priorities = struct {
@@ -877,7 +878,7 @@ fn addRule(self: *StyleManager, style_rule: *CSSStyleRule) !bool {
         return false;
     }
     const style = style_rule._style orelse return false;
-    const props = extractVisibilityProperties(style);
+    const props = extractTrackedProperties(style);
     const customs = try self.extractCustomDeclarations(style);
 
     // A custom rule holds selector_text until the property is looked up, but it
@@ -1004,12 +1005,12 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
     return best_key;
 }
 
-// The declaration names behind VisibilityProperties, in field order.
+// The declaration names behind TrackedProperties, in field order.
 const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
 
-/// Extracts visibility-relevant properties from a style declaration.
-fn extractVisibilityProperties(style: *CSSStyleProperties) VisibilityProperties {
-    var props: VisibilityProperties = .{};
+/// Extracts the tracked properties from a style declaration.
+fn extractTrackedProperties(style: *CSSStyleProperties) TrackedProperties {
+    var props: TrackedProperties = .{};
     const decl = style.asCSSStyleDeclaration();
     for (property_names) |name| {
         if (decl.findProperty(.wrap(name))) |property| {
@@ -1091,13 +1092,13 @@ pub const Display = enum(u2) {
     }
 };
 
-const VisibilityProperties = struct {
+const TrackedProperties = struct {
     display: ?Display = null,
     visibility_hidden: ?bool = null,
     opacity_zero: ?bool = null,
     pointer_events_none: ?bool = null,
 
-    fn apply(self: *VisibilityProperties, name: []const u8, value: []const u8) void {
+    fn apply(self: *TrackedProperties, name: []const u8, value: []const u8) void {
         if (std.ascii.eqlIgnoreCase(name, "display")) {
             self.display = Display.parse(value);
         } else if (std.ascii.eqlIgnoreCase(name, "visibility")) {
@@ -1109,7 +1110,7 @@ const VisibilityProperties = struct {
         }
     }
 
-    fn isRelevant(self: VisibilityProperties) bool {
+    fn isRelevant(self: TrackedProperties) bool {
         inline for (property_fields) |field| {
             if (@field(self, field) != null) {
                 return true;
@@ -1119,9 +1120,9 @@ const VisibilityProperties = struct {
     }
 };
 
-const VisibilityRule = struct {
+const TrackedRule = struct {
     selector: Selector.Selector, // Single selector, not a list
-    props: VisibilityProperties,
+    props: TrackedProperties,
 
     // Packed priority: layer_rank:12 | specificity:30 | doc_order:22. A layered
     // rule's rank bits stay 0 until finalizeLayerRanks knows every layer and
@@ -1149,7 +1150,7 @@ const CustomRule = struct {
 const ParsedCustomRule = struct {
     selector: Selector.Selector,
     value: []const u8,
-    priority: u64, // packed the same way as VisibilityRule.priority
+    priority: u64, // packed the same way as TrackedRule.priority
 };
 
 /// A `--*` declaration on its way from a rule block into custom_rules.
@@ -1184,7 +1185,7 @@ const UNLAYERED_RANK: u32 = std.math.maxInt(u12);
 // its 12 bits of VisibleRule.priority
 const MAX_LAYERS: usize = 1024;
 
-// VisibilityRule.priority field offsets (layer_rank:12 | spec:30 | doc:22).
+// TrackedRule.priority field offsets (layer_rank:12 | spec:30 | doc:22).
 const SPEC_SHIFT: u6 = 22;
 const RANK_SHIFT: u6 = 52;
 
@@ -1206,13 +1207,13 @@ const INLINE_PRIORITY: u64 = std.math.maxInt(u64);
 // `frame` must be el's owner frame (el.ownerFrame): that is the map where a
 // parsed inline style lives. Without one the attribute text is folded in
 // place; layout materializes the object itself when it needs it.
-fn inlineProps(el: *Element, frame: *Frame) VisibilityProperties {
+fn inlineProps(el: *Element, frame: *Frame) TrackedProperties {
     if (!el._flags.has_inline_style) {
         // Neither a style object nor a style attribute; skip both lookups.
         return .{};
     }
     if (el.existingStyle(frame)) |style| {
-        return extractVisibilityProperties(style);
+        return extractTrackedProperties(style);
     }
     const attr = el.getAttributeInterned("style") orelse return .{};
     // Without a sink nothing allocates
@@ -1236,7 +1237,7 @@ const CustomSink = struct {
 // earlier !important one, and an empty value removes the property. The tracked
 // properties are matched case-insensitively; a custom property's name is
 // case-sensitive and goes to `customs` when there is one.
-fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !VisibilityProperties {
+fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !TrackedProperties {
     const Slot = struct {
         value: ?[]const u8 = null,
         important: bool = false,
@@ -1274,7 +1275,7 @@ fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !VisibilityPropert
         }
     }
 
-    var props: VisibilityProperties = .{};
+    var props: TrackedProperties = .{};
     for (property_names, slots) |name, slot| {
         if (slot.value) |value| {
             props.apply(name, value);
@@ -1606,7 +1607,7 @@ test "StyleManager: inlineProps: scan matches the parsed style object" {
         \\<i style="display:"></i>
         \\<i></i>
     );
-    const expected = [_]VisibilityProperties{
+    const expected = [_]TrackedProperties{
         .{ .display = .none },
         .{ .display = .none },
         .{ .display = .none },
@@ -1626,7 +1627,7 @@ test "StyleManager: inlineProps: scan matches the parsed style object" {
         const scanned = inlineProps(el, frame);
         // scanning never creates the style object
         try testing.expectEqual(null, el.existingStyle(frame));
-        const materialized = extractVisibilityProperties(try el.getOrCreateStyle(frame));
+        const materialized = extractTrackedProperties(try el.getOrCreateStyle(frame));
         inline for (property_fields) |field| {
             try testing.expectEqual(@field(expected[i], field), @field(scanned, field));
             try testing.expectEqual(@field(expected[i], field), @field(materialized, field));
