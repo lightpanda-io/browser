@@ -881,7 +881,7 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
     errdefer self.queuePageDestruction(page);
 
     // The old document's load stays aborted even if the pending request fails.
-    live.frame.document._load_aborted = true;
+    live.frame.abortDocumentLoad();
 
     // Reuses `live`'s frame_id: the replacement IS the same browsing context.
     // `replaces` keeps `live` addressable until commit; the `replacement`

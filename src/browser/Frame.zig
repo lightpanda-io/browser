@@ -988,7 +988,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     // Navigation: kill in-flight HTTP transfers, but leave WebSockets
     // alive — they're cross-document by spec.
-    target.document._load_aborted = true;
+    target.abortDocumentLoad();
     session.browser.http_client.abortRequests(&target._http_owner);
 
     // Capture the originating frame's URL as the Referer for this
@@ -1108,6 +1108,20 @@ pub fn stopLoading(self: *Frame) void {
         _ = transfer.finishEarly();
     }
     http_client.cancelRequests(&self._http_owner);
+}
+
+pub fn abortDocumentLoad(self: *Frame) void {
+    self.document._load_aborted = true;
+
+    // readyState will become complete even if the parser is still on the
+    // stack. Remember its aborted state separately so document.open/write cannot
+    // start another parser, even after the original parse has unwound.
+    if (self._load_state == .parsing and !self._script_manager.base.static_scripts_done) {
+        self.document._active_parser_aborted = true;
+    }
+    if (self.document._script_created_parser) |parser| {
+        if (parser.handle != null) self.document._active_parser_aborted = true;
+    }
 }
 
 fn loadEventsAborted(self: *const Frame) bool {
@@ -3917,6 +3931,47 @@ test "Frame: document.open cancels the queued navigation without reviving load" 
     try testing.expectEqual(0, frame.page.queued_navigation.items.len);
     try testing.expectEqual("Rewritten", try (try ls.local.exec("document.title", null)).toStringSlice());
     try testing.expectEqual("", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
+}
+
+test "Frame: document.open after inline navigation does not restart the parser" {
+    const page = try testing.pageTest("fixtures/navigation_open.html", .{});
+    defer page.close();
+
+    try testing.expect(std.mem.endsWith(u8, page.frame().?.url, "/hi.html"));
+}
+
+test "Frame: document.open can cancel navigation once parsing has finished" {
+    inline for (.{ "?interactive", "?dcl" }) |query| {
+        const page = try testing.pageTest("fixtures/navigation_open.html" ++ query, .{});
+        defer page.close();
+        const frame = page.frame().?;
+
+        try testing.expect(std.mem.endsWith(u8, frame.url, "/navigation_open.html" ++ query));
+        try testing.expectEqual(false, frame.document._active_parser_aborted);
+        try testing.expectEqual(null, frame._queued_navigation);
+        try testing.expectEqual("Rewritten", (try frame.getTitle()).?);
+    }
+}
+
+test "Frame: cancelling navigation does not revive an aborted parser" {
+    const page = try testing.pageTest("fixtures/navigation_open.html?cancel", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/navigation_open.html?cancel"));
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // The original parse has unwound, but the active-parser-was-aborted flag
+    // must still prevent open/write/writeln from replacing the document.
+    try ls.local.eval(
+        \\document.open();
+        \\document.write('<title>Later write</title>');
+        \\document.writeln('<title>Later writeln</title>');
+        \\document.close();
+    , null);
+    try testing.expectEqual("Original", try (try ls.local.exec("document.title", null)).toStringSlice());
+    try testing.expectEqual(null, frame.document._script_created_parser);
 }
 
 test "Frame: static immediate meta refresh navigates" {
