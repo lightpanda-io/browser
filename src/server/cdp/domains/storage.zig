@@ -86,17 +86,23 @@ fn setCookies(cmd: *CDP.Command) !void {
     }
 
     for (params.cookies) |param| {
-        try setCdpCookie(&bc.session.cookie_jar, param);
+        setCdpCookie(&bc.session.cookie_jar, param) catch |err| switch (err) {
+            error.InvalidSameSite => return invalidSameSiteError(cmd, param.sameSite),
+            else => return err,
+        };
     }
 
     try cmd.sendResult(null, .{});
 }
 
-pub const SameSite = enum {
-    Strict,
-    Lax,
-    None,
-};
+pub fn invalidSameSiteError(cmd: *CDP.Command, value: []const u8) !void {
+    const message = try std.fmt.allocPrint(
+        cmd.arena,
+        "Invalid value '{s}' for 'sameSite'. Accepted (case-insensitive): Strict, Lax, None, no_restriction, unspecified",
+        .{value},
+    );
+    return cmd.sendError(-31998, message, .{});
+}
 const CookiePriority = enum {
     Low,
     Medium,
@@ -121,7 +127,7 @@ pub const CdpCookie = struct {
     path: ?[:0]const u8 = null,
     secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-    sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
+    sameSite: []const u8 = "None", // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
     expires: ?f64 = null, // -1? says google
     priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
     sameParty: ?bool = null,
@@ -141,6 +147,8 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null) {
         return error.NotImplemented;
     }
+
+    const same_site = (try Cookie.SameSite.parse(param.sameSite)) orelse .lax;
 
     // The errdefer only protects construction failures. Once we `break :blk`
     // with the Cookie value, `Jar.add` owns its lifetime.
@@ -164,11 +172,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
             .expires = param.expires,
             .secure = secure,
             .http_only = param.httpOnly,
-            .same_site = switch (param.sameSite) {
-                .Strict => .strict,
-                .Lax => .lax,
-                .None => .none,
-            },
+            .same_site = same_site,
         };
     };
     try cookie_jar.add(cookie, lp.datetime.timestamp(.real), true);
