@@ -39,6 +39,7 @@ const IFrame = Element.Html.IFrame;
 
 pub fn createElementNS(document: *const Node.Document, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
     const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator;
+    const from_clone = @TypeOf(attribute_iterator) == *Element.Attribute.List or @TypeOf(attribute_iterator) == *const Element.Attribute.List;
     const frame = frameOf(document);
 
     switch (namespace) {
@@ -852,6 +853,15 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                     if (creation == .construct) {
                         try realm._undefined_custom_elements.append(realm.arena, node.as(Element).is(Element.Html.Custom).?);
                     }
+                    return node;
+                }
+
+                if (from_clone) {
+                    const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
+                        ._tag_name = tag_name,
+                        ._definition = null,
+                    });
+                    try realm._ce_reactions.enqueueUpgrade(realm, node.as(Element).is(Element.Html.Custom).?, definition.?);
                     return node;
                 }
 
