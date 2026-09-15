@@ -81,6 +81,8 @@
     \\          Allowed values:
     \\              html               Serialized HTML of the DOM.
     \\              markdown           Converts content to Markdown.
+    \\              pdf                Text-only rendering of the page as a
+    \\                                 PDF file (base64 with --json).
     \\              png                Text-only rendering of the page as a
     \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
