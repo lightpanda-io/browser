@@ -209,10 +209,10 @@
     \\
     \\Arguments:
     \\[SCRIPT]
-    \\          Optional path to a .js script. Runs the script (no LLM calls) and
-    \\          exits; `{0s} run SCRIPT` is the preferred spelling. With no script
-    \\          and no --task, the REPL starts; from there /load runs a script and
-    \\          /save exports the session to a file.
+    \\          Optional path to a .js script, or `-` for stdin. Runs the script
+    \\          (no LLM calls) and exits; `{0s} run SCRIPT` is the preferred
+    \\          spelling. With no script and no --task, the REPL starts; from
+    \\          there /load runs a script and /save exports the session to a file.
     \\          Caution: .js files can contain evaluate(...) calls that run
     \\          arbitrary JavaScript in the page. Only run scripts you trust, the
     \\          same way you would a shell script.
@@ -312,16 +312,17 @@
     \\Runs a saved script, then exits. No LLM calls, no API key needed.
     \\
     \\Usage:
-    \\  {0s} run <SCRIPT> [COMMON_OPTIONS]
+    \\  {0s} run <SCRIPT | -> [COMMON_OPTIONS]
     \\
     \\Examples:
     \\  {0s} run script.js                        (replay a saved script)
+    \\  cat script.js | {0s} run -                (read the script from stdin)
     \\
     \\Arguments:
     \\<SCRIPT>
     \\          Path to a .js script to run, then exit. Produce one with
     \\          `{0s} agent --task "..." --save script.js`, or `/save` from the
-    \\          agent REPL.
+    \\          agent REPL. Pass `-` to read the script from stdin instead.
     \\          Caution: .js files can contain evaluate(...) calls that run
     \\          arbitrary JavaScript in the page. Only run scripts you trust, the
     \\          same way you would a shell script.
