@@ -17,13 +17,17 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# The branch push and the PR go through the distribution app rather than
-# GITHUB_TOKEN. The repository has can_approve_pull_request_reviews off, so
-# GITHUB_TOKEN cannot open a pull request at all ("GitHub Actions is not
-# permitted to create or approve pull requests"). The app also gets the PR its
-# CI checks, which GITHUB_TOKEN never would.
+# Two tokens, because neither can do the whole job:
+#   - the push uses GITHUB_TOKEN. The distribution app is installed here but
+#     its token has no write access ("Permission to lightpanda-io/browser.git
+#     denied to lightpanda-browser-distribution[bot]").
+#   - the pull request uses the app token. The repository has
+#     can_approve_pull_request_reviews off, so GITHUB_TOKEN gets "GitHub
+#     Actions is not permitted to create or approve pull requests".
+# The app opening the PR also gets it CI checks, which GITHUB_TOKEN never
+# would: GitHub starts no workflow run for an event caused by GITHUB_TOKEN.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   regen:
@@ -45,7 +49,6 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/install
       - uses: ./.github/actions/v8-snapshot
@@ -65,9 +68,8 @@ jobs:
             echo "profile unchanged"
             exit 0
           fi
-          slug="${{ steps.app-token.outputs.app-slug }}[bot]"
-          git config user.name "$slug"
-          git config user.email "$(gh api "/users/$slug" --jq .id)+$slug@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add orderfile/lightpanda.ld orderfile/v8.txt
           git commit -m "orderfile: regenerate the hot-code profile" -m "$(cat "$OUT/result.txt")"
           # One fixed branch, force-pushed: a re-run refreshes the open PR
