@@ -23,6 +23,7 @@
     <input id="chk" type="checkbox">
     <input id="rad" type="radio" name="group1">
     <button id="btnPreventDefault">Prevent Default</button>
+    <button id="btnChord">Chord</button>
     <button id="btnDisabled" disabled>Disabled</button>
     <div id="focusTarget" tabindex="0" onclick="window.focusTargetFocused = document.activeElement === this;">Focus me</div>
     <div id="plain" onclick="window.plainBlurred = document.activeElement === document.body;">Not focusable</div>
@@ -30,7 +31,7 @@
         window.seq = [];
         const btn = document.getElementById('btn');
         for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-            btn.addEventListener(t, function(e) { window.seq.push([e.type, e.button, e.buttons, e.pointerType, e.isTrusted].join(':')); });
+            btn.addEventListener(t, function(e) { window.seq.push([e.type, e.button, e.buttons, e.detail, e.pointerType, e.isTrusted].join(':')); });
         }
 
         // Regression coverage for pointerdown's preventDefault() suppressing
@@ -40,6 +41,18 @@
         btnPreventDefault.addEventListener('pointerdown', function(e) { e.preventDefault(); });
         for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
             btnPreventDefault.addEventListener(t, function(e) { window.seqPrevented.push(e.type); });
+        }
+
+        // Regression coverage for a multi-button chord: the left button's
+        // pointerdown is cancelled, then right is pressed while left is
+        // still held. Only the left press/release should be full
+        // pointerdown/pointerup; the chorded right press/release in between
+        // must report as pointermove, not a second pointerdown/pointerup.
+        window.seqChord = [];
+        const btnChord = document.getElementById('btnChord');
+        btnChord.addEventListener('pointerdown', function(e) { if (e.button === 0) e.preventDefault(); });
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'pointermove', 'click', 'auxclick', 'contextmenu']) {
+            btnChord.addEventListener(t, function(e) { window.seqChord.push([e.type, e.buttons].join(':')); });
         }
 
         window.disabledEvents = [];
