@@ -43,6 +43,20 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         return;
     };
 
+    const jar = &session.cookie_jar;
+
+    // The file is either a CDP-style JSON array or the Netscape format. Sniff which one it is.
+    const head = std.mem.trimStart(u8, content, &std.ascii.whitespace);
+    if (head.len == 0) {
+        log.debug(.app, "Cookie.parseFile", .{ .path = path, .note = "empty file" });
+        return;
+    }
+    if (head[0] != '[' and head[0] != '{') {
+        const loaded = try NetscapeFormat.parse(jar, content);
+        log.info(.app, "Cookie.loadFromFile", .{ .path = path, .count = loaded });
+        return;
+    }
+
     const json_cookies = std.json.parseFromSliceLeaky([]const JsonCookie, arena.allocator(), content, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
@@ -50,7 +64,6 @@ fn _loadFromFile(session: *Session, path: []const u8) !void {
         return;
     };
 
-    const jar = &session.cookie_jar;
     const now = lp.datetime.timestamp(.real);
 
     var loaded: usize = 0;
@@ -148,6 +161,206 @@ fn parseJsonSameSite(value: ?[]const u8) Cookie.SameSite {
     if (std.ascii.eqlIgnoreCase(same_site, "lax")) return .lax;
     if (std.ascii.eqlIgnoreCase(same_site, "none")) return .none;
     return .none;
+}
+
+/// Netscape cookie file format parser with `#HttpOnly_` addition from curl.
+/// https://docs.cyotek.com/cyowcopy/1.10/netscapecookieformat.html
+/// https://curl.se/docs/http-cookies.html
+pub const NetscapeFormat = struct {
+    /// Parses and loads cookies in Netscape format.
+    /// Returns number of cookies loaded.
+    pub fn parse(jar: *Cookie.Jar, slice: []const u8) !usize {
+        const now = lp.datetime.timestamp(.real);
+        var loaded: usize = 0;
+
+        var line_iterator = std.mem.splitScalar(u8, slice, '\n');
+        iterate_lines: while (line_iterator.next()) |line| {
+            if (line.len == 0) {
+                continue :iterate_lines;
+            }
+            // Remove CR if there's one.
+            var s = if (line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
+            // Skip if nothing left.
+            if (s.len == 0) {
+                continue :iterate_lines;
+            }
+
+            // Computed here since this doesn't have it's own column.
+            var is_http_only = false;
+            if (s[0] == '#') {
+                // Is it continued with `HttpOnly_`?
+                is_http_only =
+                    s.len >= 10 and
+                    @as(u64, @bitCast(s[1..9].*)) == @as(u64, @bitCast(@as([]const u8, "HttpOnly")[0..8].*)) and
+                    s[9] == '_';
+                // Regular comment; skip the line.
+                if (!is_http_only) {
+                    continue :iterate_lines;
+                }
+                // Advance.
+                s = s[10..];
+            }
+
+            var fields: struct {
+                domain: []const u8 = undefined,
+                include_subdomains: bool = false,
+                /// null means "/".
+                path: ?[]const u8 = null,
+                secure: bool = false,
+                expires_at: f64 = 0,
+                name: []const u8 = undefined,
+                value: []const u8 = "",
+            } = .{};
+
+            // Iterate over columns.
+            var column_index: usize = 0;
+            var column_iterator = std.mem.splitScalar(u8, s, '\t');
+            while (column_iterator.next()) |column| {
+                defer column_index += 1;
+
+                switch (column_index) {
+                    0 => fields.domain = column,
+                    1 => fields.include_subdomains = parseBool(column) catch continue :iterate_lines,
+                    2 => {
+                        // If this is a boolean, we have to set `secure` field here instead.
+                        const secure = parseBool(column) catch {
+                            // Not a boolean, set path.
+                            fields.path = column;
+                            continue;
+                        };
+                        fields.secure = secure;
+                        // Parsed secure early, we have to advance once more.
+                        column_index += 1;
+                    },
+                    3 => fields.secure = parseBool(column) catch continue :iterate_lines,
+                    4 => fields.expires_at = std.fmt.parseFloat(f64, column) catch continue :iterate_lines,
+                    5 => fields.name = column,
+                    6 => fields.value = column,
+                    // Indicates we got columns more than we expected.
+                    else => continue :iterate_lines,
+                }
+            }
+
+            // We need at least 6 columns filled (value can be empty).
+            if (column_index < 6) {
+                continue :iterate_lines;
+            }
+
+            var cookie_arena = std.heap.ArenaAllocator.init(jar.allocator);
+            errdefer cookie_arena.deinit();
+
+            const allocator = cookie_arena.allocator();
+            const name = try allocator.dupe(u8, fields.name);
+            const value = try allocator.dupe(u8, fields.value);
+            const _path = if (fields.path) |path| try allocator.dupe(u8, path) else "/";
+            // The domain column's leading dot and the `include_subdomains`
+            // column can disagree. curl strips the dot on read and re-derives
+            // it from the column, and `Cookie.matchesHost` keys tail-matching
+            // off that dot, so the column is what decides it here.
+            const bare_domain = if (fields.domain.len > 0 and fields.domain[0] == '.') fields.domain[1..] else fields.domain;
+            const domain = if (fields.include_subdomains)
+                try std.fmt.allocPrint(allocator, ".{s}", .{bare_domain})
+            else
+                try allocator.dupe(u8, bare_domain);
+
+            // Bake a cookie.
+            const cookie = Cookie{
+                .arena = cookie_arena,
+                .name = name,
+                .value = value,
+                .domain = domain,
+                .path = _path,
+                .expires = fields.expires_at,
+                .secure = fields.secure,
+                .http_only = is_http_only,
+                .same_site = .none,
+            };
+
+            jar.add(cookie, now, true) catch |err| {
+                log.warn(.app, "invalid cookie", .{ .name = fields.name, .err = err });
+                continue :iterate_lines;
+            };
+            loaded += 1;
+        }
+
+        return loaded;
+    }
+
+    fn parseBool(s: []const u8) error{Invalid}!bool {
+        if (std.ascii.eqlIgnoreCase(s, "false")) {
+            return false;
+        }
+        if (std.ascii.eqlIgnoreCase(s, "true")) {
+            return true;
+        }
+        return error.Invalid;
+    }
+};
+
+test "cookies: netscape include_subdomains drives the domain's leading dot" {
+    var jar = Cookie.Jar.init(std.testing.allocator, null);
+    defer jar.deinit();
+
+    // The domain column and the flag disagree on two of these four lines; the
+    // flag wins either way. Expiry is far future so nothing is dropped as stale.
+    const content =
+        "# Netscape HTTP Cookie File\n" ++
+        "example.com\tTRUE\t/\tFALSE\t4102444800\ta\t1\n" ++
+        ".example.com\tTRUE\t/\tFALSE\t4102444800\tb\t2\n" ++
+        "example.com\tFALSE\t/\tFALSE\t4102444800\tc\t3\n" ++
+        ".example.com\tFALSE\t/\tFALSE\t4102444800\td\t4\n";
+
+    try std.testing.expectEqual(@as(usize, 4), try NetscapeFormat.parse(&jar, content));
+    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[0].domain);
+    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[1].domain);
+    try std.testing.expectEqualStrings("example.com", jar.cookies.items[2].domain);
+    try std.testing.expectEqualStrings("example.com", jar.cookies.items[3].domain);
+
+    // That dot is what `Cookie.matchesHost` keys tail-matching off.
+    try std.testing.expect(jar.cookies.items[0].matchesHost("www.example.com"));
+    try std.testing.expect(jar.cookies.items[2].matchesHost("www.example.com") == false);
+    try std.testing.expect(jar.cookies.items[2].matchesHost("example.com"));
+}
+
+test "cookies: netscape #HttpOnly_ prefix sets http_only" {
+    var jar = Cookie.Jar.init(std.testing.allocator, null);
+    defer jar.deinit();
+
+    // curl writes the prefix ahead of the domain column and strips it before
+    // reading the columns, so it composes with the include_subdomains dot.
+    const content =
+        "#HttpOnly_example.com\tFALSE\t/\tFALSE\t4102444800\ta\t1\n" ++
+        "#HttpOnly_.example.com\tTRUE\t/\tFALSE\t4102444800\tb\t2\n" ++
+        "example.com\tFALSE\t/\tFALSE\t4102444800\tc\t3\n";
+
+    try std.testing.expectEqual(@as(usize, 3), try NetscapeFormat.parse(&jar, content));
+
+    try std.testing.expect(jar.cookies.items[0].http_only);
+    try std.testing.expectEqualStrings("example.com", jar.cookies.items[0].domain);
+
+    try std.testing.expect(jar.cookies.items[1].http_only);
+    try std.testing.expectEqualStrings(".example.com", jar.cookies.items[1].domain);
+
+    try std.testing.expect(jar.cookies.items[2].http_only == false);
+}
+
+test "cookies: netscape treats #HttpOnly_ near-misses as comments" {
+    var jar = Cookie.Jar.init(std.testing.allocator, null);
+    defer jar.deinit();
+
+    // Every line here is a comment. curl's check is a case-sensitive
+    // `strncmp(lineptr, "#HttpOnly_", 10)`, so none of these are the prefix,
+    // and a bare prefix with no columns after it has nothing to load.
+    const content =
+        "# Netscape HTTP Cookie File\n" ++
+        "#\n" ++
+        "# HttpOnly_example.com\tFALSE\t/\tFALSE\t4102444800\ta\t1\n" ++
+        "#HttpOnlyX example.com\tFALSE\t/\tFALSE\t4102444800\tb\t2\n" ++
+        "#httponly_example.com\tFALSE\t/\tFALSE\t4102444800\tc\t3\n" ++
+        "#HttpOnly_\n";
+
+    try std.testing.expectEqual(@as(usize, 0), try NetscapeFormat.parse(&jar, content));
+    try std.testing.expectEqual(@as(usize, 0), jar.cookies.items.len);
 }
 
 test "cookies: load JSON accepts CDP SameSite casing" {
