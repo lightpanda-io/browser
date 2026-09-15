@@ -1602,21 +1602,50 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 
 pub const ScrollAxes = struct { x: bool = false, y: bool = false };
 
-/// Nearest ancestor-or-self that is a scroll container along any of `axes`.
-/// null once the chain reaches html/body: those scroll the viewport.
-pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ?*Element {
-    if (!axes.x and !axes.y) return null;
-    const owner = self.ownerFrame(frame) orelse return null;
+/// What a scroll along one axis lands on. html and body scroll the viewport,
+/// so does a detached element.
+pub const ScrollTarget = union(enum) {
+    viewport,
+    container: *Element,
+};
+
+pub const ScrollTargets = struct {
+    x: ScrollTarget = .viewport,
+    y: ScrollTarget = .viewport,
+    /// Whichever of the two is closest to the element, for callers that
+    /// position one scroller with an absolute offset.
+    nearest: ScrollTarget = .viewport,
+};
+
+/// Nearest ancestor-or-self scroll container per requested axis, in one walk.
+/// An axis not in `axes` stays `.viewport`.
+pub fn scrollContainers(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTargets {
+    var targets: ScrollTargets = .{};
+    var pending = axes;
+    const owner = self.ownerFrame(frame) orelse return targets;
     const style_manager = &owner._style_manager;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
+        if (!pending.x and !pending.y) break;
         const tag = el.getTag();
-        if (tag == .html or tag == .body) return null;
-        if (style_manager.scrolls(el, axes)) {
-            return el;
+        if (tag == .html or tag == .body) break;
+        const scrolls = style_manager.overflowAxes(el);
+        const hit_x = pending.x and scrolls.x;
+        const hit_y = pending.y and scrolls.y;
+        if (!hit_x and !hit_y) continue;
+        if (targets.nearest == .viewport) {
+            targets.nearest = .{ .container = el };
+        }
+        if (hit_x) {
+            targets.x = .{ .container = el };
+            pending.x = false;
+        }
+        if (hit_y) {
+            targets.y = .{ .container = el };
+            pending.y = false;
         }
     }
-    return null;
+    return targets;
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {

@@ -1885,14 +1885,26 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
 
     const result = lp.actions.scroll(target_node, args.x, args.y, page) catch |err| return mapActionError(err);
 
-    const body = (if (result.scrolled) |scrolled| blk: {
-        const moved: ActionTarget = .{ .backend_node_id = (registry.register(scrolled) catch return ToolError.InternalError).id };
-        break :blk if (scrolled == target_node)
-            std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{ moved, result.x, result.y })
-        else
-            std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{ moved, ActionTarget{ .backend_node_id = args.backendNodeId.? }, result.x, result.y });
-    } else std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y })) catch return ToolError.InternalError;
+    const body = (switch (result.target) {
+        .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
+        .node => |node| std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
+            try registeredTarget(registry, node),
+            result.x,
+            result.y,
+        }),
+        .container => |c| std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
+            try registeredTarget(registry, c.container),
+            try registeredTarget(registry, c.node),
+            result.x,
+            result.y,
+        }),
+    }) catch return ToolError.InternalError;
     return finalizeAction(arena, session, registry, scope, body);
+}
+
+fn registeredTarget(registry: *NodeRegistry, node: *DOMNode) ToolError!ActionTarget {
+    const registered = registry.register(node) catch return ToolError.InternalError;
+    return .{ .backend_node_id = registered.id };
 }
 
 /// Default timeout for the `waitFor*` tools — short, since they wait on an

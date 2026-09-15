@@ -399,10 +399,11 @@ fn scrollNode(cmd: anytype) !void {
         return error.InternalError;
     };
 
-    const target_id: ?NodeRegistry.Id = if (result.scrolled) |scrolled|
-        (try bc.node_registry.register(scrolled)).id
-    else
-        null;
+    const target_id: ?NodeRegistry.Id = switch (result.target) {
+        .window => null,
+        .node => |node| (try bc.node_registry.register(node)).id,
+        .container => |c| (try bc.node_registry.register(c.container)).id,
+    };
     return cmd.sendResult(.{ .backendNodeId = target_id, .x = result.x, .y = result.y }, .{});
 }
 

@@ -715,12 +715,12 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.anyInChain(el, .pointer_events, .{});
 }
 
-/// Whether `el` is a scroll container along any of `axes`: its own computed
-/// overflow on that axis is auto, scroll or overlay. No ancestor walk.
-pub fn scrolls(self: *StyleManager, el: *Element, axes: Element.ScrollAxes) bool {
-    self.rebuildIfDirty() catch return false;
+/// The axes along which `el` is a scroll container: its own computed overflow
+/// on that axis is auto, scroll or overlay. No ancestor walk.
+pub fn overflowAxes(self: *StyleManager, el: *Element) Element.ScrollAxes {
+    self.rebuildIfDirty() catch return .{};
     const p = self.ownProps(el);
-    return (axes.x and p.overflow_x_scrolls) or (axes.y and p.overflow_y_scrolls);
+    return .{ .x = p.overflow_x_scrolls, .y = p.overflow_y_scrolls };
 }
 
 fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: CheckVisibilityOptions) bool {
@@ -1752,10 +1752,8 @@ test "StyleManager: memo: reuse and invalidation" {
     try testing.expectEqual(false, sm.hasPointerEventsNone(b));
 
     try b.setStyle("overflow: hidden auto", frame);
-    try testing.expectEqual(false, sm.scrolls(b, .{ .x = true }));
-    try testing.expectEqual(true, sm.scrolls(b, .{ .y = true }));
-    try testing.expectEqual(true, sm.scrolls(b, .{ .x = true, .y = true }));
-    try testing.expectEqual(false, sm.scrolls(p, .{ .x = true, .y = true }));
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overflowAxes(b));
+    try testing.expectEqual(Element.ScrollAxes{}, sm.overflowAxes(p));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
