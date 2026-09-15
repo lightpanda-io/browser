@@ -205,6 +205,21 @@ pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: S
     });
 }
 
+/// Whether the target has a listener for `event_type` that can call
+/// preventDefault. A removed listener isn't "in" the list anymore, same as
+/// findListener.
+pub fn hasNonPassiveListener(self: *EventManagerBase, target: *EventTarget, event_type: String) bool {
+    const list = self.getListeners(target, event_type) orelse return false;
+    var node = list.first;
+    while (node) |n| : (node = n.next) {
+        const listener: *align(8) Listener = @fieldParentPtr("node", n);
+        if (!listener.removed and !listener.passive) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Dispatching can be recursive from the compiler's point of view, so we need to
 // give it an explicit error set so that other parts of the code can use an
 // inferred error.

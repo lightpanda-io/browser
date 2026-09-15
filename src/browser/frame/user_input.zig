@@ -327,19 +327,9 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
 /// axis, unlike an absolute position.
 pub fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !void {
     const targets = target.scrollContainers(.{ .x = delta_x != 0, .y = delta_y != 0 }, frame);
-    if (delta_x != 0) {
-        try scrollBy(targets.x, delta_x, 0, frame);
-    }
-    if (delta_y != 0) {
-        try scrollBy(targets.y, 0, delta_y, frame);
-    }
-}
-
-fn scrollBy(target: Element.ScrollTarget, left: i32, top: i32, frame: *Frame) !void {
-    return switch (target) {
-        .container => |el| el.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame),
-        .viewport => frame.window.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame),
-    };
+    // A zero delta resolves to .viewport and scrolls it by nothing.
+    try targets.x.scrollBy(delta_x, 0, frame);
+    try targets.y.scrollBy(0, delta_y, frame);
 }
 
 fn deltaToScroll(d: f64) i32 {

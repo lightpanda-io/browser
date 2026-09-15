@@ -34,7 +34,6 @@ const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
-const CSSStyleDeclaration = @import("webapi/css/CSSStyleDeclaration.zig");
 
 const log = lp.log;
 const String = lp.String;
@@ -1025,9 +1024,8 @@ const property_names = [_][]const u8{ "display", "visibility", "opacity", "point
 /// shorthand and its longhands the same precedence as the source text.
 fn extractTrackedProperties(style: *CSSStyleProperties) TrackedProperties {
     var slots: Slots = .{};
-    var node = style.asCSSStyleDeclaration()._properties.first;
-    while (node) |n| : (node = n.next) {
-        const property = CSSStyleDeclaration.Property.fromNodeLink(n);
+    var it = style.asCSSStyleDeclaration().iterator();
+    while (it.next()) |property| {
         slots.apply(property._name.str(), property._value.str(), property._important);
     }
     return slots.props();
@@ -1308,12 +1306,11 @@ const Slots = struct {
             // `overflow: <x> [<y>]`; a single value applies to both axes.
             var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             const x = it.next() orelse "";
-            const y = it.next() orelse x;
-            self.slotFor("overflow-x").apply(x, important);
-            self.slotFor("overflow-y").apply(y, important);
+            self.apply("overflow-x", x, important);
+            self.apply("overflow-y", it.next() orelse x, important);
             return;
         }
-        for (property_names, &self.slots) |tracked, *slot| {
+        inline for (property_names, &self.slots) |tracked, *slot| {
             if (std.ascii.eqlIgnoreCase(name, tracked)) {
                 slot.apply(value, important);
                 return;
@@ -1321,18 +1318,9 @@ const Slots = struct {
         }
     }
 
-    fn slotFor(self: *Slots, comptime name: []const u8) *Slot {
-        inline for (property_names, 0..) |tracked, i| {
-            if (comptime std.mem.eql(u8, tracked, name)) {
-                return &self.slots[i];
-            }
-        }
-        comptime unreachable;
-    }
-
     fn props(self: Slots) TrackedProperties {
         var p: TrackedProperties = .{};
-        for (property_names, self.slots) |name, s| {
+        inline for (property_names, self.slots) |name, s| {
             if (s.value) |value| {
                 p.apply(name, value);
             }

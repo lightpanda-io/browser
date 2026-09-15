@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
+const StyleManager = @import("../StyleManager.zig");
 const Factory = @import("../Factory.zig");
 
 const CSS = @import("CSS.zig");
@@ -1603,49 +1604,76 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 pub const ScrollAxes = struct { x: bool = false, y: bool = false };
 
 /// What a scroll along one axis lands on. html and body scroll the viewport,
-/// so does a detached element.
+/// and so does a detached element.
 pub const ScrollTarget = union(enum) {
     viewport,
     container: *Element,
+
+    pub fn scrollBy(self: ScrollTarget, left: i32, top: i32, frame: *Frame) !void {
+        const opts: ScrollToOpts = .{ .opts = .{ .left = left, .top = top } };
+        return switch (self) {
+            .container => |el| el.scrollBy(opts, null, frame),
+            .viewport => frame.window.scrollBy(opts, null, frame),
+        };
+    }
 };
 
 pub const ScrollTargets = struct {
     x: ScrollTarget = .viewport,
     y: ScrollTarget = .viewport,
-    /// Whichever of the two is closest to the element, for callers that
-    /// position one scroller with an absolute offset.
-    nearest: ScrollTarget = .viewport,
 };
 
+/// Nearest ancestor-or-self scroll container along any of `axes`, for callers
+/// positioning one scroller with an absolute offset.
+pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTarget {
+    const style_manager = self.scrollStyleManager(axes, frame) orelse return .viewport;
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        if (el.scrollsViewport()) break;
+        const scrolls = style_manager.overflowAxes(el);
+        if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
+            return .{ .container = el };
+        }
+    }
+    return .viewport;
+}
+
 /// Nearest ancestor-or-self scroll container per requested axis, in one walk.
-/// An axis not in `axes` stays `.viewport`.
+/// Relative deltas may land on a different scroller per axis. An axis not in
+/// `axes` stays `.viewport`.
 pub fn scrollContainers(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTargets {
     var targets: ScrollTargets = .{};
     var pending = axes;
-    const owner = self.ownerFrame(frame) orelse return targets;
-    const style_manager = &owner._style_manager;
+    const style_manager = self.scrollStyleManager(axes, frame) orelse return targets;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        if (!pending.x and !pending.y) break;
-        const tag = el.getTag();
-        if (tag == .html or tag == .body) break;
+        if (el.scrollsViewport()) break;
         const scrolls = style_manager.overflowAxes(el);
-        const hit_x = pending.x and scrolls.x;
-        const hit_y = pending.y and scrolls.y;
-        if (!hit_x and !hit_y) continue;
-        if (targets.nearest == .viewport) {
-            targets.nearest = .{ .container = el };
-        }
-        if (hit_x) {
+        if (pending.x and scrolls.x) {
             targets.x = .{ .container = el };
             pending.x = false;
         }
-        if (hit_y) {
+        if (pending.y and scrolls.y) {
             targets.y = .{ .container = el };
             pending.y = false;
         }
+        if (!pending.x and !pending.y) break;
     }
     return targets;
+}
+
+/// null when the walk cannot find anything: no axis asked for, or detached.
+fn scrollStyleManager(self: *Element, axes: ScrollAxes, frame: *Frame) ?*StyleManager {
+    if (!axes.x and !axes.y) return null;
+    const owner = self.ownerFrame(frame) orelse return null;
+    return &owner._style_manager;
+}
+
+fn scrollsViewport(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .html, .body => true,
+        else => false,
+    };
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {

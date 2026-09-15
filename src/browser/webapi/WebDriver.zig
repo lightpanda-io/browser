@@ -378,6 +378,9 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
             continue;
         }
 
+        const x = readI32(action, "x", 0);
+        const y = readI32(action, "y", 0);
+
         const origin = try action.get("origin");
         var el: ?*Element = null;
         if (origin.isObject()) {
@@ -385,7 +388,6 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         } else {
             // "viewport"/"pointer" origins: approximate hit-testing with
             // the faux layout's vertical axis, falling back to the root.
-            const y = readI32(action, "y", 0);
             el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
             if (el == null) {
                 el = frame.document.getDocumentElement();
@@ -395,7 +397,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
 
         const delta_x = readI32(action, "deltaX", 0);
         const delta_y = readI32(action, "deltaY", 0);
-        dispatchWheel(target, delta_x, delta_y, frame);
+        dispatchWheel(target, x, y, delta_x, delta_y, frame);
     }
 }
 
@@ -585,9 +587,11 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
     };
 }
 
-fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
-    const rect = el.boundingClientRectValues(frame);
-    Frame.user_input.wheel(frame, el, rect.x, rect.y, @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
+// The action's x/y, which the caller already resolved the target from. An
+// element origin makes them offsets from its center, but the faux layout has
+// no center worth computing.
+fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame: *Frame) void {
+    Frame.user_input.wheel(frame, el, @floatFromInt(x), @floatFromInt(y), @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
         log.warn(.app, "webdriver wheel", .{ .err = err });
     };
 }
@@ -606,11 +610,11 @@ fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
         .bubbles = true,
         .cancelable = owner._event_manager.hasNonPassiveListener(el.asNode(), typ),
         .composed = true,
-    }, frame) catch |err| {
+    }, owner) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
         return;
     };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
+    dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 
 pub const JsApi = struct {

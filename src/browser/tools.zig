@@ -1887,24 +1887,22 @@ fn execScroll(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeReg
 
     const body = (switch (result.target) {
         .window => std.fmt.allocPrint(arena, "Scrolled window to x: {d}, y: {d}", .{ result.x, result.y }),
-        .node => |node| std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
-            try registeredTarget(registry, node),
+        .node => std.fmt.allocPrint(arena, "Scrolled element ({f}) to x: {d}, y: {d}", .{
+            ActionTarget{ .backend_node_id = args.backendNodeId.? },
             result.x,
             result.y,
         }),
-        .container => |c| std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
-            try registeredTarget(registry, c.container),
-            try registeredTarget(registry, c.node),
-            result.x,
-            result.y,
-        }),
+        .container => |container| blk: {
+            const registered = registry.register(container) catch return ToolError.InternalError;
+            break :blk std.fmt.allocPrint(arena, "Scrolled scroll container ({f}) of element ({f}) to x: {d}, y: {d}", .{
+                ActionTarget{ .backend_node_id = registered.id },
+                ActionTarget{ .backend_node_id = args.backendNodeId.? },
+                result.x,
+                result.y,
+            });
+        },
     }) catch return ToolError.InternalError;
     return finalizeAction(arena, session, registry, scope, body);
-}
-
-fn registeredTarget(registry: *NodeRegistry, node: *DOMNode) ToolError!ActionTarget {
-    const registered = registry.register(node) catch return ToolError.InternalError;
-    return .{ .backend_node_id = registered.id };
 }
 
 /// Default timeout for the `waitFor*` tools — short, since they wait on an

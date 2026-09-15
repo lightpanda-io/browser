@@ -401,8 +401,7 @@ fn scrollNode(cmd: anytype) !void {
 
     const target_id: ?NodeRegistry.Id = switch (result.target) {
         .window => null,
-        .node => |node| (try bc.node_registry.register(node)).id,
-        .container => |c| (try bc.node_registry.register(c.container)).id,
+        .node, .container => |scrolled| (try bc.node_registry.register(scrolled)).id,
     };
     return cmd.sendResult(.{ .backendNodeId = target_id, .x = result.x, .y = result.y }, .{});
 }

@@ -153,26 +153,15 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
 /// is non-passive. The UA dispatches scroll-blocking events as
 /// non-cancelable when none is: it already knows preventDefault can't be
 /// called.
-pub fn hasNonPassiveListener(self: *EventManager, node: *Node, typ: []const u8) bool {
+pub fn hasNonPassiveListener(self: *EventManager, node: *Node, comptime typ: []const u8) bool {
+    const event_type: lp.String = comptime .wrap(typ);
     var current: ?*Node = node;
     while (current) |n| : (current = n.parentNode()) {
-        if (anyNonPassive(self.base.getListeners(n.asEventTarget(), .wrap(typ)))) {
+        if (self.base.hasNonPassiveListener(n.asEventTarget(), event_type)) {
             return true;
         }
     }
-    return anyNonPassive(self.base.getListeners(self.frame.window.asEventTarget(), .wrap(typ)));
-}
-
-fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
-    const list = list_ orelse return false;
-    var link = list.first;
-    while (link) |l| : (link = l.next) {
-        const listener: *align(8) Listener = @fieldParentPtr("node", l);
-        if (!listener.passive) {
-            return true;
-        }
-    }
-    return false;
+    return self.base.hasNonPassiveListener(self.frame.window.asEventTarget(), event_type);
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {

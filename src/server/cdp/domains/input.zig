@@ -448,41 +448,17 @@ test "cdp.input: dispatchMouseEvent mouseWheel scrolls a scroll container, not t
     });
     const split = try ls.local.compileAndRun("document.getElementById('scrollbox').scrollTop === 50 && document.getElementById('scrollbox').scrollLeft === 0 && window.scrollX === 30 && window.scrollY === 0", null);
     try testing.expect(split.isTrue());
-}
 
-test "cdp.input: dispatchMouseEvent mouseWheel scrolls a stylesheet-declared scroll container" {
-    var ctx = try testing.context();
-    defer ctx.deinit();
-
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-
-    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
-    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
-    try testing.waitForPage(bc);
-
-    var ls: lp.js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-
-    var try_catch: lp.js.TryCatch = undefined;
-    try_catch.init(&ls.local);
-    defer try_catch.deinit();
-
-    const rect_x = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().x", null)).toF64();
-    const rect_y = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().y", null)).toF64();
-
+    // The container may be declared in a stylesheet rather than inline.
+    const sheet_x = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().x", null)).toF64();
+    const sheet_y = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().y", null)).toF64();
     try ctx.processMessage(.{
-        .id = 1,
+        .id = 3,
         .method = "Input.dispatchMouseEvent",
-        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+        .params = .{ .type = "mouseWheel", .x = sheet_x, .y = sheet_y, .deltaY = 40 },
     });
-
-    const result = try ls.local.compileAndRun("document.getElementById('sheetscroll').scrollTop === 40 && document.getElementById('sheetleaf').scrollTop === 0 && window.scrollY === 0", null);
-    try testing.expect(result.isTrue());
-
-    var runner = bc.session.runner(.{});
+    const sheet = try ls.local.compileAndRun("document.getElementById('sheetscroll').scrollTop === 40 && document.getElementById('sheetleaf').scrollTop === 0 && window.scrollY === 0", null);
+    try testing.expect(sheet.isTrue());
     try runner.waitForScript(frame._frame_id, "window.sheetScrolled === true", 1000);
 }
 
