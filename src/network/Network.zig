@@ -106,7 +106,7 @@ pub fn init(app: *App) !Network {
         null;
     errdefer if (web_bot_auth) |wba| wba.deinit(allocator);
 
-    var adblocker = try AdBlocker.fromConfig(allocator, config);
+    var adblocker = try AdBlocker.fromConfig(allocator, config, app.regex_context);
     errdefer if (adblocker) |*blocker| blocker.deinit();
 
     var cache = try Cache.init(allocator, config);
