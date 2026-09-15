@@ -475,8 +475,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
 
 const PageTestOpts = struct {
     wait_until_done: bool = true,
+    // Set before the page exists so the per-navigation reset is exercised.
+    virtual_time_budget_ms: ?u32 = null,
 };
 pub fn pageTest(comptime test_file: []const u8, opts: PageTestOpts) !Session.PageHandle {
+    test_session.virtual_time = if (opts.virtual_time_budget_ms) |ms| .init(ms) else null;
     const page = try test_session.createPage();
     errdefer page.close();
 

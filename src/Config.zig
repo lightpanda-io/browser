@@ -291,6 +291,7 @@ const CommonOptions = .{
     .{ .name = "load_resources", .type = LoadResources, .default = LoadResources{} },
     .{ .name = "v8_flags_unsafe", .type = ?[]const u8 },
     .{ .name = "v8_max_heap_mb", .type = ?u32 },
+    .{ .name = "virtual_time_budget_ms", .type = ?u32 },
     .{ .name = "watchdog_ms", .type = ?u32 },
     .{
         .name = "ca_cert",
@@ -590,6 +591,13 @@ pub fn loadResources(self: *const Config) LoadResources {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.load_resources,
         else => unreachable,
+    };
+}
+
+pub fn virtualTimeBudgetMs(self: *const Config) ?u32 {
+    return switch (self.mode) {
+        inline .fetch, .mcp, .agent => |opts| opts.virtual_time_budget_ms,
+        else => null,
     };
 }
 
@@ -1656,4 +1664,22 @@ pub fn tagJsonArray(comptime E: type) []const u8 {
         s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
     }
     return s ++ "]";
+}
+
+test "Config: parseArgs --virtual-time-budget-ms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "fetch", "--virtual-time-budget-ms", "1000", "https://example.com" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(1000, config.virtualTimeBudgetMs());
+    }
+    {
+        const argv = [_][*:0]const u8{ "lightpanda", "serve", "--virtual-time-budget-ms", "1000" };
+        const proc_args: std.process.Args = .{ .vector = &argv };
+        const config = try parseArgs(arena.allocator(), proc_args);
+        try std.testing.expectEqual(null, config.virtualTimeBudgetMs());
+    }
 }

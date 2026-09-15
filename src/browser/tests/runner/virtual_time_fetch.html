@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<div id=out></div>
+<script>
+  fetch('runner1.html?delay_ms=100').then(() => { window.__fetched = true; });
+  setTimeout(() => {
+    document.getElementById('out').textContent = String(!!window.__fetched);
+  }, 3000);
+</script>
