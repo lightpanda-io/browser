@@ -1,0 +1,101 @@
+name: orderfile
+
+# Regenerates orderfile/lightpanda.ld + orderfile/v8.txt from a profile of the
+# CDP bench and opens a pull request with the result, every night or on demand
+# from the Actions tab. See orderfile/README.md.
+
+env:
+  LIGHTPANDA_DISABLE_TELEMETRY: true
+
+on:
+  schedule:
+    - cron: "2 0 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# The branch push and the PR use GITHUB_TOKEN. GitHub starts no workflow run
+# for an event caused by GITHUB_TOKEN, so the PR gets no CI check. That costs
+# nothing today: the PR touches only orderfile/, and e2e-test.yml and
+# zig-test.yml filter pull_request on .github/**, src/**, build.zig and
+# build.zig.zon, so neither would run on it anyway. Add orderfile/** to those
+# filters and this has to move back to a GitHub App token (see release.yml).
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regen:
+    name: regenerate orderfile
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: 'lightpanda-io/demo'
+          path: demo
+
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/v8-snapshot
+
+      - run: npm install
+        working-directory: demo
+
+      - name: regenerate the profile
+        env:
+          DEMO_DIR: demo
+          OUT: ${{ runner.temp }}/orderfile-regen
+        run: |
+          orderfile/tools/regen.sh -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+
+      # Only on failure: a run that got as far as the PR has its result in
+      # the PR itself, and $OUT dies with the runner, so this is the one case
+      # where the page dump and the bench output are worth keeping.
+      - name: upload profile
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: orderfile-profile
+          path: |
+            ${{ runner.temp }}/orderfile-regen/result.txt
+            ${{ runner.temp }}/orderfile-regen/gen_order.stats
+            ${{ runner.temp }}/orderfile-regen/hot.text
+            ${{ runner.temp }}/orderfile-regen/hot.rodata
+            ${{ runner.temp }}/orderfile-regen/resident.json
+            ${{ runner.temp }}/orderfile-regen/link.line
+            ${{ runner.temp }}/orderfile-regen/bench.out
+            ${{ runner.temp }}/orderfile-regen/lightpanda.ld
+            ${{ runner.temp }}/orderfile-regen/v8.txt
+          retention-days: 10
+
+      - name: open a pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUT: ${{ runner.temp }}/orderfile-regen
+          BRANCH: orderfile-regen
+        run: |
+          if git diff --quiet -- orderfile/lightpanda.ld orderfile/v8.txt; then
+            echo "profile unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orderfile/lightpanda.ld orderfile/v8.txt
+          git commit -m "orderfile: regenerate the hot-code profile" -m "$(cat "$OUT/result.txt")"
+          # One fixed branch, force-pushed: a re-run refreshes the open PR
+          # instead of stacking a second one.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "refreshed the open pull request"
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "orderfile: regenerate the hot-code profile" \
+            --body-file "$OUT/result.txt"
