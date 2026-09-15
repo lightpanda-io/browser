@@ -351,6 +351,58 @@ test "cdp.input: dispatchMouseEvent mouseWheel fires wheel event" {
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: dispatchMouseEvent mouseWheel cancelability follows listener passivity" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // Only passive listeners: the event is non-cancelable, preventDefault is
+    // inert and the scroll happens. Blink's legacy mousewheel fires too.
+    _ = try ls.local.compileAndRun(
+        \\const box = document.getElementById('scrollbox');
+        \\box.addEventListener('wheel', (e) => { window.passiveCancelable = e.cancelable; e.preventDefault(); }, { passive: true });
+        \\box.addEventListener('mousewheel', (e) => { window.legacyDeltaY = e.deltaY; });
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+    });
+    var result = try ls.local.compileAndRun("window.passiveCancelable === false && window.legacyDeltaY === 40 && document.getElementById('scrollbox').scrollTop === 40", null);
+    try testing.expect(result.isTrue());
+
+    // A non-passive listener makes it cancelable, and preventDefault stops the scroll.
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('scrollbox').addEventListener('wheel', (e) => { window.activeCancelable = e.cancelable; e.preventDefault(); });
+    , null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+    });
+    result = try ls.local.compileAndRun("window.activeCancelable === true && document.getElementById('scrollbox').scrollTop === 40", null);
+    try testing.expect(result.isTrue());
+}
+
 test "cdp.input: dispatchMouseEvent mouseWheel scrolls a scroll container, not the viewport" {
     var ctx = try testing.context();
     defer ctx.deinit();
