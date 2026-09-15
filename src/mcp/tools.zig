@@ -1169,14 +1169,44 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
+    // A scroll container, and a node with no scroll-container ancestor, are
+    // scrolled themselves.
+    const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
+    const scrollbox_id = (try server.active_session.registry.register(scrollbox)).id;
+    const plain = frame.document.getElementById("plain", frame).?.asNode();
+    const plain_id = (try server.active_session.registry.register(plain)).id;
+    for ([_]struct { id: lp.NodeRegistry.Id, y: i32 }{ .{ .id = scrollbox_id, .y = 50 }, .{ .id = plain_id, .y = 7 } }) |c| {
+        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":{d}}}}}}}", .{ c.id, c.y });
+        try router.handleMessage(server, aa, msg);
+        const expected = try std.fmt.allocPrint(aa, "Scrolled element (backendNodeId: {d}) to x: 0, y: {d}", .{ c.id, c.y });
+        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // A leaf inside a scroll container scrolls the container, not the leaf.
     {
-        const scrollbox = frame.document.getElementById("scrollbox", frame).?.asNode();
-        const scrollbox_id = (try server.active_session.registry.register(scrollbox)).id;
-        var scroll_id_buf: [12]u8 = undefined;
-        const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
-        const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
-        try router.handleMessage(server, aa, scroll_msg);
-        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled to x: 0, y: 50") != null);
+        const leaf = frame.document.getElementById("innerleaf", frame).?.asNode();
+        const leaf_id = (try server.active_session.registry.register(leaf)).id;
+        const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        try router.handleMessage(server, aa, msg);
+        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
+    // Without a node the window scrolls; an omitted axis keeps its offset.
+    {
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"scroll","arguments":{"y":20}}}
+        );
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled window to x: 0, y: 20") != null);
+        out.clearRetainingCapacity();
+        try router.handleMessage(server, aa,
+            \\{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"scroll","arguments":{"x":5}}}
+        );
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Scrolled window to x: 5, y: 20") != null);
         out.clearRetainingCapacity();
     }
 
@@ -1243,6 +1273,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    // Scroll events are scheduled, not fired inline with the tool.
+    var runner = server.active_session.session.runner(.{});
+    try runner.waitForScript(frame._frame_id, "window.scrolled === true && window.outerScrolled === true", 1000);
+
     const result = try ls.local.exec(
         \\ JSON.stringify(window.seq) === JSON.stringify([
         \\   'pointerdown:0:1:mouse:true', 'mousedown:0:1::true',
@@ -1253,7 +1287,10 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ window.focusTargetFocused === true && window.plainBlurred === true &&
         \\ window.clicked === true && window.inputVal === 'hello' &&
         \\ window.changed === true && window.selChanged === 'opt2' &&
-        \\ window.scrolled === true &&
+        \\ document.getElementById('outerscroll').scrollTop === 30 &&
+        \\ document.getElementById('innerleaf').scrollTop === 0 &&
+        \\ document.getElementById('plain').scrollTop === 7 &&
+        \\ window.scrollX === 5 && window.scrollY === 20 &&
         \\ window.hovered === true &&
         \\ window.keyPressed === 'Enter' && window.keyReleased === 'Enter' &&
         \\ window.sel2Changed === 'b' &&

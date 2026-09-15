@@ -287,33 +287,34 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
     try dispatchInputAndChangeEvents(el, frame);
 }
 
-pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !void {
-    if (node) |n| {
-        const el = n.is(Element) orelse return error.InvalidNodeType;
+pub const ScrollResult = struct {
+    /// What moved: the given node, its nearest scroll container, or null for
+    /// the window.
+    scrolled: ?*DOMNode,
+    x: u32,
+    y: u32,
+};
 
-        if (x) |val| {
-            el.setScrollLeft(val, frame) catch |err| {
-                lp.log.err(.app, "setScrollLeft failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        }
-        if (y) |val| {
-            el.setScrollTop(val, frame) catch |err| {
-                lp.log.err(.app, "setScrollTop failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        }
-
-        const scroll_evt: *Event = try .initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page);
-        frame._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
-            lp.log.err(.app, "dispatch scroll event failed", .{ .err = err });
-        };
-    } else {
-        frame.window.scrollTo(.{ .x = x orelse 0 }, y, frame) catch |err| {
+pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !ScrollResult {
+    const n = node orelse {
+        frame.window.scrollTo(.{ .opts = .{ .left = x, .top = y } }, null, frame) catch |err| {
             lp.log.err(.app, "scroll failed", .{ .err = err });
             return error.ActionFailed;
         };
-    }
+        return .{ .scrolled = null, .x = frame.window.getScrollX(), .y = frame.window.getScrollY() };
+    };
+    const el = n.is(Element) orelse return error.InvalidNodeType;
+
+    const target = el.scrollContainer(.{ .x = x != null, .y = y != null }, frame) orelse el;
+    target.scrollTo(.{ .opts = .{ .left = x, .top = y } }, null, frame) catch |err| {
+        lp.log.err(.app, "scroll failed", .{ .err = err });
+        return error.ActionFailed;
+    };
+    return .{
+        .scrolled = target.asNode(),
+        .x = target.getScrollLeft(frame),
+        .y = target.getScrollTop(frame),
+    };
 }
 
 // Floored to 1 so timeout_ms=0 still gets one check instead of failing outright.

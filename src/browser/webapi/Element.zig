@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
+const StyleManager = @import("../StyleManager.zig");
 const Factory = @import("../Factory.zig");
 
 const CSS = @import("CSS.zig");
@@ -1600,6 +1601,45 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
     }
 }
 
+pub const ScrollAxes = struct { x: bool = false, y: bool = false };
+
+/// Nearest ancestor-or-self that is a scroll container along any of `axes`.
+/// null once the chain reaches html/body: those scroll the viewport.
+pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ?*Element {
+    if (!axes.x and !axes.y) return null;
+    const owner = self.ownerFrame(frame) orelse return null;
+    const style_manager = &owner._style_manager;
+    var current: ?*Element = self;
+    while (current) |el| : (current = el.parentElement()) {
+        const tag = el.getTag();
+        if (tag == .html or tag == .body) return null;
+        if ((axes.x and el.overflowScrolls(.x, style_manager)) or (axes.y and el.overflowScrolls(.y, style_manager))) {
+            return el;
+        }
+    }
+    return null;
+}
+
+// Only inline `overflow` is resolved: computed styles don't cascade stylesheet
+// rules, so a sheet-declared scroll container is treated as page content.
+fn overflowScrolls(self: *Element, axis: enum { x, y }, style_manager: *StyleManager) bool {
+    const longhand = switch (axis) {
+        .x => style_manager.inlineStyleValue(self, comptime .wrap("overflow-x")),
+        .y => style_manager.inlineStyleValue(self, comptime .wrap("overflow-y")),
+    };
+    const value = longhand orelse blk: {
+        // `overflow: <x> [<y>]`; a single value applies to both axes.
+        const shorthand = style_manager.inlineStyleValue(self, comptime .wrap("overflow")) orelse return false;
+        var it = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
+        const x = it.next() orelse return false;
+        break :blk switch (axis) {
+            .x => x,
+            .y => it.next() orelse x,
+        };
+    };
+    return std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "scroll");
+}
+
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {
     if (!self.isVisible(frame)) {
         return 0.0;
@@ -1948,19 +1988,32 @@ pub fn scrollIntoView(self: *Element, opts: ?ScrollIntoViewOpts, frame: *Frame) 
     frame.window.scrollTo(.{ .x = 0 }, @trunc(@max(0, y)), frame) catch {};
 }
 
-const ScrollToOpts = union(enum) {
+// The scrollTo/scrollBy argument shape shared with Window: positional (x, y)
+// or a dictionary.
+pub const ScrollToOpts = union(enum) {
     x: i32,
     opts: Opts,
 
-    const Opts = struct {
+    pub const Opts = struct {
         behavior: []const u8 = "",
         left: ?i32 = null,
         top: ?i32 = null,
     };
+
+    pub const Offsets = struct { left: ?i32, top: ?i32 };
+
+    /// Per-axis values; null leaves that axis where it is. Only the dictionary
+    /// form can omit an axis.
+    pub fn offsets(self: ScrollToOpts, y: ?i32) Offsets {
+        return switch (self) {
+            .x => |x| .{ .left = x, .top = y orelse 0 },
+            .opts => |o| .{ .left = o.left, .top = o.top },
+        };
+    }
 };
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const o = opts orelse return;
+    const o = (opts orelse return).offsets(y);
     const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
@@ -1968,16 +2021,8 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     }
     const old_x = gop.value_ptr.x;
     const old_y = gop.value_ptr.y;
-    switch (o) {
-        .x => |x| {
-            gop.value_ptr.x = @intCast(@max(0, x));
-            gop.value_ptr.y = @intCast(@max(0, y orelse 0));
-        },
-        .opts => |dict| {
-            if (dict.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
-            if (dict.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
-        },
-    }
+    if (o.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
+    if (o.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }
@@ -1985,20 +2030,16 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
 
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const o = opts orelse return;
+    const o = (opts orelse return).offsets(y);
     const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
-    const dx: i32, const dy: i32 = switch (o) {
-        .x => |x| .{ x, y orelse 0 },
-        .opts => |dict| .{ dict.left orelse 0, dict.top orelse 0 },
-    };
     const old_x = gop.value_ptr.x;
     const old_y = gop.value_ptr.y;
-    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) +| dx));
-    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) +| dy));
+    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) +| (o.left orelse 0)));
+    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) +| (o.top orelse 0)));
     if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
         try self.scheduleScrollEvents(owner);
     }

@@ -389,19 +389,21 @@ fn scrollNode(cmd: anytype) !void {
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const maybe_node_id = params.nodeId orelse params.backendNodeId;
+    const target_node: ?*DOMNode = if (maybe_node_id) |node_id|
+        (bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId).dom
+    else
+        null;
 
-    var target_node: ?*DOMNode = null;
-    if (maybe_node_id) |node_id| {
-        const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
-        target_node = node.dom;
-    }
-
-    lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| {
+    const result = lp.actions.scroll(target_node, params.x, params.y, frame) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
 
-    return cmd.sendResult(.{}, .{});
+    const target_id: ?NodeRegistry.Id = if (result.scrolled) |scrolled|
+        (try bc.node_registry.register(scrolled)).id
+    else
+        null;
+    return cmd.sendResult(.{ .backendNodeId = target_id, .x = result.x, .y = result.y }, .{});
 }
 
 fn waitForSelector(cmd: anytype) !void {
@@ -712,6 +714,23 @@ test "cdp.lp: action tools" {
         .method = "LP.scrollNode",
         .params = .{ .backendNodeId = scrollbox_id, .y = 50 },
     });
+    try ctx.expectSentResult(.{ .backendNodeId = scrollbox_id, .x = 0, .y = 50 }, .{ .id = 4 });
+
+    // A leaf inside a scroll container scrolls the container, not the leaf.
+    const leaf = frame.document.getElementById("innerleaf", frame).?.asNode();
+    const leaf_id = (try bc.node_registry.register(leaf)).id;
+    const outer = frame.document.getElementById("outerscroll", frame).?.asNode();
+    const outer_id = (try bc.node_registry.register(outer)).id;
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "LP.scrollNode",
+        .params = .{ .backendNodeId = leaf_id, .y = 30 },
+    });
+    try ctx.expectSentResult(.{ .backendNodeId = outer_id, .x = 0, .y = 30 }, .{ .id = 5 });
+
+    // Scroll events are scheduled, not fired inline with the command.
+    var runner = bc.session.runner(.{});
+    try runner.waitForScript(frame._frame_id, "window.scrolled === true && window.outerScrolled === true", 1000);
 
     // Evaluate assertions
     var ls: lp.js.Local.Scope = undefined;
@@ -722,7 +741,7 @@ test "cdp.lp: action tools" {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && document.getElementById('outerscroll').scrollTop === 30 && document.getElementById('innerleaf').scrollTop === 0 && window.scrollY === 0", null);
 
     try testing.expect(result.isTrue());
 }

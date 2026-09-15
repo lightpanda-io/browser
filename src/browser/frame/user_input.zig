@@ -302,63 +302,27 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
     }
 
     // CDP deltas are untrusted, so guard NaN and saturate the addition.
-    try scrollAlong(target, .x, deltaToScroll(delta_x), frame);
-    try scrollAlong(target, .y, deltaToScroll(delta_y), frame);
+    try wheelScroll(target, deltaToScroll(delta_x), deltaToScroll(delta_y), frame);
 }
 
-const ScrollAxis = enum { x, y };
+/// Each axis scrolls the nearest ancestor-or-self scroll container along it,
+/// else the viewport. Relative deltas may land on different scrollers per
+/// axis, unlike an absolute position.
+pub fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !void {
+    try scrollAlong(target, .{ .x = true }, delta_x, frame);
+    try scrollAlong(target, .{ .y = true }, delta_y, frame);
+}
 
-// Each axis scrolls the nearest ancestor-or-self that is a scroll container
-// along it, else the viewport. Both scrollBy paths schedule the trusted
-// scroll/scrollend events themselves.
-fn scrollAlong(target: *Element, axis: ScrollAxis, delta: i32, frame: *Frame) !void {
+fn scrollAlong(target: *Element, axes: Element.ScrollAxes, delta: i32, frame: *Frame) !void {
     if (delta == 0) {
         return;
     }
-    const left: i32, const top: i32 = switch (axis) {
-        .x => .{ delta, 0 },
-        .y => .{ 0, delta },
-    };
-    if (scrollContainerOf(target, axis, frame)) |container| {
+    const left: i32 = if (axes.x) delta else 0;
+    const top: i32 = if (axes.y) delta else 0;
+    if (target.scrollContainer(axes, frame)) |container| {
         return container.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame);
     }
     return frame.window.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame);
-}
-
-// html/body scroll the viewport.
-fn scrollContainerOf(start: *Element, axis: ScrollAxis, frame: *Frame) ?*Element {
-    var current: ?*Element = start;
-    while (current) |el| : (current = el.parentElement()) {
-        switch (el.getTag()) {
-            .html, .body => return null,
-            else => {},
-        }
-        if (isScrollContainer(el, axis, frame)) {
-            return el;
-        }
-    }
-    return null;
-}
-
-// Only inline `overflow` is resolved: computed styles don't cascade stylesheet
-// rules, so a sheet-declared scroll container is treated as page content.
-fn isScrollContainer(el: *Element, axis: ScrollAxis, frame: *Frame) bool {
-    const style_manager = &frame._style_manager;
-    const longhand = switch (axis) {
-        .x => style_manager.inlineStyleValue(el, comptime .wrap("overflow-x")),
-        .y => style_manager.inlineStyleValue(el, comptime .wrap("overflow-y")),
-    };
-    const value = longhand orelse blk: {
-        // `overflow: <x> [<y>]`; a single value applies to both axes.
-        const shorthand = style_manager.inlineStyleValue(el, comptime .wrap("overflow")) orelse return false;
-        var it = std.mem.tokenizeScalar(u8, shorthand, ' ');
-        const x = it.next() orelse return false;
-        break :blk switch (axis) {
-            .x => x,
-            .y => it.next() orelse x,
-        };
-    };
-    return std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "scroll");
 }
 
 fn deltaToScroll(d: f64) i32 {

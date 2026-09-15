@@ -922,21 +922,10 @@ pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
     return frame._page.getViewport().height;
 }
 
-const ScrollToOpts = union(enum) {
-    x: i32,
-    opts: Opts,
-
-    const Opts = struct {
-        behavior: []const u8 = "",
-        left: i32,
-        top: i32,
-    };
-};
-pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const new_x: u32, const new_y: u32 = switch (opts) {
-        .x => |x| .{ @intCast(@max(x, 0)), @intCast(@max(0, y orelse 0)) },
-        .opts => |o| .{ @intCast(@max(0, o.left)), @intCast(@max(0, o.top)) },
-    };
+pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts.offsets(y);
+    const new_x: u32 = if (o.left) |left| @intCast(@max(0, left)) else self._scroll_pos.x;
+    const new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;
@@ -998,21 +987,10 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
     );
 }
 
-pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    // The scroll is relative to the current position. So compute to new
-    // absolute position.
-    var absx: i32 = undefined;
-    var absy: i32 = undefined;
-    switch (opts) {
-        .x => |x| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) +| x;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) +| (y orelse 0);
-        },
-        .opts => |o| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) +| o.left;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) +| o.top;
-        },
-    }
+pub fn scrollBy(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts.offsets(y);
+    const absx = @as(i32, @intCast(self._scroll_pos.x)) +| (o.left orelse 0);
+    const absy = @as(i32, @intCast(self._scroll_pos.y)) +| (o.top orelse 0);
     return self.scrollTo(.{ .x = absx }, absy, frame);
 }
 
