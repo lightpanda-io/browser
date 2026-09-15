@@ -208,6 +208,21 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     custom._disconnected_callback_invoked = false;
 
     const node = custom.asNode();
+    const element = custom.asElement();
+    for (element.attributeEntries()) |*attr| {
+        const name = lp.String.wrap(attr.name());
+        if (definition.isAttributeObserved(name)) {
+            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
+        }
+    }
+    if (node.isConnected()) {
+        try Custom.enqueueConnectedCallbackOnElement(false, element, frame);
+    }
+
+    // During construction the element is precustomized, not yet custom.
+    custom._upgrade_in_progress = true;
+    defer custom._upgrade_in_progress = false;
+
     const prev_upgrading = frame._upgrading_element;
     const prev_consumed = frame._upgrading_consumed;
     frame._upgrading_element = node;
@@ -252,20 +267,11 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
         return error.CustomElementUpgradeFailed;
     }
 
-    // Enqueue attributeChangedCallback for existing observed attributes
-    const element = custom.asElement();
-    for (element.attributeEntries()) |*attr| {
-        const name = lp.String.wrap(attr.name());
-        if (definition.isAttributeObserved(name)) {
-            Custom.enqueueAttributeChangedCallbackOnElement(element, name, null, .wrap(attr.value()), null, frame);
-        }
-    }
-
-    if (node.isConnected()) {
-        Custom.enqueueConnectedCallbackOnElement(false, element, frame) catch |err| {
-            log.warn(.bug, "ce_reactions enqueue fail", .{ .err = err });
-        };
-    }
+    // Insertions and removals during construction queue nothing, so the
+    // dedup flags must reflect where the constructor left the element.
+    const connected = node.isConnected();
+    custom._connected_callback_invoked = connected;
+    custom._disconnected_callback_invoked = connected == false;
 }
 
 fn upgradeFailed(custom: *Custom) void {
