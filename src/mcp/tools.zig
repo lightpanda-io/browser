@@ -1196,6 +1196,19 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         out.clearRetainingCapacity();
     }
 
+    // The container may be declared in a stylesheet rather than inline.
+    {
+        const leaf = frame.document.getElementById("sheetleaf", frame).?.asNode();
+        const leaf_id = (try server.active_session.registry.register(leaf)).id;
+        const outer = frame.document.getElementById("sheetscroll", frame).?.asNode();
+        const outer_id = (try server.active_session.registry.register(outer)).id;
+        const msg = try std.fmt.allocPrint(aa, "{{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{{\"name\":\"scroll\",\"arguments\":{{\"backendNodeId\":{d},\"y\":30}}}}}}", .{leaf_id});
+        try router.handleMessage(server, aa, msg);
+        const expected = try std.fmt.allocPrint(aa, "Scrolled scroll container (backendNodeId: {d}) of element (backendNodeId: {d}) to x: 0, y: 30", .{ outer_id, leaf_id });
+        try testing.expect(std.mem.indexOf(u8, out.written(), expected) != null);
+        out.clearRetainingCapacity();
+    }
+
     // Without a node the window scrolls; an omitted axis keeps its offset.
     {
         try router.handleMessage(server, aa,
@@ -1289,6 +1302,7 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
         \\ window.changed === true && window.selChanged === 'opt2' &&
         \\ document.getElementById('outerscroll').scrollTop === 30 &&
         \\ document.getElementById('innerleaf').scrollTop === 0 &&
+        \\ document.getElementById('sheetscroll').scrollTop === 30 &&
         \\ document.getElementById('plain').scrollTop === 7 &&
         \\ window.scrollX === 5 && window.scrollY === 20 &&
         \\ window.hovered === true &&

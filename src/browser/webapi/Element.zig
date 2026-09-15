@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
-const StyleManager = @import("../StyleManager.zig");
 const Factory = @import("../Factory.zig");
 
 const CSS = @import("CSS.zig");
@@ -1613,31 +1612,11 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ?*Elemen
     while (current) |el| : (current = el.parentElement()) {
         const tag = el.getTag();
         if (tag == .html or tag == .body) return null;
-        if ((axes.x and el.overflowScrolls(.x, style_manager)) or (axes.y and el.overflowScrolls(.y, style_manager))) {
+        if (style_manager.scrolls(el, axes)) {
             return el;
         }
     }
     return null;
-}
-
-// Only inline `overflow` is resolved: computed styles don't cascade stylesheet
-// rules, so a sheet-declared scroll container is treated as page content.
-fn overflowScrolls(self: *Element, axis: enum { x, y }, style_manager: *StyleManager) bool {
-    const longhand = switch (axis) {
-        .x => style_manager.inlineStyleValue(self, comptime .wrap("overflow-x")),
-        .y => style_manager.inlineStyleValue(self, comptime .wrap("overflow-y")),
-    };
-    const value = longhand orelse blk: {
-        // `overflow: <x> [<y>]`; a single value applies to both axes.
-        const shorthand = style_manager.inlineStyleValue(self, comptime .wrap("overflow")) orelse return false;
-        var it = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
-        const x = it.next() orelse return false;
-        break :blk switch (axis) {
-            .x => x,
-            .y => it.next() orelse x,
-        };
-    };
-    return std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "scroll");
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {

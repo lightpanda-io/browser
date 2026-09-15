@@ -920,7 +920,7 @@ pub const Property = struct {
     _important: bool = false,
     _node: std.DoublyLinkedList.Node,
 
-    fn fromNodeLink(n: *std.DoublyLinkedList.Node) *Property {
+    pub fn fromNodeLink(n: *std.DoublyLinkedList.Node) *Property {
         return @alignCast(@fieldParentPtr("_node", n));
     }
 

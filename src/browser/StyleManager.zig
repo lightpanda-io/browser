@@ -34,13 +34,14 @@ const CSSRule = @import("webapi/css/CSSRule.zig");
 const CSSStyleRule = @import("webapi/css/CSSStyleRule.zig");
 const CSSStyleSheet = @import("webapi/css/CSSStyleSheet.zig");
 const CSSStyleProperties = @import("webapi/css/CSSStyleProperties.zig");
+const CSSStyleDeclaration = @import("webapi/css/CSSStyleDeclaration.zig");
 
 const log = lp.log;
 const String = lp.String;
 const Allocator = std.mem.Allocator;
 
 // Tracks the CSS properties the renderless layout acts on (display, visibility,
-// opacity, pointer-events) from <style> elements.
+// opacity, pointer-events, overflow) from <style> elements.
 // Rules are bucketed by their rightmost selector part for fast lookup.
 const StyleManager = @This();
 
@@ -652,7 +653,8 @@ const Props = packed struct(u8) {
     visibility_hidden: bool = false,
     opacity_zero: bool = false,
     pointer_events_none: bool = false,
-    _unused: u2 = 0,
+    overflow_x_scrolls: bool = false,
+    overflow_y_scrolls: bool = false,
 
     fn probe(self: Props, comptime what: Probe, options: CheckVisibilityOptions) bool {
         return switch (what) {
@@ -713,6 +715,14 @@ pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
     return self.anyInChain(el, .pointer_events, .{});
 }
 
+/// Whether `el` is a scroll container along any of `axes`: its own computed
+/// overflow on that axis is auto, scroll or overlay. No ancestor walk.
+pub fn scrolls(self: *StyleManager, el: *Element, axes: Element.ScrollAxes) bool {
+    self.rebuildIfDirty() catch return false;
+    const p = self.ownProps(el);
+    return (axes.x and p.overflow_x_scrolls) or (axes.y and p.overflow_y_scrolls);
+}
+
 fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: CheckVisibilityOptions) bool {
     var current: ?*Element = el;
     while (current) |elem| : (current = elem.parentElement()) {
@@ -751,6 +761,8 @@ const Priorities = struct {
     visibility_hidden: u64 = 0,
     opacity_zero: u64 = 0,
     pointer_events_none: u64 = 0,
+    overflow_x_scrolls: u64 = 0,
+    overflow_y_scrolls: u64 = 0,
 
     fn allInline(self: Priorities) bool {
         inline for (property_fields) |field| {
@@ -1006,18 +1018,19 @@ fn getBucketKey(compound: Selector.Compound) ?BucketKey {
 }
 
 // The declaration names behind TrackedProperties, in field order.
-const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events" };
+const property_names = [_][]const u8{ "display", "visibility", "opacity", "pointer-events", "overflow-x", "overflow-y" };
 
-/// Extracts the tracked properties from a style declaration.
+/// Extracts the tracked properties from a style declaration. The object holds
+/// one entry per name in first-declared order, so folding it in order gives a
+/// shorthand and its longhands the same precedence as the source text.
 fn extractTrackedProperties(style: *CSSStyleProperties) TrackedProperties {
-    var props: TrackedProperties = .{};
-    const decl = style.asCSSStyleDeclaration();
-    for (property_names) |name| {
-        if (decl.findProperty(.wrap(name))) |property| {
-            props.apply(name, property._value.str());
-        }
+    var slots: Slots = .{};
+    var node = style.asCSSStyleDeclaration()._properties.first;
+    while (node) |n| : (node = n.next) {
+        const property = CSSStyleDeclaration.Property.fromNodeLink(n);
+        slots.apply(property._name.str(), property._value.str(), property._important);
     }
-    return props;
+    return slots.props();
 }
 
 // Computes CSS specificity for a selector.
@@ -1097,6 +1110,8 @@ const TrackedProperties = struct {
     visibility_hidden: ?bool = null,
     opacity_zero: ?bool = null,
     pointer_events_none: ?bool = null,
+    overflow_x_scrolls: ?bool = null,
+    overflow_y_scrolls: ?bool = null,
 
     fn apply(self: *TrackedProperties, name: []const u8, value: []const u8) void {
         if (std.ascii.eqlIgnoreCase(name, "display")) {
@@ -1107,7 +1122,18 @@ const TrackedProperties = struct {
             self.opacity_zero = std.ascii.eqlIgnoreCase(value, "0");
         } else if (std.ascii.eqlIgnoreCase(name, "pointer-events")) {
             self.pointer_events_none = std.ascii.eqlIgnoreCase(value, "none");
+        } else if (std.ascii.eqlIgnoreCase(name, "overflow-x")) {
+            self.overflow_x_scrolls = overflowScrolls(value);
+        } else if (std.ascii.eqlIgnoreCase(name, "overflow-y")) {
+            self.overflow_y_scrolls = overflowScrolls(value);
         }
+    }
+
+    // `overlay` is Chrome's legacy alias of auto.
+    fn overflowScrolls(value: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(value, "auto") or
+            std.ascii.eqlIgnoreCase(value, "scroll") or
+            std.ascii.eqlIgnoreCase(value, "overlay");
     }
 
     fn isRelevant(self: TrackedProperties) bool {
@@ -1238,24 +1264,7 @@ const CustomSink = struct {
 // properties are matched case-insensitively; a custom property's name is
 // case-sensitive and goes to `customs` when there is one.
 fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !TrackedProperties {
-    const Slot = struct {
-        value: ?[]const u8 = null,
-        important: bool = false,
-
-        fn apply(self: *@This(), declaration: CssParser.Declaration) void {
-            if (self.important and !declaration.important) {
-                return;
-            }
-            if (declaration.value.len == 0) {
-                self.* = .{};
-                return;
-            }
-            self.value = declaration.value;
-            self.important = declaration.important;
-        }
-    };
-
-    var slots = [_]Slot{.{}} ** property_names.len;
+    var slots: Slots = .{};
     var it = CssParser.parseDeclarationsList(block);
     while (it.next()) |declaration| {
         if (isCustomProperty(declaration.name)) {
@@ -1267,22 +1276,70 @@ fn foldDeclarations(block: []const u8, customs: ?*CustomSink) !TrackedProperties
             gop.value_ptr.* = .{ .name = declaration.name, .value = declaration.value, .important = declaration.important };
             continue;
         }
-        for (property_names, &slots) |name, *slot| {
-            if (std.ascii.eqlIgnoreCase(declaration.name, name)) {
-                slot.apply(declaration);
-                break;
+        slots.apply(declaration.name, declaration.value, declaration.important);
+    }
+    return slots.props();
+}
+
+/// One block's winning value per tracked property, folded in declaration
+/// order.
+const Slots = struct {
+    const Slot = struct {
+        value: ?[]const u8 = null,
+        important: bool = false,
+
+        fn apply(self: *Slot, value: []const u8, important: bool) void {
+            if (self.important and !important) {
+                return;
+            }
+            if (value.len == 0) {
+                self.* = .{};
+                return;
+            }
+            self.value = value;
+            self.important = important;
+        }
+    };
+
+    slots: [property_names.len]Slot = @splat(.{}),
+
+    fn apply(self: *Slots, name: []const u8, value: []const u8, important: bool) void {
+        if (std.ascii.eqlIgnoreCase(name, "overflow")) {
+            // `overflow: <x> [<y>]`; a single value applies to both axes.
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            const x = it.next() orelse "";
+            const y = it.next() orelse x;
+            self.slotFor("overflow-x").apply(x, important);
+            self.slotFor("overflow-y").apply(y, important);
+            return;
+        }
+        for (property_names, &self.slots) |tracked, *slot| {
+            if (std.ascii.eqlIgnoreCase(name, tracked)) {
+                slot.apply(value, important);
+                return;
             }
         }
     }
 
-    var props: TrackedProperties = .{};
-    for (property_names, slots) |name, slot| {
-        if (slot.value) |value| {
-            props.apply(name, value);
+    fn slotFor(self: *Slots, comptime name: []const u8) *Slot {
+        inline for (property_names, 0..) |tracked, i| {
+            if (comptime std.mem.eql(u8, tracked, name)) {
+                return &self.slots[i];
+            }
         }
+        comptime unreachable;
     }
-    return props;
-}
+
+    fn props(self: Slots) TrackedProperties {
+        var p: TrackedProperties = .{};
+        for (property_names, self.slots) |name, s| {
+            if (s.value) |value| {
+                p.apply(name, value);
+            }
+        }
+        return p;
+    }
+};
 
 /// Resolved value of an element's inline `style=` declaration for `property_name`,
 /// or null when the element has no such declaration. Reads the element's parsed
@@ -1606,6 +1663,13 @@ test "StyleManager: inlineProps: scan matches the parsed style object" {
         \\<i style="visibility:hidden"></i>
         \\<i style="display:"></i>
         \\<i></i>
+        \\<i style="overflow: auto"></i>
+        \\<i style="overflow: hidden scroll"></i>
+        \\<i style="overflow: hidden; overflow-y: auto"></i>
+        \\<i style="overflow-y: auto; overflow: hidden"></i>
+        \\<i style="overflow-y: auto !important; overflow: hidden"></i>
+        \\<i style="overflow-x: overlay"></i>
+        \\<i style="overflow:"></i>
     );
     const expected = [_]TrackedProperties{
         .{ .display = .none },
@@ -1617,6 +1681,13 @@ test "StyleManager: inlineProps: scan matches the parsed style object" {
         .{ .opacity_zero = false, .pointer_events_none = true },
         .{ .visibility_hidden = true },
         .{},
+        .{},
+        .{ .overflow_x_scrolls = true, .overflow_y_scrolls = true },
+        .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true },
+        .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true },
+        .{ .overflow_x_scrolls = false, .overflow_y_scrolls = false },
+        .{ .overflow_x_scrolls = false, .overflow_y_scrolls = true },
+        .{ .overflow_x_scrolls = true },
         .{},
     };
 
@@ -1679,6 +1750,12 @@ test "StyleManager: memo: reuse and invalidation" {
     try testing.expectEqual(true, sm.isHidden(b, .{ .check_visibility = true }));
     try testing.expectEqual(true, sm.hasVisibilityHiddenInherited(b));
     try testing.expectEqual(false, sm.hasPointerEventsNone(b));
+
+    try b.setStyle("overflow: hidden auto", frame);
+    try testing.expectEqual(false, sm.scrolls(b, .{ .x = true }));
+    try testing.expectEqual(true, sm.scrolls(b, .{ .y = true }));
+    try testing.expectEqual(true, sm.scrolls(b, .{ .x = true, .y = true }));
+    try testing.expectEqual(false, sm.scrolls(p, .{ .x = true, .y = true }));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
