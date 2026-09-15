@@ -429,13 +429,19 @@
     \\          Defaults to 1 GiB.
     \\  --http-nav-burst <INT>
     \\          Number of top-level navigations to an idle host allowed to
-    \\          start without waiting for --http-nav-delay. After a burst,
-    \\          navigations are spaced by --http-nav-delay again.
-    \\          Defaults to 1.
+    \\          start without waiting. The allowance refills as the host goes
+    \\          idle again. It buys a head start only: it does not change how
+    \\          fast the delay grows once the host is busy.
+    \\          Defaults to 10.
     \\  --http-nav-delay <INT>
-    \\          Minimum time in ms between two top-level navigations to the same
-    \\          host (see --http-nav-burst). Disable by setting to 0.
-    \\          Defaults to 0.
+    \\          Fixed time in ms between two top-level navigations to the same
+    \\          host (see --http-nav-burst). Set to 0 to disable rate limiting.
+    \\          By default the delay is dynamic: it starts at 20ms, grows with
+    \\          the number of navigations sent to the host and with its errors
+    \\          (429, 503, Retry-After, other 5xx, no answer), and comes back
+    \\          down over time. Under sustained load it settles around 100ms,
+    \\          about 10 navigations per second to the same host.
+    \\          localhost, 127.0.0.1 and [::1] are never rate limited.
     \\  --http-proxy <URL>
     \\          HTTP proxy for all HTTP requests.
     \\          username:password may be included for basic auth.
