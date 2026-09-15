@@ -26,6 +26,47 @@ permissions:
   packages: read
 
 jobs:
+  # The hot-code profile the Linux binaries are laid out with. Regenerated on
+  # every release rather than taken from the repository, so the layout matches
+  # the code being shipped. Nothing is committed here; orderfile.yml is what
+  # keeps the checked-in profile fresh.
+  orderfile:
+    name: orderfile profile
+
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    # A profile is an optimization, not a requirement. When this job fails the
+    # build jobs find no artifact and fall back to orderfile/lightpanda.ld as
+    # committed, so a missing kernel knob or a flaky bench never blocks a
+    # release.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
+
+      - uses: ./.github/actions/orderfile
+        with:
+          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+
+      # Both arches use this one profile: it is a list of symbol names, and
+      # orderfile/README.md applies the x86_64 profile to aarch64 as-is.
+      - name: share the profile with the build jobs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orderfile
+          path: |
+            orderfile/lightpanda.ld
+            orderfile/v8.txt
+          retention-days: 1
+
   build-linux:
     strategy:
       fail-fast: false
@@ -47,6 +88,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
+    needs: orderfile
+    # The profile job is allowed to fail, and a skipped build is not an
+    # acceptable answer to that.
+    if: ${{ !cancelled() }}
+
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -56,6 +102,16 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
+
+      # The fresh profile, when the orderfile job produced one. It overwrites
+      # the committed files; with no artifact the build keeps what is in the
+      # repository.
+      - name: fresh orderfile
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: orderfile
+          path: orderfile
 
       - name: v8 snapshot
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin

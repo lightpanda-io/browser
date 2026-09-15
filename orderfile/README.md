@@ -19,8 +19,10 @@ below), with no change in run duration.
 ## How it is applied
 
 - Opt-in via `-Dorderfile=orderfile/lightpanda.ld`; CI passes it for the Linux
-  release artifact and the e2e bench build. Local release builds don't, so
-  they keep the sub-second link. Linux/LLD only (it is an ELF linker script).
+  release artifact and the e2e bench build. The release regenerates the profile
+  first and builds with that one, falling back to the committed file when that
+  job fails. Local release builds don't pass the flag, so they keep the
+  sub-second link. Linux/LLD only (it is an ELF linker script).
 - The exe and every C library it links are built with
   `-ffunction-sections -fdata-sections` so each function/datum has its own
   input section for the script to address.
