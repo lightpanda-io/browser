@@ -288,9 +288,13 @@ pub fn fill(node: *DOMNode, text: []const u8, frame: *Frame) !void {
 }
 
 pub const ScrollResult = struct {
-    /// What moved: the given node, its nearest scroll container, or null for
-    /// the window.
-    scrolled: ?*DOMNode,
+    /// What scrolled. Always the node the caller named, its nearest scroll
+    /// container, or the window.
+    target: union(enum) {
+        window,
+        node: *DOMNode,
+        container: *DOMNode,
+    },
     x: u32,
     y: u32,
 };
@@ -301,17 +305,22 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, frame: *Frame) !ScrollResult {
             lp.log.err(.app, "scroll failed", .{ .err = err });
             return error.ActionFailed;
         };
-        return .{ .scrolled = null, .x = frame.window.getScrollX(), .y = frame.window.getScrollY() };
+        return .{ .target = .window, .x = frame.window.getScrollX(), .y = frame.window.getScrollY() };
     };
     const el = n.is(Element) orelse return error.InvalidNodeType;
 
-    const target = el.scrollContainer(.{ .x = x != null, .y = y != null }, frame) orelse el;
+    // A node with no scroll container scrolls itself, not the viewport: the
+    // caller named it.
+    const target = switch (el.scrollContainer(.{ .x = x != null, .y = y != null }, frame)) {
+        .container => |container| container,
+        .viewport => el,
+    };
     target.scrollTo(.{ .opts = .{ .left = x, .top = y } }, null, frame) catch |err| {
         lp.log.err(.app, "scroll failed", .{ .err = err });
         return error.ActionFailed;
     };
     return .{
-        .scrolled = target.asNode(),
+        .target = if (target == el) .{ .node = n } else .{ .container = target.asNode() },
         .x = target.getScrollLeft(frame),
         .y = target.getScrollTop(frame),
     };

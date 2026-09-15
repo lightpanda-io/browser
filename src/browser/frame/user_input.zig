@@ -287,42 +287,49 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
         });
     }
 
-    const wheel_event: *WheelEvent = try .initTrusted("wheel", .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .clientX = x,
-        .clientY = y,
-        .deltaX = delta_x,
-        .deltaY = delta_y,
-    }, frame);
+    try wheel(frame, target, x, y, delta_x, delta_y);
+}
 
-    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), wheel_event.asEvent())) {
+/// A wheel over `target`: trusted `wheel`, the legacy `mousewheel` Blink
+/// still fires, then the scroll unless either was canceled. Each event is
+/// non-cancelable when every listener on its path is passive.
+pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
+    // Listeners live in the event manager of the element's own frame, which
+    // is not the caller's when the element belongs to an iframe's document.
+    const owner = target.ownerFrame(frame) orelse return;
+    const event_manager = &owner._event_manager;
+
+    var canceled = false;
+    inline for (.{ "wheel", "mousewheel" }) |typ| {
+        const event: *WheelEvent = try .initTrusted(typ, .{
+            .bubbles = true,
+            .cancelable = event_manager.hasNonPassiveListener(target.asNode(), typ),
+            .composed = true,
+            .clientX = x,
+            .clientY = y,
+            .deltaX = delta_x,
+            .deltaY = delta_y,
+        }, owner);
+        if (try event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
+            canceled = true;
+        }
+    }
+    if (canceled) {
         return;
     }
 
-    // CDP deltas are untrusted, so guard NaN and saturate the addition.
-    try wheelScroll(target, deltaToScroll(delta_x), deltaToScroll(delta_y), frame);
+    // Deltas come from the wire, so guard NaN and saturate the addition.
+    try wheelScroll(target, deltaToScroll(delta_x), deltaToScroll(delta_y), owner);
 }
 
 /// Each axis scrolls the nearest ancestor-or-self scroll container along it,
 /// else the viewport. Relative deltas may land on different scrollers per
 /// axis, unlike an absolute position.
 pub fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !void {
-    try scrollAlong(target, .{ .x = true }, delta_x, frame);
-    try scrollAlong(target, .{ .y = true }, delta_y, frame);
-}
-
-fn scrollAlong(target: *Element, axes: Element.ScrollAxes, delta: i32, frame: *Frame) !void {
-    if (delta == 0) {
-        return;
-    }
-    const left: i32 = if (axes.x) delta else 0;
-    const top: i32 = if (axes.y) delta else 0;
-    if (target.scrollContainer(axes, frame)) |container| {
-        return container.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame);
-    }
-    return frame.window.scrollBy(.{ .opts = .{ .left = left, .top = top } }, null, frame);
+    const targets = target.scrollContainers(.{ .x = delta_x != 0, .y = delta_y != 0 }, frame);
+    // A zero delta resolves to .viewport and scrolls it by nothing.
+    try targets.x.scrollBy(delta_x, 0, frame);
+    try targets.y.scrollBy(0, delta_y, frame);
 }
 
 fn deltaToScroll(d: f64) i32 {
