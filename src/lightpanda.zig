@@ -467,7 +467,7 @@ fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Bina
 }
 
 fn pngOpts(frame: *Frame) screenshot.Opts {
-    return .fromViewport(frame._page.getViewport(), true);
+    return .fromViewport(frame.page.getViewport(), true);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {

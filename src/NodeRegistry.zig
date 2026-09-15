@@ -68,7 +68,7 @@ pub fn reset(self: *NodeRegistry) void {
 /// IDs valid. Must run before the page's arena is freed — attribution reads
 /// each node's document.
 pub fn resetFrame(self: *NodeRegistry, arena: Allocator, frame: *Frame) void {
-    const page = frame._page;
+    const page = frame.page;
     var doomed: std.ArrayListUnmanaged(*Node) = .empty;
     var it = self.lookup_by_id.valueIterator();
     while (it.next()) |node_ptr| {

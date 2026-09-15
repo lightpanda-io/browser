@@ -179,7 +179,7 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, exec: *js.Execution) !bo
     switch (exec.js.global) {
         .frame => |frame| {
             event.acquireRef();
-            defer _ = event.releaseRef(frame._page);
+            defer _ = event.releaseRef(frame.page);
             try frame._event_manager.dispatch(self, event);
         },
         .worker => |wgs| try wgs.dispatch(self, event, null, .{}),

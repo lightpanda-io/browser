@@ -139,7 +139,7 @@ pub const GlobalScope = union(enum) {
     // The Page-level blob: URL store, shared by every global on the page.
     pub fn blobUrls(self: GlobalScope) *const Blob.UrlMap {
         return switch (self) {
-            inline else => |g| &g._page.blob_urls,
+            inline else => |g| &g.page.blob_urls,
         };
     }
 

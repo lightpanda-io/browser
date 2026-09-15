@@ -154,7 +154,7 @@ fn unobserve(self: *IntersectionObserver, target: *Element, frame: *Frame) void 
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.releaseRef(frame._page);
+                    entry.releaseRef(frame.page);
                 } else {
                     j += 1;
                 }
@@ -178,7 +178,7 @@ pub fn reset(self: *IntersectionObserver, page: *Page) void {
 
 pub fn disconnect(self: *IntersectionObserver, frame: *Frame) void {
     const registered = self._observing.items.len > 0;
-    self.reset(frame._page);
+    self.reset(frame.page);
     if (registered) {
         Frame.observers.unregisterIntersectionObserver(frame, self);
     }
@@ -188,7 +188,7 @@ fn takeRecords(self: *IntersectionObserver, frame: *Frame) !js.Value {
     const local = frame.js.local orelse return error.NotHandled;
     const entries = try self.takePendingEntries(frame);
     // whether we safely deliver these to v8 or not, we're done with these
-    defer releaseAll(entries, frame._page);
+    defer releaseAll(entries, frame.page);
     return local.zigValueToJs(entries, .{});
 }
 
@@ -216,7 +216,7 @@ fn calculateIntersection(
     const root_rect = if (self._root) |root|
         root.boundingClientRectValues(frame)
     else blk: {
-        const viewport = frame._page.getViewport();
+        const viewport = frame.page.getViewport();
         break :blk DOMRect.Data{
             .width = @floatFromInt(viewport.width),
             .height = @floatFromInt(viewport.height),
@@ -317,7 +317,7 @@ pub fn deliverEntries(self: *IntersectionObserver, frame: *Frame) !void {
 
     const entries = try self.takePendingEntries(frame);
     // whether we safely deliver these to v8 or not, we're done with these
-    defer releaseAll(entries, frame._page);
+    defer releaseAll(entries, frame.page);
 
     var caught: js.TryCatch.Caught = .{};
 

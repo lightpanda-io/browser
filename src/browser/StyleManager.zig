@@ -158,7 +158,7 @@ fn applyMediaAtRule(self: *StyleManager, build_arena: Allocator, text: []const u
     const block = atRuleBlock(text, "@media") orelse return;
     const query = std.mem.trim(u8, block.prelude, &std.ascii.whitespace);
 
-    if (MediaQuery.matches(query, self.frame._page.getViewport()) == false) {
+    if (MediaQuery.matches(query, self.frame.page.getViewport()) == false) {
         return;
     }
 
@@ -725,7 +725,7 @@ fn anyInChain(self: *StyleManager, el: *Element, comptime what: Probe, options: 
 /// The memoized own-element result. Callers must have run rebuildIfDirty,
 /// which resets the memo.
 fn ownProps(self: *StyleManager, el: *Element) Props {
-    const version = self.frame._page.style_version;
+    const version = self.frame.page.style_version;
     if (self.memo_version != version) {
         self.memo.clearRetainingCapacity();
         self.memo_version = version;

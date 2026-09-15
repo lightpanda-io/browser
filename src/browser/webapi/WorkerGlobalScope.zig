@@ -65,7 +65,7 @@ _is_module: bool,
 // Meant to follow the same field naming as Page so that an anytype of generic
 // can access these the same for a Page of a WGS.
 // These fields represent the "Page"-like component of the WGS
-_page: *Page,
+page: *Page,
 _session: *Session,
 _factory: *Factory,
 _identity: JS.Identity = .{},
@@ -155,7 +155,7 @@ pub fn init(
             .call_arena = call_arena.allocator(),
             .local_arena = local_arena.allocator(),
             ._frame = frame,
-            ._page = frame._page,
+            .page = frame.page,
             ._session = session,
             ._identity = .{},
             ._type = undefined,
@@ -201,7 +201,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *WorkerGlobalScope) void {
-    const page = self._page;
+    const page = self.page;
     const session = page.session;
     const browser = session.browser;
 
@@ -246,7 +246,7 @@ pub fn dispatch(
         target,
         event,
         handler,
-        self._page,
+        self.page,
         opts,
     );
 }
@@ -378,7 +378,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
     };
 
     if (no_handler) {
-        self._page.recordJsError(error.JsException);
+        self.page.recordJsError(error.JsException);
     }
 
     const target = self.asEventTarget();
@@ -386,7 +386,7 @@ pub fn unhandledPromiseRejection(self: *WorkerGlobalScope, no_handler: bool, rej
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.persist() else null,
             .promise = try rejection.promise().persist(),
-        }, self._page)).asEvent();
+        }, self.page)).asEvent();
         try self.dispatch(target, event, attribute_callback, .{});
     }
 }
@@ -453,7 +453,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     defer try_catch.deinit();
 
     _ = ls.local.eval(response.body.items, url) catch |err| {
-        self._page.recordJsError(err);
+        self.page.recordJsError(err);
         const caught = try_catch.caughtOrError(arena, err);
         log.err(.browser, "importScript", .{ .url = resolved_url, .caught = caught });
         return;
@@ -463,14 +463,14 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
-    self._page.recordJsError(error.JsException);
+    self.page.recordJsError(error.JsException);
 
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, self._page);
+    }, self.page);
 
     // Invoke onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -499,7 +499,7 @@ pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {
     const event = error_event.asEvent();
     // Keep the event alive past dispatch so we can read _prevent_default.
     event.acquireRef();
-    defer _ = event.releaseRef(self._page);
+    defer _ = event.releaseRef(self.page);
 
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.

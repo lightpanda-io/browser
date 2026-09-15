@@ -53,9 +53,10 @@ pub const Lookup = std.AutoHashMapUnmanaged(Key, *AnimatedTransformList);
 
 pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*AnimatedTransformList {
     const key: Key = .{ .element = element, .kind = kind };
-    const gop = try frame._svg_animated_transform_lists.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page.svg_animated_transform_lists.getOrPut(page.frame_arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_transform_lists.remove(key);
+        errdefer _ = page.svg_animated_transform_lists.remove(key);
         gop.value_ptr.* = try createForAttribute(element, kind.attributeName(), frame);
     }
     return gop.value_ptr.*;

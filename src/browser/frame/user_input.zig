@@ -66,7 +66,7 @@ const HoverContext = struct {
 // bubbles up normally, but mouseleave will only fire on parents where the new
 // target isn't part of.
 pub fn updateHoverTarget(frame: *Frame, to: ?*Element, ctx: HoverContext) void {
-    const page = frame._page;
+    const page = frame.page;
     const from = page.input_hover_target;
     if (from == to) {
         return;
@@ -631,7 +631,7 @@ pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
     // the keydown still fires and its default action — e.g. sequential focus
     // navigation on Tab — can run.
     const element = frame.window._document.getActiveElement() orelse {
-        event.deinit(frame._page);
+        event.deinit(frame.page);
         return;
     };
 
@@ -768,7 +768,7 @@ fn allowEdit(frame: *Frame, keydown: *Event, target: *Element, before_data: ?[]c
             .inputType = input_type,
         }, frame)).asEvent();
         before.acquireRef(); // need to check its _prevent_default
-        defer _ = before.releaseRef(frame._page);
+        defer _ = before.releaseRef(frame.page);
         try frame._event_manager.dispatch(target.asEventTarget(), before);
         if (before._prevent_default) {
             return false;
@@ -784,7 +784,7 @@ fn allowEdit(frame: *Frame, keydown: *Event, target: *Element, before_data: ?[]c
             .data = data,
         }, frame)).asEvent();
         text_event.acquireRef(); // need to check its _prevent_default
-        defer _ = text_event.releaseRef(frame._page);
+        defer _ = text_event.releaseRef(frame.page);
         try frame._event_manager.dispatch(target.asEventTarget(), text_event);
         return text_event._prevent_default == false;
     }

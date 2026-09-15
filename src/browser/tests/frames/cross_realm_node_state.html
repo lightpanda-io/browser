@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+<script src="../testing.js"></script>
+
+<!--
+Lazily-created per-node state (dataset, classList, shadow roots, inline event
+handlers, ...) belongs to the node, whichever realm touches it. The iframe
+helpers run in the iframe's realm, so each pair below reads the same node from
+two realms.
+-->
+<iframe id="idf" src="support/cross_realm_node_state.html"></iframe>
+
+<script id="identity">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const el = idf.contentDocument.getElementById('s1');
+
+    testing.expectTrue(el.dataset === iwin.datasetOf('s1'));
+    testing.expectTrue(el.classList === iwin.classListOf('s1'));
+  });
+</script>
+
+<script id="shadow_root">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const host = idf.contentDocument.getElementById('host');
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    testing.expectTrue(iwin.shadowRootOf('host') === shadow);
+  });
+</script>
+
+<script id="declarative_shadow_root">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const dhost = idf.contentDocument.getElementById('dhost');
+
+    // Attached by the iframe's parser; must be visible to JS from both realms.
+    const shadow = dhost.shadowRoot;
+    testing.expectTrue(shadow !== null);
+    testing.expectTrue(iwin.shadowRootOf('dhost') === shadow);
+    testing.expectEqual('in', shadow.getElementById('inner').textContent);
+  });
+</script>
+
+<script id="inline_handler">
+  testing.onload(() => {
+    const idf = document.getElementById('idf');
+    const iwin = idf.contentWindow;
+    const btn = idf.contentDocument.getElementById('btn');
+
+    let fired = 0;
+    const handler = () => { fired += 1; };
+    btn.onclick = handler;
+    testing.expectTrue(iwin.onclickOf('btn') === handler);
+
+    iwin.clickById('btn');
+    testing.expectEqual(1, fired);
+  });
+</script>
+</body>

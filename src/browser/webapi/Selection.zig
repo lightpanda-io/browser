@@ -55,7 +55,7 @@ pub fn acquireRef(self: *Selection) void {
 }
 
 fn dispatchSelectionChangeEvent(frame: *Frame) !void {
-    const event = try Event.init("selectionchange", .{}, frame._page);
+    const event = try Event.init("selectionchange", .{}, frame.page);
     try frame._event_manager.dispatch(frame.document.asEventTarget(), event);
 }
 
@@ -719,7 +719,7 @@ pub fn toString(self: *const Selection, frame: *Frame) ![]const u8 {
 
 fn setRange(self: *Selection, new_range: ?*Range, frame: *Frame) void {
     if (self._range) |existing| {
-        _ = existing.asAbstractRange().releaseRef(frame._page);
+        _ = existing.asAbstractRange().releaseRef(frame.page);
     }
     if (new_range) |nr| {
         nr.asAbstractRange().acquireRef();

@@ -171,7 +171,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 }
 
 pub fn disconnect(self: *MutationObserver, frame: *Frame) void {
-    releaseAll(self._pending_records.items, frame._page);
+    releaseAll(self._pending_records.items, frame.page);
     self._pending_records.clearRetainingCapacity();
 
     if (self._observing.items.len > 0) {
@@ -184,7 +184,7 @@ fn takeRecords(self: *MutationObserver, frame: *Frame) !js.Value {
     const local = frame.js.local orelse return error.NotHandled;
     const records = try self.takePendingRecords(frame);
     // whether we safely deliver these to v8 or not, we're done with these
-    defer releaseAll(records, frame._page);
+    defer releaseAll(records, frame.page);
     return local.zigValueToJs(records, .{});
 }
 
@@ -356,7 +356,7 @@ pub fn deliverRecords(self: *MutationObserver, frame: *Frame) !void {
     // This ensures mutations triggered during the callback go into a fresh list
     const records = try self.takePendingRecords(frame);
     // whether we safely deliver these to v8 or not, we're done with these
-    defer releaseAll(records, frame._page);
+    defer releaseAll(records, frame.page);
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);

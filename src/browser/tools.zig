@@ -1368,7 +1368,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const scope = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, scope, args.strip, page) catch return ToolError.OutOfMemory;
-    const opts: lp.screenshot.Opts = .fromViewport(page._page.getViewport(), args.fullPage);
+    const opts: lp.screenshot.Opts = .fromViewport(page.page.getViewport(), args.fullPage);
     var prepared = lp.screenshot.preparePng(arena, state, opts, page) catch
         return ToolError.InternalError;
 
@@ -1767,7 +1767,7 @@ fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void 
     // Runner waits are keyed by Page root (a popup lives on its opener's
     // Page). Read it before processing: a synthetic root navigation frees
     // the Page in place.
-    const root_frame_id = frame._page.frame._frame_id;
+    const root_frame_id = frame.page.frame._frame_id;
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
         return;
@@ -1794,7 +1794,7 @@ const ActionScope = struct {
 
 fn beginAction(session: *lp.Session) ActionScope {
     const frame = session.currentFrame();
-    return .{ .frame = frame, .popups = if (frame) |f| f._page.popups.items.len else 0 };
+    return .{ .frame = frame, .popups = if (frame) |f| f.page.popups.items.len else 0 };
 }
 
 /// Finish a state-changing action: drain any queued navigation triggered by
@@ -1813,14 +1813,14 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     if (before != null and before.? != page) registry.reset();
 
     var note: []const u8 = "";
-    if (page._page.popups.items.len > scope.popups) {
+    if (page.page.popups.items.len > scope.popups) {
         // The action opened a new window (target=_blank or window.open).
         // Follow it, as a user whose click opened a tab would.
         var runner = session.runner(.{});
-        runner.waitForFrame(page._page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
             return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
         page = try requireFrame(session);
-        const popups = page._page.popups.items;
+        const popups = page.page.popups.items;
         if (popups.len > scope.popups) {
             page = popups[popups.len - 1];
             session.followPopup(page._frame_id);

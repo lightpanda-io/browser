@@ -181,7 +181,7 @@ pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
     }
     const it = self._items.orderedRemove(index);
     if (it._kind == .file) {
-        it._payload.file._proto.releaseRef(frame._page);
+        it._payload.file._proto.releaseRef(frame.page);
         try self.rebuildFiles(frame);
     }
 }
@@ -189,7 +189,7 @@ pub fn removeItem(self: *DataTransfer, index: u32, frame: *Frame) !void {
 pub fn clearItems(self: *DataTransfer, frame: *Frame) !void {
     for (self._items.items) |it| {
         if (it._kind == .file) {
-            it._payload.file._proto.releaseRef(frame._page);
+            it._payload.file._proto.releaseRef(frame.page);
         }
     }
     self._items.clearRetainingCapacity();

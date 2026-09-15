@@ -31,9 +31,10 @@ _anim_val: *PreserveAspectRatio,
 pub const Lookup = std.AutoHashMapUnmanaged(*Element, *AnimatedPreserveAspectRatio);
 
 pub fn getOrCreate(element: *Element, frame: *Frame) !*AnimatedPreserveAspectRatio {
-    const gop = try frame._svg_animated_preserve_aspect_ratios.getOrPut(frame.arena, element);
+    const page = frame.page;
+    const gop = try page.svg_animated_preserve_aspect_ratios.getOrPut(page.frame_arena, element);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_animated_preserve_aspect_ratios.remove(element);
+        errdefer _ = page.svg_animated_preserve_aspect_ratios.remove(element);
         gop.value_ptr.* = try create(element, frame);
     }
     return gop.value_ptr.*;

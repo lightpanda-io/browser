@@ -51,7 +51,7 @@ pub fn init(node: *Node, frame: *Frame) !*ChildNodes {
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
-        ._cached_version = frame._page.dom_version,
+        ._cached_version = frame.page.dom_version,
     };
     return self;
 }
@@ -118,7 +118,7 @@ pub fn entries(self: *ChildNodes, frame: *Frame) !*EntryIterator {
 }
 
 fn versionCheck(self: *ChildNodes, frame: *const Frame) bool {
-    const current = frame._page.dom_version;
+    const current = frame.page.dom_version;
     if (current == self._cached_version) {
         return true;
     }

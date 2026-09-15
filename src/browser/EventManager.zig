@@ -77,7 +77,7 @@ const DispatchError = EventManagerBase.DispatchError;
 
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
     event.acquireRef();
-    defer _ = event.releaseRef(self.frame._page);
+    defer _ = event.releaseRef(self.frame.page);
 
     // Increment event count for Event Timing API
     self.frame.window._performance._event_counts.increment(event._type_string.str());
@@ -101,7 +101,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 /// called preventDefault().
 pub fn dispatchCancelable(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!bool {
     event.acquireRef();
-    defer event.releaseRef(self.frame._page);
+    defer event.releaseRef(self.frame.page);
     try self.dispatch(target, event);
     return event.getDefaultPrevented();
 }
@@ -140,7 +140,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     window._current_event = event;
     defer window._current_event = prev_event;
 
-    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame._page, opts);
+    try self.base.dispatchDirect(frame.call_arena, frame.js, target, event, handler, frame.page, opts);
 }
 
 /// Check if there are any listeners for a direct dispatch (non-DOM target).
@@ -333,7 +333,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 if (err == error.ExecutionTerminated) {
                     return error.ExecutionTerminated;
                 }
-                frame._page.recordJsError(err);
+                frame.page.recordJsError(err);
                 log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                 break :ret null;
             };
@@ -394,7 +394,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                     if (err == error.ExecutionTerminated) {
                         return error.ExecutionTerminated;
                     }
-                    frame._page.recordJsError(err);
+                    frame.page.recordJsError(err);
                     log.warn(.event, "inline handler", .{ .err = err, .caught = caught });
                     break :ret null;
                 };
@@ -861,7 +861,7 @@ const ActivationState = struct {
         const event = try Event.initTrusted(comptime .wrap(typ), .{
             .bubbles = true,
             .cancelable = false,
-        }, frame._page);
+        }, frame.page);
 
         const target = input.asElement().asEventTarget();
         try frame._event_manager.dispatch(target, event);
