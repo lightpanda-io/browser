@@ -521,6 +521,10 @@ pub fn deinit(self: *Frame) void {
         cs.detach();
     }
 
+    if (self.window._navigator._service_worker) |container| {
+        container.detach();
+    }
+
     const page = self._page;
 
     if (self._queued_navigation) |qn| {

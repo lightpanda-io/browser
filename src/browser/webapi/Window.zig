@@ -298,7 +298,10 @@ fn getSessionStorage(self: *Window) *storage.Lookup {
 }
 
 fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
-    if (self._cookie_store) |cs| return cs;
+    if (self._cookie_store) |cs| {
+        return cs;
+    }
+
     const cs = try exec._factory.eventTarget(CookieStore{ ._proto = undefined });
     try cs.attach(exec);
     self._cookie_store = cs;

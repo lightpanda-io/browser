@@ -46,7 +46,6 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _port: *MessagePort,
-_on_error: ?js.Function.Global = null,
 
 const NameOrOpts = union(enum) {
     name: []const u8,
@@ -101,27 +100,6 @@ pub fn getPort(self: *const SharedWorker) *MessagePort {
     return self._port;
 }
 
-fn getOnError(self: *const SharedWorker) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *SharedWorker, setter: ?FunctionSetter) void {
-    self._on_error = getFunctionFromSetter(setter);
-}
-
-const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
-};
-
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
-    const setter = setter_ orelse return null;
-    return switch (setter) {
-        .func => |func| func,
-        .anything => null,
-    };
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(SharedWorker);
 
@@ -134,7 +112,6 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(SharedWorker.init, .{});
 
     pub const port = bridge.accessor(SharedWorker.getPort, null, .{});
-    pub const onerror = bridge.accessor(SharedWorker.getOnError, SharedWorker.setOnError, .{});
 };
 
 const testing = @import("../../testing.zig");

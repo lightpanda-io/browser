@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+<script>
+  // A worker's script is fetched over HTTP, so how long it takes to leave
+  // `parsed` depends on the machine: wait on the state, never on time.
+  function workerReached(worker, state) {
+    return new Promise((resolve) => {
+      if (worker.state === state) return resolve();
+      worker.addEventListener('statechange', () => worker.state === state && resolve());
+    });
+  }
+</script>
+
+<script id="service_worker_container">
+  {
+    testing.expectTrue('serviceWorker' in navigator);
+    testing.expectTrue(navigator.serviceWorker instanceof ServiceWorkerContainer);
+    // Same object every time, like every other navigator sub-object.
+    testing.expectTrue(navigator.serviceWorker === navigator.serviceWorker);
+    // Nothing controls a client until fetch events are dispatched.
+    testing.expectEqual(null, navigator.serviceWorker.controller);
+  }
+</script>
+
+<script id="service_worker_realm_exclusions" type=module>
+  // A service worker's realm is worker_common_apis, not worker_extended_apis:
+  // the blocking APIs a dedicated/shared worker gets must not be there. A
+  // dedicated worker in the same page still has them.
+  {
+    const state = await testing.async();
+    // Its own scope: the default one is shared with every other subtest here,
+    // and whichever registers first owns the worker for all of them.
+    const registration = await navigator.serviceWorker.register(
+      './realm-worker.js',
+      { scope: './realm/' },
+    );
+    await workerReached(registration.installing, 'activated');
+
+    const dedicated = new Worker('./realm-worker.js');
+    const fromDedicated = await new Promise((resolve) => {
+      dedicated.onmessage = (e) => resolve(e.data);
+    });
+
+    state.resolve();
+    await state.done(() => {
+      // realm-worker.js asserts its own realm and throws on a mismatch, and a
+      // throw stops it before it installs — so reaching "activated" is the
+      // service-worker half of this test.
+      testing.expectEqual('activated', registration.active.state);
+      // ...while the dedicated worker can tell us directly.
+      testing.expectEqual(true, fromDedicated.hasXHR);
+      testing.expectEqual(true, fromDedicated.hasFileReaderSync);
+      // Both realms keep the async pieces.
+      testing.expectEqual(true, fromDedicated.hasFetch);
+      testing.expectEqual(true, fromDedicated.hasWebSocket);
+      // CookieStore is [Exposed=(ServiceWorker,Window)]: none of the three
+      // should be reachable from a dedicated worker.
+      testing.expectEqual(false, fromDedicated.hasCookieStoreCtor);
+      testing.expectEqual(false, fromDedicated.hasCookieStoreProp);
+      testing.expectEqual(false, fromDedicated.hasCookieChangeEvent);
+    });
+  }
+</script>
+
+<script id="service_worker_register" type=module>
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register('./lifecycle-worker.js');
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(registration instanceof ServiceWorkerRegistration);
+      // The default scope is the script's own directory.
+      testing.expectTrue(registration.scope.endsWith('/service_worker/'));
+      testing.expectEqual(null, registration.waiting);
+    });
+  }
+</script>
+
+<script id="service_worker_reaches_activated" type=module>
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register('./lifecycle-worker.js');
+
+    // Resolves only once install's (deferred) waitUntil promise settles and
+    // activate has run.
+    const ready = await navigator.serviceWorker.ready;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(ready instanceof ServiceWorkerRegistration);
+      testing.expectTrue(registration.active instanceof ServiceWorker);
+      testing.expectEqual('activated', registration.active.state);
+      testing.expectEqual(null, registration.installing);
+      testing.expectTrue(registration.active.scriptURL.endsWith('/lifecycle-worker.js'));
+    });
+  }
+</script>
+
+<script id="service_worker_ready_is_one_promise" type=module>
+  // `ready` is the container's single registration-ready promise, so every
+  // access is the same object — before and after it settles.
+  {
+    const state = await testing.async();
+    const before = navigator.serviceWorker.ready;
+    testing.expectTrue(navigator.serviceWorker.ready === before);
+
+    await navigator.serviceWorker.register('./lifecycle-worker.js');
+    await before;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(navigator.serviceWorker.ready === before);
+    });
+  }
+</script>
+
+<script id="service_worker_ready_after_activation" type=module>
+  // `ready` asked for after the worker is already active resolves immediately
+  // rather than waiting for a transition that has already happened.
+  {
+    const state = await testing.async();
+    await navigator.serviceWorker.register('./lifecycle-worker.js');
+    await navigator.serviceWorker.ready;
+
+    const again = await navigator.serviceWorker.ready;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(again instanceof ServiceWorkerRegistration);
+      testing.expectEqual('activated', again.active.state);
+    });
+  }
+</script>
+
+<script id="service_worker_same_scope_reused" type=module>
+  // A second register() for the same scope reuses the running worker rather
+  // than starting a second one.
+  {
+    const state = await testing.async();
+    const first = await navigator.serviceWorker.register('./lifecycle-worker.js');
+    const second = await navigator.serviceWorker.register('./lifecycle-worker.js');
+    await navigator.serviceWorker.ready;
+
+    state.resolve();
+    await state.done(() => {
+      // Same registration object, since it's the same container and scope.
+      testing.expectTrue(first === second);
+      testing.expectTrue(first.active === second.active);
+    });
+  }
+</script>
+
+<script id="service_worker_explicit_scope" type=module>
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register(
+      './lifecycle-worker.js',
+      { scope: './deep/' },
+    );
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(registration.scope.endsWith('/service_worker/deep/'));
+    });
+  }
+</script>
+
+<script id="service_worker_statechange" type=module>
+  // The installing worker's statechange fires as it advances, which is how
+  // sites detect that a new worker took over.
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register('./lifecycle-worker.js');
+
+    const worker = registration.installing;
+    const states = [];
+    worker.addEventListener('statechange', () => states.push(worker.state));
+
+    await navigator.serviceWorker.ready;
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(worker instanceof ServiceWorker);
+      // We don't promise every intermediate state, only that it got there.
+      testing.expectEqual('activated', states[states.length - 1]);
+    });
+  }
+</script>
+
+<script id="service_worker_waituntil_gates_activation" type=module>
+  // An install handler whose waitUntil promise never settles must leave the
+  // worker at `installing` — that gate is the whole point of ExtendableEvent.
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register(
+      './waiting-worker.js',
+      { scope: './stuck/' },
+    );
+    await workerReached(registration.installing, 'installing');
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(null, registration.active);
+      testing.expectTrue(registration.installing instanceof ServiceWorker);
+      testing.expectEqual('installing', registration.installing.state);
+    });
+  }
+</script>
+
+<script id="service_worker_script_error" type=module>
+  // A worker whose top-level script throws never installs.
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register(
+      './throwing-worker.js',
+      { scope: './broken/' },
+    );
+    await workerReached(registration.installing, 'redundant');
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(null, registration.active);
+      testing.expectEqual(null, registration.installing);
+    });
+  }
+</script>
+
+<script id="service_worker_cross_origin_rejects" type=module>
+  {
+    const state = await testing.async();
+    let err = null;
+    try {
+      await navigator.serviceWorker.register('https://example.com/sw.js');
+    } catch (e) {
+      err = e;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('SecurityError', err.name);
+    });
+  }
+</script>
+
+<script id="service_worker_get_registration" type=module>
+  {
+    const state = await testing.async();
+    await navigator.serviceWorker.register('./lifecycle-worker.js');
+
+    const found = await navigator.serviceWorker.getRegistration();
+    const all = await navigator.serviceWorker.getRegistrations();
+    const missing = await navigator.serviceWorker.getRegistration('/nowhere/at/all');
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(found instanceof ServiceWorkerRegistration);
+      testing.expectTrue(all.length > 0);
+      testing.expectEqual(undefined, missing);
+    });
+  }
+</script>
+
+<script id="service_worker_unregister" type=module>
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register(
+      './lifecycle-worker.js',
+      { scope: './gone/' },
+    );
+
+    const first = await registration.unregister();
+    const second = await registration.unregister();
+    const all = await navigator.serviceWorker.getRegistrations();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, first);
+      testing.expectEqual(false, second);
+      // Unregistering detaches this realm's registration: it no longer shows
+      // up in the container and has no worker in any slot.
+      testing.expectTrue(all.every((r) => r !== registration));
+      testing.expectEqual(null, registration.installing);
+      testing.expectEqual(null, registration.active);
+    });
+  }
+</script>
+
+<script id="service_worker_different_script_replaces" type=module>
+  // There is no update pipeline yet, so a second register() for the same scope
+  // with a different script replaces the registration: the old worker goes
+  // redundant and the old registration is detached.
+  {
+    const state = await testing.async();
+    const first = await navigator.serviceWorker.register(
+      './lifecycle-worker.js',
+      { scope: './swap/' },
+    );
+    const worker = first.installing;
+    await workerReached(worker, 'activated');
+
+    const second = await navigator.serviceWorker.register(
+      './waiting-worker.js',
+      { scope: './swap/' },
+    );
+    const all = await navigator.serviceWorker.getRegistrations();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectTrue(first !== second);
+      testing.expectEqual('redundant', worker.state);
+      testing.expectEqual(null, first.active);
+      testing.expectTrue(all.every((r) => r !== first));
+      testing.expectTrue(second.installing.scriptURL.endsWith('/waiting-worker.js'));
+    });
+  }
+</script>
+
+<script id="service_worker_post_message" type=module>
+  // Page -> worker only for now: a worker has no way to reach a client back
+  // until `clients` exists. The assertion is just that it doesn't throw.
+  {
+    const state = await testing.async();
+    const registration = await navigator.serviceWorker.register('./lifecycle-worker.js');
+    await navigator.serviceWorker.ready;
+
+    registration.active.postMessage({ hello: 'worker' });
+
+    let threw = false;
+    try {
+      registration.active.postMessage(function () {});
+    } catch (e) {
+      threw = true;
+      testing.expectEqual('DataCloneError', e.name);
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, threw);
+    });
+  }
+</script>
+
+<script id="service_worker_object_identity" type=module>
+  // identity-worker.js asserts the worker-realm half and throws on a mismatch,
+  // which stops it before it installs — so reaching "activated" is that half of
+  // the test. Here we check the page realm's own view.
+  {
+    const state = await testing.async();
+    const reg = await navigator.serviceWorker.register('./identity-worker.js', { scope: './ident/' });
+    await workerReached(reg.installing, 'activated');
+    const again = await navigator.serviceWorker.getRegistration('./ident/');
+    // The page itself isn't under ./ident/, so the broader default-scope
+    // registration is the one that matches this document.
+    const here = await navigator.serviceWorker.getRegistration();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('activated', reg.active.state);
+      // Longest matching scope wins: ./ident/ is nested inside the default
+      // scope, which was registered first and is a prefix of it.
+      testing.expectTrue(again === reg);
+      testing.expectTrue(here !== reg);
+      // One ServiceWorker object for the one worker.
+      testing.expectTrue(reg.active === reg.active);
+    });
+  }
+</script>
