@@ -100,7 +100,7 @@ pub fn registerMutationObserver(frame: *Frame, observer: *MutationObserver) !voi
 }
 
 pub fn unregisterMutationObserver(frame: *Frame, observer: *MutationObserver) void {
-    observer.releaseRef(frame._page);
+    observer.releaseRef(frame.page);
     frame._mutation.observers.remove(&observer.node);
 }
 
@@ -112,7 +112,7 @@ pub fn registerIntersectionObserver(frame: *Frame, observer: *IntersectionObserv
 pub fn unregisterIntersectionObserver(frame: *Frame, observer: *IntersectionObserver) void {
     for (frame._intersection.observers.items, 0..) |obs, i| {
         if (obs == observer) {
-            observer.releaseRef(frame._page);
+            observer.releaseRef(frame.page);
             _ = frame._intersection.observers.swapRemove(i);
             return;
         }
@@ -127,7 +127,7 @@ pub fn registerResizeObserver(frame: *Frame, observer: *ResizeObserver) !void {
 pub fn unregisterResizeObserver(frame: *Frame, observer: *ResizeObserver) void {
     for (frame._resize.observers.items, 0..) |obs, i| {
         if (obs == observer) {
-            observer.releaseRef(frame._page);
+            observer.releaseRef(frame.page);
             _ = frame._resize.observers.swapRemove(i);
             return;
         }
@@ -342,8 +342,8 @@ fn disconnectRunawayIntersectionObservers(frame: *Frame) void {
     }
 
     for (frame._intersection.observers.items) |observer| {
-        observer.reset(frame._page);
-        observer.releaseRef(frame._page);
+        observer.reset(frame.page);
+        observer.releaseRef(frame.page);
     }
     frame._intersection.observers.clearRetainingCapacity();
 }
@@ -465,7 +465,7 @@ pub fn deliverMutations(frame: *Frame) void {
 
     // slotchange events fire after the observer callbacks (spec step order)
     for (slots) |slot| {
-        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, frame._page) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, frame.page) catch |err| {
             log.err(.frame, "deliverSlotchange.init", .{ .err = err, .type = frame._type, .url = frame.url });
             continue;
         };

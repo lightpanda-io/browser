@@ -443,7 +443,7 @@ pub fn getNamespaceURI(self: *const Element) ?[]const u8 {
 
 pub fn getNamespaceUri(self: *Element, frame: *Frame) ?[]const u8 {
     if (self._namespace != .unknown) return self._namespace.toUri();
-    return frame._element_namespace_uris.get(self);
+    return frame.page.element_namespace_uris.get(self);
 }
 
 pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, frame: *Frame) ?[]const u8 {
@@ -900,7 +900,8 @@ pub fn attachShadow(self: *Element, opts: ShadowRoot.AttachOptions, frame: *Fram
     }
 
     const shadow_root = try ShadowRoot.init(self, opts, frame);
-    try frame._element_shadow_roots.put(frame.arena, self, shadow_root);
+    const page = frame.page;
+    try page.element_shadow_roots.put(page.frame_arena, self, shadow_root);
     self._flags.shadow_host = true;
     return shadow_root;
 }
@@ -912,7 +913,7 @@ pub fn hostedShadowRoot(self: *Element, frame: *const Frame) ?*ShadowRoot {
     if (!self._flags.shadow_host) {
         return null;
     }
-    return frame._element_shadow_roots.get(self);
+    return frame.page.element_shadow_roots.get(self);
 }
 
 pub fn insertAdjacentElement(
@@ -995,19 +996,20 @@ pub fn getAttributeNames(self: *const Element, frame: *Frame) ![][]const u8 {
 }
 
 pub fn getAttributeNamedNodeMap(self: *Element, frame: *Frame) !*Attribute.NamedNodeMap {
-    const gop = try frame._attribute_named_node_map_lookup.getOrPut(frame.arena, @intFromPtr(self));
+    const page = frame.page;
+    const gop = try page.attribute_named_node_map_lookup.getOrPut(page.frame_arena, @intFromPtr(self));
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(Attribute.NamedNodeMap{ ._element = self });
     }
     return gop.value_ptr.*;
 }
 
-// The materialized style lives in the map of the element's own frame, not
-// the caller's: attributeChange (which resyncs it) is dispatched on the owner
-// frame, and a same-origin script can reach an element in another frame.
+// The materialized style is built with the element's own frame, not the
+// caller's: a same-origin script can reach an element in another frame.
 pub fn getOrCreateStyle(self: *Element, frame: *Frame) !*CSSStyleProperties {
     const owner = self.ownerFrame(frame) orelse frame;
-    const gop = try owner._element_styles.getOrPut(owner.arena, self);
+    const page = frame.page;
+    const gop = try page.element_styles.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, owner);
     }
@@ -1019,7 +1021,7 @@ pub fn existingStyle(self: *Element, frame: *Frame) ?*CSSStyleProperties {
     if (!self._flags.has_inline_style) {
         return null;
     }
-    return (self.ownerFrame(frame) orelse frame)._element_styles.get(self);
+    return frame.page.element_styles.get(self);
 }
 
 /// The inline style object, parsed from the style attribute on first use;
@@ -1055,7 +1057,8 @@ pub fn setStyle(self: *Element, value: []const u8, frame: *Frame) !void {
 }
 
 pub fn getClassList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_class_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_class_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1071,7 +1074,8 @@ pub fn setClassList(self: *Element, value: String, frame: *Frame) !void {
 }
 
 pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_part_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_part_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1082,7 +1086,8 @@ pub fn getPartList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
 }
 
 pub fn getRelList(self: *Element, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_rel_lists.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_rel_lists.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1099,7 +1104,8 @@ pub const TokenListKey = struct { element: *Element, attribute: TokenListAttribu
 pub const TokenListLookup = std.AutoHashMapUnmanaged(TokenListKey, *collections.DOMTokenList);
 
 pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, frame: *Frame) !*collections.DOMTokenList {
-    const gop = try frame._element_token_lists.getOrPut(frame.arena, .{ .element = self, .attribute = attribute });
+    const page = frame.page;
+    const gop = try page.element_token_lists.getOrPut(page.frame_arena, .{ .element = self, .attribute = attribute });
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
             ._element = self,
@@ -1110,7 +1116,8 @@ pub fn getTokenList(self: *Element, comptime attribute: TokenListAttribute, fram
 }
 
 pub fn getDataset(self: *Element, frame: *Frame) !*DOMStringMap {
-    const gop = try frame._element_datasets.getOrPut(frame.arena, self);
+    const page = frame.page;
+    const gop = try page.element_datasets.getOrPut(page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try frame._factory.create(DOMStringMap{
             ._element = self,
@@ -1504,7 +1511,7 @@ fn viewportAxis(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
     // clientWidth and clientHeight rather than its own MASSIVE box. This
     // fixes jstracker's uiContourMap which attempts to tile the clientHeight
     // of the body. (https://github.com/lightpanda-io/browser/issues/3251)
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return @floatFromInt(if (axis == .width) viewport.width else viewport.height);
 }
 
@@ -1558,20 +1565,19 @@ pub fn getClientRects(self: *Element, frame: *Frame) ![]*DOMRect {
     return rects;
 }
 
-// Scroll positions live in the map of the element's own frame — not the
-// caller's, which differs when a same-origin script scrolls an element in
-// another frame (e.g. inside an iframe). All scroll accessors resolve the
-// owner frame first so the state, the fired events and the document
-// comparison stay in the element's frame.
+// Scroll events fire in the element's own frame — not the caller's, which
+// differs when a same-origin script scrolls an element in another frame (e.g.
+// inside an iframe). All scroll accessors resolve the owner frame first so the
+// fired events and the document comparison stay in the element's frame.
 pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
     const owner = self.ownerFrame(frame) orelse return 0;
-    const pos = owner._element_scroll_positions.get(self) orelse return 0;
+    const pos = owner.page.element_scroll_positions.get(self) orelse return 0;
     return pos.y;
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
     const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -1584,13 +1590,13 @@ pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
     const owner = self.ownerFrame(frame) orelse return 0;
-    const pos = owner._element_scroll_positions.get(self) orelse return 0;
+    const pos = owner.page.element_scroll_positions.get(self) orelse return 0;
     return pos.x;
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
     const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -1919,8 +1925,9 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
     // A namespace outside the built-in set lives in a side table; the clone
     // must report the same namespaceURI.
     if (self._namespace == .unknown) {
-        if (frame._element_namespace_uris.get(self)) |uri| {
-            try frame._element_namespace_uris.put(frame.arena, node.as(Element), uri);
+        const page = document._page;
+        if (page.element_namespace_uris.get(self)) |uri| {
+            try page.element_namespace_uris.put(page.frame_arena, node.as(Element), uri);
         }
     }
 
@@ -2015,7 +2022,7 @@ pub const ScrollToOpts = union(enum) {
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = (opts orelse return).offsets(y);
     const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -2032,7 +2039,7 @@ pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = (opts orelse return).offsets(y);
     const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner._element_scroll_positions.getOrPut(owner.arena, self);
+    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -2050,7 +2057,7 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
 // scrolling element (the root) are fired at the document instead.
 // `frame` is the element's owner frame (resolved by the public accessors).
 fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
-    const gop = try frame._element_scroll_positions.getOrPut(frame.arena, self);
+    const gop = try frame.page.element_scroll_positions.getOrPut(frame.page.frame_arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -2091,7 +2098,7 @@ const ScrollEventTask = struct {
 
     fn cancelled(ptr: *anyopaque) void {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
-        if (self.frame._element_scroll_positions.getPtr(self.element)) |pos| {
+        if (self.frame.page.element_scroll_positions.getPtr(self.element)) |pos| {
             pos.state = .done;
         }
         self.frame._factory.destroy(self);
@@ -2100,7 +2107,7 @@ const ScrollEventTask = struct {
     fn run(ptr: *anyopaque) anyerror!?u32 {
         const self: *ScrollEventTask = @ptrCast(@alignCast(ptr));
         const f = self.frame;
-        const pos = f._element_scroll_positions.getPtr(self.element) orelse {
+        const pos = f.page.element_scroll_positions.getPtr(self.element) orelse {
             f._factory.destroy(self);
             return null;
         };
@@ -2125,7 +2132,7 @@ const ScrollEventTask = struct {
 
     fn dispatchEvent(self: *ScrollEventTask, comptime event_type: String) void {
         const Event = @import("Event.zig");
-        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame._page) catch |err| {
+        const event = Event.initTrusted(event_type, .{ .bubbles = self.bubbles() }, self.frame.page) catch |err| {
             log.warn(.dom, "element.scroll.event", .{ .err = err });
             return;
         };

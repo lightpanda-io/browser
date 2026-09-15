@@ -27,8 +27,17 @@ const Factory = @import("Factory.zig");
 const Viewport = @import("Viewport.zig");
 
 const Blob = @import("webapi/Blob.zig");
+const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const SharedWorkerGlobalScope = @import("webapi/SharedWorkerGlobalScope.zig");
+const PointList = @import("webapi/svg/PointList.zig");
+const StringList = @import("webapi/svg/StringList.zig");
+const AnimatedEnumeration = @import("webapi/svg/AnimatedEnumeration.zig");
+const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
+const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
+const AnimatedString = @import("webapi/svg/AnimatedString.zig");
+const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
+const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -77,6 +86,61 @@ factory: Factory,
 // objects allocate out of this.
 _frame_arena: *lp.Arena,
 frame_arena: Allocator,
+
+// Lazily-created per-node state, kept out of the nodes themselves because
+// few nodes ever need it. Keyed by node pointer and held by the Page, not a
+// Frame or Document: the state belongs to the node whichever realm touches
+// it, and follows the node across documents (adoption) with no migration.
+// Nodes live until the Page does, so a key is never reused.
+
+// See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
+// fat yet rarely needed. We only create them on-demand, but still need proper
+// identity (a given attribute should return the same *Attribute), so we do
+// a look here, keyed by (list, name). We don't store this in the Element or
+// Attribute.List.Entry because that would require additional space per
+// element / Attribute.List.Entry even though we'll create very few (if any)
+// actual *Attributes.
+attribute_lookup: Element.Attribute.List.Lookup = .empty,
+
+// Canonical pool for attribute names that aren't in String.intern's.
+// Every Attribute's entry's name is either a String intern or held here.
+// This is both a memory optimization (deduping attribute names) and a performance
+// optimization (since we can compare strings by just their pointer)
+attribute_names: std.StringHashMapUnmanaged(void) = .empty,
+
+// Same as attribute_lookup, but instead of individual attributes, this is for
+// the return of elements.attributes.
+attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap) = .empty,
+
+// Lazily-created style, classList, and dataset objects. Only stored for elements
+// that actually access these features via JavaScript, saving 24 bytes per element.
+element_styles: Element.StyleLookup = .empty,
+// Computed-style views handed out by window.getComputedStyle. The computed
+// variant is a stateless lazy view, so one per (element, pseudo-element)
+// suffices — and Chrome returns the same object for repeated calls, so
+// identity is also conformance.
+element_computed_styles: Element.ComputedStyleLookup = .empty,
+element_datasets: Element.DatasetLookup = .empty,
+element_class_lists: Element.ClassListLookup = .empty,
+element_rel_lists: Element.RelListLookup = .empty,
+element_part_lists: Element.PartListLookup = .empty,
+element_token_lists: Element.TokenListLookup = .empty,
+element_shadow_roots: Element.ShadowRootLookup = .empty,
+element_scroll_positions: Element.ScrollPositionLookup = .empty,
+element_namespace_uris: Element.NamespaceUriLookup = .empty,
+svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
+svg_animated_lengths: AnimatedLength.Lookup = .empty,
+svg_animated_numbers: AnimatedNumber.Lookup = .empty,
+svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
+svg_animated_strings: AnimatedString.Lookup = .empty,
+svg_animated_transform_lists: AnimatedTransformList.Lookup = .empty,
+_svg_point_lists: PointList.Lookup = .empty,
+_svg_string_lists: StringList.Lookup = .empty,
+
+// Same as above, but for Nodes (slot assigments apply to both Element AND
+// Text nodes)
+_assigned_slots: Node.AssignedSlotLookup = .empty,
+_manual_slot_assignments: Node.AssignedSlotLookup = .empty,
 
 // Origin map for same-origin context sharing. Entries live for the Page's
 // lifetime.
@@ -203,6 +267,18 @@ pub fn deinit(self: *Page) void {
     self.closed_frames = .empty;
 
     self.frame.deinit();
+
+    {
+        var svg_point_lists = self._svg_point_lists.valueIterator();
+        while (svg_point_lists.next()) |list| {
+            list.*.deinit(self);
+        }
+
+        var svg_transform_lists = self.svg_animated_transform_lists.valueIterator();
+        while (svg_transform_lists.next()) |list| {
+            list.*.deinit(self);
+        }
+    }
 
     for (self.shared_workers.items) |scope| {
         scope.deinit();
@@ -439,5 +515,5 @@ test "Page: js_error_count" {
     const page = try testing.pageTest("page_js_error.html", .{});
     defer page.close();
 
-    try testing.expectEqual(2, page.frame().?._page.js_error_count);
+    try testing.expectEqual(2, page.frame().?.page.js_error_count);
 }

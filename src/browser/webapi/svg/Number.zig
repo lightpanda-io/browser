@@ -30,7 +30,7 @@ _arena: *lp.Arena,
 _value: f32 = 0,
 
 pub fn detached(frame: *Frame) !*Number {
-    const arena = try frame._page.getArena(.tiny, "SVGNumber");
+    const arena = try frame.page.getArena(.tiny, "SVGNumber");
     errdefer arena.release();
     const self = try arena.create(Number);
     self.* = .{ ._arena = arena };

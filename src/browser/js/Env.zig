@@ -338,7 +338,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const page = global._page;
+    const page = global.page;
     const origin = try page.getOrCreateOrigin(null);
     errdefer page.releaseOrigin(origin);
 

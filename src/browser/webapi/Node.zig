@@ -1677,7 +1677,7 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     if (!self._flags.assigned_slot) {
         return null;
     }
-    return frame._assigned_slots.get(self);
+    return frame.page._assigned_slots.get(self);
 }
 
 pub const JsApi = struct {

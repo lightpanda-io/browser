@@ -65,15 +65,6 @@ const popover = @import("webapi/element/popover.zig");
 const slotting = @import("webapi/element/slotting.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
-const PointList = @import("webapi/svg/PointList.zig");
-const StringList = @import("webapi/svg/StringList.zig");
-const AnimatedEnumeration = @import("webapi/svg/AnimatedEnumeration.zig");
-const AnimatedLength = @import("webapi/svg/AnimatedLength.zig");
-const AnimatedNumber = @import("webapi/svg/AnimatedNumber.zig");
-const AnimatedString = @import("webapi/svg/AnimatedString.zig");
-const AnimatedTransformList = @import("webapi/svg/AnimatedTransformList.zig");
-const AnimatedPreserveAspectRatio = @import("webapi/svg/AnimatedPreserveAspectRatio.zig");
-
 const sys_url = @import("../sys/url.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 const GlobalScope = @import("global_scope.zig").GlobalScope;
@@ -104,7 +95,7 @@ _frame_id: u32,
 // navigate.
 _loader_id: u32,
 
-_page: *Page,
+page: *Page,
 
 _session: *Session,
 
@@ -117,55 +108,6 @@ _parse_mode: enum { document, fragment, document_write } = .document,
 // Range.createContextualFragment(), whose scripts DO run when the fragment is
 // inserted into a document
 _fragment_scripts_runnable: bool = false,
-
-// See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
-// fat yet rarely needed. We only create them on-demand, but still need proper
-// identity (a given attribute should return the same *Attribute), so we do
-// a look here, keyed by (list, name). We don't store this in the Element or
-// Attribute.List.Entry because that would require additional space per
-// element / Attribute.List.Entry even though we'll create very few (if any)
-// actual *Attributes.
-_attribute_lookup: Element.Attribute.List.Lookup = .empty,
-
-// Canonical pool for attribute names that aren't in String.intern's.
-// Every Attribute's entry's name is either a String intern or held here.
-// This is both a memory optimization (deduping attribute names) and a performance
-// optimization (since we can compare strings by just their pointer)
-_attribute_names: std.StringHashMapUnmanaged(void) = .empty,
-
-// Same as _atlribute_lookup, but instead of individual attributes, this is for
-// the return of elements.attributes.
-_attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap) = .empty,
-
-// Lazily-created style, classList, and dataset objects. Only stored for elements
-// that actually access these features via JavaScript, saving 24 bytes per element.
-_element_styles: Element.StyleLookup = .empty,
-// Computed-style views handed out by window.getComputedStyle. The computed
-// variant is a stateless lazy view, so one per (element, pseudo-element)
-// suffices — and Chrome returns the same object for repeated calls, so
-// identity is also conformance.
-_element_computed_styles: Element.ComputedStyleLookup = .empty,
-_element_datasets: Element.DatasetLookup = .empty,
-_element_class_lists: Element.ClassListLookup = .empty,
-_element_rel_lists: Element.RelListLookup = .empty,
-_element_part_lists: Element.PartListLookup = .empty,
-_element_token_lists: Element.TokenListLookup = .empty,
-_element_shadow_roots: Element.ShadowRootLookup = .empty,
-_element_scroll_positions: Element.ScrollPositionLookup = .empty,
-_element_namespace_uris: Element.NamespaceUriLookup = .empty,
-_svg_animated_enumerations: AnimatedEnumeration.Lookup = .empty,
-_svg_animated_lengths: AnimatedLength.Lookup = .empty,
-_svg_animated_numbers: AnimatedNumber.Lookup = .empty,
-_svg_animated_preserve_aspect_ratios: AnimatedPreserveAspectRatio.Lookup = .empty,
-_svg_animated_strings: AnimatedString.Lookup = .empty,
-_svg_animated_transform_lists: AnimatedTransformList.Lookup = .empty,
-_svg_point_lists: PointList.Lookup = .empty,
-_svg_string_lists: StringList.Lookup = .empty,
-
-// Same as above, but for Nodes (slot assigments apply to both Element AND
-// Text nodes)
-_assigned_slots: Node.AssignedSlotLookup = .empty,
-_manual_slot_assignments: Node.AssignedSlotLookup = .empty,
 
 /// Lazily-created inline event listeners (or listeners provided as attributes).
 /// Avoids bloating all elements with extra function fields for rare usage.
@@ -398,6 +340,7 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
 
     self.* = .{
         .js = undefined,
+        .page = page,
         .arena = arena,
         .parent = parent,
         .document = document,
@@ -407,7 +350,6 @@ pub fn init(self: *Frame, frame_id: u32, page: *Page, opts: InitOpts) !void {
         .call_arena = call_arena.allocator(),
         .local_arena = local_arena.allocator(),
         ._frame_id = frame_id,
-        ._page = page,
         ._session = session,
         ._loader_id = session.nextLoaderId(),
         ._factory = factory,
@@ -521,7 +463,7 @@ pub fn deinit(self: *Frame) void {
         cs.detach();
     }
 
-    const page = self._page;
+    const page = self.page;
 
     if (self._queued_navigation) |qn| {
         qn.arena.release();
@@ -543,16 +485,6 @@ pub fn deinit(self: *Frame) void {
         }
 
         observers.deinit(self, page);
-
-        var svg_point_lists = self._svg_point_lists.valueIterator();
-        while (svg_point_lists.next()) |list| {
-            list.*.deinit(page);
-        }
-
-        var svg_transform_lists = self._svg_animated_transform_lists.valueIterator();
-        while (svg_transform_lists.next()) |list| {
-            list.*.deinit(page);
-        }
 
         var document = self.window._document;
         document._selection.releaseRef(page);
@@ -722,7 +654,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         const location = try Location.init(self.url, self);
         location.acquireRef();
         // We're not holding a ref to old location anymore.
-        self.window._location.releaseRef(self._page);
+        self.window._location.releaseRef(self.page);
         self.window._location = location;
 
         if (is_blob) {
@@ -754,7 +686,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         // Content injection
         if (is_blob) {
             const blob = blk: {
-                if (self._page.blob_urls.get(request_url)) |entry| break :blk entry.blob;
+                if (self.page.blob_urls.get(request_url)) |entry| break :blk entry.blob;
                 log.warn(.js, "invalid blob", .{ .url = request_url });
                 return error.BlobNotFound;
             };
@@ -903,7 +835,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     // and the in-flight transfer survives the OLD page's frame.deinit which
     // calls http_client.abortList() on the shared frame_id during
     // commitPendingPage.
-    const is_pending_root = self._page.replaces != null;
+    const is_pending_root = self.page.replaces != null;
 
     // We dispatch frame_navigate event before sending the request.
     // It ensures the event frame_navigated is not dispatched before this one.
@@ -1031,7 +963,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
         const location = try Location.init(target.url, target);
         location.acquireRef();
-        target.window._location.releaseRef(target._page);
+        target.window._location.releaseRef(target.page);
         target.window._location = location;
 
         if (target.parent == null) {
@@ -1166,7 +1098,7 @@ pub fn stopLoading(self: *Frame) void {
     }
 
     if (self._queued_navigation) |qn| {
-        const queued = self._page.queued_navigation;
+        const queued = self.page.queued_navigation;
         if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
             _ = queued.swapRemove(idx);
         }
@@ -1203,7 +1135,7 @@ pub fn documentIsLoaded(self: *Frame) void {
 fn _documentIsLoaded(self: *Frame) !void {
     try self.dispatchReadyStateChange();
 
-    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self._page);
+    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self.page);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -1222,7 +1154,7 @@ fn _documentIsLoaded(self: *Frame) !void {
 // (readiness -> complete). Does not bubble.
 // https://html.spec.whatwg.org/multipage/dom.html#current-document-readiness
 fn dispatchReadyStateChange(self: *Frame) !void {
-    const event = try Event.initTrusted(.wrap("readystatechange"), .{}, self._page);
+    const event = try Event.initTrusted(.wrap("readystatechange"), .{}, self.page);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -1254,7 +1186,7 @@ fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) void
     defer entered.exit();
 
     blk: {
-        const event = Event.initTrusted(comptime .wrap("load"), .{}, self._page) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("load"), .{}, self.page) catch |err| {
             log.err(.frame, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
@@ -1317,7 +1249,7 @@ fn _documentIsComplete(self: *Frame) !void {
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
     if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
-        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self._page);
+        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self.page);
         // This event is weird, it's dispatched directly on the window, but
         // with the document as the target.
         event._target = self.document.asEventTarget();
@@ -1389,8 +1321,8 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     // frame_remove (clears OLD V8 context group + CDP node_registry),
     // tears down the OLD page, flips the pointer, and dispatches
     // frame_created against the new (now active) frame.
-    if (self._page.replaces != null) {
-        try self._session.commitPendingPage(self._page);
+    if (self.page.replaces != null) {
+        try self._session.commitPendingPage(self.page);
     }
 
     const response_url = transfer.req.url;
@@ -1423,7 +1355,7 @@ fn frameHeaderDoneCallback(transfer: *HttpClient.Transfer) !HttpClient.Transfer.
     // Init new location.
     const location = try Location.init(self.url, self);
     location.acquireRef();
-    self.window._location.releaseRef(self._page);
+    self.window._location.releaseRef(self.page);
     self.window._location = location;
 
     if (comptime lp.IS_DEBUG) {
@@ -1890,8 +1822,8 @@ fn frameErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // pending Page; the OLD active Page (and its V8 context) is untouched.
     // We do NOT run frameDoneCallback against the pending frame — the frame
     // is about to be freed.
-    if (self._page.replaces != null) {
-        self._session.discardPendingPage(self._page);
+    if (self.page.replaces != null) {
+        self._session.discardPendingPage(self.page);
         return;
     }
 
@@ -1993,7 +1925,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
     const new_frame = try self.arena.create(Frame);
     const frame_id = session.nextFrameId();
 
-    try Frame.init(new_frame, frame_id, self._page, .{ .parent = self });
+    try Frame.init(new_frame, frame_id, self.page, .{ .parent = self });
     errdefer new_frame.deinit();
 
     const delays_load = iframe.isLazyLoading() == false;
@@ -2099,7 +2031,7 @@ const OpenPopupOpts = struct {
 // The popup shares the Page's arena, factory, and identity map, but has no
 // parent and is not attached to the frame tree — it lives in page.popups.
 pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
-    const page = self._page;
+    const page = self.page;
     const session = self._session;
 
     const resolved_url: [:0]const u8 = blk: {
@@ -2161,7 +2093,7 @@ pub fn openPopup(self: *Frame, opts: OpenPopupOpts) !*Frame {
 }
 
 pub fn domChanged(self: *Frame) void {
-    self._page.dom_version += 1;
+    self.page.dom_version += 1;
     self.styleChanged();
 
     // A DOM change is our "rendering opportunity": re-evaluate the layout
@@ -2173,7 +2105,7 @@ pub fn domChanged(self: *Frame) void {
 /// Stamps the cascade: any change that can alter a selector match or cascade
 /// result, including non-tree state that live collections never see.
 pub fn styleChanged(self: *Frame) void {
-    self._page.style_version += 1;
+    self.page.style_version += 1;
 }
 
 const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
@@ -2484,7 +2416,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
 }
 
 fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
-    const event = try Event.initTrusted(name, .{}, self._page);
+    const event = try Event.initTrusted(name, .{}, self.page);
     try self._event_manager.dispatch(el.asEventTarget(), event);
 }
 
@@ -2921,7 +2853,7 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
         }
     }
 
-    if (self._element_shadow_roots.count() != 0) {
+    if (self.page.element_shadow_roots.count() != 0) {
         // html5ever wraps fragment parses in a temporary <html> element that
         // gets unwrapped later; it must not take part in slot assignment.
         const in_fragment_parse = from_parser and self._parse_mode == .fragment;
@@ -3636,7 +3568,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer _ = submit_event.releaseRef(self._page);
+        defer _ = submit_event.releaseRef(self.page);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form
@@ -3664,7 +3596,7 @@ pub fn submitForm(self: *Frame, submitter_: ?*Element, form_: ?*Element.Html.For
 
     const form_data = try FormData.initWithCharset(form, submitter_, charset, &self.js.execution);
     form_data.acquireRef();
-    defer form_data.releaseRef(self._page);
+    defer form_data.releaseRef(self.page);
 
     // Per HTML spec form-submission algorithm, when the submitter is a submit
     // button, its formaction/formmethod/formenctype attributes override the

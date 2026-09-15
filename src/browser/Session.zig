@@ -569,7 +569,7 @@ pub fn idleSlice(self: *Session) u31 {
 }
 
 pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
-    return frame._page.scheduleNavigation(frame);
+    return frame.page.scheduleNavigation(frame);
 }
 
 // Drain one page's queued navigations and return whether any page had work.
@@ -730,7 +730,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
-    const page = frame._page;
+    const page = frame.page;
     frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
@@ -780,7 +780,7 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     const saved_name = reuse_window._name;
     const saved_opener = reuse_window._opener;
     const frame_id = frame._frame_id;
-    const page = frame._page;
+    const page = frame.page;
 
     frame.js.detachGlobal();
     frame.deinit();

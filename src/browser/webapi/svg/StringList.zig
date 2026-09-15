@@ -68,9 +68,10 @@ pub fn getOrCreate(element: *Element, kind: Kind, frame: *Frame) !*StringList {
         .element = element,
         .kind = kind,
     };
-    const gop = try frame._svg_string_lists.getOrPut(frame.arena, key);
+    const page = frame.page;
+    const gop = try page._svg_string_lists.getOrPut(page.frame_arena, key);
     if (!gop.found_existing) {
-        errdefer _ = frame._svg_string_lists.remove(key);
+        errdefer _ = page._svg_string_lists.remove(key);
         gop.value_ptr.* = try frame._factory.create(StringList{
             ._element = element,
             ._attribute_name = kind.attributeName(),

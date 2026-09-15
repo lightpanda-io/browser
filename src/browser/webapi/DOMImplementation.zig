@@ -122,7 +122,7 @@ fn createDocument(_: *const DOMImplementation, namespace_nullable: js.Nullable([
         if (namespace == .unknown) {
             if (namespace_) |uri| {
                 const duped = try frame.dupeString(uri);
-                try frame._element_namespace_uris.put(frame.arena, root.as(Node.Element), duped);
+                try document._page.element_namespace_uris.put(document._page.frame_arena, root.as(Node.Element), duped);
             }
         }
 

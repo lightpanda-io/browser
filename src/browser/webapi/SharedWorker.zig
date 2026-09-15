@@ -77,7 +77,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
         const s = try SharedWorkerGlobalScope.init(frame, resolved_url, options.name, options.type);
         errdefer s.deinit();
 
-        const page = frame._page;
+        const page = frame.page;
         try page.shared_workers.append(page.frame_arena, s);
         errdefer _ = page.shared_workers.pop();
 
@@ -87,7 +87,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
     };
 
     const port = try scope.connect(&frame.js.execution);
-    return frame._page.factory.eventTarget(SharedWorker{
+    return frame.page.factory.eventTarget(SharedWorker{
         ._proto = undefined,
         ._port = port,
     });

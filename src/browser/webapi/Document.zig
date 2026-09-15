@@ -398,7 +398,7 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     if (ns == .unknown) {
         if (namespace) |uri| {
             const duped = try frame.dupeString(uri);
-            try frame._element_namespace_uris.put(frame.arena, node.as(Element), duped);
+            try self._page.element_namespace_uris.put(self._page.frame_arena, node.as(Element), duped);
         }
     }
     return node.as(Element);
@@ -547,12 +547,12 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
 
     const event: *Event = blk: {
         if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents") or std.mem.eql(u8, normalized, "svgevents")) {
-            break :blk try Event.init("", null, frame._page);
+            break :blk try Event.init("", null, frame.page);
         }
 
         if (std.mem.eql(u8, normalized, "customevent")) {
             const CustomEvent = @import("event/CustomEvent.zig");
-            break :blk (try CustomEvent.init("", null, frame._page)).asEvent();
+            break :blk (try CustomEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "keyboardevent")) {
@@ -577,7 +577,7 @@ fn createEvent(_: *const Document, event_type: []const u8, frame: *Frame) !*@imp
 
         if (std.mem.eql(u8, normalized, "messageevent")) {
             const MessageEvent = @import("event/MessageEvent.zig");
-            break :blk (try MessageEvent.init("", null, frame._page)).asEvent();
+            break :blk (try MessageEvent.init("", null, frame.page)).asEvent();
         }
 
         if (std.mem.eql(u8, normalized, "hashchangeevent")) {

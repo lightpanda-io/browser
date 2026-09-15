@@ -33,7 +33,7 @@ _rc: lp.RC = .{},
 pub fn init(raw_url: []const u8, frame: *Frame) !*Location {
     const url = try URL.init(raw_url, null, &frame.js.execution);
     url.acquireRef();
-    errdefer url.releaseRef(frame._page);
+    errdefer url.releaseRef(frame.page);
 
     return frame._factory.create(Location{
         ._url = url,

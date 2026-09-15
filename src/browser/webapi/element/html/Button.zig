@@ -165,7 +165,7 @@ pub fn checkValidity(self: *Button, frame: *Frame) !bool {
     if (!self.getWillValidate()) return true;
     if (self._custom_validity == null) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }

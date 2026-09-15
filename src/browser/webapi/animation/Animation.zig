@@ -84,7 +84,7 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 
     // Schedule the transition from .running => .finished in 10ms.
     self.acquireRef();
-    errdefer self.releaseRef(frame._page);
+    errdefer self.releaseRef(frame.page);
     try frame.js.scheduler.add(
         self,
         Animation.update,
@@ -97,7 +97,7 @@ pub fn play(self: *Animation, frame: *Frame) !void {
 // and `cancelled` are mutually exclusive, so play()'s ref is released once.
 fn cancelled(ctx: *anyopaque) void {
     const self: *Animation = @ptrCast(@alignCast(ctx));
-    self.releaseRef(self._frame._page);
+    self.releaseRef(self._frame.page);
 }
 
 pub fn pause(self: *Animation) void {
@@ -217,7 +217,7 @@ fn update(ctx: *anyopaque) !?u32 {
     }
 
     // No future change scheduled, set the object weak for garbage collection.
-    self.releaseRef(self._frame._page);
+    self.releaseRef(self._frame.page);
     return null;
 }
 

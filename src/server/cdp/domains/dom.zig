@@ -171,7 +171,7 @@ fn performSearch(cmd: *CDP.Command) !void {
     }
 
     const list = try Selector.querySelectorAll(root, params.query, frame);
-    defer list.deinit(frame._page);
+    defer list.deinit(frame.page);
     return finishSearch(cmd, bc, list._nodes);
 }
 
@@ -320,7 +320,7 @@ fn querySelectorAll(cmd: *CDP.Command) !void {
     };
 
     const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, frame);
-    defer selected_nodes.deinit(frame._page);
+    defer selected_nodes.deinit(frame.page);
 
     const nodes = selected_nodes._nodes;
 
@@ -673,9 +673,9 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
         // Files are created at refcount 0; selectFiles takes ownership. If a later
         // path fails to load, release the arenas of the ones already created.
         var created: usize = 0;
-        errdefer for (files[0..created]) |f| f._proto.deinit(frame._page);
+        errdefer for (files[0..created]) |f| f._proto.deinit(frame.page);
         for (params.files, 0..) |path, i| {
-            files[i] = try fileFromDiskPath(path, frame._page);
+            files[i] = try fileFromDiskPath(path, frame.page);
             created = i + 1;
         }
     }
