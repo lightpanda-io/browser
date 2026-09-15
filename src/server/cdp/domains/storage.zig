@@ -92,11 +92,14 @@ fn setCookies(cmd: *CDP.Command) !void {
     try cmd.sendResult(null, .{});
 }
 
-pub const SameSite = enum {
-    Strict,
-    Lax,
-    None,
-};
+fn parseSameSite(s: []const u8) ?Cookie.SameSite {
+    if (std.ascii.eqlIgnoreCase(s, "strict")) return .strict;
+    if (std.ascii.eqlIgnoreCase(s, "lax")) return .lax;
+    if (std.ascii.eqlIgnoreCase(s, "none")) return .none;
+    if (std.ascii.eqlIgnoreCase(s, "no_restriction")) return .none;
+    if (std.ascii.eqlIgnoreCase(s, "unspecified")) return .none;
+    return null;
+}
 const CookiePriority = enum {
     Low,
     Medium,
@@ -121,7 +124,7 @@ pub const CdpCookie = struct {
     path: ?[:0]const u8 = null,
     secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
-    sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
+    sameSite: []const u8 = "None", // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
     expires: ?f64 = null, // -1? says google
     priority: CookiePriority = .Medium, // default: https://datatracker.ietf.org/doc/html/draft-west-cookie-priority-00
     sameParty: ?bool = null,
@@ -141,6 +144,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     if (param.priority != .Medium or param.sameParty != null or param.sourceScheme != null) {
         return error.NotImplemented;
     }
+    const same_site = parseSameSite(param.sameSite) orelse return error.InvalidSameSite;
 
     // The errdefer only protects construction failures. Once we `break :blk`
     // with the Cookie value, `Jar.add` owns its lifetime.
@@ -164,11 +168,7 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
             .expires = param.expires,
             .secure = secure,
             .http_only = param.httpOnly,
-            .same_site = switch (param.sameSite) {
-                .Strict => .strict,
-                .Lax => .lax,
-                .None => .none,
-            },
+            .same_site = same_site,
         };
     };
     try cookie_jar.add(cookie, lp.datetime.timestamp(.real), true);
