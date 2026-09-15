@@ -176,12 +176,7 @@ pub fn cloneFragment(self: *DocumentFragment, deep: bool, document: *const Node.
     const fragment_node = fragment.asNode();
 
     if (deep) {
-        var child_it = self.asNode().childrenIterator();
-        while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
-                try frame.appendNode(fragment_node, cloned_child, .{});
-            }
-        }
+        try self.asNode().cloneChildrenInto(fragment_node, document, frame);
     }
 
     return fragment_node;

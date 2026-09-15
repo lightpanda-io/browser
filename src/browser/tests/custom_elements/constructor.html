@@ -107,6 +107,30 @@
     }
 </script>
 
+<div id=clone_siblings_container></div>
+
+<script id=clone_self_appending_siblings>
+    {
+        // Two trailing constructors append into the list being cloned.
+        let calls = 0;
+        class MyCloneElementB extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                // Bound regressions so a live walk fails rather than hangs.
+                if (calls <= 8) $('#clone_siblings_container').appendChild(this);
+            }
+        }
+        customElements.define('my-clone_element_b', MyCloneElementB);
+        document.createElement('my-clone_element_b');
+        document.createElement('my-clone_element_b');
+        testing.expectEqual(2, calls);
+        $('#clone_siblings_container').cloneNode(true);
+        testing.expectEqual(4, calls);
+        testing.expectEqual(4, $('#clone_siblings_container').childElementCount);
+    }
+</script>
+
 <div id=fragment_clone_container></div>
 
 <script id=clone_fragment>

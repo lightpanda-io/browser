@@ -1942,23 +1942,12 @@ pub fn clone(self: *Element, deep: bool, document: *const Node.Document, frame: 
                 .declarative = shadow._declarative,
             }, frame) catch return error.CloneError;
 
-            const cloned_shadow_node = cloned_shadow.asNode();
-            var shadow_child_it = shadow.asNode().childrenIterator();
-            while (shadow_child_it.next()) |child| {
-                if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
-                    try frame.appendNode(cloned_shadow_node, cloned_child, .{});
-                }
-            }
+            try shadow.asNode().cloneChildrenInto(cloned_shadow.asNode(), document, frame);
         }
     }
 
     if (deep) {
-        var child_it = self.asNode().childrenIterator();
-        while (child_it.next()) |child| {
-            if (try child.cloneNodeForAppending(true, document, frame)) |cloned_child| {
-                try frame.appendNode(node, cloned_child, .{});
-            }
-        }
+        try self.asNode().cloneChildrenInto(node, document, frame);
     }
 
     return node;
