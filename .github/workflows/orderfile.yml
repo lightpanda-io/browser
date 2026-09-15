@@ -1,0 +1,84 @@
+name: orderfile
+
+# Regenerates orderfile/lightpanda.ld + orderfile/v8.txt from a profile of the
+# CDP bench and opens a pull request with the result, every night or on demand
+# from the Actions tab. See orderfile/README.md.
+#
+# release.yml runs the same ./.github/actions/orderfile, but builds with the
+# profile instead of committing it.
+
+env:
+  LIGHTPANDA_DISABLE_TELEMETRY: true
+
+on:
+  schedule:
+    - cron: "2 0 * * *"
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Two tokens, because neither can do the whole job:
+#   - the push uses GITHUB_TOKEN. The distribution app is installed here but
+#     its token has no write access ("Permission to lightpanda-io/browser.git
+#     denied to lightpanda-browser-distribution[bot]").
+#   - the pull request uses the app token. The repository has
+#     can_approve_pull_request_reviews off, so GITHUB_TOKEN gets "GitHub
+#     Actions is not permitted to create or approve pull requests".
+# The app opening the PR also gets it CI checks, which GITHUB_TOKEN never
+# would: GitHub starts no workflow run for an event caused by GITHUB_TOKEN.
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    name: regenerate orderfile
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Generate token for browser
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install
+      - uses: ./.github/actions/v8-snapshot
+
+      - uses: ./.github/actions/orderfile
+        id: orderfile
+        with:
+          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+
+      - name: open a pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OUT: ${{ steps.orderfile.outputs.out-dir }}
+          BRANCH: orderfile-regen
+        run: |
+          if git diff --quiet -- orderfile/lightpanda.ld orderfile/v8.txt; then
+            echo "profile unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add orderfile/lightpanda.ld orderfile/v8.txt
+          git commit -m "orderfile: regenerate the hot-code profile" -m "$(cat "$OUT/result.txt")"
+          # One fixed branch, force-pushed: a re-run refreshes the open PR
+          # instead of stacking a second one.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "refreshed the open pull request"
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "orderfile: regenerate the hot-code profile" \
+            --body-file "$OUT/result.txt"
