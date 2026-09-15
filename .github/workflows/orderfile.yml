@@ -17,15 +17,13 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# The branch push and the PR use GITHUB_TOKEN. GitHub starts no workflow run
-# for an event caused by GITHUB_TOKEN, so the PR gets no CI check. That costs
-# nothing today: the PR touches only orderfile/, and e2e-test.yml and
-# zig-test.yml filter pull_request on .github/**, src/**, build.zig and
-# build.zig.zon, so neither would run on it anyway. Add orderfile/** to those
-# filters and this has to move back to a GitHub App token (see release.yml).
+# The branch push and the PR go through the distribution app rather than
+# GITHUB_TOKEN. The repository has can_approve_pull_request_reviews off, so
+# GITHUB_TOKEN cannot open a pull request at all ("GitHub Actions is not
+# permitted to create or approve pull requests"). The app also gets the PR its
+# CI checks, which GITHUB_TOKEN never would.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   regen:
@@ -35,6 +33,15 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Generate token for browser
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: browser
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
@@ -50,16 +57,17 @@ jobs:
 
       - name: open a pull request
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OUT: ${{ runner.temp }}/orderfile-regen
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OUT: ${{ steps.orderfile.outputs.out-dir }}
           BRANCH: orderfile-regen
         run: |
           if git diff --quiet -- orderfile/lightpanda.ld orderfile/v8.txt; then
             echo "profile unchanged"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          slug="${{ steps.app-token.outputs.app-slug }}[bot]"
+          git config user.name "$slug"
+          git config user.email "$(gh api "/users/$slug" --jq .id)+$slug@users.noreply.github.com"
           git add orderfile/lightpanda.ld orderfile/v8.txt
           git commit -m "orderfile: regenerate the hot-code profile" -m "$(cat "$OUT/result.txt")"
           # One fixed branch, force-pushed: a re-run refreshes the open PR
