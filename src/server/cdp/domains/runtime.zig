@@ -271,7 +271,7 @@ test "cdp.runtime: consoleAPICalled only carries values for primitives" {
     try testing.expectEqual(0, try probed.toF64());
 }
 
-test "cdp.runtime: console calls made while a notification is being built" {
+test "cdp.runtime: console notifications run no page JS" {
     testing.silenceLog(&.{.js});
 
     var ctx = try testing.context();
@@ -285,19 +285,17 @@ test "cdp.runtime: console calls made while a notification is being built" {
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
-    // Legacy Console formatting can re-enter the notification handlers.
     _ = try ls.local.exec(
-        \\const inner = 'x'.repeat(120);
-        \\const probe = { toString() { console.log(inner); console.log(inner); return 'outer'; } };
+        \\globalThis.probed = 0;
+        \\const probe = { toString() { globalThis.probed++; console.log('inner'); return 'outer'; } };
         \\console.log('head-marker', probe, 'tail-marker-'.repeat(20));
     , null);
 
-    const inner = "x" ** 120;
     const tail = "tail-marker-" ** 20;
-    try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = inner }, .{});
-    try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = "head-marker outer " ++ tail }, .{});
-    try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{.{ .type = "string", .value = inner }} }, .{});
+    try ctx.expectSentEvent("Console.messageAdded", .{ .level = "log", .text = "head-marker [object Object] " ++ tail }, .{});
     try ctx.expectSentEvent("Runtime.consoleAPICalled", .{ .type = "log", .args = .{ .{ .type = "string", .value = "head-marker" }, .{ .type = "object", .className = "Object" }, .{ .type = "string", .value = tail } } }, .{});
+    const probed = try ls.local.exec("globalThis.probed", null);
+    try testing.expectEqual(0, try probed.toF64());
     try testing.expectEqual(0, ctx.cdp().notification_depth);
     try testing.expectEqual(0, ctx.cdp().link.send_depth);
     try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .params = .{ .expression = "6 * 7" } });
