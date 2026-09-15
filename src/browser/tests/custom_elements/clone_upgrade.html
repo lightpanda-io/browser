@@ -162,3 +162,48 @@
         testing.expectEqual(1, reported);
     }
 </script>
+
+<script id=upgrade_constructor_removes_itself>
+    {
+        const events = [];
+        const el = document.body.appendChild(document.createElement('self-removing-upgrade'));
+        customElements.define('self-removing-upgrade', class extends HTMLElement {
+            constructor() {
+                super();
+                this.remove();
+            }
+            connectedCallback() { events.push('connected'); }
+            disconnectedCallback() { events.push('disconnected'); }
+        });
+        testing.expectEqual(['connected'], events);
+        document.body.appendChild(el);
+        testing.expectEqual(['connected', 'connected'], events);
+        el.remove();
+        testing.expectEqual(['connected', 'connected', 'disconnected'], events);
+    }
+</script>
+
+<script id=clone_constructor_connects_itself>
+    {
+        let cloning = false;
+        const events = [];
+        class SelfConnectingClone extends HTMLElement {
+            constructor() {
+                super();
+                if (cloning) document.body.appendChild(this);
+            }
+            connectedCallback() { if (cloning) events.push('connected'); }
+            disconnectedCallback() { if (cloning) events.push('disconnected'); }
+        }
+        customElements.define('self-connecting-clone', SelfConnectingClone);
+        const original = new SelfConnectingClone();
+        cloning = true;
+        const copy = original.cloneNode();
+        testing.expectEqual(true, copy.isConnected);
+        testing.expectEqual([], events);
+        copy.remove();
+        testing.expectEqual(['disconnected'], events);
+        document.body.appendChild(copy);
+        testing.expectEqual(['disconnected', 'connected'], events);
+    }
+</script>

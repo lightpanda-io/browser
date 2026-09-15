@@ -266,6 +266,12 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
         frame.window.reportError(exc, frame) catch {};
         return error.CustomElementUpgradeFailed;
     }
+
+    // Insertions and removals during construction queue nothing, so the
+    // dedup flags must reflect where the constructor left the element.
+    const connected = node.isConnected();
+    custom._connected_callback_invoked = connected;
+    custom._disconnected_callback_invoked = connected == false;
 }
 
 fn upgradeFailed(custom: *Custom) void {
