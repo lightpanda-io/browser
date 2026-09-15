@@ -56,6 +56,15 @@ pub const SameSite = enum {
     strict,
     lax,
     none,
+
+    pub fn parse(value: []const u8) error{InvalidSameSite}!?SameSite {
+        if (std.ascii.eqlIgnoreCase(value, "strict")) return .strict;
+        if (std.ascii.eqlIgnoreCase(value, "lax")) return .lax;
+        if (std.ascii.eqlIgnoreCase(value, "none")) return .none;
+        if (std.ascii.eqlIgnoreCase(value, "no_restriction")) return .none;
+        if (std.ascii.eqlIgnoreCase(value, "unspecified")) return null;
+        return error.InvalidSameSite;
+    }
 };
 
 // How the request carrying the Cookie header reaches its target. Only a

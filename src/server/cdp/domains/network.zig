@@ -291,7 +291,10 @@ fn setCookie(cmd: *CDP.Command) !void {
     )) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    try CdpStorage.setCdpCookie(&bc.session.cookie_jar, params);
+    CdpStorage.setCdpCookie(&bc.session.cookie_jar, params) catch |err| switch (err) {
+        error.InvalidSameSite => return CdpStorage.invalidSameSiteError(cmd, params.sameSite),
+        else => return err,
+    };
 
     try cmd.sendResult(.{ .success = true }, .{});
 }
@@ -303,7 +306,10 @@ fn setCookies(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     for (params.cookies) |param| {
-        try CdpStorage.setCdpCookie(&bc.session.cookie_jar, param);
+        CdpStorage.setCdpCookie(&bc.session.cookie_jar, param) catch |err| switch (err) {
+            error.InvalidSameSite => return CdpStorage.invalidSameSiteError(cmd, param.sameSite),
+            else => return err,
+        };
     }
 
     try cmd.sendResult(null, .{});
@@ -972,6 +978,57 @@ test "cdp.Network: cookies" {
         .params = .{ .browserContextId = "BID-S" },
     });
     try ctx.expectSentResult(.{ .cookies = &[_]ResCookie{} }, .{ .id = 10 });
+}
+
+test "cdp.Network: setCookie accepts the sameSite spellings drivers send" {
+    // Issue #3453: cookies bridged from chrome.cookies / other tooling come
+    // with lowercase or `no_restriction` sameSite values. Accept them on
+    // input; getCookies keeps reporting the canonical CDP spelling.
+    const ResCookie = CdpStorage.ResCookie;
+
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-SS" });
+
+    try ctx.processMessage(
+        \\{"id":1,"method":"Network.setCookie","params":{"name":"a","value":"1","url":"https://example.com/","sameSite":"lax"}}
+    );
+    try ctx.expectSentResult(.{ .success = true }, .{ .id = 1 });
+
+    try ctx.processMessage(
+        \\{"id":2,"method":"Network.setCookies","params":{"cookies":[
+        \\  {"name":"b","value":"2","url":"https://example.com/","sameSite":"no_restriction"},
+        \\  {"name":"c","value":"3","url":"https://example.com/","sameSite":"STRICT"},
+        \\  {"name":"d","value":"4","url":"https://example.com/","sameSite":"unspecified"}
+        \\]}}
+    );
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Network.getAllCookies",
+    });
+    try ctx.expectSentResult(.{
+        .cookies = &[_]ResCookie{
+            .{ .name = "a", .value = "1", .domain = "example.com", .size = 2, .secure = true, .sameSite = "Lax" },
+            // `no_restriction` is the chrome.cookies spelling of None.
+            .{ .name = "b", .value = "2", .domain = "example.com", .size = 2, .secure = true, .sameSite = "None" },
+            .{ .name = "c", .value = "3", .domain = "example.com", .size = 2, .secure = true, .sameSite = "Strict" },
+            // `unspecified` means no SameSite was set, so it takes the default.
+            .{ .name = "d", .value = "4", .domain = "example.com", .size = 2, .secure = true, .sameSite = "Lax" },
+        },
+    }, .{ .id = 3 });
+}
+
+test "cdp.Network: setCookie rejects an unknown sameSite by name" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-SE" });
+
+    try ctx.processMessage(
+        \\{"id":1,"method":"Network.setCookie","params":{"name":"a","value":"1","url":"https://example.com/","sameSite":"sometimes"}}
+    );
+    try ctx.expectSentError(-31998, "Invalid value 'sometimes' for 'sameSite'. Accepted (case-insensitive): Strict, Lax, None, no_restriction, unspecified", .{ .id = 1 });
 }
 
 test "cdp.Network: clearBrowserCookies accepts empty params object" {

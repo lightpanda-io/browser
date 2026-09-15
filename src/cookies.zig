@@ -156,11 +156,8 @@ const JsonCookie = struct {
 };
 
 fn parseJsonSameSite(value: ?[]const u8) Cookie.SameSite {
-    const same_site = value orelse return .none;
-    if (std.ascii.eqlIgnoreCase(same_site, "strict")) return .strict;
-    if (std.ascii.eqlIgnoreCase(same_site, "lax")) return .lax;
-    if (std.ascii.eqlIgnoreCase(same_site, "none")) return .none;
-    return .none;
+    const raw = value orelse return .lax;
+    return (Cookie.SameSite.parse(raw) catch .lax) orelse .lax;
 }
 
 /// Netscape cookie file format parser with `#HttpOnly_` addition from curl.
