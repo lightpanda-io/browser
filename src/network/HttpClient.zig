@@ -3430,11 +3430,15 @@ pub const Transfer = struct {
         }
 
         try transfer.updateURL(url);
-        // 301, 302, 303 → change to GET, drop body.
-        // 307, 308 → keep method and body.
-        if (status == 301 or status == 302 or status == 303) {
+        const rewrite_to_get = ((status == 301 or status == 302) and req.method == .POST) or
+            (status == 303 and req.method != .GET and req.method != .HEAD);
+        if (rewrite_to_get) {
             req.method = .GET;
             req.body = null;
+            // Fetch's request-body headers must not outlive the body.
+            inline for (.{ "Content-Encoding", "Content-Language", "Content-Location", "Content-Type" }) |name| {
+                transfer.removeHeader(name);
+            }
         }
 
         if (req.referrer_policy) |policy| {
@@ -5109,6 +5113,78 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
     try testing.expectEqual(0, client.transfers.count());
 }
 
+test "HttpClient: redirects drop body headers only when rewriting the method" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    const cases = [_]struct { status: u16, method: Method, expected: Method }{
+        .{ .status = 301, .method = .POST, .expected = .GET },
+        .{ .status = 302, .method = .POST, .expected = .GET },
+        .{ .status = 303, .method = .POST, .expected = .GET },
+        .{ .status = 307, .method = .POST, .expected = .POST },
+        .{ .status = 308, .method = .POST, .expected = .POST },
+        .{ .status = 301, .method = .PUT, .expected = .PUT },
+        .{ .status = 302, .method = .PUT, .expected = .PUT },
+        .{ .status = 303, .method = .PUT, .expected = .GET },
+        .{ .status = 303, .method = .PATCH, .expected = .GET },
+        .{ .status = 303, .method = .DELETE, .expected = .GET },
+        .{ .status = 301, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 302, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 303, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 301, .method = .GET, .expected = .GET },
+        .{ .status = 302, .method = .GET, .expected = .GET },
+        .{ .status = 303, .method = .GET, .expected = .GET },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "redirect test");
+        defer arena.release();
+        const body: ?[]const u8 = if (case.method == .GET or case.method == .HEAD) null else "payload";
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = case.method,
+                .url = "http://example.com/start",
+                .body = body,
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
+                .resource_type = .document,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        const body_headers = [_][]const u8{ "content-type", "Content-Encoding", "CONTENT-LANGUAGE", "Content-Location" };
+        for (body_headers) |name| try transfer.setHeader(name, "body-value", .{});
+        try transfer.setHeader("Accept", "text/html", .{});
+        try transfer.setHeader("X-Keep", "yes", .{});
+
+        try transfer.applyRedirectTarget(transfer.req.url, "/end", case.status);
+        try testing.expectEqual(case.expected, transfer.req.method);
+        const rewritten = case.method != case.expected;
+        if (rewritten or body == null) {
+            try testing.expectEqual(null, transfer.req.body);
+        } else {
+            try testing.expectEqual(body.?, transfer.req.body.?);
+        }
+        for (body_headers) |name| {
+            if (rewritten) {
+                try testing.expectEqual(null, transfer.findRequestHeader(name));
+            } else {
+                try testing.expectEqual("body-value", transfer.findRequestHeader(name).?);
+            }
+        }
+        try testing.expectEqual("text/html", transfer.findRequestHeader("accept").?);
+        try testing.expectEqual("yes", transfer.findRequestHeader("x-keep").?);
+        try testing.expectEqual("http://example.com/end", transfer.req.url);
+    }
+}
+
 test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
     // Regression for #2828: a CDP Fetch.fulfillRequest with a 3xx status + a
     // Location header must be followed like a real network redirect (re-issued
@@ -5158,6 +5234,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
 
+        try transfer.setHeader("Content-Type", "multipart/form-data; boundary=test", .{});
         transfer.park(.intercept_request);
         client.intercepted += 1;
 
@@ -5170,6 +5247,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         try testing.expectEqual("http://example.com/end", transfer.req.url);
         try testing.expectEqual(.GET, transfer.req.method);
         try testing.expectEqual(null, transfer.req.body);
+        try testing.expectEqual(null, transfer.findRequestHeader("content-type"));
         // Unparked exactly once; transfer is still alive.
         try testing.expectEqual(0, client.intercepted);
         try testing.expectEqual(1, client.transfers.count());
@@ -5200,6 +5278,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
 
+        try transfer.setHeader("Content-Type", "multipart/form-data; boundary=test", .{});
         transfer.park(.intercept_request);
         client.intercepted += 1;
 
@@ -5211,6 +5290,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         try testing.expectEqual("http://example.com/other", transfer.req.url);
         try testing.expectEqual(.POST, transfer.req.method);
         try testing.expectEqual("payload", transfer.req.body.?);
+        try testing.expectEqual("multipart/form-data; boundary=test", transfer.findRequestHeader("content-type").?);
         try testing.expectEqual(0, client.intercepted);
         transfer.deinit();
     }
