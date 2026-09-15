@@ -153,6 +153,10 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+
     // Validate priority
     const priority = priority_ orelse "";
     const important = if (priority.len > 0) blk: {
@@ -218,6 +222,9 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 }
 
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
     const result = try self.removePropertyImpl(property_name, frame);
     try self.syncStyleAttribute(frame);
     return result;
@@ -277,6 +284,9 @@ fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
 }
 
 fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
     try self.setPropertyImpl("float", value_ orelse "", false, frame);
     try self.syncStyleAttribute(frame);
 }
@@ -288,6 +298,15 @@ fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
 }
 
 pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    try self.replaceCssText(text, frame);
+}
+
+// setCssText without the read-only check, for declarations that are never
+// computed (a CSSStyleRule's style).
+pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
     self.clearProperties(frame);
 
     try self.applyDeclarations(text, frame);
