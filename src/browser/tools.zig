@@ -683,7 +683,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
-                    \\    "name": { "type": "string", "description": "Optional accessible name to match, case-insensitive: a substring, or a JavaScript-syntax regex written as /.../ (unanchored: use ^...$ for the whole name; prefix (?-i) for case-sensitive)." }
+                    \\    "name": { "type": "string", "description": "Optional accessible name to match, case-insensitive: a substring, or a JavaScript regex literal such as /sign (in|up)/ (unanchored; flags i, m, s, u accepted; case-insensitive even without i, prefix (?-i) to make it case-sensitive)." }
                     \\  }
                     \\}
                 ),
@@ -2073,23 +2073,32 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const page = try requireFrame(session);
 
-    const pattern: ?[]const u8 = if (args.name) |name| regexBody(name) else null;
+    const literal: ?RegexLiteral = if (args.name) |name| regexLiteral(name) else null;
     var diag: lp.Regex.Diagnostic = .{};
-    const name_regex: ?lp.Regex = if (pattern) |p|
-        session.browser.app.regex_context.compile(p, .{ .case_insensitive = true, .unicode = true }, &diag) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidRegex => return .{
-                .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ p, diag.message(), diag.offset }),
+    const name_regex: ?lp.Regex = if (literal) |lit| blk: {
+        var options: lp.Regex.Options = .{ .case_insensitive = true, .unicode = true };
+        for (lit.flags) |flag| switch (flag) {
+            'i', 'u' => {},
+            's' => options.dot_all = true,
+            'm' => options.multiline = true,
+            else => return .{
+                .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, args.name.? }),
                 .is_error = true,
             },
-        }
-    else
-        null;
+        };
+        break :blk session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRegex => return .{
+                .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
+                .is_error = true,
+            },
+        };
+    } else null;
     defer if (name_regex) |re| re.deinit();
 
     const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
         .role = args.role,
-        .name = if (pattern == null) args.name else null,
+        .name = if (literal == null) args.name else null,
         .name_regex = name_regex,
     }) catch return ToolError.InternalError;
 
@@ -2098,11 +2107,22 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
     return .{ .text = try renderJson(arena, matched) };
 }
 
-/// The body of a `/.../` literal, the spelling adblock lists use for a regex
-/// too. Unanchored, so a name that really is written that way still matches.
-fn regexBody(text: []const u8) ?[]const u8 {
-    if (text.len > 2 and text[0] == '/' and text[text.len - 1] == '/') return text[1 .. text.len - 1];
-    return null;
+const RegexLiteral = struct {
+    body: []const u8,
+    flags: []const u8,
+};
+
+/// A `/body/flags` literal as JavaScript writes it, and the spelling adblock
+/// lists use for a regex too. Anything after the closing slash that is not a
+/// letter makes the whole thing plain text again. Matching is unanchored, so
+/// a name that really is written as `/foo/` still matches itself.
+fn regexLiteral(text: []const u8) ?RegexLiteral {
+    if (text.len < 3 or text[0] != '/') return null;
+    const close = 1 + (std.mem.lastIndexOfScalar(u8, text[1..], '/') orelse return null);
+    if (close == 1) return null;
+    const flags = text[close + 1 ..];
+    for (flags) |flag| if (!std.ascii.isLower(flag)) return null;
+    return .{ .body = text[1..close], .flags = flags };
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {

@@ -1431,6 +1431,35 @@ test "MCP - findElement" {
         try testing.expect(std.mem.indexOf(u8, out.written(), "missing closing parenthesis at offset 1") != null);
         out.clearRetainingCapacity();
     }
+
+    {
+        const msg =
+            \\{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/PREVENT.DEFAULT/i"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "Prevent Default") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        const msg =
+            \\{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/g"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "\"isError\":true") != null);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "unsupported regex flag 'g' in '/prevent/g'") != null);
+        out.clearRetainingCapacity();
+    }
+
+    {
+        // Text after the closing slash that is not a flag is a plain substring.
+        const msg =
+            \\{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"findElement","arguments":{"name":"/prevent/ default"}}}
+        ;
+        try router.handleMessage(server, aa, msg);
+        try testing.expect(std.mem.indexOf(u8, out.written(), "[]") != null);
+        out.clearRetainingCapacity();
+    }
 }
 
 test "MCP - waitForSelector: existing element" {

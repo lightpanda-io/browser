@@ -42,6 +42,10 @@ pub const Options = struct {
     /// works beyond ASCII. An invalid sequence in the subject fails to match
     /// rather than erroring. `\b` and `\w` stay ASCII, as in JavaScript.
     unicode: bool = false,
+    /// JavaScript's `s`: `.` also matches a newline.
+    dot_all: bool = false,
+    /// JavaScript's `m`: `^` and `$` also match around newlines.
+    multiline: bool = false,
 };
 
 /// Why a compile failed, for the caller to log or show.
@@ -106,6 +110,8 @@ pub const Context = struct {
         var flags: u32 = 0;
         if (options.case_insensitive) flags |= pcre2.PCRE2_CASELESS;
         if (options.unicode) flags |= pcre2.PCRE2_UTF | pcre2.PCRE2_MATCH_INVALID_UTF;
+        if (options.dot_all) flags |= pcre2.PCRE2_DOTALL;
+        if (options.multiline) flags |= pcre2.PCRE2_MULTILINE;
 
         var err_code: c_int = 0;
         var err_offset: usize = 0;
@@ -239,6 +245,25 @@ test "Regex: invalid patterns are errors, runaway ones no match" {
     const subject = "a" ** 64 ++ "b";
     try testing.expect(!runaway.matches(subject));
     try testing.expect(runaway.matches("a" ** 64));
+}
+
+test "Regex: dot_all and multiline follow the JavaScript flags" {
+    const context: *Context = try .init(testing.allocator);
+    defer context.deinit();
+
+    const dot = try context.compile("a.b", .{}, null);
+    defer dot.deinit();
+    try testing.expect(!dot.matches("a\nb"));
+    const dot_all = try context.compile("a.b", .{ .dot_all = true }, null);
+    defer dot_all.deinit();
+    try testing.expect(dot_all.matches("a\nb"));
+
+    const line = try context.compile("^b$", .{}, null);
+    defer line.deinit();
+    try testing.expect(!line.matches("a\nb"));
+    const multiline = try context.compile("^b$", .{ .multiline = true }, null);
+    defer multiline.deinit();
+    try testing.expect(multiline.matches("a\nb"));
 }
 
 test "Regex: a diagnostic names the fault and where it is" {
