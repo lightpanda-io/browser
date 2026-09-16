@@ -113,6 +113,45 @@
 }
 </script>
 
+<script id="overflowShorthand">
+{
+  const div = document.createElement('div');
+  div.style.cssText = 'overflow: hidden; overflow-y: scroll';
+  testing.expectEqual('hidden', div.style.overflowX);
+  testing.expectEqual('scroll', div.style.overflowY);
+  testing.expectEqual('hidden scroll', div.style.overflow);
+  testing.expectEqual(2, div.style.length);
+  testing.expectEqual('overflow: hidden scroll;', div.style.cssText);
+
+  div.style.setProperty('overflow', 'hidden');
+  testing.expectEqual('hidden', div.style.overflowY);
+  testing.expectEqual('hidden', div.style.overflow);
+  testing.expectEqual('overflow: hidden;', div.style.cssText);
+
+  div.style.overflowY = 'auto';
+  testing.expectEqual('hidden auto', div.style.overflow);
+  testing.expectEqual('overflow: hidden auto;', div.style.cssText);
+
+  // Chrome returns '' from removeProperty for a shorthand, Firefox the value.
+  div.style.removeProperty('overflow');
+  testing.expectEqual('', div.style.overflowX);
+  testing.expectEqual(0, div.style.length);
+
+  div.style.overflowX = 'scroll';
+  testing.expectEqual('', div.style.overflow);
+  testing.expectEqual('overflow-x: scroll;', div.style.cssText);
+
+  div.style.setProperty('overflow', 'auto', 'important');
+  testing.expectEqual('important', div.style.getPropertyPriority('overflow'));
+  testing.expectEqual('overflow: auto !important;', div.style.cssText);
+
+  div.style.overflowY = 'hidden';
+  testing.expectEqual('', div.style.overflow);
+  testing.expectEqual('', div.style.getPropertyPriority('overflow'));
+  testing.expectEqual('overflow-x: auto !important; overflow-y: hidden;', div.style.cssText);
+}
+</script>
+
 <script id="invalidPriority">
 {
   const div = $('#test-div');

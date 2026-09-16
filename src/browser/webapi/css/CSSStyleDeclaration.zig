@@ -97,42 +97,95 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
         }
     }
 
-    const prop = self.findProperty(wrapped) orelse {
-        // Only return default values for computed styles
-        if (self._is_computed) {
-            if (self._element) |element| {
-                if (element.ownerFrame(frame)) |owner| {
-                    const style_manager = &owner._style_manager;
+    if (self.declaredValue(wrapped, frame)) |value| {
+        return value;
+    }
 
-                    if (isCustomProperty(normalized)) {
-                        return style_manager.customPropertyValue(element, wrapped) orelse "";
-                    }
-
-                    // Resolve inline `style=` declarations through the element's
-                    // parsed inline style, so computed values match `el.style`.
-                    if (style_manager.inlineStyleValue(element, wrapped)) |value| {
-                        return value;
-                    }
-
-                    // Computed width/height must agree with the synthetic layout
-                    // metrics. Returning "" makes measurement code see
-                    // contradictory sizes — jQuery's "shrink text until it fits"
-                    // loops then never terminate. jQuery's .width() reads this
-                    // value, so it must also carry clientWidth's content fallback
-                    // or append-until-wide marquee loops never terminate.
-                    if (wrapped.eql(comptime .wrap("width"))) {
-                        return resolvedDimension(element, .width, frame);
-                    }
-                    if (wrapped.eql(comptime .wrap("height"))) {
-                        return resolvedDimension(element, .height, frame);
-                    }
-                }
-            }
-            return getDefaultPropertyValue(self, wrapped);
-        }
+    // Only return default values for computed styles
+    if (!self._is_computed) {
         return "";
-    };
+    }
+    if (self._element) |element| {
+        if (element.ownerFrame(frame)) |owner| {
+            const style_manager = &owner._style_manager;
+
+            if (isCustomProperty(normalized)) {
+                return style_manager.customPropertyValue(element, wrapped) orelse "";
+            }
+
+            // Resolve inline `style=` declarations through the element's
+            // parsed inline style, so computed values match `el.style`.
+            if (style_manager.inlineStyleValue(element, wrapped)) |value| {
+                return value;
+            }
+
+            // Computed width/height must agree with the synthetic layout
+            // metrics. Returning "" makes measurement code see
+            // contradictory sizes — jQuery's "shrink text until it fits"
+            // loops then never terminate. jQuery's .width() reads this
+            // value, so it must also carry clientWidth's content fallback
+            // or append-until-wide marquee loops never terminate.
+            if (wrapped.eql(comptime .wrap("width"))) {
+                return resolvedDimension(element, .width, frame);
+            }
+            if (wrapped.eql(comptime .wrap("height"))) {
+                return resolvedDimension(element, .height, frame);
+            }
+        }
+    }
+    return getDefaultPropertyValue(self, wrapped);
+}
+
+/// The value of a declared property, or null when it isn't declared. The
+/// `overflow` shorthand reads as its longhands when both are present with
+/// the same priority, the way the CSSOM serializes a shorthand.
+pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
+    if (name.eql(overflow_shorthand)) {
+        const x = self.findProperty(comptime .wrap("overflow-x")) orelse return null;
+        const y = self.overflowPartner(x) orelse return null;
+        if (x._value.eql(y._value)) {
+            return x._value.str();
+        }
+        return std.fmt.allocPrint(frame.local_arena, "{f} {f}", .{ x._value, y._value }) catch return null;
+    }
+    const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
+}
+
+// `overflow` is the one shorthand whose longhands the style cascade folds
+// (StyleManager tracks overflow-x and overflow-y), so it is the one this
+// object stores expanded, as the CSSOM does for every shorthand: setting it
+// sets both longhands, reading or serializing it recombines them.
+const overflow_shorthand: String = .wrap("overflow");
+
+const OverflowValues = struct { x: []const u8, y: []const u8 };
+
+// `overflow: <x> [<y>]`; a single value applies to both axes. More than two
+// values is invalid and ignored.
+fn splitOverflow(value: []const u8) ?OverflowValues {
+    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+    const x = it.next() orelse return null;
+    const y = it.next() orelse x;
+    if (it.next() != null) {
+        return null;
+    }
+    return .{ .x = x, .y = y };
+}
+
+/// The other overflow longhand when `prop` is one and both are declared with
+/// the same priority: the pair reads and serializes as the shorthand.
+fn overflowPartner(self: *const CSSStyleDeclaration, prop: *const Property) ?*Property {
+    const other: String = if (prop._name.eql(comptime .wrap("overflow-x")))
+        comptime .wrap("overflow-y")
+    else if (prop._name.eql(comptime .wrap("overflow-y")))
+        comptime .wrap("overflow-x")
+    else
+        return null;
+    const partner = self.findProperty(other) orelse return null;
+    if (partner._important != prop._important) {
+        return null;
+    }
+    return partner;
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
@@ -148,7 +201,14 @@ fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame
 
 pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []const u8, frame: *Frame) []const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    const prop = self.findProperty(.wrap(normalized)) orelse return "";
+    const wrapped = String.wrap(normalized);
+    if (wrapped.eql(overflow_shorthand)) {
+        // A shorthand is important when all its longhands are.
+        const x = self.findProperty(comptime .wrap("overflow-x")) orelse return "";
+        const y = self.findProperty(comptime .wrap("overflow-y")) orelse return "";
+        return if (x._important and y._important) "important" else "";
+    }
+    const prop = self.findProperty(wrapped) orelse return "";
     return if (prop._important) "important" else "";
 }
 
@@ -175,8 +235,14 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// setProperty path, within a single declaration block a normal declaration must
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
+    const normalized = normalizePropertyName(declaration.name, &frame.buf);
+    if (std.mem.eql(u8, normalized, "overflow")) {
+        const values = splitOverflow(declaration.value) orelse return;
+        try self.applyParsedDeclaration(.{ .name = "overflow-x", .value = values.x, .important = declaration.important }, frame);
+        try self.applyParsedDeclaration(.{ .name = "overflow-y", .value = values.y, .important = declaration.important }, frame);
+        return;
+    }
     if (!declaration.important) {
-        const normalized = normalizePropertyName(declaration.name, &frame.buf);
         if (self.findProperty(.wrap(normalized))) |existing| {
             if (existing._important) return;
         }
@@ -196,6 +262,12 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     const normalized = normalizePropertyName(property_name, &frame.buf);
+    if (std.mem.eql(u8, normalized, "overflow")) {
+        const values = splitOverflow(value) orelse return false;
+        const x = try self.setPropertyImpl("overflow-x", values.x, important, frame);
+        const y = try self.setPropertyImpl("overflow-y", values.y, important, frame);
+        return x or y;
+    }
 
     // Normalize the value for canonical serialization
     const normalized_value = try normalizePropertyValue(frame.local_arena, normalized, value);
@@ -233,6 +305,15 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
+    if (std.mem.eql(u8, normalized, "overflow")) {
+        const old_value = try frame.call_arena.dupe(u8, self.declaredValue(overflow_shorthand, frame) orelse "");
+        const x = try self.removePropertyImpl("overflow-x", frame);
+        const y = try self.removePropertyImpl("overflow-y", frame);
+        if (x == null and y == null) {
+            return null;
+        }
+        return old_value;
+    }
     const prop = self.findProperty(.wrap(normalized)) orelse return null;
 
     // the value might not be on the heap (it could be inlined in the small string
@@ -316,14 +397,34 @@ pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Fram
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
-    const node = self._properties.first orelse return;
-    try Property.fromNodeLink(node).format(writer);
-
-    var next = node.next;
-    while (next) |n| {
-        try writer.writeByte(' ');
-        try Property.fromNodeLink(n).format(writer);
-        next = n.next;
+    var first = true;
+    var node = self._properties.first;
+    while (node) |n| : (node = n.next) {
+        const prop = Property.fromNodeLink(n);
+        // A pair of overflow longhands serializes once, as the shorthand,
+        // where overflow-x sits.
+        const partner = self.overflowPartner(prop);
+        if (partner != null and prop._name.eql(comptime .wrap("overflow-y"))) {
+            continue;
+        }
+        if (!first) {
+            try writer.writeByte(' ');
+        }
+        first = false;
+        if (partner) |y| {
+            try writer.writeAll("overflow: ");
+            try prop._value.format(writer);
+            if (!prop._value.eql(y._value)) {
+                try writer.writeByte(' ');
+                try y._value.format(writer);
+            }
+            if (prop._important) {
+                try writer.writeAll(" !important");
+            }
+            try writer.writeByte(';');
+        } else {
+            try prop.format(writer);
+        }
     }
 }
 
@@ -716,7 +817,6 @@ fn isTwoValueShorthand(name: []const u8) bool {
         .{ "border-inline-width", {} },
         .{ "border-block-color", {} },
         .{ "border-inline-color", {} },
-        .{ "overflow", {} },
         .{ "overscroll-behavior", {} },
         .{ "gap", {} },
         .{ "grid-gap", {} },
@@ -1036,14 +1136,12 @@ test "normalizePropertyValue: first baseline to baseline" {
 
 test "normalizePropertyValue: collapse duplicate two-value shorthands" {
     const cases = .{
-        .{ "overflow", "hidden hidden", "hidden" },
         .{ "gap", "10px 10px", "10px" },
         .{ "scroll-snap-align", "start start", "start" },
         .{ "scroll-padding-block", "5px 5px", "5px" },
         .{ "background-size", "auto auto", "auto" },
         .{ "overscroll-behavior", "auto auto", "auto" },
         // Different values should NOT collapse
-        .{ "overflow", "hidden scroll", "hidden scroll" },
         .{ "gap", "10px 20px", "10px 20px" },
     };
     inline for (cases) |case| {

@@ -1232,11 +1232,6 @@ fn inlineProps(el: *Element, frame: *Frame) TrackedProperties {
     return foldDeclarations(attr, null) catch unreachable;
 }
 
-fn styleValue(style: *CSSStyleProperties, property_name: String) ?[]const u8 {
-    const property = style.asCSSStyleDeclaration().findProperty(property_name) orelse return null;
-    return property._value.str();
-}
-
 /// `--*` declarations of one block, keyed by name so a block declaring the same
 /// custom property twice keeps only the winner.
 const CustomSink = struct {
@@ -1323,7 +1318,7 @@ const Slots = struct {
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
     const style = el.inlineStyle(self.frame) orelse return null;
-    return styleValue(style, property_name);
+    return style.asCSSStyleDeclaration().declaredValue(property_name, self.frame);
 }
 
 /// Computed value of a custom property (`--x`) on `el`, or null when nothing
@@ -1730,6 +1725,12 @@ test "StyleManager: memo: reuse and invalidation" {
     try b.setStyle("overflow: hidden auto", frame);
     try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overflowAxes(b));
     try testing.expectEqual(Element.ScrollAxes{}, sm.overflowAxes(p));
+
+    // Setting the shorthand resets both longhands, whatever declared them.
+    try b.setStyle("overflow: hidden; overflow-y: scroll", frame);
+    try testing.expectEqual(Element.ScrollAxes{ .x = false, .y = true }, sm.overflowAxes(b));
+    try (try b.getOrCreateStyle(frame)).asCSSStyleDeclaration().setProperty("overflow", "hidden", null, frame);
+    try testing.expectEqual(Element.ScrollAxes{}, sm.overflowAxes(b));
 
     // A stylesheet change resets the memo
     sm.sheetModified();
