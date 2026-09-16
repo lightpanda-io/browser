@@ -754,7 +754,6 @@ fn ownProps(self: *StyleManager, el: *Element) Props {
 
 const property_fields = std.meta.fieldNames(TrackedProperties);
 
-// INLINE_PRIORITY can't be beaten, so allInline ends the rule scan early.
 const Priorities = struct {
     display: u64 = 0,
     visibility_hidden: u64 = 0,
@@ -762,15 +761,6 @@ const Priorities = struct {
     pointer_events_none: u64 = 0,
     overflow_x_scrolls: u64 = 0,
     overflow_y_scrolls: u64 = 0,
-
-    fn allInline(self: Priorities) bool {
-        inline for (property_fields) |field| {
-            if (@field(self, field) != INLINE_PRIORITY) {
-                return false;
-            }
-        }
-        return true;
-    }
 };
 
 fn compute(self: *StyleManager, el: *Element) Props {
@@ -786,28 +776,26 @@ fn compute(self: *StyleManager, el: *Element) Props {
         }
     }
 
-    if (!priorities.allInline()) {
-        if (el.getId()) |id| {
-            if (self.id_rules.get(id)) |rules| {
+    if (el.getId()) |id| {
+        if (self.id_rules.get(id)) |rules| {
+            checkRules(&rules, &p, &priorities, el, frame);
+        }
+    }
+
+    if (el.getClassName()) |class_attr| {
+        var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
+        while (it.next()) |class| {
+            if (self.class_rules.get(class)) |rules| {
                 checkRules(&rules, &p, &priorities, el, frame);
             }
         }
-
-        if (el.getClassName()) |class_attr| {
-            var it = std.mem.tokenizeAny(u8, class_attr, &std.ascii.whitespace);
-            while (it.next()) |class| {
-                if (self.class_rules.get(class)) |rules| {
-                    checkRules(&rules, &p, &priorities, el, frame);
-                }
-            }
-        }
-
-        if (self.tag_rules.get(el.getTag())) |rules| {
-            checkRules(&rules, &p, &priorities, el, frame);
-        }
-
-        checkRules(&self.other_rules, &p, &priorities, el, frame);
     }
+
+    if (self.tag_rules.get(el.getTag())) |rules| {
+        checkRules(&rules, &p, &priorities, el, frame);
+    }
+
+    checkRules(&self.other_rules, &p, &priorities, el, frame);
 
     // UA stylesheet display:none fallback (HTML Rendering §15.3.1 "Hidden
     // elements"). Applied only when no author rule for `display` matched the
