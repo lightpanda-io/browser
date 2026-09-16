@@ -44,8 +44,6 @@ allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 
-// Compiles every pattern the process runs: adblock lists, tool arguments.
-// Heap-held because PCRE2 keeps its address.
 regex_context: *Regex.Context,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
@@ -105,7 +103,7 @@ pub fn deinit(self: *App) void {
     }
     self.telemetry.deinit(allocator);
     self.network.deinit();
-    // Compiled patterns free through the context, so it goes after them.
+    // After `network`: its adblock regexes free through this context.
     self.regex_context.deinit();
     self.snapshot.deinit();
     self.platform.deinit();

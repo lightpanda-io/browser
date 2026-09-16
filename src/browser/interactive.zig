@@ -150,13 +150,18 @@ pub fn collectInteractiveElements(
     return walkInteractive(root, arena, frame, .{});
 }
 
+pub const Name = union(enum) {
+    /// Case-insensitive.
+    substring: []const u8,
+    /// Unanchored.
+    regex: Regex,
+};
+
 const FindFilter = struct {
     /// Exact role match (case-insensitive). When null, role is not filtered.
     role: ?[]const u8 = null,
-    /// Accessible-name substring match (case-insensitive). When null, name is not filtered.
-    name: ?[]const u8 = null,
-    /// Compiled pattern searched in the accessible name.
-    name_regex: ?Regex = null,
+    /// Accessible-name match. When null, name is not filtered.
+    name: ?Name = null,
     /// Stop walking once this many matches accumulate. When null, walks the full subtree.
     max: ?usize = null,
 };
@@ -230,11 +235,11 @@ fn walkInteractive(
             if (role == null) try getTextContent(node, arena) else null;
         if (filter.name) |nf| {
             const n = name orelse continue;
-            if (std.ascii.indexOfIgnoreCase(n, nf) == null) continue;
-        }
-        if (filter.name_regex) |re| {
-            const n = name orelse continue;
-            if (!re.matches(n)) continue;
+            const hit = switch (nf) {
+                .substring => |s| std.ascii.indexOfIgnoreCase(n, s) != null,
+                .regex => |re| re.matches(n),
+            };
+            if (!hit) continue;
         }
 
         const listener_types = getListenerTypes(el.asEventTarget(), listener_targets);
@@ -509,14 +514,14 @@ test "browser.interactive: a name regex filters the walk" {
 
     const starts_add = try context.compile("^add", options, null);
     defer starts_add.deinit();
-    const found_add = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name_regex = starts_add });
+    const found_add = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = starts_add } });
     try testing.expectEqual(2, found_add.len);
     try testing.expectEqual("Add to cart", found_add[0].name.?);
     try testing.expectEqual("Add item", found_add[1].name.?);
 
     const only_cart = try context.compile("^cart$", options, null);
     defer only_cart.deinit();
-    const found_cart = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name_regex = only_cart });
+    const found_cart = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name = .{ .regex = only_cart } });
     try testing.expectEqual(1, found_cart.len);
     try testing.expectEqual("Cart", found_cart[0].name.?);
 }

@@ -814,8 +814,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 /// Outcome of running a tool against the page. Operational failures (OOM,
 /// missing page, invalid params) come out as Zig errors on the enclosing
 /// `!ToolResult`; `is_error = true` is the in-band signal for a JS-level
-/// failure (V8 caught a throw inside `evaluate`/`extract`) — the LLM consumes
-/// `text` either way to self-correct. Non-evaluate tools always set `is_error =
+/// failure (V8 caught a throw inside `evaluate`/`extract`) or any failure whose
+/// message carries detail the model needs — the LLM consumes `text` either way
+/// to self-correct. Non-evaluate tools always set `is_error =
 /// false` on success.
 pub const ToolResult = struct {
     text: []const u8,
@@ -2073,33 +2074,40 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const page = try requireFrame(session);
 
-    const literal: ?RegexLiteral = if (args.name) |name| regexLiteral(name) else null;
-    var diag: lp.Regex.Diagnostic = .{};
-    const name_regex: ?lp.Regex = if (literal) |lit| blk: {
-        var options: lp.Regex.Options = .{ .case_insensitive = true, .unicode = true };
-        for (lit.flags) |flag| switch (flag) {
-            'i', 'u' => {},
-            's' => options.dot_all = true,
-            'm' => options.multiline = true,
-            else => return .{
-                .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, args.name.? }),
-                .is_error = true,
-            },
-        };
-        break :blk session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidRegex => return .{
-                .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
-                .is_error = true,
-            },
-        };
-    } else null;
-    defer if (name_regex) |re| re.deinit();
+    var name_filter: ?lp.interactive.Name = null;
+    defer if (name_filter) |nf| switch (nf) {
+        .regex => |re| re.deinit(),
+        .substring => {},
+    };
+    if (args.name) |name| {
+        if (regexLiteral(name)) |lit| {
+            var options: lp.Regex.Options = .{ .case_insensitive = true, .unicode = true };
+            for (lit.flags) |flag| switch (flag) {
+                'i', 'u' => {},
+                's' => options.dot_all = true,
+                'm' => options.multiline = true,
+                else => return .{
+                    .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
+                    .is_error = true,
+                },
+            };
+            var diag: lp.Regex.Diagnostic = .{};
+            const regex = session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidRegex => return .{
+                    .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
+                    .is_error = true,
+                },
+            };
+            name_filter = .{ .regex = regex };
+        } else {
+            name_filter = .{ .substring = name };
+        }
+    }
 
     const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
         .role = args.role,
-        .name = if (literal == null) args.name else null,
-        .name_regex = name_regex,
+        .name = name_filter,
     }) catch return ToolError.InternalError;
 
     lp.interactive.registerNodes(matched, registry) catch
@@ -2112,17 +2120,31 @@ const RegexLiteral = struct {
     flags: []const u8,
 };
 
-/// A `/body/flags` literal as JavaScript writes it, and the spelling adblock
-/// lists use for a regex too. Anything after the closing slash that is not a
-/// letter makes the whole thing plain text again. Matching is unanchored, so
-/// a name that really is written as `/foo/` still matches itself.
+/// A JavaScript `/body/flags` literal, or null for plain text. A name really
+/// written as `/foo/` still matches itself, the search being unanchored.
 fn regexLiteral(text: []const u8) ?RegexLiteral {
-    if (text.len < 3 or text[0] != '/') return null;
-    const close = 1 + (std.mem.lastIndexOfScalar(u8, text[1..], '/') orelse return null);
-    if (close == 1) return null;
+    if (text.len == 0 or text[0] != '/') return null;
+    const close = std.mem.lastIndexOfScalar(u8, text, '/') orelse return null;
+    if (close < 2) return null;
     const flags = text[close + 1 ..];
-    for (flags) |flag| if (!std.ascii.isLower(flag)) return null;
+    for (flags) |flag| {
+        if (std.mem.indexOfScalar(u8, "dgimsuvy", flag) == null) return null;
+    }
     return .{ .body = text[1..close], .flags = flags };
+}
+
+test "regexLiteral" {
+    for ([_][]const u8{ "foo", "/", "//", "//i", "/foo", "/foo/ bar", "/usr/bin" }) |text| {
+        try std.testing.expectEqual(null, regexLiteral(text));
+    }
+
+    const plain = regexLiteral("/foo/").?;
+    try std.testing.expectEqualStrings("foo", plain.body);
+    try std.testing.expectEqualStrings("", plain.flags);
+
+    const flagged = regexLiteral("/a/b/gi").?;
+    try std.testing.expectEqualStrings("a/b", flagged.body);
+    try std.testing.expectEqualStrings("gi", flagged.flags);
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {

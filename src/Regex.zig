@@ -16,9 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! A compiled pattern in JavaScript `RegExp` syntax, run by PCRE2. Adblock
-//! lists and agent tool arguments both write regexes that way, and PCRE2
-//! reads the syntax as-is, escapes like `\/` included.
+//! A pattern in JavaScript `RegExp` syntax, run by PCRE2, which reads that
+//! syntax as-is, escapes like `\/` included.
 //!
 //! A compiled pattern and its `Context` are never modified after `compile`,
 //! so one `Regex` can be shared by every thread; the per-call match data is
@@ -42,13 +41,12 @@ pub const Options = struct {
     /// works beyond ASCII. An invalid sequence in the subject fails to match
     /// rather than erroring. `\b` and `\w` stay ASCII, as in JavaScript.
     unicode: bool = false,
-    /// JavaScript's `s`: `.` also matches a newline.
+    /// JavaScript's `s`.
     dot_all: bool = false,
-    /// JavaScript's `m`: `^` and `$` also match around newlines.
+    /// JavaScript's `m`.
     multiline: bool = false,
 };
 
-/// Why a compile failed, for the caller to log or show.
 pub const Diagnostic = struct {
     offset: usize = 0,
     len: usize = 0,
@@ -59,8 +57,7 @@ pub const Diagnostic = struct {
     }
 };
 
-/// What every `Regex` compiled through it shares: the allocator PCRE2 draws
-/// from, and the compile and match settings. Outlives the regexes.
+/// Shared by every `Regex` compiled through it; outlives them.
 ///
 /// PCRE2 would happily use libc's malloc; it is handed the owner's allocator
 /// so that a compiled pattern nobody freed fails a test the way any other
@@ -90,8 +87,7 @@ pub const Context = struct {
 
         const compile_context = pcre2.pcre2_compile_context_create_8(general) orelse return error.OutOfMemory;
         errdefer pcre2.pcre2_compile_context_free_8(compile_context);
-        // JavaScript without the `u` flag reads an unknown escape as the
-        // literal character.
+        // JavaScript reads an unknown escape as the literal character.
         _ = pcre2.pcre2_set_compile_extra_options_8(compile_context, pcre2.PCRE2_EXTRA_BAD_ESCAPE_IS_LITERAL);
 
         const match_context = pcre2.pcre2_match_context_create_8(general) orelse return error.OutOfMemory;
@@ -175,8 +171,6 @@ const MATCH_SCRATCH = 24 * 1024;
 /// Whether the pattern matches anywhere in `text`, as `RegExp.test` would
 /// answer. A match that hits the backtracking limits counts as no match.
 pub fn matches(self: Regex, text: []const u8) bool {
-    // This can run per request or per DOM node; the scratch keeps the common
-    // case off the heap.
     var scratch = std.heap.stackFallback(MATCH_SCRATCH, self.context.allocator);
     var allocator = scratch.get();
     const general = pcre2.pcre2_general_context_create_8(Context.cMalloc, Context.cFree, &allocator) orelse return false;
