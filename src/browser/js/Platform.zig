@@ -57,6 +57,11 @@ pub fn init(opts: Options) !Platform {
     return .{ .handle = handle };
 }
 
+/// Date's clock only; V8's monotonic clock stays real.
+pub fn setClockOffsetMillis(self: Platform, offset_ms: f64) void {
+    v8.v8__Platform__SetClockOffsetMillis(self.handle, offset_ms);
+}
+
 pub fn deinit(self: Platform) void {
     _ = v8.v8__V8__Dispose();
     v8.v8__V8__DisposePlatform();

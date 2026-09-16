@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<div id=out></div>
+<script>
+  let hops = 0;
+  function check() {
+    if (++hops < 15) {
+      setTimeout(check, 100);
+      return;
+    }
+    const el = document.createElement('div');
+    el.id = 'ready';
+    document.getElementById('out').append(el);
+  }
+  setTimeout(check, 100);
+</script>
