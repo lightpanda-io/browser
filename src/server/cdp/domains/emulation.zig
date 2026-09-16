@@ -310,10 +310,10 @@ test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach win
     try ctx.processMessage(.{
         .id = 1,
         .method = "Emulation.setDeviceMetricsOverride",
-        .params = .{ .width = 1280, .height = 720, .deviceScaleFactor = 1, .mobile = false, .screenWidth = 2560, .screenHeight = 1440 },
+        .params = .{ .width = 1280, .height = 720, .deviceScaleFactor = 2, .mobile = false, .screenWidth = 2560, .screenHeight = 1440 },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-    var v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1280 && innerHeight === 720", null);
+    var v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1280 && innerHeight === 720 && devicePixelRatio === 2", null);
     try testing.expect(v.toBool());
 
     // 0 keeps the current value, as for width/height.
@@ -322,11 +322,11 @@ test "cdp.Emulation: setDeviceMetricsOverride screenWidth/screenHeight reach win
         .method = "Emulation.setDeviceMetricsOverride",
         .params = .{ .width = 1024, .height = 0, .deviceScaleFactor = 0, .mobile = false, .screenWidth = 0, .screenHeight = 0 },
     });
-    v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1024 && innerHeight === 720", null);
+    v = try ls.local.exec("screen.width === 2560 && screen.height === 1440 && innerWidth === 1024 && innerHeight === 720 && devicePixelRatio === 2", null);
     try testing.expect(v.toBool());
 
     try ctx.processMessage(.{ .id = 3, .method = "Emulation.clearDeviceMetricsOverride" });
-    v = try ls.local.exec("screen.width === innerWidth && screen.height === innerHeight", null);
+    v = try ls.local.exec("screen.width === innerWidth && screen.height === innerHeight && devicePixelRatio === 1", null);
     try testing.expect(v.toBool());
 }
 
