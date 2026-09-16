@@ -559,6 +559,25 @@ test "Runner: lazy iframe does not delay the load event" {
     try testing.expectEqual(true, lazy_child._parent_notified);
 }
 
+test "Runner: iframe that cancels its own navigation stops delaying the parent" {
+    const page = try testing.pageTest("runner/iframe_nav_cancel.html", .{ .wait_until_done = false });
+    defer page.close();
+
+    var runner = page.session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .load });
+
+    const frame = page.frame().?;
+    try testing.expectEqual(true, frame._load_state == .complete);
+    try testing.expectEqual(0, frame._pending_loads);
+
+    // The child aborted its load for a navigation it then cancelled, so no
+    // replacement frame will ever notify the parent on its behalf.
+    const child = frame.child_frames.items[0];
+    try testing.expectEqual(true, child.document._load_aborted);
+    try testing.expectEqual(null, child._queued_navigation);
+    try testing.expectEqual(true, child._parent_notified);
+}
+
 test "Runner: idle notifications advance past a resolved condition" {
     const page = try testing.pageTest("runner/runner1.html", .{});
     defer page.close();

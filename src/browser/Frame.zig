@@ -1031,7 +1031,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     target._queued_navigation = qn;
     try session.scheduleNavigation(target);
-    target.documentIsComplete();
+    target.abortedDocumentIsComplete();
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -1101,6 +1101,16 @@ pub fn stopLoading(self: *Frame) void {
 
     self.cancelQueuedNavigation();
 
+    // HTML's "active parser was aborted" flag. Stopping is the only thing that
+    // actually kills the parser: a merely *scheduled* navigation leaves it
+    // running until the replacement commits, and Chrome keeps honouring
+    // document.write until then.
+    if (self.parserIsRunning()) {
+        self.document._active_parser_aborted = true;
+    } else if (self.document._script_created_parser) |parser| {
+        if (parser.handle != null) self.document._active_parser_aborted = true;
+    }
+
     const http_client = &self._session.browser.http_client;
     if (http_client.findTransfer(self._req_id)) |transfer| {
         // the main navigation is still transfering, force it to finish now,
@@ -1110,18 +1120,38 @@ pub fn stopLoading(self: *Frame) void {
     http_client.cancelRequests(&self._http_owner);
 }
 
+// A cross-document navigation has been scheduled (or started) for this frame:
+// its current document is superseded and must never fire DOMContentLoaded or
+// load, even if the replacement is discarded or fails. Deliberately does NOT
+// touch _load_state — the parser can still be on the stack, and open/write/
+// maybeCheckpoint key off it.
 pub fn abortDocumentLoad(self: *Frame) void {
     self.document._load_aborted = true;
+}
 
-    // readyState will become complete even if the parser is still on the
-    // stack. Remember its aborted state separately so document.open/write cannot
-    // start another parser, even after the original parse has unwound.
-    if (self._load_state == .parsing and !self._script_manager.base.static_scripts_done) {
-        self.document._active_parser_aborted = true;
+// The navigation parser is on the stack, i.e. an inline script is running from
+// inside parser.parse(). Narrower than `_load_state == .parsing`, which stays
+// true through deferred and async scripts.
+fn parserIsRunning(self: *const Frame) bool {
+    return switch (self._parse_state) {
+        .html => true,
+        else => false,
+    };
+}
+
+// Chrome moves a superseded document's readyState to "complete" but never
+// fires DOMContentLoaded or load. `_load_aborted` suppresses the events; this
+// is the readyState half, run as soon as the navigation is scheduled. The
+// guard makes it idempotent: a handler that renavigates lands here again.
+pub fn abortedDocumentIsComplete(self: *Frame) void {
+    if (self.document._ready_state == .complete) {
+        return;
     }
-    if (self.document._script_created_parser) |parser| {
-        if (parser.handle != null) self.document._active_parser_aborted = true;
-    }
+    self.document._ready_state = .complete;
+    self.dispatchReadyStateChange() catch |err| switch (err) {
+        error.JsException => {}, // already logged
+        else => log.err(.frame, "aborted document is complete", .{ .err = err, .type = self._type, .url = self.url }),
+    };
 }
 
 fn loadEventsAborted(self: *const Frame) bool {
@@ -1138,6 +1168,27 @@ pub fn cancelQueuedNavigation(self: *Frame) void {
     }
     qn.arena.release();
     self._queued_navigation = null;
+
+    // Our own load is aborted and the replacement that would have completed it
+    // is now gone, so _documentIsComplete will never reach the parent. Release
+    // the parent's load delay here or it waits forever.
+    if (self.document._load_aborted) {
+        self.releaseParentLoadDelay();
+    }
+}
+
+// Stop delaying the parent's load event without dispatching the iframe
+// element's load event: that event belongs to a document that actually
+// finished loading, and this one never will.
+fn releaseParentLoadDelay(self: *Frame) void {
+    const parent = self.parent orelse return;
+    if (self._parent_notified) {
+        return;
+    }
+    self._parent_notified = true;
+    if (self._delays_parent_load) {
+        parent.pendingLoadCompleted();
+    }
 }
 
 pub fn documentIsLoaded(self: *Frame) void {
@@ -1267,8 +1318,11 @@ pub fn documentIsComplete(self: *Frame) void {
 }
 
 fn _documentIsComplete(self: *Frame) !void {
-    self.document._ready_state = .complete;
-    try self.dispatchReadyStateChange();
+    // abortedDocumentIsComplete may already have done this half.
+    if (self.document._ready_state != .complete) {
+        self.document._ready_state = .complete;
+        try self.dispatchReadyStateChange();
+    }
     if (self.loadEventsAborted()) return;
 
     // Run element load/error events before window.load.
@@ -3951,6 +4005,22 @@ test "Frame: document.open can cancel navigation once parsing has finished" {
         try testing.expectEqual(null, frame._queued_navigation);
         try testing.expectEqual("Rewritten", (try frame.getTitle()).?);
     }
+}
+
+test "Frame: a scheduled navigation does not abort the parser" {
+    const page = try testing.pageTest("fixtures/navigation_open.html?write", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/navigation_open.html?write"));
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // The write landed: only window.stop() sets the active-parser-was-aborted
+    // flag, scheduling the navigation doesn't.
+    const late = try ls.local.exec("document.getElementById('late').textContent", null);
+    try testing.expectEqual("late", try late.toStringSlice());
+    try testing.expectEqual(true, frame.document._active_parser_aborted);
 }
 
 test "Frame: cancelling navigation does not revive an aborted parser" {

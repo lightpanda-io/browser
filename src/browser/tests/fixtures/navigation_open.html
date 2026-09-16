@@ -15,6 +15,13 @@ if (location.search === '?interactive') {
   });
 } else if (location.search === '?dcl') {
   document.addEventListener('DOMContentLoaded', navigateAndOpen);
+} else if (location.search === '?write') {
+  // Scheduling a navigation does not abort the parser: Chrome keeps honouring
+  // document.write until the replacement commits. window.stop() cancels the
+  // navigation so the test can see what landed.
+  location.assign('../hi.html');
+  document.write('<p id="late">late</p>');
+  window.stop();
 } else {
   navigateAndOpen();
 }
