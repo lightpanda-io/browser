@@ -1518,6 +1518,10 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
                 driver.onLink(link);
                 break :blk false;
             },
+            .bidi_http => |command| blk: {
+                driver.onHttp(command);
+                break :blk false;
+            },
             .quit => blk: {
                 driver.onQuit();
                 break :blk true; // quit always shutsdown
@@ -1550,14 +1554,14 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
-        .bidi => false,
+        .bidi, .bidi_http => false,
     };
 }
 
 fn isTerminal(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .cdp, .bidi, .link => false,
+        .ping, .cdp, .bidi, .link, .bidi_http => false,
     };
 }
 
@@ -1575,7 +1579,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .link => false,
+        .ping, .link, .bidi_http => false,
         .cdp => |c| isTeardownMethod(c.input.method),
         // Frames aren't parsed on the Network thread for BiDi, so we
         // can't spot a teardown command without re-parsing here.

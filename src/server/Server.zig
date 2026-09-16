@@ -31,7 +31,9 @@ const WS = @import("WS.zig");
 const http = @import("http.zig");
 const Link = @import("Link.zig");
 const Driver = @import("Driver.zig");
+
 const Inbox = @import("../Inbox.zig");
+const http_command = @import("bidi/http_command.zig");
 
 const log = lp.log;
 const posix = std.posix;
@@ -178,7 +180,7 @@ pub fn init(app: *App, address: sys_net.IpAddress) !*Server {
         .webdriver => protocols.webdriver = true,
     };
 
-    const request_capacity = 2 * config.maxConnections();
+    const request_capacity = 3 * config.maxConnections();
     var worker_queue: std.ArrayList(WorkerRequest) = try .initCapacity(allocator, request_capacity);
     errdefer worker_queue.deinit(allocator);
 
@@ -560,6 +562,43 @@ pub fn quitSession(self: *Server, worker: *Worker) void {
     }
 }
 
+// An HTTP command for a session's worker. We need to park the connection, push
+// the request to the worker, and park the connection until we get the response
+// to send back as the HTTP response.
+pub fn parkRequest(self: *Server, worker: *Worker, conn: *Connection, keepalive: bool, arena: *lp.Arena, command: http_command.Command) void {
+    if (comptime lp.IS_DEBUG) {
+        lp.assert(worker.http_request == null, "Server.parkRequest busy", .{});
+    }
+
+    // stop monitoring the socket
+    self.detachConnection(conn);
+
+    worker.http_request = .{ .conn = conn, .keepalive = keepalive };
+    // a session with a command in flight isn't idle, whatever its link
+    self.clearIdle(worker);
+    // the command lives in arena, which the message now owns
+    worker.inbox.push(arena, .{ .bidi_http = command });
+    if (worker.driver) |driver| {
+        driver.wakeup();
+    }
+}
+
+fn deliverResponse(self: *Server, worker: *Worker, response: Connection.Writing.Pooled, now: u64) void {
+    const parked = worker.http_request orelse {
+        // the worker answers only what it was sent, once
+        if (comptime lp.IS_DEBUG) {
+            lp.assert(false, "Server.deliverResponse unparked", .{});
+        }
+        response.arena.release();
+        return;
+    };
+    worker.http_request = null;
+    http.resumeParked(self, parked.conn, parked.keepalive, .{ .pooled = response }, now);
+    if (worker.link == null) {
+        self.markIdle(worker, now);
+    }
+}
+
 // Into the worker's mailbox.
 fn push(self: *Server, worker: *Worker, payload: Inbox.Message.Payload) void {
     const arena = self.app.arena_pool.acquire(.tiny, "worker push") catch |err| switch (err) {
@@ -589,7 +628,8 @@ fn drainWorkerQueue(self: *Server, now: u64) void {
         switch (request.op) {
             .attach => |attach| self.attachWorker(request.worker, attach.driver, attach.link, now),
             .release_link => |notify| self.releaseLink(request.worker, notify, now),
-            .release => |notify| self.releaseWorker(request.worker, notify),
+            .release => |notify| self.releaseWorker(request.worker, notify, now),
+            .respond => |response| self.deliverResponse(request.worker, response, now),
         }
     }
     self.worker_drain.clearRetainingCapacity();
@@ -639,6 +679,13 @@ fn markIdle(self: *Server, worker: *Worker, now: u64) void {
         // ending already (or never a HTTP session)
         return;
     }
+
+    if (worker.http_request != null) {
+        // waiting for a response, not idle, once we [start] to deliver the
+        // response, then the clock will start ticking again.
+        return;
+    }
+
     const timeout = self.session_timeout_ms orelse {
         // reaping disabled: the session lives until DELETE /session/{id}
         return;
@@ -673,9 +720,14 @@ fn releaseLink(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) 
     notify.set(lp.io);
 }
 
-fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event) void {
+fn releaseWorker(self: *Server, worker: *Worker, notify: *std.Io.Event, now: u64) void {
     self.unmonitorLink(worker);
     worker.link = null;
+    if (worker.http_request) |parked| {
+        // the worker stopped without answering (DELETE, shutdown, a failed init)
+        worker.http_request = null;
+        http.resumeParked(self, parked.conn, false, .{ .static = http.session_ended_response }, now);
+    }
     self.releaseWorkerSlot(worker);
     // The worker is free to deinit its driver and close the fd from here.
     notify.set(lp.io);
@@ -907,7 +959,7 @@ const EPoll = struct {
     // the low bit set (both are word-aligned, so the bit is free).
     const WS_TAG: usize = 1;
 
-    fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
+    pub fn monitorHTTP(self: *const EPoll, conn: *Connection) !void {
         var event = linux.epoll_event{
             .data = .{ .ptr = @intFromPtr(conn) },
             .events = READ_EVENTS,
@@ -1050,7 +1102,7 @@ const KQueue = struct {
         return self.change(&.{socketEvent(fd, EVFILT.READ, EV.DELETE, 0)});
     }
 
-    fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
+    pub fn monitorHTTP(self: *const KQueue, conn: *Connection) !void {
         return self.monitor(conn.socket, EVFILT.READ, @intFromPtr(conn));
     }
 
@@ -1214,6 +1266,14 @@ pub const Worker = struct {
     deadline: ?u64 = null,
     idle_node: DoublyLinkedList.Node = .{},
 
+    // The HTTP WebDriver command the worker is answering.
+    http_request: ?ParkedRequest = null,
+
+    const ParkedRequest = struct {
+        conn: *Connection,
+        keepalive: bool,
+    };
+
     const Pool = struct {
         slab: []Worker,
         free: DoublyLinkedList,
@@ -1334,6 +1394,12 @@ pub const Worker = struct {
         notify.waitUncancelable(lp.io);
     }
 
+    // Worker -> loop: the answer to http_request, a complete HTTP response in
+    // a pooled arena. The loop releases it once it's written.
+    pub fn respond(self: *Worker, response: Connection.Writing.Pooled) void {
+        self.notifyLoop(.{ .respond = response });
+    }
+
     fn notifyLoop(self: *Worker, op: WorkerRequest.Op) void {
         const server = self.server;
         server.worker_mutex.lockUncancelable(lp.io);
@@ -1352,6 +1418,7 @@ const WorkerRequest = struct {
         release: *std.Io.Event,
         release_link: *std.Io.Event,
         attach: struct { driver: Driver, link: ?*Link },
+        respond: Connection.Writing.Pooled,
     };
 };
 
@@ -1899,6 +1966,101 @@ test "server: HTTP session bootstrap errors" {
     try assertHTTPError(404, "Not found", "GET /session/00000000-0000-4000-8000-000000000000 HTTP/1.1\r\n" ++
         "Connection: upgrade\r\nUpgrade: websocket\r\nsec-websocket-version:13\r\nsec-websocket-key: k\r\n\r\n");
     try deleteHTTPSession("00000000-0000-4000-8000-000000000000", false);
+}
+
+test "server: HTTP navigate" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    // One keepalive connection throughout: an answered command's connection
+    // is back on the loop, ready for the next.
+    var c = try createTestClient();
+    defer c.deinit();
+    {
+        const res = try sessionCommand(&c, &session_id, "/url", "not json");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid argument\",\"message\":\"invalid body\",\"stacktrace\":\"\"}}"));
+    }
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html";
+    {
+        const res = try sessionCommand(&c, &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}");
+        try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
+            "Content-Length: 14\r\n" ++
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
+            "{\"value\":null}", res);
+    }
+
+    // it's the browsing context a websocket on the session sees
+    var ws = try createTestClient();
+    defer ws.deinit();
+    var path_buf: [64]u8 = undefined;
+    try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+    try ws.bidiCommand("{\"id\":1,\"method\":\"browsingContext.getTree\"}");
+    const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) ws.reader.cleanup();
+    try testing.expect(std.mem.indexOf(u8, msg.data, "\"url\":\"" ++ url ++ "\"") != null);
+}
+
+test "server: HTTP command errors" {
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, "00000000-0000-4000-8000-000000000000", "/url", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"no such session\",\"stacktrace\":\"\"}}"));
+    }
+
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+
+    // routing errors are the loop's, in W3C form
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        var request_buf: [128]u8 = undefined;
+        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "GET /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 405 Method Not Allowed\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown method\",\"message\":\"unknown method\",\"stacktrace\":\"\"}}"));
+    }
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, &session_id, "/nope", "{}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
+    }
+
+    // a slow page keeps the navigate parked on the worker
+    var slow = try createTestClient();
+    defer slow.deinit();
+    try writeSessionCommand(&slow, &session_id, "/url", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/hi.html?delay_ms=500\"}");
+    lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
+
+    // one command at a time
+    {
+        var c = try createTestClient();
+        defer c.deinit();
+        const res = try sessionCommand(&c, &session_id, "/url", "{\"url\":\"about:blank\"}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown error\",\"message\":\"a command is already in progress\",\"stacktrace\":\"\"}}"));
+    }
+
+    // ending the session answers the parked command
+    try deleteHTTPSession(&session_id, true);
+    const res = try slow.httpRequest("");
+    try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+    try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"session ended\",\"stacktrace\":\"\"}}"));
+}
+
+fn sessionCommand(c: *TestClient, session_id: *const [36]u8, command: []const u8, body: []const u8) ![]const u8 {
+    try writeSessionCommand(c, session_id, command, body);
+    return c.httpRequest("");
+}
+
+fn writeSessionCommand(c: *TestClient, session_id: *const [36]u8, command: []const u8, body: []const u8) !void {
+    var head_buf: [128]u8 = undefined;
+    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "POST /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ session_id, command, body.len }));
+    try sys_net.writeAll(c.socket, body);
 }
 
 // POST /session; asserts the response and whether it advertised a websocket
