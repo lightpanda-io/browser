@@ -67,21 +67,9 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         }
     }
 
-    // A dispatch error must never reject the testdriver command, so each
-    // stage is caught and logged rather than propagated.
-    const main = Frame.user_input.mouse_button.main;
-    const modifiers = frame._page.input_modifiers;
-    const press = Frame.user_input.dispatchPointerPress(frame, element, 0, 0, main, 1, modifiers) catch |err| {
-        log.warn(.app, "webdriver click press", .{ .err = err });
-        return;
-    };
-    try Frame.user_input.runMouseDownFocus(frame, element, press, "webdriver click focus");
-    Frame.user_input.dispatchPointerRelease(frame, element, 0, 0, main, press.suppress_mouse, 1, modifiers) catch |err| {
-        log.warn(.app, "webdriver click release", .{ .err = err });
-        return;
-    };
-    Frame.user_input.dispatchClickAsPointer(frame, element, 0, 0, 1, 0, modifiers) catch |err| {
-        log.warn(.app, "webdriver click click", .{ .err = err });
+    // A dispatch error must never reject the testdriver command.
+    Frame.user_input.triggerClick(frame, element, frame._page.input_modifiers) catch |err| {
+        log.warn(.app, "webdriver click", .{ .err = err });
     };
 }
 

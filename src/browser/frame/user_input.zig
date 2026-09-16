@@ -281,52 +281,52 @@ pub const PointerButtons = struct {
     }
 };
 
-pub const PressResult = struct {
+const PressResult = struct {
     /// pointerdown's preventDefault() suppressed the compat mousedown here and
     /// the paired mouseup on release.
     suppress_mouse: bool,
-    /// mousedown's preventDefault() suppressed its focus default action (only
-    /// meaningful when suppress_mouse is false).
+    /// mousedown's focus default action is suppressed (always when
+    /// suppress_mouse is).
     suppress_focus: bool,
 };
 
-/// Press half: pointerdown, then mousedown unless preventDefault() suppressed
-/// it; doesn't run the focus default action (callers disagree on how a focus
-/// failure should affect the click).
-pub fn dispatchPointerPress(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, mouse_detail: u32, modifiers: Modifiers) !PressResult {
-    const buttons = buttonsBitmask(button);
-    const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", .{ .x = x, .y = y, .button = button, .buttons = buttons, .modifiers = modifiers });
-    const suppress_focus = if (suppress_mouse)
-        true
-    else
-        try dispatchMouseEventOn(frame, target, "mousedown", .{ .x = x, .y = y, .button = button, .buttons = buttons, .detail = mouse_detail, .modifiers = modifiers });
-    return .{ .suppress_mouse = suppress_mouse, .suppress_focus = suppress_focus };
+/// pointerdown, then mousedown unless pointerdown was cancelled. `in.detail`
+/// applies to mousedown only.
+fn dispatchPointerPress(frame: *Frame, target: *Element, in: PointerInput) !PressResult {
+    var pointer = in;
+    pointer.detail = 0;
+    const suppress_mouse = try dispatchPointerEventOn(frame, target, "pointerdown", pointer);
+    if (suppress_mouse) {
+        return .{ .suppress_mouse = true, .suppress_focus = true };
+    }
+    const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", in);
+    return .{ .suppress_mouse = false, .suppress_focus = suppress_focus };
 }
 
-/// Runs mousedown's focus default action unless the gesture suppressed it;
-/// `warn_label` logs a focus failure and continues, null propagates it.
-pub fn runMouseDownFocus(frame: *Frame, target: *Element, press: PressResult, comptime warn_label: ?[]const u8) !void {
-    if (press.suppress_mouse or press.suppress_focus) return;
-    if (warn_label) |label| {
-        focusForMouseDown(frame, target) catch |err| log.warn(.app, label, .{ .err = err });
-    } else {
-        try focusForMouseDown(frame, target);
+/// pointerup, then mouseup unless the gesture's pointerdown was cancelled.
+/// `in.detail` applies to mouseup only.
+fn dispatchPointerRelease(frame: *Frame, target: *Element, in: PointerInput, suppress_mouse: bool) !void {
+    var pointer = in;
+    pointer.detail = 0;
+    _ = try dispatchPointerEventOn(frame, target, "pointerup", pointer);
+    if (suppress_mouse == false) {
+        _ = try dispatchMouseEventOn(frame, target, "mouseup", in);
     }
 }
 
-/// Release half: pointerup, then mouseup unless the paired pointerdown
-/// suppressed it (click fires separately via dispatchClickAsPointer).
-pub fn dispatchPointerRelease(frame: *Frame, target: *Element, x: f64, y: f64, button: i32, suppress_mouse: bool, mouse_detail: u32, modifiers: Modifiers) !void {
-    _ = try dispatchPointerEventOn(frame, target, "pointerup", .{ .x = x, .y = y, .button = button, .modifiers = modifiers });
-    if (!suppress_mouse) {
-        _ = try dispatchMouseEventOn(frame, target, "mouseup", .{ .x = x, .y = y, .button = button, .detail = mouse_detail, .modifiers = modifiers });
+/// The trusted primary-button gesture a real user click produces; widgets key
+/// off pointerdown/mousedown, not click alone. A focus failure is logged, not
+/// returned.
+pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void {
+    const press = try dispatchPointerPress(frame, target, .{ .x = 0, .y = 0, .buttons = 1, .detail = 1, .modifiers = modifiers });
+    if (press.suppress_focus == false) {
+        focusForMouseDown(frame, target) catch |err| log.warn(.app, "click mousedown focus", .{ .err = err });
     }
-}
 
-/// Primary-button click as a PointerEvent (matching HTMLElement.click());
-/// `buttons` is the mask still held, nonzero on a mid-chord primary release.
-pub fn dispatchClickAsPointer(frame: *Frame, target: *Element, x: f64, y: f64, detail: u32, buttons: u16, modifiers: Modifiers) !void {
-    _ = try dispatchPointerEventOn(frame, target, "click", .{ .x = x, .y = y, .buttons = buttons, .detail = detail, .modifiers = modifiers });
+    const up: PointerInput = .{ .x = 0, .y = 0, .detail = 1, .modifiers = modifiers };
+    try dispatchPointerRelease(frame, target, up, press.suppress_mouse);
+    // click is a PointerEvent, matching HTMLElement.click().
+    _ = try dispatchPointerEventOn(frame, target, "click", up);
 }
 
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
@@ -350,20 +350,25 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
     // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
     // both fire mousedown with detail 0 in that case.
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
+    const in: PointerInput = .{ .x = x, .y = y, .button = button, .buttons = gesture.held, .detail = detail };
 
     if (gesture.starts_gesture) {
         // Stash the pointerdown outcome before the fallible focus call: the
         // release half is a separate message and can't observe it otherwise.
-        const press = try dispatchPointerPress(frame, target, x, y, button, detail, .{});
+        const press = try dispatchPointerPress(frame, target, in);
         frame._page.input_pointer.mousedown_suppressed = press.suppress_mouse;
-        try runMouseDownFocus(frame, target, press, null);
+        if (press.suppress_focus == false) {
+            try focusForMouseDown(frame, target);
+        }
     } else {
         // A chorded press is a buttons-mask change (pointermove), not a second
         // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
         _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = gesture.held });
-        if (!frame._page.input_pointer.mousedown_suppressed) {
-            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", .{ .x = x, .y = y, .button = button, .buttons = gesture.held, .detail = detail });
-            try runMouseDownFocus(frame, target, .{ .suppress_mouse = false, .suppress_focus = suppress_focus }, null);
+        if (frame._page.input_pointer.mousedown_suppressed == false) {
+            const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", in);
+            if (suppress_focus == false) {
+                try focusForMouseDown(frame, target);
+            }
         }
     }
 }
@@ -415,7 +420,7 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 1;
 
     if (ends_gesture) {
-        try dispatchPointerRelease(frame, target, x, y, button, was_suppressed, detail, .{});
+        try dispatchPointerRelease(frame, target, .{ .x = x, .y = y, .button = button, .detail = detail }, was_suppressed);
     } else {
         // A chorded release (another button still held) is a buttons-mask
         // change, not pointerup.
@@ -428,7 +433,7 @@ pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_cou
     // After mouseup, the activation event depends on the button.
     switch (button) {
         mouse_button.main => {
-            try dispatchClickAsPointer(frame, target, x, y, detail, remaining, .{});
+            _ = try dispatchPointerEventOn(frame, target, "click", .{ .x = x, .y = y, .buttons = remaining, .detail = detail });
             // A second click in quick succession also fires dblclick.
             if (click_count == 2) {
                 _ = try dispatchMouseEventOn(frame, target, "dblclick", .{ .x = x, .y = y, .button = button, .buttons = remaining, .detail = detail });

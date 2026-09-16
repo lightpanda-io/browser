@@ -38,9 +38,6 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-/// The trusted primary-button gesture a real user click produces; widgets key
-/// off pointerdown/mousedown, not click alone. A focus failure is worth a
-/// warning, not aborting the click.
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
@@ -50,20 +47,8 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
 
     Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
 
-    const main = Frame.user_input.mouse_button.main;
-    const press_result = Frame.user_input.dispatchPointerPress(frame, el, 0, 0, main, 1, .{}) catch |err| {
-        lp.log.err(.app, "click press failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-    try Frame.user_input.runMouseDownFocus(frame, el, press_result, "click mousedown focus");
-
-    Frame.user_input.dispatchPointerRelease(frame, el, 0, 0, main, press_result.suppress_mouse, 1, .{}) catch |err| {
-        lp.log.err(.app, "click release failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-
-    Frame.user_input.dispatchClickAsPointer(frame, el, 0, 0, 1, 0, .{}) catch |err| {
-        lp.log.err(.app, "click click failed", .{ .err = err });
+    Frame.user_input.triggerClick(frame, el, .{}) catch |err| {
+        lp.log.err(.app, "click failed", .{ .err = err });
         return error.ActionFailed;
     };
 }
