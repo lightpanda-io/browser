@@ -1611,7 +1611,7 @@ pub const ScrollAxes = struct { x: bool = false, y: bool = false };
 
 /// What a scroll along one axis lands on. html and body scroll the viewport,
 /// and so does a detached element.
-pub const ScrollTarget = union(enum) {
+const ScrollTarget = union(enum) {
     viewport,
     container: *Element,
 
@@ -1624,7 +1624,7 @@ pub const ScrollTarget = union(enum) {
     }
 };
 
-pub const ScrollTargets = struct {
+const ScrollTargets = struct {
     x: ScrollTarget = .viewport,
     y: ScrollTarget = .viewport,
 };
