@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=recursiveDispatchWithOnError>
+  {
+    const el = document.createElement('div');
+    let depth = 0;
+    const previousOnError = window.onerror;
+    const onError = () => {};
+    window.onerror = () => true;
+    window.addEventListener('error', onError);
+    el.addEventListener('recurse', () => {
+      depth++;
+      el.dispatchEvent(new Event('recurse'));
+    });
+    try {
+      el.dispatchEvent(new Event('recurse'));
+      testing.expectTrue(depth > 5);
+    } finally {
+      window.onerror = previousOnError;
+      window.removeEventListener('error', onError);
+    }
+  }
+</script>
+
+<script id=recursiveDispatchWithMicrotasks type=module>
+  {
+    const state = await testing.async();
+    const el = document.createElement('div');
+    let depth = 0;
+    let delivered = 0;
+    const target = document.createElement('div');
+    const observer = new MutationObserver(() => { delivered++; });
+    observer.observe(target, { attributes: true });
+    el.addEventListener('recurse', () => {
+      depth++;
+      target.setAttribute('depth', String(depth));
+      el.dispatchEvent(new Event('recurse'));
+    });
+    el.dispatchEvent(new Event('recurse'));
+    queueMicrotask(() => state.resolve());
+    await state.done(() => {
+      observer.disconnect();
+      testing.expectTrue(depth > 5);
+      testing.expectTrue(delivered > 0);
+    });
+  }
+</script>
+
+<script id=stillAlive>
+  testing.expectEqual(3, 1 + 2);
+</script>
