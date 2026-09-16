@@ -540,9 +540,18 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
     }
     if (!full) try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
     const raw: u32 = @bitCast(status);
-    try testing.expectEqual(true, std.posix.W.IFSIGNALED(raw));
     errdefer std.debug.print("signal={t} mode={t} status=0x{x}\n", .{ sig, mode, raw });
-    try testing.expectEqual(sig, std.posix.W.TERMSIG(raw));
+    if (comptime builtin.sanitize_thread) {
+        // ThreadSanitizer's sigaction wrapper keeps the signal blocked for the
+        // duration of the handler whatever SA_NODEFER says, so the re-raise
+        // only ever goes pending and the handler's fallback exit is what ends
+        // the process. Everything before that point is unaffected.
+        try testing.expectEqual(true, std.posix.W.IFEXITED(raw));
+        try testing.expectEqual(@as(u8, @intCast(128 + @intFromEnum(sig))), std.posix.W.EXITSTATUS(raw));
+    } else {
+        try testing.expectEqual(true, std.posix.W.IFSIGNALED(raw));
+        try testing.expectEqual(sig, std.posix.W.TERMSIG(raw));
+    }
 
     var text = output[0..len];
     if (mode == .regular_file) {
