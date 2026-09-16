@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script>
+  // deleteDatabase's success handler runs on the delete task's stack, and
+  // close() detaches this frame's context from the IndexedDB connection gate.
+  // Regression: the detach freed the in-flight task, which then freed itself
+  // again on its way out of the gate.
+  const req = indexedDB.deleteDatabase('popup-self-close-db');
+  req.onsuccess = () => {
+    window.opener.postMessage({ from: 'popup_idb_self_close' }, '*');
+    window.close();
+  };
+</script>
