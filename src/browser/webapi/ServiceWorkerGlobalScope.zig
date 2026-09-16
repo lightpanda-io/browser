@@ -8,6 +8,11 @@
 // published by the Free Software Foundation, either version 3 of the
 // License, or (at your option) any later version.
 //
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
@@ -60,7 +65,7 @@ _on_activate: ?js.Function.Global = null,
 _on_message: ?js.Function.Global = null,
 
 // Our event dispatching is more complicated, because it can be held by an
-// abitrary JS promise (ExtendableEvent.waitUntil). So we create this, hold it
+// arbitrary JS promise (ExtendableEvent.waitUntil). So we create this, hold it
 // (aka acquireRef() it), dispatch it when the promise resolve, and then
 // releaseRef().
 _pending_event: ?*ExtendableEvent = null,
@@ -415,7 +420,7 @@ fn releasePendingEvent(self: *ServiceWorkerGlobalScope) void {
 fn setState(self: *ServiceWorkerGlobalScope, state: ServiceWorker.State) void {
     if (self._state == state or self._state == .redundant) {
         // redundant is terminal, once reached, we cannot put the worker back
-        // into intalled/activating
+        // into installed/activating
         return;
     }
     self._state = state;
@@ -561,7 +566,7 @@ pub fn getCookieStore(self: *ServiceWorkerGlobalScope) !*CookieStore {
     return cs;
 }
 
-// We don't yet have anything that "waits", so we can resolvethis immediately.
+// We don't yet have anything that "waits", so we can resolve this immediately.
 // Makes sure that the following common usage doesn't fail:
 //    self.addEventListener('install', e => e.waitUntil(self.skipWaiting()))
 pub fn skipWaiting(_: *ServiceWorkerGlobalScope, exec: *const js.Execution) !js.Promise {
