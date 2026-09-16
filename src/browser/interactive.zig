@@ -213,9 +213,11 @@ fn walkInteractive(
             else => {},
         }
 
-        if (frame._style_manager.hasDisplayNone(el)) {
-            tw.skipChildren();
-            continue;
+        if (el.ownerFrame(frame)) |owner| {
+            if (owner._style_manager.hasDisplayNone(el)) {
+                tw.skipChildren();
+                continue;
+            }
         }
 
         const html_el = el.is(Element.Html) orelse continue;

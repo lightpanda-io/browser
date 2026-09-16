@@ -1258,7 +1258,11 @@ const HiddenOptions = struct { ancestors: bool = true };
 
 /// Chromium's AX tree prunes display:none and visibility:hidden alike.
 fn isHidden(elt: *DOMNode.Element, frame: *Frame, options: HiddenOptions) bool {
-    return hasHidingAttribute(elt) or frame._style_manager.isHidden(elt, .{
+    if (hasHidingAttribute(elt)) {
+        return true;
+    }
+    const owner = elt.ownerFrame(frame) orelse return false;
+    return owner._style_manager.isHidden(elt, .{
         .check_visibility = true,
         .ancestors = options.ancestors,
     });

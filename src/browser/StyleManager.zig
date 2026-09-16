@@ -100,6 +100,16 @@ pub fn deinit(self: *StyleManager) void {
     self.arena.release();
 }
 
+// StyleManager methods should always be invoked on the StyleManager of the
+// Frame associated with an Element's document.
+fn assertOwns(self: *const StyleManager, el_: ?*const Element) void {
+    if (comptime lp.IS_DEBUG == false) {
+        return;
+    }
+    const el = el_ orelse return;
+    std.debug.assert(el.ownerFrame(self.frame) == self.frame);
+}
+
 /// Hard cap on `@media` / `@layer` nesting depth. CSS allows arbitrarily-deep
 /// at-rule nesting; without a cap a hostile inline stylesheet could blow the
 /// Zig stack via the mutually-recursive `applyMediaAtRule` / `applyLayerAtRule`
@@ -671,6 +681,7 @@ const Probe = enum { hidden, visibility, pointer_events };
 const Memo = std.AutoHashMapUnmanaged(*Element, Props);
 
 pub fn isHidden(self: *StyleManager, el: *Element, options: CheckVisibilityOptions) bool {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     if (!options.ancestors) {
         return self.ownProps(el).probe(.hidden, options);
@@ -686,6 +697,7 @@ pub fn hasDisplayNone(self: *StyleManager, el: *Element) bool {
 
 /// Own property, no ancestor walk; honors the UA hidden-element rules.
 pub fn display(self: *StyleManager, el: *Element) Display {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return .other;
     return self.ownProps(el).display;
 }
@@ -695,6 +707,7 @@ pub fn display(self: *StyleManager, el: *Element) Display {
 /// are NOT counted, so document scaffolding is preserved. Used by the HTML
 /// dump's "invisible" strip mode.
 pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     const p = self.ownProps(el);
     return p.author_display and p.display == .none;
@@ -705,11 +718,13 @@ pub fn hasAuthorDisplayNone(self: *StyleManager, el: *Element) bool {
 /// display:none: an ancestor with display:none means the element isn't
 /// rendered, but its computed `visibility` still reflects inherited visibility.
 pub fn hasVisibilityHiddenInherited(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     return self.anyInChain(el, .visibility, .{});
 }
 
 pub fn hasPointerEventsNone(self: *StyleManager, el: *Element) bool {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return false;
     return self.anyInChain(el, .pointer_events, .{});
 }
@@ -1315,6 +1330,7 @@ const Slots = struct {
 /// inline style (the same source `el.style` exposes), so `getComputedStyle` and
 /// `el.style` agree on inline values instead of resolving them independently.
 pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    self.assertOwns(el);
     const style = el.inlineStyle(self.frame) orelse return null;
     return style.asCSSStyleDeclaration().declaredValue(property_name, self.frame);
 }
@@ -1322,6 +1338,7 @@ pub fn inlineStyleValue(self: *StyleManager, el: *Element, property_name: String
 /// Computed value of a custom property (`--x`) on `el`, or null when nothing
 /// declares it. The value is returned as-is, no var substitution
 pub fn customPropertyValue(self: *StyleManager, el: *Element, property_name: String) ?[]const u8 {
+    self.assertOwns(el);
     self.rebuildIfDirty() catch return null;
 
     // Only the rules declaring this name; usually a handful, often none. An
@@ -1396,17 +1413,22 @@ fn parsedCustomRules(self: *StyleManager, name: []const u8) ![]const ParsedCusto
 /// `inherit`/relative-unit chains share it).
 const MAX_FONT_ANCESTOR_DEPTH = 32;
 
+/// The font-size an element inherits when nothing declares one and when an
+/// element is part of a frameless document.
+pub const DEFAULT_FONT_SIZE = 16;
+
 /// Computed font-size in CSS pixels. We do what we can, namely inline styles
 /// font-related attributes, up the parent chain.
 pub fn computedFontSize(self: *StyleManager, element: ?*Element) f64 {
+    self.assertOwns(element);
     return self.computedFontSizeAt(element, 0);
 }
 
 fn computedFontSizeAt(self: *StyleManager, element: ?*Element, depth: u8) f64 {
     if (depth >= MAX_FONT_ANCESTOR_DEPTH) {
-        return 16;
+        return DEFAULT_FONT_SIZE;
     }
-    const current = element orelse return 16;
+    const current = element orelse return DEFAULT_FONT_SIZE;
     const parent = current.parentElement();
 
     if (self.inlineStyleValue(current, comptime .wrap("font-size"))) |raw| {

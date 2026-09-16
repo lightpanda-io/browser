@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<head>
+  <style id="sheet">
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="probe">p</div>
+  <div id="host">keep<span id="gone" class="hidden">drop</span></div>
+  <script>
+    // Called by the parent test: these execute in this frame's realm, so they
+    // read this frame's StyleManager.
+    function displayOf(id) {
+      return getComputedStyle(document.getElementById(id)).display;
+    }
+  </script>
+</body>
