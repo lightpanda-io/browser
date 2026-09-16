@@ -332,7 +332,7 @@ pub fn triggerClick(frame: *Frame, target: *Element, modifiers: Modifiers) !void
 pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse {
         // Don't leave a prior gesture's state for the next message to misread.
-        frame._page.input_pointer.reset();
+        frame.page.input_pointer.reset();
         return;
     };
     if (comptime lp.IS_DEBUG) {
@@ -346,7 +346,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         });
     }
 
-    const gesture = frame._page.input_pointer.press(button);
+    const gesture = frame.page.input_pointer.press(button);
     // clickCount 0 (omitted) stays 0, not forced to 1: Chrome and Firefox
     // both fire mousedown with detail 0 in that case.
     const detail: u32 = if (click_count > 0) @intCast(click_count) else 0;
@@ -356,7 +356,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         // Stash the pointerdown outcome before the fallible focus call: the
         // release half is a separate message and can't observe it otherwise.
         const press = try dispatchPointerPress(frame, target, in);
-        frame._page.input_pointer.mousedown_suppressed = press.suppress_mouse;
+        frame.page.input_pointer.mousedown_suppressed = press.suppress_mouse;
         if (press.suppress_focus == false) {
             try focusForMouseDown(frame, target);
         }
@@ -364,7 +364,7 @@ pub fn triggerMousePress(frame: *Frame, x: f64, y: f64, button: i32, click_count
         // A chorded press is a buttons-mask change (pointermove), not a second
         // pointerdown: https://www.w3.org/TR/pointerevents3/#chorded-button-interactions
         _ = try dispatchPointerEventOn(frame, target, "pointermove", .{ .x = x, .y = y, .button = button, .buttons = gesture.held });
-        if (frame._page.input_pointer.mousedown_suppressed == false) {
+        if (frame.page.input_pointer.mousedown_suppressed == false) {
             const suppress_focus = try dispatchMouseEventOn(frame, target, "mousedown", in);
             if (suppress_focus == false) {
                 try focusForMouseDown(frame, target);
@@ -400,7 +400,7 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     // Consume the state before any early return, so a release that misses
     // every element can't leave it for the next message to misread.
-    const gesture = frame._page.input_pointer.release(button);
+    const gesture = frame.page.input_pointer.release(button);
     const remaining = gesture.held;
     const ends_gesture = gesture.ends_gesture;
     const was_suppressed = gesture.was_suppressed;
