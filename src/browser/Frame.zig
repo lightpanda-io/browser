@@ -988,6 +988,7 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
 
     // Navigation: kill in-flight HTTP transfers, but leave WebSockets
     // alive — they're cross-document by spec.
+    target.abortDocumentLoad();
     session.browser.http_client.abortRequests(&target._http_owner);
 
     // Capture the originating frame's URL as the Referer for this
@@ -1029,7 +1030,8 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: *lp.Arena, request_url
     }
 
     target._queued_navigation = qn;
-    return session.scheduleNavigation(target);
+    try session.scheduleNavigation(target);
+    target.documentIsComplete();
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -1097,14 +1099,7 @@ pub fn stopLoading(self: *Frame) void {
         self.child_frames.items[i].stopLoading();
     }
 
-    if (self._queued_navigation) |qn| {
-        const queued = self.page.queued_navigation;
-        if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
-            _ = queued.swapRemove(idx);
-        }
-        qn.arena.release();
-        self._queued_navigation = null;
-    }
+    self.cancelQueuedNavigation();
 
     const http_client = &self._session.browser.http_client;
     if (http_client.findTransfer(self._req_id)) |transfer| {
@@ -1115,8 +1110,38 @@ pub fn stopLoading(self: *Frame) void {
     http_client.cancelRequests(&self._http_owner);
 }
 
+pub fn abortDocumentLoad(self: *Frame) void {
+    self.document._load_aborted = true;
+
+    // readyState will become complete even if the parser is still on the
+    // stack. Remember its aborted state separately so document.open/write cannot
+    // start another parser, even after the original parse has unwound.
+    if (self._load_state == .parsing and !self._script_manager.base.static_scripts_done) {
+        self.document._active_parser_aborted = true;
+    }
+    if (self.document._script_created_parser) |parser| {
+        if (parser.handle != null) self.document._active_parser_aborted = true;
+    }
+}
+
+fn loadEventsAborted(self: *const Frame) bool {
+    if (self.document._load_aborted or self.js.env.terminatePending()) return true;
+    const parent = self.parent orelse return false;
+    return parent.loadEventsAborted();
+}
+
+pub fn cancelQueuedNavigation(self: *Frame) void {
+    const qn = self._queued_navigation orelse return;
+    const queued = self.page.queued_navigation;
+    if (std.mem.indexOfScalar(*Frame, queued.items, self)) |idx| {
+        _ = queued.swapRemove(idx);
+    }
+    qn.arena.release();
+    self._queued_navigation = null;
+}
+
 pub fn documentIsLoaded(self: *Frame) void {
-    if (self._load_state != .parsing) {
+    if (self._load_state != .parsing or self.loadEventsAborted()) {
         // Ideally, documentIsLoaded would only be called once, but if a
         // script is dynamically added from an async script after
         // documentIsLoaded is already called, then ScriptManager will call
@@ -1134,6 +1159,7 @@ pub fn documentIsLoaded(self: *Frame) void {
 
 fn _documentIsLoaded(self: *Frame) !void {
     try self.dispatchReadyStateChange();
+    if (self.loadEventsAborted()) return;
 
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self.page);
     try self._event_manager.dispatch(
@@ -1225,6 +1251,7 @@ pub fn documentIsComplete(self: *Frame) void {
     // documentIsLoaded, if there were _only_ async scripts
     if (self._load_state == .parsing) {
         self.documentIsLoaded();
+        if (self._load_state == .complete) return;
     }
 
     self._load_state = .complete;
@@ -1233,7 +1260,7 @@ pub fn documentIsComplete(self: *Frame) void {
         else => log.err(.frame, "document is complete", .{ .err = err, .type = self._type, .url = self.url }),
     };
 
-    if (self._maybe_meta_refresh) {
+    if (self._maybe_meta_refresh and !self.loadEventsAborted()) {
         self._maybe_meta_refresh = false;
         self.metaRefreshOnLoad();
     }
@@ -1242,9 +1269,11 @@ pub fn documentIsComplete(self: *Frame) void {
 fn _documentIsComplete(self: *Frame) !void {
     self.document._ready_state = .complete;
     try self.dispatchReadyStateChange();
+    if (self.loadEventsAborted()) return;
 
     // Run element load/error events before window.load.
     try self.dispatchQueuedEvents();
+    if (self.loadEventsAborted()) return;
 
     // Dispatch window.load event.
     const window_target = self.window.asEventTarget();
@@ -3788,6 +3817,161 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: superseded documents omit DOMContentLoaded and load" {
+    const cases = [_]struct { trigger: []const u8, expected: []const u8 }{
+        .{ .trigger = "location.assign('/next');", .expected = "complete" },
+        .{
+            .trigger = "document.addEventListener('readystatechange', () => { if (document.readyState === 'interactive') location.assign('/next'); });",
+            .expected = "interactive|complete",
+        },
+        .{
+            .trigger = "document.addEventListener('DOMContentLoaded', () => location.assign('/next'));",
+            .expected = "interactive|dcl|complete",
+        },
+        .{
+            .trigger = "document.addEventListener('readystatechange', () => { if (document.readyState === 'complete') location.assign('/next'); });",
+            .expected = "interactive|dcl|complete",
+        },
+        .{ .trigger = "location.hash = 'section';", .expected = "interactive|dcl|complete|load" },
+        .{ .trigger = "history.replaceState({}, '', '?same-document=1');", .expected = "interactive|dcl|complete|load" },
+    };
+    for (cases) |case| {
+        const page = try testing.pageTest("hi.html", .{});
+        defer page.close();
+        const frame = page.frame().?;
+        var ls: JS.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\globalThis.events = [];
+            \\document.addEventListener('readystatechange', () => events.push(document.readyState));
+            \\document.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+            \\window.addEventListener('load', () => events.push('load'));
+        , null);
+        frame._load_state = .parsing;
+        frame.document._ready_state = .loading;
+        try ls.local.eval(case.trigger, null);
+        frame.documentIsComplete();
+        const events = try ls.local.exec("events.join('|')", null);
+        try testing.expectEqual(case.expected, try events.toStringSlice());
+    }
+}
+
+test "Frame: pending or discarded replacements do not resume old load events" {
+    for ([_]bool{ false, true }) |discard| {
+        const page = try testing.pageTest("hi.html", .{});
+        defer page.close();
+        const frame = page.frame().?;
+        var ls: JS.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        try ls.local.eval(
+            \\globalThis.events = [];
+            \\document.addEventListener('readystatechange', () => events.push(document.readyState));
+            \\document.addEventListener('DOMContentLoaded', () => events.push('dcl'));
+            \\window.addEventListener('load', () => events.push('load'));
+        , null);
+        frame._load_state = .parsing;
+        frame.document._ready_state = .loading;
+        try frame._session.initiateRootNavigation(frame._frame_id, "http://127.0.0.1:9582/src/browser/tests/hi.html?replacement", .{});
+        const replacement = frame.page.replacement.?;
+        if (discard) frame._session.discardPendingPage(replacement);
+        try testing.expectEqual(null, frame._queued_navigation);
+        frame.documentIsComplete();
+        const events = try ls.local.exec("events.join('|')", null);
+        try testing.expectEqual("complete", try events.toStringSlice());
+        if (!discard) frame._session.discardPendingPage(replacement);
+    }
+}
+
+test "Frame: readystatechange during an aborted load may renavigate or throw" {
+    const page = try testing.pageTest("hi.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(
+        \\globalThis.events = [];
+        \\document.addEventListener('readystatechange', () => {
+        \\  events.push(document.readyState);
+        \\  if (document.readyState === 'complete') { location.assign('/second'); throw new Error('handler'); }
+        \\});
+        \\window.addEventListener('load', () => events.push('load'));
+    , null);
+    frame._load_state = .parsing;
+    frame.document._ready_state = .loading;
+    testing.silenceLog(&.{ .js, .event, .frame });
+    try ls.local.eval("location.assign('/first');", null);
+    try testing.expectEqual("complete", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
+    try testing.expectEqual(true, std.mem.endsWith(u8, frame._queued_navigation.?.url, "/second"));
+    try testing.expectEqual(1, frame.page.queued_navigation.items.len);
+    frame.documentIsComplete();
+    try testing.expectEqual("complete", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
+}
+
+test "Frame: document.open cancels the queued navigation without reviving load" {
+    const page = try testing.pageTest("hi.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(
+        \\globalThis.events = [];
+        \\window.addEventListener('load', () => events.push('load'));
+        \\location.assign('/next');
+        \\document.open();
+        \\document.write('<title>Rewritten</title>');
+        \\document.close();
+    , null);
+    try testing.expectEqual(null, frame._queued_navigation);
+    try testing.expectEqual(0, frame.page.queued_navigation.items.len);
+    try testing.expectEqual("Rewritten", try (try ls.local.exec("document.title", null)).toStringSlice());
+    try testing.expectEqual("", try (try ls.local.exec("events.join('|')", null)).toStringSlice());
+}
+
+test "Frame: document.open after inline navigation does not restart the parser" {
+    const page = try testing.pageTest("fixtures/navigation_open.html", .{});
+    defer page.close();
+
+    try testing.expect(std.mem.endsWith(u8, page.frame().?.url, "/hi.html"));
+}
+
+test "Frame: document.open can cancel navigation once parsing has finished" {
+    inline for (.{ "?interactive", "?dcl" }) |query| {
+        const page = try testing.pageTest("fixtures/navigation_open.html" ++ query, .{});
+        defer page.close();
+        const frame = page.frame().?;
+
+        try testing.expect(std.mem.endsWith(u8, frame.url, "/navigation_open.html" ++ query));
+        try testing.expectEqual(false, frame.document._active_parser_aborted);
+        try testing.expectEqual(null, frame._queued_navigation);
+        try testing.expectEqual("Rewritten", (try frame.getTitle()).?);
+    }
+}
+
+test "Frame: cancelling navigation does not revive an aborted parser" {
+    const page = try testing.pageTest("fixtures/navigation_open.html?cancel", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    try testing.expect(std.mem.endsWith(u8, frame.url, "/navigation_open.html?cancel"));
+    var ls: JS.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    // The original parse has unwound, but the active-parser-was-aborted flag
+    // must still prevent open/write/writeln from replacing the document.
+    try ls.local.eval(
+        \\document.open();
+        \\document.write('<title>Later write</title>');
+        \\document.writeln('<title>Later writeln</title>');
+        \\document.close();
+    , null);
+    try testing.expectEqual("Original", try (try ls.local.exec("document.title", null)).toStringSlice());
+    try testing.expectEqual(null, frame.document._script_created_parser);
 }
 
 test "Frame: static immediate meta refresh navigates" {
