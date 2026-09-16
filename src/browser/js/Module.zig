@@ -53,6 +53,7 @@ pub fn getModuleRequests(self: Module) Requests {
 }
 
 pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
+    if (self.local.ctx.env.stackExhausted()) return error.StackExhausted;
     var out: v8.MaybeBool = undefined;
     v8.v8__Module__InstantiateModule(self.handle, self.local.handle, cb, &out);
     if (out.has_value) {
@@ -62,6 +63,7 @@ pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
 }
 
 pub fn evaluate(self: Module) !js.Value {
+    if (self.local.ctx.env.stackExhausted()) return error.StackExhausted;
     const status = self.getStatus();
     switch (status) {
         .kInstantiated, .kEvaluated, .kErrored => {},
