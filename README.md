@@ -4,7 +4,8 @@
 <h1 align="center">Lightpanda Browser</h1>
 <p align="center">
 <strong>The headless browser built from scratch for AI agents and automation.</strong><br>
-Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
+Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.</strong><br>
+16x lighter and 9x faster than Chromium.
 </p>
 
 </div>
@@ -192,6 +193,7 @@ reference.
 ./lightpanda agent --task "top story on news.ycombinator.com?"
 ./lightpanda agent --no-llm                           # basic REPL, no LLM
 ./lightpanda run session.js                           # run a recorded script
+cat session.js | ./lightpanda run -                   # ...or pipe one in via stdin
 ./lightpanda agent --provider gemini --task "..."     # force a specific provider
 ./lightpanda agent --list-models                      # models available for the detected provider
 VERTEX_API_KEY=... ./lightpanda agent --provider vertex             # Vertex AI, express mode

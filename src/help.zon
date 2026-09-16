@@ -81,6 +81,8 @@
     \\          Allowed values:
     \\              html               Serialized HTML of the DOM.
     \\              markdown           Converts content to Markdown.
+    \\              pdf                Text-only rendering of the page as a
+    \\                                 PDF file (base64 with --json).
     \\              png                Text-only rendering of the page as a
     \\                                 PNG image (base64 with --json).
     \\              semantic_tree      JSON-serialized semantic tree.
@@ -207,10 +209,10 @@
     \\
     \\Arguments:
     \\[SCRIPT]
-    \\          Optional path to a .js script. Runs the script (no LLM calls) and
-    \\          exits; `{0s} run SCRIPT` is the preferred spelling. With no script
-    \\          and no --task, the REPL starts; from there /load runs a script and
-    \\          /save exports the session to a file.
+    \\          Optional path to a .js script, or `-` for stdin. Runs the script
+    \\          (no LLM calls) and exits; `{0s} run SCRIPT` is the preferred
+    \\          spelling. With no script and no --task, the REPL starts; from
+    \\          there /load runs a script and /save exports the session to a file.
     \\          Caution: .js files can contain evaluate(...) calls that run
     \\          arbitrary JavaScript in the page. Only run scripts you trust, the
     \\          same way you would a shell script.
@@ -253,18 +255,28 @@
     \\          The AI provider. When omitted, lightpanda auto-detects an API
     \\          key from your environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
     \\          GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY,
-    \\          MISTRAL_API_KEY). With exactly one key set: that provider is
-    \\          used. With multiple keys on a TTY: you'll be prompted to pick;
-    \\          in non-interactive contexts, pass --provider explicitly. With
-    \\          no keys set: falls back to the basic REPL (slash commands only,
-    \\          no natural-language input, no LOGIN / ACCEPT_COOKIES keywords).
+    \\          MISTRAL_API_KEY, VERTEX_API_KEY). With exactly one key set:
+    \\          that provider is used. With multiple keys on a TTY: you'll be
+    \\          prompted to pick; in non-interactive contexts, pass --provider
+    \\          explicitly. With no keys set: falls back to the basic REPL
+    \\          (slash commands only, no natural-language input, no LOGIN /
+    \\          ACCEPT_COOKIES keywords).
+    \\
+    \\          openai_compatible targets any OpenAI-style server via
+    \\          OPENAI_BASE_URL + OPENAI_API_KEY; it is auto-detected when
+    \\          OPENAI_BASE_URL is set.
+    \\
+    \\          Vertex project mode (GOOGLE_CLOUD_PROJECT + a gcloud token)
+    \\          works with --provider vertex; it is only auto-detected when
+    \\          GOOGLE_GENAI_USE_VERTEXAI=1 is set too.
     \\
     \\          Local servers (ollama, llama_cpp) are never auto-detected (they
     \\          need no key); select them explicitly with --provider ollama /
     \\          --provider llama_cpp.
     \\
     \\          Allowed values: "anthropic", "openai", "gemini", "huggingface",
-    \\                          "vercel", "mistral", "ollama", "llama_cpp".
+    \\                          "vercel", "mistral", "ollama", "llama_cpp",
+    \\                          "vertex", "codex", "openai_compatible".
     \\          In the REPL, use /provider to list and change providers.
     \\  --save <PATH>
     \\          Synthesize a replayable .js script from the --task run and write
@@ -292,26 +304,25 @@
     \\The provider, model, effort, and verbosity you choose in the REPL are
     \\remembered per-directory in .lp-agent.zon and reused on the next run.
     \\
-    \\API keys are read from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY,
-    \\GOOGLE_API_KEY/GEMINI_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or
-    \\MISTRAL_API_KEY. The local servers (Ollama, llama.cpp) do not require an
-    \\API key.
+    \\API keys are read from the environment; see --provider for the full list.
+    \\The local servers (Ollama, llama.cpp) do not require an API key.
     ,
     .run =
     \\run command
     \\Runs a saved script, then exits. No LLM calls, no API key needed.
     \\
     \\Usage:
-    \\  {0s} run <SCRIPT> [COMMON_OPTIONS]
+    \\  {0s} run <SCRIPT | -> [COMMON_OPTIONS]
     \\
     \\Examples:
     \\  {0s} run script.js                        (replay a saved script)
+    \\  cat script.js | {0s} run -                (read the script from stdin)
     \\
     \\Arguments:
     \\<SCRIPT>
     \\          Path to a .js script to run, then exit. Produce one with
     \\          `{0s} agent --task "..." --save script.js`, or `/save` from the
-    \\          agent REPL.
+    \\          agent REPL. Pass `-` to read the script from stdin instead.
     \\          Caution: .js files can contain evaluate(...) calls that run
     \\          arbitrary JavaScript in the page. Only run scripts you trust, the
     \\          same way you would a shell script.
@@ -477,13 +488,6 @@
     \\  --proxy-bearer-token <TOKEN>
     \\          Token sent for bearer authentication with the proxy:
     \\          Proxy-Authorization: Bearer <token>.
-    \\  --storage-engine <ENGINE>
-    \\          The storage engine to use.
-    \\          Defaults to none.
-    \\          Allowed values: "none", "sqlite".
-    \\  --storage-sqlite-path <PATH>
-    \\          Path to the SQLite database file for persistent storage.
-    \\          Use ":memory:" for in-memory storage.
     \\  --timezone <IANA>
     \\          Time zone used by Date and Intl, e.g. Europe/Paris or UTC.
     \\          Defaults to the host time zone.
