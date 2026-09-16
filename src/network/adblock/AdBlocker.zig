@@ -223,7 +223,7 @@ pub fn parse(self: *AdBlocker, reader: *Io.Reader) !void {
         if (filter.kind == .regex) {
             const body = filter.pattern[1 .. filter.pattern.len - 1];
             var diag: Regex.Diagnostic = .{};
-            const compiled = Regex.compile(self.regex_context, body, .{ .case_insensitive = !filter.match_case }, &diag) catch |err| switch (err) {
+            const compiled = self.regex_context.compile(body, .{ .case_insensitive = !filter.match_case }, &diag) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidRegex => {
                     log.debug(.app, "adblock regex rejected", .{

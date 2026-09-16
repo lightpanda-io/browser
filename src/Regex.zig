@@ -100,6 +100,35 @@ pub const Context = struct {
         return self;
     }
 
+    /// A failed compile fills `diag`, when given, with PCRE2's message and the
+    /// offset of the offending character.
+    pub fn compile(self: *const Context, pattern: []const u8, options: Options, diag: ?*Diagnostic) Error!Regex {
+        var flags: u32 = 0;
+        if (options.case_insensitive) flags |= pcre2.PCRE2_CASELESS;
+        if (options.unicode) flags |= pcre2.PCRE2_UTF | pcre2.PCRE2_MATCH_INVALID_UTF;
+
+        var err_code: c_int = 0;
+        var err_offset: usize = 0;
+        const code = pcre2.pcre2_compile_8(
+            pattern.ptr,
+            pattern.len,
+            flags,
+            &err_code,
+            &err_offset,
+            self.compile_context,
+        ) orelse {
+            // A failed allocation is ours, not the pattern's.
+            if (err_code == pcre2.PCRE2_ERROR_HEAP_FAILED) return error.OutOfMemory;
+            if (diag) |d| {
+                const len = pcre2.pcre2_get_error_message_8(err_code, &d.buf, d.buf.len);
+                d.len = if (len < 0) 0 else @intCast(len);
+                d.offset = err_offset;
+            }
+            return error.InvalidRegex;
+        };
+        return .{ .code = code, .context = self };
+    }
+
     pub fn deinit(self: *Context) void {
         pcre2.pcre2_match_context_free_8(self.match_context);
         pcre2.pcre2_compile_context_free_8(self.compile_context);
@@ -128,35 +157,6 @@ pub const Context = struct {
         allocator.free(base[0..total]);
     }
 };
-
-/// A failed compile fills `diag`, when given, with PCRE2's message and the
-/// offset of the offending character.
-pub fn compile(context: *const Context, pattern: []const u8, options: Options, diag: ?*Diagnostic) Error!Regex {
-    var flags: u32 = 0;
-    if (options.case_insensitive) flags |= pcre2.PCRE2_CASELESS;
-    if (options.unicode) flags |= pcre2.PCRE2_UTF | pcre2.PCRE2_MATCH_INVALID_UTF;
-
-    var err_code: c_int = 0;
-    var err_offset: usize = 0;
-    const code = pcre2.pcre2_compile_8(
-        pattern.ptr,
-        pattern.len,
-        flags,
-        &err_code,
-        &err_offset,
-        context.compile_context,
-    ) orelse {
-        // A failed allocation is ours, not the pattern's.
-        if (err_code == pcre2.PCRE2_ERROR_HEAP_FAILED) return error.OutOfMemory;
-        if (diag) |d| {
-            const len = pcre2.pcre2_get_error_message_8(err_code, &d.buf, d.buf.len);
-            d.len = if (len < 0) 0 else @intCast(len);
-            d.offset = err_offset;
-        }
-        return error.InvalidRegex;
-    };
-    return .{ .code = code, .context = context };
-}
 
 pub fn deinit(self: Regex) void {
     pcre2.pcre2_code_free_8(self.code);
@@ -191,7 +191,7 @@ test "Regex: JavaScript escapes and unanchored search" {
     const context: *Context = try .init(testing.allocator);
     defer context.deinit();
 
-    const regex = try Regex.compile(context, "^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*", .{ .case_insensitive = true }, null);
+    const regex = try context.compile("^https?:\\/\\/[0-9a-z]{5,}\\.com\\/.*", .{ .case_insensitive = true }, null);
     defer regex.deinit();
 
     try testing.expect(regex.matches("https://abcde.com/x"));
@@ -199,12 +199,12 @@ test "Regex: JavaScript escapes and unanchored search" {
     try testing.expect(!regex.matches("https://abcd.com/x"));
     try testing.expect(!regex.matches("https://abcde.org/x"));
 
-    const invoke = try Regex.compile(context, "\\/[0-9a-f]{32}\\/invoke\\.js", .{ .case_insensitive = true }, null);
+    const invoke = try context.compile("\\/[0-9a-f]{32}\\/invoke\\.js", .{ .case_insensitive = true }, null);
     defer invoke.deinit();
     try testing.expect(invoke.matches("https://host.com/0123456789abcdef0123456789abcdef/invoke.js"));
     try testing.expect(!invoke.matches("https://host.com/0123456789abcdef0123456789abcde/invoke.js"));
 
-    const dash = try Regex.compile(context, "[a-z\\-]+\\?s=", .{ .case_insensitive = true }, null);
+    const dash = try context.compile("[a-z\\-]+\\?s=", .{ .case_insensitive = true }, null);
     defer dash.deinit();
     try testing.expect(dash.matches("https://x.com/a-b?s=1"));
     try testing.expect(!dash.matches("https://x.com/?s=1"));
@@ -214,7 +214,7 @@ test "Regex: case is kept by default" {
     const context: *Context = try .init(testing.allocator);
     defer context.deinit();
 
-    const exact = try Regex.compile(context, "\\/[a-z0-9]{12}\\/[a-zA-Z0-9]{20,}$", .{}, null);
+    const exact = try context.compile("\\/[a-z0-9]{12}\\/[a-zA-Z0-9]{20,}$", .{}, null);
     defer exact.deinit();
     try testing.expect(exact.matches("https://x.com/abcdef123456/aBcDeFgHiJkLmNoPqRsTuV"));
     try testing.expect(!exact.matches("https://x.com/ABCDEF123456/aBcDeFgHiJkLmNoPqRsTuV"));
@@ -224,17 +224,17 @@ test "Regex: invalid patterns are errors, runaway ones no match" {
     const context: *Context = try .init(testing.allocator);
     defer context.deinit();
 
-    try testing.expectError(error.InvalidRegex, Regex.compile(context, "(", .{}, null));
-    try testing.expectError(error.InvalidRegex, Regex.compile(context, "a{2,1}", .{}, null));
+    try testing.expectError(error.InvalidRegex, context.compile("(", .{}, null));
+    try testing.expectError(error.InvalidRegex, context.compile("a{2,1}", .{}, null));
 
     // An unknown alphanumeric escape is the literal, as in JavaScript.
-    const literal = try Regex.compile(context, "\\q", .{ .case_insensitive = true }, null);
+    const literal = try context.compile("\\q", .{ .case_insensitive = true }, null);
     defer literal.deinit();
     try testing.expect(literal.matches("https://x.com/q"));
 
     // Exponential backtracking stops at the match limit instead of stalling
     // the caller.
-    const runaway = try Regex.compile(context, "^(a+)+$", .{ .case_insensitive = true }, null);
+    const runaway = try context.compile("^(a+)+$", .{ .case_insensitive = true }, null);
     defer runaway.deinit();
     const subject = "a" ** 64 ++ "b";
     try testing.expect(!runaway.matches(subject));
@@ -246,7 +246,7 @@ test "Regex: a diagnostic names the fault and where it is" {
     defer context.deinit();
 
     var diag: Diagnostic = .{};
-    try testing.expectError(error.InvalidRegex, Regex.compile(context, "ab(", .{}, &diag));
+    try testing.expectError(error.InvalidRegex, context.compile("ab(", .{}, &diag));
     try testing.expectString("missing closing parenthesis", diag.message());
     try testing.expectEqual(3, diag.offset);
 }
@@ -255,28 +255,28 @@ test "Regex: unicode folds case beyond ASCII and tolerates invalid bytes" {
     const context: *Context = try .init(testing.allocator);
     defer context.deinit();
 
-    const ascii = try Regex.compile(context, "^реклама$", .{ .case_insensitive = true }, null);
+    const ascii = try context.compile("^реклама$", .{ .case_insensitive = true }, null);
     defer ascii.deinit();
     try testing.expect(ascii.matches("реклама"));
     try testing.expect(!ascii.matches("Реклама"));
 
-    const unicode = try Regex.compile(context, "^реклама$", .{ .case_insensitive = true, .unicode = true }, null);
+    const unicode = try context.compile("^реклама$", .{ .case_insensitive = true, .unicode = true }, null);
     defer unicode.deinit();
     try testing.expect(unicode.matches("Реклама"));
     try testing.expect(unicode.matches("РЕКЛАМА"));
 
     // One code point, not one byte.
-    const single = try Regex.compile(context, "^.$", .{ .unicode = true }, null);
+    const single = try context.compile("^.$", .{ .unicode = true }, null);
     defer single.deinit();
     try testing.expect(single.matches("é"));
     try testing.expect(!single.matches("ab"));
 
     // Word boundaries stay ASCII, as in JavaScript.
-    const word = try Regex.compile(context, "\\bshare\\b", .{ .unicode = true }, null);
+    const word = try context.compile("\\bshare\\b", .{ .unicode = true }, null);
     defer word.deinit();
     try testing.expect(word.matches("éshare"));
 
-    const sidebar = try Regex.compile(context, "sidebar", .{ .unicode = true }, null);
+    const sidebar = try context.compile("sidebar", .{ .unicode = true }, null);
     defer sidebar.deinit();
     try testing.expect(sidebar.matches("sidebar\xFF"));
     try testing.expect(!sidebar.matches("\xFF"));

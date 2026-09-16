@@ -2076,7 +2076,7 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
     const pattern: ?[]const u8 = if (args.name) |name| regexBody(name) else null;
     var diag: lp.Regex.Diagnostic = .{};
     const name_regex: ?lp.Regex = if (pattern) |p|
-        lp.Regex.compile(session.browser.app.regex_context, p, .{ .case_insensitive = true, .unicode = true }, &diag) catch |err| switch (err) {
+        session.browser.app.regex_context.compile(p, .{ .case_insensitive = true, .unicode = true }, &diag) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InvalidRegex => return .{
                 .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ p, diag.message(), diag.offset }),

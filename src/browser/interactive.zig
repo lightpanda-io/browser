@@ -507,14 +507,14 @@ test "browser.interactive: a name regex filters the walk" {
     const context = testing.test_app.regex_context;
     const options: Regex.Options = .{ .case_insensitive = true, .unicode = true };
 
-    const starts_add = try Regex.compile(context, "^add", options, null);
+    const starts_add = try context.compile("^add", options, null);
     defer starts_add.deinit();
     const found_add = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name_regex = starts_add });
     try testing.expectEqual(2, found_add.len);
     try testing.expectEqual("Add to cart", found_add[0].name.?);
     try testing.expectEqual("Add item", found_add[1].name.?);
 
-    const only_cart = try Regex.compile(context, "^cart$", options, null);
+    const only_cart = try context.compile("^cart$", options, null);
     defer only_cart.deinit();
     const found_cart = try findInteractiveElements(div.asNode(), frame.call_arena, frame, .{ .name_regex = only_cart });
     try testing.expectEqual(1, found_cart.len);
