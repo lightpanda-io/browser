@@ -3412,6 +3412,15 @@ pub const Transfer = struct {
             break :blk resolved;
         };
 
+        if (req.request_mode == .cors and (URL.getUsername(url).len > 0 or URL.getPassword(url).len > 0)) {
+            const origin = req.origin orelse return error.RedirectWithCredentials;
+            if (transfer._cors_cross_origin or !URL.isSameOrigin(base, origin) or !URL.isSameOrigin(url, origin)) {
+                // Can only follow a redirect to a URL with credentials when
+                // we're staying on the same origin
+                return error.RedirectWithCredentials;
+            }
+        }
+
         // When the redirect target is not same-origin with the current URL,
         // the Authorization header must not follow the request to the new
         // origin.
@@ -5182,6 +5191,52 @@ test "HttpClient: redirects drop body headers only when rewriting the method" {
         try testing.expectEqual("text/html", transfer.findRequestHeader("accept").?);
         try testing.expectEqual("yes", transfer.findRequestHeader("x-keep").?);
         try testing.expectEqual("http://example.com/end", transfer.req.url);
+    }
+}
+
+test "HttpClient: cors redirect to a URL with credentials" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    const cases = [_]struct { mode: Request.RequestMode, url: [:0]const u8, location: []const u8, allowed: bool }{
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://b.test/", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://a.test/x", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user:pw@a.test/x", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user:pw@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://:pw@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://b.test/r", .location = "http://user:pw@a.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://b.test/r", .location = "http://user:pw@b.test/", .allowed = false },
+        .{ .mode = .no_cors, .url = "http://b.test/r", .location = "http://user:pw@c.test/", .allowed = true },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "redirect test");
+        defer arena.release();
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = case.url,
+                .origin = "http://a.test",
+                .credentials_mode = .omit,
+                .request_mode = case.mode,
+                .resource_type = .fetch,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        const result = transfer.applyRedirectTarget(transfer.req.url, case.location, 302);
+        if (case.allowed) {
+            try result;
+        } else {
+            try testing.expectError(error.RedirectWithCredentials, result);
+        }
     }
 }
 
