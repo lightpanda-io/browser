@@ -36,6 +36,9 @@ _type: Type,
 _arena: *lp.Arena,
 _bubbles: bool = false,
 _cancelable: bool = false,
+// Resolved at dispatch: cancelable only while a listener on the path could
+// call preventDefault. The UA's scroll-blocking events work this way.
+_cancelable_unless_passive: bool = false,
 _composed: bool = false,
 _type_string: String,
 _target: ?*EventTarget = null,

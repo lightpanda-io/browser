@@ -608,12 +608,12 @@ fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
     const event = TouchEvent.initTrusted(typ, .{
         .bubbles = true,
-        .cancelable = owner._event_manager.hasNonPassiveListener(el.asNode(), typ),
         .composed = true,
     }, owner) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
         return;
     };
+    event.asEvent()._cancelable_unless_passive = true;
     dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 

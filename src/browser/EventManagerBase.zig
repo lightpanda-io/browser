@@ -205,11 +205,9 @@ pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: S
     });
 }
 
-/// Whether the target has a listener for `event_type` that can call
-/// preventDefault. A removed listener isn't "in" the list anymore, same as
-/// findListener.
-pub fn hasNonPassiveListener(self: *EventManagerBase, target: *EventTarget, event_type: String) bool {
-    const list = self.getListeners(target, event_type) orelse return false;
+/// Whether a listener in the list can call preventDefault. A removed
+/// listener isn't "in" the list anymore, same as findListener.
+pub fn hasNonPassiveListener(list: *const std.DoublyLinkedList) bool {
     var node = list.first;
     while (node) |n| : (node = n.next) {
         const listener: *align(8) Listener = @fieldParentPtr("node", n);

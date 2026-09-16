@@ -149,21 +149,6 @@ pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []cons
     return self.base.hasDirectListeners(target, typ, handler);
 }
 
-/// Whether any listener for `typ` on the path from `node` up to the window
-/// is non-passive. The UA dispatches scroll-blocking events as
-/// non-cancelable when none is: it already knows preventDefault can't be
-/// called.
-pub fn hasNonPassiveListener(self: *EventManager, node: *Node, comptime typ: []const u8) bool {
-    const event_type: lp.String = comptime .wrap(typ);
-    var current: ?*Node = node;
-    while (current) |n| : (current = n.parentNode()) {
-        if (self.base.hasNonPassiveListener(n.asEventTarget(), event_type)) {
-            return true;
-        }
-    }
-    return self.base.hasNonPassiveListener(self.frame.window.asEventTarget(), event_type);
-}
-
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     const target_et = target.asEventTarget();
     event._target = target_et;
@@ -312,6 +297,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
     const path = path_buffer[0..path_len];
 
+    if (event._cancelable_unless_passive) {
+        event._cancelable = self.anyNonPassive(path, event);
+    }
+
     // Phase 1: Capturing phase (root → target, excluding target)
     // This happens for all events, regardless of bubbling
     event._event_phase = .capturing_phase;
@@ -432,6 +421,22 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
             }
         }
     }
+}
+
+/// Whether a listener on the path could call preventDefault. An inline
+/// handler always can; addEventListener listeners can unless passive.
+fn anyNonPassive(self: *EventManager, path: []const *EventTarget, event: *Event) bool {
+    for (path) |target| {
+        if (self.getInlineHandler(target, event) != null) {
+            return true;
+        }
+        if (self.base.getListeners(target, event._type_string)) |list| {
+            if (EventManagerBase.hasNonPassiveListener(list)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {

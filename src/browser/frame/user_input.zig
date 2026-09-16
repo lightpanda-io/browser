@@ -292,7 +292,7 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
 
 /// A wheel over `target`: trusted `wheel`, the legacy `mousewheel` Blink
 /// still fires, then the scroll unless either was canceled. Each event is
-/// non-cancelable when every listener on its path is passive.
+/// cancelable only while a listener on its dispatch path is non-passive.
 pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
     // Listeners live in the event manager of the element's own frame, which
     // is not the caller's when the element belongs to an iframe's document.
@@ -303,13 +303,13 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
     inline for (.{ "wheel", "mousewheel" }) |typ| {
         const event: *WheelEvent = try .initTrusted(typ, .{
             .bubbles = true,
-            .cancelable = event_manager.hasNonPassiveListener(target.asNode(), typ),
             .composed = true,
             .clientX = x,
             .clientY = y,
             .deltaX = delta_x,
             .deltaY = delta_y,
         }, owner);
+        event.asEvent()._cancelable_unless_passive = true;
         if (try event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
             canceled = true;
         }
