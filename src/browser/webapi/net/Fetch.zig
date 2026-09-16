@@ -144,6 +144,8 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             try h.populateRequestHeaders(transfer);
         }
 
+        try exec.headersForRequest(transfer);
+
         const source: ?[:0]const u8 = switch (request._referrer) {
             .none => null,
             .client => exec.referrerSource(),
