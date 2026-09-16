@@ -290,31 +290,25 @@ pub fn triggerMouseWheel(frame: *Frame, x: f64, y: f64, delta_x: f64, delta_y: f
     try wheel(frame, target, x, y, delta_x, delta_y);
 }
 
-/// A wheel over `target`: trusted `wheel`, the legacy `mousewheel` Blink
-/// still fires, then the scroll unless either was canceled. Each event is
-/// cancelable only while a listener on its dispatch path is non-passive.
+/// A wheel over `target`: a trusted `wheel`, then the scroll unless it was
+/// canceled. The event manager retypes it as Blink's legacy `mousewheel` for
+/// targets listening only to that, and makes it cancelable only while a
+/// listener on its dispatch path is non-passive.
 pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delta_y: f64) !void {
     // Listeners live in the event manager of the element's own frame, which
     // is not the caller's when the element belongs to an iframe's document.
     const owner = target.ownerFrame(frame) orelse return;
-    const event_manager = &owner._event_manager;
 
-    var canceled = false;
-    inline for (.{ "wheel", "mousewheel" }) |typ| {
-        const event: *WheelEvent = try .initTrusted(typ, .{
-            .bubbles = true,
-            .composed = true,
-            .clientX = x,
-            .clientY = y,
-            .deltaX = delta_x,
-            .deltaY = delta_y,
-        }, owner);
-        event.asEvent()._cancelable_unless_passive = true;
-        if (try event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
-            canceled = true;
-        }
-    }
-    if (canceled) {
+    const event: *WheelEvent = try .initTrusted("wheel", .{
+        .bubbles = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .deltaX = delta_x,
+        .deltaY = delta_y,
+    }, owner);
+    event.asEvent()._cancelable_unless_passive = true;
+    if (try owner._event_manager.dispatchCancelable(target.asEventTarget(), event.asEvent())) {
         return;
     }
 

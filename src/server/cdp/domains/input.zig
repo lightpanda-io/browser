@@ -372,11 +372,15 @@ test "cdp.input: dispatchMouseEvent mouseWheel cancelability follows listener pa
     defer try_catch.deinit();
 
     // Only passive listeners: the event is non-cancelable, preventDefault is
-    // inert and the scroll happens. Blink's legacy mousewheel fires too.
+    // inert and the scroll happens. Blink's legacy mousewheel fires only on a
+    // target with no wheel listener, and sees the event under that name.
     _ = try ls.local.compileAndRun(
         \\const box = document.getElementById('scrollbox');
         \\box.addEventListener('wheel', (e) => { window.passiveCancelable = e.cancelable; e.preventDefault(); }, { passive: true });
-        \\box.addEventListener('mousewheel', (e) => { window.legacyDeltaY = e.deltaY; });
+        \\box.addEventListener('mousewheel', () => { window.boxLegacy = true; });
+        \\document.body.addEventListener('mousewheel', (e) => { window.legacyType = e.type; window.legacyDeltaY = e.deltaY; });
+        \\window.bodyWheel = (e) => { window.bodyType = e.type; };
+        \\document.body.addEventListener('wheel', window.bodyWheel, { passive: true });
     , null);
 
     const rect_x = try (try ls.local.compileAndRun("document.getElementById('scrollbox').getBoundingClientRect().x", null)).toF64();
@@ -387,7 +391,20 @@ test "cdp.input: dispatchMouseEvent mouseWheel cancelability follows listener pa
         .method = "Input.dispatchMouseEvent",
         .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
     });
-    var result = try ls.local.compileAndRun("window.passiveCancelable === false && window.legacyDeltaY === 40 && document.getElementById('scrollbox').scrollTop === 40", null);
+    var result = try ls.local.compileAndRun("window.passiveCancelable === false && window.boxLegacy === undefined && window.bodyType === 'wheel' && window.legacyType === undefined && document.getElementById('scrollbox').scrollTop === 40", null);
+    try testing.expect(result.isTrue());
+
+    // Without a wheel listener the body runs its mousewheel listener instead.
+    _ = try ls.local.compileAndRun(
+        \\document.body.removeEventListener('wheel', window.bodyWheel);
+        \\window.bodyType = undefined;
+    , null);
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
+    });
+    result = try ls.local.compileAndRun("window.bodyType === undefined && window.legacyType === 'mousewheel' && window.legacyDeltaY === 40 && document.getElementById('scrollbox').scrollTop === 80", null);
     try testing.expect(result.isTrue());
 
     // A non-passive listener makes it cancelable, and preventDefault stops the scroll.
@@ -395,11 +412,26 @@ test "cdp.input: dispatchMouseEvent mouseWheel cancelability follows listener pa
         \\document.getElementById('scrollbox').addEventListener('wheel', (e) => { window.activeCancelable = e.cancelable; e.preventDefault(); });
     , null);
     try ctx.processMessage(.{
-        .id = 2,
+        .id = 3,
         .method = "Input.dispatchMouseEvent",
         .params = .{ .type = "mouseWheel", .x = rect_x, .y = rect_y, .deltaY = 40 },
     });
-    result = try ls.local.compileAndRun("window.activeCancelable === true && document.getElementById('scrollbox').scrollTop === 40", null);
+    result = try ls.local.compileAndRun("window.activeCancelable === true && document.getElementById('scrollbox').scrollTop === 80", null);
+    try testing.expect(result.isTrue());
+
+    // A mousewheel listener standing in for wheel is a listener like any
+    // other: non-passive, it makes the event cancelable and can cancel the scroll.
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('sheetscroll').addEventListener('mousewheel', (e) => { window.sheetCancelable = e.cancelable; e.preventDefault(); });
+    , null);
+    const sheet_x = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().x", null)).toF64();
+    const sheet_y = try (try ls.local.compileAndRun("document.getElementById('sheetleaf').getBoundingClientRect().y", null)).toF64();
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchMouseEvent",
+        .params = .{ .type = "mouseWheel", .x = sheet_x, .y = sheet_y, .deltaY = 40 },
+    });
+    result = try ls.local.compileAndRun("window.sheetCancelable === true && document.getElementById('sheetscroll').scrollTop === 0", null);
     try testing.expect(result.isTrue());
 }
 
