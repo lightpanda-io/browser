@@ -177,11 +177,11 @@ fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     return sw;
 }
 
-pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
+fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
-pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
+fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
