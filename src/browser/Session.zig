@@ -904,6 +904,9 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
         log.err(.browser, "pending navigation start", .{ .err = err, .url = url });
         return err;
     };
+
+    live.frame.abortDocumentLoad();
+    live.frame.abortedDocumentIsComplete();
 }
 
 // Promote a pending replacement Page to be the live Page.

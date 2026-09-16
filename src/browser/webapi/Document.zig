@@ -65,6 +65,9 @@ _content_type: ?[]const u8 = null,
 // createDocument) are UTF-8 regardless of the frame's encoding
 _charset: ?[]const u8 = null,
 _ready_state: ReadyState = .loading,
+_load_aborted: bool = false,
+// HTML's "active parser was aborted" flag also makes open/write no-ops.
+_active_parser_aborted: bool = false,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 // Track IDs that were removed from the map - they might have duplicates in the tree
@@ -996,6 +999,8 @@ fn writeInternal(self: *Document, text: []const []const u8, append_newline: bool
         return error.InvalidStateError;
     }
 
+    if (self._active_parser_aborted) return;
+
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
         for (text) |str| {
@@ -1122,7 +1127,7 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
         return error.InvalidStateError;
     }
 
-    if (frame._load_state == .parsing) {
+    if (self._active_parser_aborted or frame._load_state == .parsing) {
         return self;
     }
 
@@ -1148,6 +1153,9 @@ pub fn open(self: *Document, call_frame: *Frame) !*Document {
     self._style_sheets = null;
     self._implementation = null;
     self._ready_state = .loading;
+    // open() cancels an ongoing navigation; the aborted document's load is
+    // gone for good, as in Chrome.
+    frame.cancelQueuedNavigation();
 
     self._script_created_parser = Parser.Streaming.init(frame.arena, doc_node, frame, .{ .allow_declarative_shadow = true });
     try self._script_created_parser.?.start();
