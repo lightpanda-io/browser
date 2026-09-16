@@ -4,7 +4,7 @@
 <h1 align="center">Lightpanda Browser</h1>
 <p align="center">
 <strong>The headless browser built from scratch for AI agents and automation.</strong><br>
-Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
+Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.</strong><br>
 16x lighter and 9x faster than Chromium.
 </p>
 
