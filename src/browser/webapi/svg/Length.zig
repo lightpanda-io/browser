@@ -23,6 +23,7 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Page = @import("../../Page.zig");
 const units = @import("../../css/units.zig");
+const StyleManager = @import("../../StyleManager.zig");
 const Element = @import("../Element.zig");
 
 const String = lp.String;
@@ -298,12 +299,12 @@ fn resolveParsedLength(parsed: Parsed, element: *Element, direction: Direction, 
 }
 
 fn fontSize(self: *const Length, frame: *Frame) f64 {
-    const element = self._element orelse return frame._style_manager.computedFontSize(null);
+    const element = self._element orelse return StyleManager.DEFAULT_FONT_SIZE;
     return elementFontSize(element, frame);
 }
 
 fn elementFontSize(element: *Element, frame: *Frame) f64 {
-    const owner = element.ownerFrame(frame) orelse return frame._style_manager.computedFontSize(null);
+    const owner = element.ownerFrame(frame) orelse return StyleManager.DEFAULT_FONT_SIZE;
     return owner._style_manager.computedFontSize(element);
 }
 

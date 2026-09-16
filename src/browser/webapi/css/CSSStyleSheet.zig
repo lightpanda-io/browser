@@ -4,6 +4,7 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Parser = @import("../../css/Parser.zig");
+const StyleManager = @import("../../StyleManager.zig");
 
 const Element = @import("../Element.zig");
 
@@ -40,6 +41,11 @@ pub fn initWithOwner(owner: *Element, frame: *Frame) !*CSSStyleSheet {
 
 pub fn getOwnerNode(self: *const CSSStyleSheet) ?*Element {
     return self._owner_node;
+}
+
+fn ownerStyleManager(self: *const CSSStyleSheet, frame: *Frame) ?*StyleManager {
+    const owner = self._owner_node orelse return null;
+    return &(owner.ownerFrame(frame) orelse return null)._style_manager;
 }
 
 pub fn getHref(self: *const CSSStyleSheet) ?[]const u8 {
@@ -115,7 +121,9 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
         log.debug(.not_implemented, "insertRule clamped index", .{});
     }
     try rules.insert(index, inserted, frame);
-    frame._style_manager.ruleInserted(self, inserted);
+    if (self.ownerStyleManager(frame)) |style_manager| {
+        style_manager.ruleInserted(self, inserted);
+    }
 
     return index;
 }
@@ -155,7 +163,9 @@ fn deleteRule(self: *CSSStyleSheet, index: u32, frame: *Frame) !void {
     try rules.remove(index);
 
     // Notify StyleManager that rules have changed
-    frame._style_manager.sheetModified();
+    if (self.ownerStyleManager(frame)) |style_manager| {
+        style_manager.sheetModified();
+    }
 }
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!js.Promise {
@@ -167,7 +177,9 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSErr
     const rules = try self.getCssRules(frame);
     rules.clear();
     try self.parseInto(text, frame);
-    frame._style_manager.sheetModified();
+    if (self.ownerStyleManager(frame)) |style_manager| {
+        style_manager.sheetModified();
+    }
 }
 
 fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!void {

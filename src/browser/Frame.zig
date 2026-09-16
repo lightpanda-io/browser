@@ -2664,6 +2664,7 @@ const RemoveNodeOpts = struct {
     // Set to false when the caller queues its own combined mutation record
     notify_observers: bool = true,
 };
+
 pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
     // NodeIterator pre-removing steps must run while the tree is intact.
     if (self._live_node_iterators.first != null) {
@@ -2761,15 +2762,21 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
 
         popover.removeFromOpen(el, self);
 
-        // If a <style> element is being removed, remove its sheet from the list
+        // If a <style> element is being removed, remove its sheet from the list.
+        // `self` is the calling frame — Node.removeChild passes its own — so
+        // both the list and the rebuild belong to the element's frame, which is
+        // the one holding the sheet in its cascade.
+        const sheet_owner = el.ownerFrame(self);
         if (el.is(Element.Html.Style)) |style| {
             if (style._sheet) |sheet| {
-                if (self.document._style_sheets) |sheets| {
-                    sheets.remove(sheet);
-                }
+                removeStyleSheet(sheet_owner, sheet);
                 style._sheet = null;
             }
-            self._style_manager.sheetModified();
+            // Unconditional: with no materialized sheet the manager still holds
+            // the rules it parsed straight from the element's text.
+            if (sheet_owner) |owner| {
+                owner._style_manager.sheetModified();
+            }
         } else if (el.is(Element.Html.Link)) |link| {
             // External stylesheet links registered via Frame.loadExternalStylesheet
             // must be symmetrically deregistered on disconnect, or
@@ -2778,14 +2785,20 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
             // exactly the SPA theme-switch pattern (append new sheet,
             // remove old) the feature exists to serve.
             if (link._sheet) |sheet| {
-                if (self.document._style_sheets) |sheets| {
-                    sheets.remove(sheet);
-                }
+                removeStyleSheet(sheet_owner, sheet);
                 link._sheet = null;
-                self._style_manager.sheetModified();
+                if (sheet_owner) |owner| {
+                    owner._style_manager.sheetModified();
+                }
             }
         }
     }
+}
+
+fn removeStyleSheet(owner: ?*Frame, sheet: *CSSStyleSheet) void {
+    const frame = owner orelse return;
+    const sheets = frame.document._style_sheets orelse return;
+    sheets.remove(sheet);
 }
 
 // The TreeWalker isn't shadow DOM aware, so this is correctly scoped to direct
