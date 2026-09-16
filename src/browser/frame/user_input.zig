@@ -320,10 +320,9 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
 /// else the viewport. Relative deltas may land on different scrollers per
 /// axis, unlike an absolute position.
 fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !void {
-    const targets = target.scrollContainers(.{ .x = delta_x != 0, .y = delta_y != 0 }, frame);
     // A zero delta resolves to .viewport and scrolls it by nothing.
-    try targets.x.scrollBy(delta_x, 0, frame);
-    try targets.y.scrollBy(0, delta_y, frame);
+    try target.scrollContainer(.{ .x = delta_x != 0 }, frame).scrollBy(delta_x, 0, frame);
+    try target.scrollContainer(.{ .y = delta_y != 0 }, frame).scrollBy(0, delta_y, frame);
 }
 
 fn deltaToScroll(d: f64) i32 {

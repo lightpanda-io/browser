@@ -142,11 +142,10 @@ pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const
 pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Frame) ?[]const u8 {
     if (name.eql(overflow_shorthand)) {
         const x = self.findProperty(comptime .wrap("overflow-x")) orelse return null;
-        const y = self.overflowPartner(x) orelse return null;
-        if (x._value.eql(y._value)) {
-            return x._value.str();
-        }
-        return std.fmt.allocPrint(frame.local_arena, "{f} {f}", .{ x._value, y._value }) catch return null;
+        const pair = self.overflowPair(x) orelse return null;
+        var buf = std.Io.Writer.Allocating.init(frame.local_arena);
+        pair.formatValue(&buf.writer) catch return null;
+        return buf.written();
     }
     const prop = self.findProperty(name) orelse return null;
     return prop._value.str();
@@ -158,34 +157,40 @@ pub fn declaredValue(self: *const CSSStyleDeclaration, name: String, frame: *Fra
 // sets both longhands, reading or serializing it recombines them.
 const overflow_shorthand: String = .wrap("overflow");
 
-const OverflowValues = struct { x: []const u8, y: []const u8 };
+/// Both overflow longhands, declared with the same priority: the pair reads
+/// and serializes as the shorthand.
+const OverflowPair = struct {
+    x: *const Property,
+    y: *const Property,
 
-// `overflow: <x> [<y>]`; a single value applies to both axes. More than two
-// values is invalid and ignored.
-fn splitOverflow(value: []const u8) ?OverflowValues {
-    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-    const x = it.next() orelse return null;
-    const y = it.next() orelse x;
-    if (it.next() != null) {
+    fn formatValue(self: OverflowPair, writer: *std.Io.Writer) !void {
+        try self.x._value.format(writer);
+        if (!self.x._value.eql(self.y._value)) {
+            try writer.writeByte(' ');
+            try self.y._value.format(writer);
+        }
+    }
+
+    fn format(self: OverflowPair, writer: *std.Io.Writer) !void {
+        try writer.writeAll("overflow: ");
+        try self.formatValue(writer);
+        try formatDeclarationEnd(self.x._important, writer);
+    }
+};
+
+/// The pair `prop` belongs to, when it is an overflow longhand and the other
+/// is declared with the same priority.
+fn overflowPair(self: *const CSSStyleDeclaration, prop: *const Property) ?OverflowPair {
+    const is_x = prop._name.eql(comptime .wrap("overflow-x"));
+    if (!is_x and !prop._name.eql(comptime .wrap("overflow-y"))) {
         return null;
     }
-    return .{ .x = x, .y = y };
-}
-
-/// The other overflow longhand when `prop` is one and both are declared with
-/// the same priority: the pair reads and serializes as the shorthand.
-fn overflowPartner(self: *const CSSStyleDeclaration, prop: *const Property) ?*Property {
-    const other: String = if (prop._name.eql(comptime .wrap("overflow-x")))
-        comptime .wrap("overflow-y")
-    else if (prop._name.eql(comptime .wrap("overflow-y")))
-        comptime .wrap("overflow-x")
-    else
-        return null;
+    const other: String = if (is_x) comptime .wrap("overflow-y") else comptime .wrap("overflow-x");
     const partner = self.findProperty(other) orelse return null;
     if (partner._important != prop._important) {
         return null;
     }
-    return partner;
+    return if (is_x) .{ .x = prop, .y = partner } else .{ .x = partner, .y = prop };
 }
 
 fn resolvedDimension(element: *Element, dimension: enum { width, height }, frame: *Frame) []const u8 {
@@ -203,10 +208,9 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
     const normalized = normalizePropertyName(property_name, &frame.buf);
     const wrapped = String.wrap(normalized);
     if (wrapped.eql(overflow_shorthand)) {
-        // A shorthand is important when all its longhands are.
         const x = self.findProperty(comptime .wrap("overflow-x")) orelse return "";
-        const y = self.findProperty(comptime .wrap("overflow-y")) orelse return "";
-        return if (x._important and y._important) "important" else "";
+        const pair = self.overflowPair(x) orelse return "";
+        return if (pair.x._important) "important" else "";
     }
     const prop = self.findProperty(wrapped) orelse return "";
     return if (prop._important) "important" else "";
@@ -236,8 +240,8 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 /// not override an earlier !important one (CSS cascade precedence).
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
     const normalized = normalizePropertyName(declaration.name, &frame.buf);
-    if (std.mem.eql(u8, normalized, "overflow")) {
-        const values = splitOverflow(declaration.value) orelse return;
+    if (overflow_shorthand.eqlSlice(normalized)) {
+        const values = CssParser.splitOverflow(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = "overflow-x", .value = values.x, .important = declaration.important }, frame);
         try self.applyParsedDeclaration(.{ .name = "overflow-y", .value = values.y, .important = declaration.important }, frame);
         return;
@@ -262,8 +266,8 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     }
 
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    if (std.mem.eql(u8, normalized, "overflow")) {
-        const values = splitOverflow(value) orelse return false;
+    if (overflow_shorthand.eqlSlice(normalized)) {
+        const values = CssParser.splitOverflow(value) orelse return false;
         const x = try self.setPropertyImpl("overflow-x", values.x, important, frame);
         const y = try self.setPropertyImpl("overflow-y", values.y, important, frame);
         return x or y;
@@ -305,8 +309,8 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, fra
 
 fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    if (std.mem.eql(u8, normalized, "overflow")) {
-        const old_value = try frame.call_arena.dupe(u8, self.declaredValue(overflow_shorthand, frame) orelse "");
+    if (overflow_shorthand.eqlSlice(normalized)) {
+        const old_value = self.declaredValue(overflow_shorthand, frame) orelse "";
         const x = try self.removePropertyImpl("overflow-x", frame);
         const y = try self.removePropertyImpl("overflow-y", frame);
         if (x == null and y == null) {
@@ -398,30 +402,20 @@ pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Fram
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
     var first = true;
-    var node = self._properties.first;
-    while (node) |n| : (node = n.next) {
-        const prop = Property.fromNodeLink(n);
-        // A pair of overflow longhands serializes once, as the shorthand,
-        // where overflow-x sits.
-        const partner = self.overflowPartner(prop);
-        if (partner != null and prop._name.eql(comptime .wrap("overflow-y"))) {
+    // An overflow pair serializes once, where its first longhand sits.
+    var skip: ?*const Property = null;
+    var it = self.iterator();
+    while (it.next()) |prop| {
+        if (prop == skip) {
             continue;
         }
         if (!first) {
             try writer.writeByte(' ');
         }
         first = false;
-        if (partner) |y| {
-            try writer.writeAll("overflow: ");
-            try prop._value.format(writer);
-            if (!prop._value.eql(y._value)) {
-                try writer.writeByte(' ');
-                try y._value.format(writer);
-            }
-            if (prop._important) {
-                try writer.writeAll(" !important");
-            }
-            try writer.writeByte(';');
+        if (self.overflowPair(prop)) |pair| {
+            try pair.format(writer);
+            skip = if (pair.x == prop) pair.y else pair.x;
         } else {
             try prop.format(writer);
         }
@@ -1049,13 +1043,16 @@ pub const Property = struct {
         try self._name.format(writer);
         try writer.writeAll(": ");
         try self._value.format(writer);
-
-        if (self._important) {
-            try writer.writeAll(" !important");
-        }
-        try writer.writeByte(';');
+        try formatDeclarationEnd(self._important, writer);
     }
 };
+
+fn formatDeclarationEnd(important: bool, writer: *std.Io.Writer) !void {
+    if (important) {
+        try writer.writeAll(" !important");
+    }
+    try writer.writeByte(';');
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleDeclaration);

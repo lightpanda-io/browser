@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
-const StyleManager = @import("../StyleManager.zig");
 const Factory = @import("../Factory.zig");
 
 const CSS = @import("CSS.zig");
@@ -1624,15 +1623,12 @@ const ScrollTarget = union(enum) {
     }
 };
 
-const ScrollTargets = struct {
-    x: ScrollTarget = .viewport,
-    y: ScrollTarget = .viewport,
-};
-
-/// Nearest ancestor-or-self scroll container along any of `axes`, for callers
-/// positioning one scroller with an absolute offset.
+/// Nearest ancestor-or-self scroll container along any of `axes`. The walk
+/// is cheap to repeat per axis: the cascade memoizes each element's props.
 pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTarget {
-    const style_manager = self.scrollStyleManager(axes, frame) orelse return .viewport;
+    if (!axes.x and !axes.y) return .viewport;
+    const owner = self.ownerFrame(frame) orelse return .viewport;
+    const style_manager = &owner._style_manager;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
         if (el.scrollsViewport()) break;
@@ -1642,37 +1638,6 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTa
         }
     }
     return .viewport;
-}
-
-/// Nearest ancestor-or-self scroll container per requested axis, in one walk.
-/// Relative deltas may land on a different scroller per axis. An axis not in
-/// `axes` stays `.viewport`.
-pub fn scrollContainers(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTargets {
-    var targets: ScrollTargets = .{};
-    var pending = axes;
-    const style_manager = self.scrollStyleManager(axes, frame) orelse return targets;
-    var current: ?*Element = self;
-    while (current) |el| : (current = el.parentElement()) {
-        if (el.scrollsViewport()) break;
-        const scrolls = style_manager.overflowAxes(el);
-        if (pending.x and scrolls.x) {
-            targets.x = .{ .container = el };
-            pending.x = false;
-        }
-        if (pending.y and scrolls.y) {
-            targets.y = .{ .container = el };
-            pending.y = false;
-        }
-        if (!pending.x and !pending.y) break;
-    }
-    return targets;
-}
-
-/// null when the walk cannot find anything: no axis asked for, or detached.
-fn scrollStyleManager(self: *Element, axes: ScrollAxes, frame: *Frame) ?*StyleManager {
-    if (!axes.x and !axes.y) return null;
-    const owner = self.ownerFrame(frame) orelse return null;
-    return &owner._style_manager;
 }
 
 fn scrollsViewport(self: *const Element) bool {

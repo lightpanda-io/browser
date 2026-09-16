@@ -431,7 +431,7 @@ fn anyNonPassive(self: *EventManager, path: []const *EventTarget, event: *Event)
             return true;
         }
         if (self.listenersFor(target, event)) |listeners| {
-            if (EventManagerBase.hasNonPassiveListener(listeners.list)) {
+            if (EventManagerBase.hasListener(listeners.list, .non_passive)) {
                 return true;
             }
         }
@@ -449,7 +449,7 @@ const TargetListeners = struct {
 /// `mousewheel` listener fires only where no `wheel` listener is registered.
 fn listenersFor(self: *EventManager, target: *EventTarget, event: *const Event) ?TargetListeners {
     if (self.base.getListeners(target, event._type_string)) |list| {
-        if (EventManagerBase.hasLiveListener(list)) {
+        if (EventManagerBase.hasListener(list, .any)) {
             return .{ .list = list, .typ = event._type_string };
         }
     }

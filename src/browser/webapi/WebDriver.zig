@@ -603,8 +603,6 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
 }
 
 fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
-    // Listeners live in the event manager of the element's own frame, which
-    // is not the caller's when the element belongs to an iframe's document.
     const owner = el.ownerFrame(frame) orelse return;
     const event = TouchEvent.initTrusted(typ, .{
         .bubbles = true,

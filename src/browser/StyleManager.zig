@@ -1286,14 +1286,12 @@ const Slots = struct {
 
     fn apply(self: *Slots, name: []const u8, value: []const u8, important: bool) void {
         if (std.ascii.eqlIgnoreCase(name, "overflow")) {
-            // `overflow: <x> [<y>]`; a single value applies to both axes.
-            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
-            const x = it.next() orelse "";
-            self.apply("overflow-x", x, important);
-            self.apply("overflow-y", it.next() orelse x, important);
+            const values = CssParser.splitOverflow(value) orelse return;
+            self.apply("overflow-x", values.x, important);
+            self.apply("overflow-y", values.y, important);
             return;
         }
-        inline for (property_names, &self.slots) |tracked, *slot| {
+        for (property_names, &self.slots) |tracked, *slot| {
             if (std.ascii.eqlIgnoreCase(name, tracked)) {
                 slot.apply(value, important);
                 return;
@@ -1303,7 +1301,7 @@ const Slots = struct {
 
     fn props(self: Slots) TrackedProperties {
         var p: TrackedProperties = .{};
-        inline for (property_names, self.slots) |name, s| {
+        for (property_names, self.slots) |name, s| {
             if (s.value) |value| {
                 p.apply(name, value);
             }
