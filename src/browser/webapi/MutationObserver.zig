@@ -207,7 +207,7 @@ fn releaseAll(records: []const *MutationRecord, page: *Page) void {
 fn queueRecord(self: *MutationObserver, record: *MutationRecord, frame: *Frame) !void {
     try self._pending_records.append(self._arena.allocator(), record);
 
-    const page = frame._page;
+    const page = frame.page;
     page.mutation_records += 1;
     if (page.mutation_records_spiked == false and page.mutation_records >= RECORD_SPIKE) {
         page.mutation_records_spiked = true;
@@ -231,12 +231,12 @@ fn logRecordSpike(frame: *Frame) void {
     // pending near zero: the records were delivered and are waiting on V8's GC.
     // err, not warn: prod runs with everything below error filtered out.
     log.err(.frame, "MutationRecord spike", .{
-        .live = frame._page.mutation_records,
+        .live = frame.page.mutation_records,
         .pending = pending,
         .observers = observers,
         .type = frame._type,
         .url = frame.url,
-        .page_url = frame._page.frame.url,
+        .page_url = frame.page.frame.url,
     });
 }
 
@@ -531,7 +531,7 @@ test "WebApi: MutationObserver counts live records on the page" {
     frame.js.localScope(&ls);
     defer ls.deinit();
 
-    const page = frame._page;
+    const page = frame.page;
     const before = page.mutation_records;
 
     try ls.local.eval(
