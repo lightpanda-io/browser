@@ -189,7 +189,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         const resolved = try URL.resolve(arena.allocator(), exec.base(), r, .{ .encoding = exec.charset.* });
         if (!exec.isSameOrigin(resolved)) break :blk .client;
         break :blk .{ .url = resolved };
-    } else switch (input) {
+    } else if (opts_ != null) .client else switch (input) {
         .url => .client,
         .request => |r| switch (r._referrer) {
             .url => |u| .{ .url = try arena.dupeZ(u8, u) },
@@ -201,7 +201,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
     // referrer.parse already returns null for that case.
     const referrer_policy: ?referrer.Policy = if (opts.referrerPolicy) |rp|
         referrer.parse(rp)
-    else switch (input) {
+    else if (opts_ != null) null else switch (input) {
         .url => null,
         .request => |r| r._referrer_policy,
     };
