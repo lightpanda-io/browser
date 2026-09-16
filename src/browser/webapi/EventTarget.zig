@@ -35,6 +35,9 @@ const MessagePort = @import("MessagePort.zig");
 const Performance = @import("Performance.zig");
 const Notification = @import("Notification.zig");
 const SharedWorker = @import("SharedWorker.zig");
+const ServiceWorker = @import("ServiceWorker.zig");
+const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
+const ServiceWorkerRegistration = @import("ServiceWorkerRegistration.zig");
 const VisualViewport = @import("VisualViewport.zig");
 const BroadcastChannel = @import("BroadcastChannel.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
@@ -87,6 +90,9 @@ pub const Type = enum(u8) {
     performance,
     screen,
     screen_orientation,
+    service_worker,
+    service_worker_container,
+    service_worker_registration,
     shared_worker,
     text_track_cue,
     visual_viewport,
@@ -120,6 +126,9 @@ pub fn Subtype(comptime tag: Type) type {
         .performance => Performance,
         .screen => Screen,
         .screen_orientation => Screen.Orientation,
+        .service_worker => ServiceWorker,
+        .service_worker_container => ServiceWorkerContainer,
+        .service_worker_registration => ServiceWorkerRegistration,
         .shared_worker => SharedWorker,
         .text_track_cue => TextTrackCue,
         .visual_viewport => VisualViewport,
@@ -312,6 +321,9 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .generic => writer.writeAll("<EventTarget>"),
         .window => writer.writeAll("<Window>"),
         .worker => writer.writeAll("<Worker>"),
+        .service_worker => writer.writeAll("<ServiceWorker>"),
+        .service_worker_container => writer.writeAll("<ServiceWorkerContainer>"),
+        .service_worker_registration => writer.writeAll("<ServiceWorkerRegistration>"),
         .shared_worker => writer.writeAll("<SharedWorker>"),
         .worker_global_scope => writer.writeAll("<WorkerGlobalScope>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
@@ -358,6 +370,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .performance => return "[object Performance]",
         .screen => return "[object Screen]",
         .screen_orientation => return "[object ScreenOrientation]",
+        .service_worker => return "[object ServiceWorker]",
+        .service_worker_container => return "[object ServiceWorkerContainer]",
+        .service_worker_registration => return "[object ServiceWorkerRegistration]",
         .shared_worker => return "[object SharedWorker]",
         .text_track_cue => return "[object TextTrackCue]",
         .visual_viewport => return "[object VisualViewport]",

@@ -29,6 +29,7 @@ const ModelContext = @import("ModelContext.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
+const ServiceWorkerContainer = @import("ServiceWorkerContainer.zig");
 
 const Navigator = @This();
 
@@ -46,6 +47,7 @@ _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
+_service_worker: ?*ServiceWorkerContainer = null,
 
 pub const init: Navigator = .{};
 
@@ -162,11 +164,24 @@ fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
+// NOTE, Env.createContext will remove the binding for this API at runtime if
+// ServiceWorkers are not enabled (and by default, they are not).
+// TODO: service workers should only exist where window.isSecureContext === true,
+// but we always return false.
+fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
+    if (self._service_worker) |sw| {
+        return sw;
+    }
+    const sw = try ServiceWorkerContainer.init(frame);
+    self._service_worker = sw;
+    return sw;
+}
+
 fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
 }
 
-pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
+fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
 
@@ -269,6 +284,7 @@ pub const JsApi = struct {
     pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{});
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
+    pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{});

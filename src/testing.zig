@@ -333,6 +333,7 @@ const HtmlRunnerOpts = struct {
         .worker = true,
         .iframe = true,
     },
+    experimental_features: Config.ExperimentalFeatures = .{},
 };
 
 // Create a fresh page on `test_session` and return its root frame — for tests
@@ -364,6 +365,9 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
         .worker = true,
         .iframe = true,
     };
+
+    test_session.experimental_features = opts.experimental_features;
+    defer test_session.experimental_features = .{};
 
     const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
     const stat = std.Io.Dir.cwd().statFile(io, root, .{}) catch |err| {
@@ -448,7 +452,11 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
         try_catch.init(&ls.local);
         defer try_catch.deinit();
 
-        const js_val = ls.local.exec("testing.assertOk()", "testing.assertOk()") catch |err| {
+        const js_val = ls.local.exec(
+            // testing is undefined until testing.js is run
+            "typeof testing === 'undefined' ? false : testing.assertOk()",
+            "testing.assertOk()",
+        ) catch |err| {
             const caught = try_catch.caughtOrError(arena_allocator, err);
             std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
             return err;

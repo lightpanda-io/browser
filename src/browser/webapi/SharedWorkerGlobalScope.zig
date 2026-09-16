@@ -46,11 +46,6 @@ _type: Worker.WorkerType,
 // until registered; deinit/close use it to unregister.
 _registry_key: []const u8 = "",
 
-// used by HttpClient when generating notification
-// Ultimately used by CDP to generate request/loader ids.
-_frame_id: u32,
-_loader_id: u32,
-
 _closed: bool = false,
 _script_loaded: bool = false,
 _script_arena: ?*lp.Arena = null,
@@ -81,8 +76,6 @@ pub fn init(frame: *Frame, url: [:0]const u8, name: []const u8, worker_type: Wor
             ._url = owned_url,
             ._name = try arena.dupe(u8, name),
             ._type = worker_type,
-            ._frame_id = frame_id,
-            ._loader_id = loader_id,
         },
         worker_type == .module,
         frame_id,
