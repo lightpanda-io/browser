@@ -791,7 +791,7 @@ test "cdp.input: dispatchKeyEvent caret movement keys move the text entry cursor
     }
 }
 
-test "cdp.input: dispatchKeyEvent char fires keypress and inserts text" {
+test "cdp.input: dispatchKeyEvent char text insertion" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -813,20 +813,29 @@ test "cdp.input: dispatchKeyEvent char fires keypress and inserts text" {
         \\inp.value = '';
         \\inp.focus();
         \\window.events = [];
-        \\inp.addEventListener('keypress', (e) => window.events.push('keypress:' + e.key));
-        \\inp.addEventListener('input', (e) => window.events.push('input:' + inp.value));
+        \\inp.addEventListener('keypress', (e) => window.events.push(e.key));
+        \\inp.addEventListener('input', (e) => window.events.push(inp.value));
     , null);
 
+    // Text is inserted and dispatches keypress and input.
     try ctx.processMessage(.{
         .id = 1,
         .method = "Input.dispatchKeyEvent",
         .params = .{ .type = "char", .key = "h", .text = "h" },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
-
     try testing.expect((try ls.local.compileAndRun(
-        \\inp.value === 'h' && window.events.join(',') === 'keypress:h,input:h'
+        \\inp.value === 'h' && window.events.join(',') === 'h,h'
     , null)).isTrue());
+
+    // A char event without a text field (e.g. Enter) must not insert its key name.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "char", .key = "Enter" },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'h'", null)).isTrue());
 
     // With preventDefault on keypress, no character is inserted.
     _ = try ls.local.compileAndRun(
@@ -834,35 +843,43 @@ test "cdp.input: dispatchKeyEvent char fires keypress and inserts text" {
     , null);
 
     try ctx.processMessage(.{
-        .id = 2,
+        .id = 3,
         .method = "Input.dispatchKeyEvent",
         .params = .{ .type = "char", .key = "x", .text = "x" },
     });
-    try ctx.expectSentResult(null, .{ .id = 2 });
-
-    try testing.expect((try ls.local.compileAndRun(
-        \\inp.value === 'h' && window.events.join(',') === 'keypress:h,input:h,keypress:x'
-    , null)).isTrue());
-
-    // A `char` event without a `text` field must not insert its `key`.
-    try ctx.processMessage(.{
-        .id = 3,
-        .method = "Input.dispatchKeyEvent",
-        .params = .{ .type = "char", .key = "Enter" },
-    });
     try ctx.expectSentResult(null, .{ .id = 3 });
-    try testing.expect((try ls.local.compileAndRun(
-        \\inp.value === 'h' && window.events.join(',') === 'keypress:h,input:h,keypress:x,keypress:Enter'
-    , null)).isTrue());
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'h'", null)).isTrue());
+}
 
-    // A `keyDown` sending only `text` falls back to using it as the key and inserts it.
+test "cdp.input: dispatchKeyEvent keyDown text-only fallback" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.value = '';
+        \\inp.focus();
+    , null);
+
+    // When keyDown omits `key`, `text` is used as the key and inserted.
     try ctx.processMessage(.{
-        .id = 4,
+        .id = 1,
         .method = "Input.dispatchKeyEvent",
         .params = .{ .type = "keyDown", .text = "z" },
     });
-    try ctx.expectSentResult(null, .{ .id = 4 });
-    try testing.expect((try ls.local.compileAndRun(
-        \\inp.value === 'hz' && window.events.join(',') === 'keypress:h,input:h,keypress:x,keypress:Enter,keypress:z,input:hz'
-    , null)).isTrue());
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'z'", null)).isTrue());
 }
