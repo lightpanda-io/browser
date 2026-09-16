@@ -5,6 +5,7 @@
 <p align="center">
 <strong>The headless browser built from scratch for AI agents and automation.</strong><br>
 Not a Chromium fork. Not a WebKit patch. A new browser, written in Zig.
+16x lighter and 9x faster than Chromium.
 </p>
 
 </div>
