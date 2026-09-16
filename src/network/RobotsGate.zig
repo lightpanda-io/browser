@@ -50,17 +50,10 @@ pub fn check(self: *RobotsGate, transfer: *Transfer) !Result {
     const url = transfer.req.url;
     const robots_url = try URL.getRobotsUrl(transfer.arena.allocator(), url);
 
-    if (self.network.robot_store.get(robots_url)) |robot_entry| {
-        switch (robot_entry) {
+    if (self.network.robot_store.checkPath(robots_url, URL.getPathname(url))) |decision| {
+        switch (decision) {
             .allowed => return .allowed,
-            .disallowed => {
-                log.warn(.http, "blocked by robots", .{ .url = url });
-                return .blocked;
-            },
-            .present => |robots| {
-                if (robots.isAllowed(URL.getPathname(url))) {
-                    return .allowed;
-                }
+            .blocked => {
                 log.warn(.http, "blocked by robots", .{ .url = url });
                 return .blocked;
             },
@@ -141,17 +134,11 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8) void {
     var queued = self.single_flight.take(robots_url) orelse return;
     defer queued.deinit(self.single_flight.allocator);
 
-    const robot_entry = self.network.robot_store.get(robots_url);
     for (queued.items) |transfer| {
         transfer.unpark();
 
-        const allowed = if (robot_entry) |entry| switch (entry) {
-            .allowed => true,
-            .disallowed => false,
-            .present => |robots| robots.isAllowed(URL.getPathname(transfer.req.url)),
-        } else true;
-
-        if (!allowed) {
+        const decision = self.network.robot_store.checkPath(robots_url, URL.getPathname(transfer.req.url));
+        if (decision == .blocked) {
             lp.metrics.robots_access.incr(.deny);
             log.warn(.http, "blocked by robots", .{ .url = transfer.req.url });
             transfer.failAsync(error.RobotsBlocked);
