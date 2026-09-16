@@ -30,10 +30,12 @@ const NodeRegistry = @import("../../NodeRegistry.zig");
 const Browser = @import("../../browser/Browser.zig");
 const Session = @import("../../browser/Session.zig");
 
+const http = @import("../http.zig");
 const Link = @import("../Link.zig");
 const Server = @import("../Server.zig");
 
 const script = @import("script.zig");
+const http_command = @import("http_command.zig");
 const remote_value = @import("remote_value.zig");
 
 const posix = std.posix;
@@ -99,6 +101,11 @@ pub const Mode = union(enum) {
     // can come and go), but the lifetime is explicit: either removed via HTTP
     // (DELETE /session/:id) or by the HTTP reaper
     http: *Server.Worker,
+};
+
+pub const Reply = union(enum) {
+    bidi: u64, // reply goes to websocket with this id
+    http: void, // reply is sent as an http response
 };
 
 // What a worker is born from: a websocket upgrade (the session comes later
@@ -285,26 +292,20 @@ pub fn onMessage(self: *BiDi, data: []const u8) anyerror!void {
     const id = input.id orelse {
         return self.sendError(null, "invalid argument", "missing command id");
     };
+    var cmd: Command = .{
+        .bidi = self,
+        .arena = arena,
+        .input = .{ .bidi = .{ .id = id, .json = data } },
+    };
+
     const method = input.method orelse {
-        return self.sendError(id, "invalid argument", "missing command method");
+        return cmd.sendError("invalid argument", "missing command method");
     };
-
     lp.metrics.serve_commands.incr(.bidi);
-    self.dispatch(arena, id, method, data) catch |err| switch (err) {
-        error.UnknownCommand => {
-            lp.metrics.serve_unknown_commands.incr(.bidi);
-            try self.sendError(id, "unknown command", method);
-        },
-        // Command.params already answered the client.
-        error.InvalidParams => {},
-        else => return err,
-    };
-}
 
-// A BiDi method is always "<module>.<command>".
-fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []const u8) !void {
+    // A BiDi method is always "<module>.<command>".
     const i = std.mem.indexOfScalar(u8, method, '.') orelse {
-        return error.UnknownCommand;
+        return unknownCommand(&cmd, method);
     };
     const module = std.meta.stringToEnum(enum {
         session,
@@ -312,53 +313,105 @@ fn dispatch(self: *BiDi, arena: Allocator, id: u64, method: []const u8, data: []
         browser,
         browsingContext,
         input,
-    }, method[0..i]) orelse return error.UnknownCommand;
+    }, method[0..i]) orelse return unknownCommand(&cmd, method);
 
     // Only the session module is reachable without a session (it's what
     // creates one); it gates its own commands.
     if (self.session_id == null and module != .session) {
-        return self.sendError(id, "invalid session id", "no active session");
+        return cmd.sendError("invalid session id", "no active session");
     }
 
-    const cmd: Command = .{
-        .id = id,
-        .bidi = self,
-        .json = data,
-        .arena = arena,
-        .action = method[i + 1 ..],
+    const action = method[i + 1 ..];
+    const result = switch (module) {
+        .session => @import("session.zig").processMessage(&cmd, action),
+        .script => @import("script.zig").processMessage(&cmd, action),
+        .browser => @import("browser.zig").processMessage(&cmd, action),
+        .browsingContext => @import("browsing_context.zig").processMessage(&cmd, action),
+        .input => @import("input.zig").processMessage(&cmd, action),
     };
-
-    switch (module) {
-        .session => return @import("session.zig").processMessage(&cmd),
-        .script => return @import("script.zig").processMessage(&cmd),
-        .browser => return @import("browser.zig").processMessage(&cmd),
-        .browsingContext => return @import("browsing_context.zig").processMessage(&cmd),
-        .input => return @import("input.zig").processMessage(&cmd),
-    }
+    result catch |err| {
+        if (err == error.UnknownCommand and cmd.answered == false) {
+            return unknownCommand(&cmd, method);
+        }
+        cmd.failed(err);
+    };
 }
 
-// One command being processed. Handlers answer through it so they don't
-// have to thread the id (and the raw message) around.
+fn unknownCommand(cmd: *Command, method: []const u8) !void {
+    lp.metrics.serve_unknown_commands.incr(.bidi);
+    return cmd.sendError("unknown command", method);
+}
+
+// Dispatch an HTTP WebDriver command from the inbox. Its connection is parked
+// until we respond.
+pub fn onHttpCommand(self: *BiDi, command: http_command.Command) void {
+    if (self.mode != .http) {
+        // the loop only parks commands on an HTTP session's worker
+        if (comptime lp.IS_DEBUG) {
+            lp.assert(false, "BiDi.onHttpCommand mode", .{});
+        }
+        return;
+    }
+    if (self.browser.env.terminatePending()) {
+        // the loop answers it once the worker releases
+        return;
+    }
+
+    defer _ = self.message_arena.reset(.{ .retain_with_limit = 4096 });
+    lp.metrics.serve_commands.incr(.bidi);
+
+    var cmd: Command = .{
+        .bidi = self,
+        .arena = self.message_arena.allocator(),
+        .input = .{ .http = command },
+    };
+    http_command.process(&cmd) catch |err| {
+        cmd.failed(err);
+    };
+}
+
+// One command being processed, from either transport. Handlers answer
+// through it so they don't have to thread where the answer goes.
 pub const Command = struct {
     bidi: *BiDi,
+    arena: Allocator, // The message_arena; valid for the lifetime of the command.
+    input: Input,
+    answered: bool = false,
 
-    // The message_arena; valid for the lifetime of the command.
-    arena: Allocator,
+    pub const Input = union(enum) {
+        // A websocket frame: the id is echoed back, and `params` is parsed
+        // out of the raw json on demand.
+        bidi: struct {
+            id: u64,
+            json: []const u8,
+        },
 
-    // Echoed back in the response.
-    id: u64,
+        // Parsed on the loop, params included.
+        http: http_command.Command,
+    };
 
-    // The "<command>" half of "<module>.<command>".
-    action: []const u8,
+    pub fn reply(self: *const Command) Reply {
+        return switch (self.input) {
+            .bidi => |b| .{ .bidi = b.id },
+            .http => .http,
+        };
+    }
 
-    // The full raw message; `params` is parsed out of it on demand.
-    json: []const u8,
-
-    // Parses the command's params object. Answers the client and returns
-    // error.InvalidParams when the message has no params or they don't
-    // match T, so callers can just `try`. onMessage swallows that error.
-    pub fn params(self: *const Command, comptime T: type) !T {
-        const wrapper = std.json.parseFromSliceLeaky(struct { params: T }, self.arena, self.json, .{
+    // Parses the websocket command's params object. Answers the client and
+    // returns error.InvalidParams when the message has no params or they
+    // don't match T, so callers can just `try`. `failed` ignores that error.
+    pub fn params(self: *Command, comptime T: type) !T {
+        const json = switch (self.input) {
+            .bidi => |b| b.json,
+            .http => {
+                // HTTP handlers get their params from input.http
+                if (comptime lp.IS_DEBUG) {
+                    lp.assert(false, "Command.params http", .{});
+                }
+                return error.InvalidParams;
+            },
+        };
+        const wrapper = std.json.parseFromSliceLeaky(struct { params: T }, self.arena, json, .{
             .ignore_unknown_fields = true,
         }) catch {
             try self.sendError("invalid argument", "invalid params");
@@ -367,18 +420,40 @@ pub const Command = struct {
         return wrapper.params;
     }
 
-    pub fn sendResult(self: *const Command, result: anytype) !void {
-        return self.bidi.sendResult(self.id, result);
+    // `result` is in the reply's shape: a BiDi result, or HTTP's value.
+    pub fn sendResult(self: *Command, result: anytype) !void {
+        self.answered = true;
+        return self.bidi.replyResult(self.reply(), result);
     }
 
-    pub fn sendError(self: *const Command, code: []const u8, message: []const u8) !void {
-        return self.bidi.sendError(self.id, code, message);
+    pub fn sendError(self: *Command, code: []const u8, message: []const u8) !void {
+        self.answered = true;
+        return self.bidi.replyError(self.reply(), code, message);
+    }
+
+    // For an answer sent after the command is gone: whoever holds the reply
+    // answers it.
+    pub fn takeReply(self: *Command) Reply {
+        self.answered = true;
+        return self.reply();
     }
 
     // Events aren't tied to the command, but handlers that emit one always
     // have a cmd on hand.
     pub fn sendEvent(self: *const Command, method: []const u8, p: anytype) !void {
         return self.bidi.sendEvent(method, p);
+    }
+
+    fn failed(self: *Command, err: anyerror) void {
+        if (self.answered) {
+            if (err != error.InvalidParams) {
+                // params answers its own error.InvalidParams
+                lp.log.warn(.bidi, "command failed after answering", .{ .err = err, .reply = self.reply() });
+            }
+            return;
+        }
+        lp.log.err(.bidi, "command failed", .{ .err = err, .reply = self.reply() });
+        self.sendError("unknown error", @errorName(err)) catch {};
     }
 };
 
@@ -409,6 +484,40 @@ pub fn sendResult(self: *BiDi, id: u64, result: anytype) !void {
 
 pub fn sendError(self: *BiDi, id: ?u64, code: []const u8, message: []const u8) !void {
     return self.sendJSON(.{ .type = "error", .id = id, .@"error" = code, .message = message });
+}
+
+pub fn replyResult(self: *BiDi, reply: Reply, result: anytype) !void {
+    switch (reply) {
+        .bidi => |id| return self.sendResult(id, result),
+        .http => return self.respondHTTP(result),
+    }
+}
+
+pub fn replyError(self: *BiDi, reply: Reply, code: []const u8, message: []const u8) !void {
+    switch (reply) {
+        .bidi => |id| return self.sendError(id, code, message),
+        .http => return self.respondHTTPStatus(http.webDriverErrorStatus(code), .{
+            .@"error" = code,
+            .message = message,
+            .stacktrace = "",
+        }),
+    }
+}
+
+// {"value": value} to the HTTP request parked on our worker.
+pub fn respondHTTP(self: *BiDi, value: anytype) !void {
+    return self.respondHTTPStatus(.ok, value);
+}
+
+fn respondHTTPStatus(self: *BiDi, status: std.http.Status, value: anytype) !void {
+    const worker = switch (self.mode) {
+        .http => |worker| worker,
+        .bidi_only => return, // an .http reply only comes from onHttpCommand, which checks
+    };
+    const arena = try self.app.arena_pool.acquire(.small, "http response");
+    errdefer arena.release();
+    const bytes = try http.webDriverResponse(arena, status, value);
+    worker.respond(.{ .arena = arena, .bytes = bytes });
 }
 
 // Without a link there's nobody to tell: an HTTP session between

@@ -24,14 +24,14 @@ const uuidv4 = @import("../../id.zig").uuidv4;
 
 const BiDi = @import("BiDi.zig");
 
-pub fn processMessage(cmd: *const BiDi.Command) !void {
+pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         status,
         new,
         end,
         subscribe,
         unsubscribe,
-    }, cmd.action) orelse return error.UnknownCommand;
+    }, action) orelse return error.UnknownCommand;
 
     // The only two commands that work without a session; `new` is what
     // creates one.
@@ -48,7 +48,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
     }
 }
 
-fn status(cmd: *const BiDi.Command) !void {
+fn status(cmd: *BiDi.Command) !void {
     // `ready` reflects whether session.new can succeed on this connection.
     if (cmd.bidi.session_id == null) {
         return cmd.sendResult(.{ .ready = true, .message = "" });
@@ -56,7 +56,7 @@ fn status(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(.{ .ready = false, .message = "session already started" });
 }
 
-fn new(cmd: *const BiDi.Command) !void {
+fn new(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     if (bidi.session_id != null) {
         return cmd.sendError("session not created", "session already exists");
@@ -103,7 +103,7 @@ pub const Capabilities = struct {
     }
 };
 
-fn end(cmd: *const BiDi.Command) !void {
+fn end(cmd: *BiDi.Command) !void {
     try cmd.sendResult(struct {}{});
 
     const bidi = cmd.bidi;
@@ -113,7 +113,7 @@ fn end(cmd: *const BiDi.Command) !void {
 
 // Subscriptions are global (per-context filtering is not supported yet).
 // Event names aren't validated against a known list.
-fn subscribe(cmd: *const BiDi.Command) !void {
+fn subscribe(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         events: []const []const u8,
     });
@@ -135,7 +135,7 @@ fn subscribe(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(.{ .subscription = &sub_id });
 }
 
-fn unsubscribe(cmd: *const BiDi.Command) !void {
+fn unsubscribe(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         events: []const []const u8 = &.{},
         subscriptions: []const []const u8 = &.{},

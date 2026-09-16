@@ -31,11 +31,11 @@ const log = lp.log;
 const user_input = Frame.user_input;
 const Allocator = std.mem.Allocator;
 
-pub fn processMessage(cmd: *const BiDi.Command) !void {
+pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         performActions,
         releaseActions,
-    }, cmd.action) orelse return error.UnknownCommand;
+    }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .performActions => return performActions(cmd),
@@ -43,7 +43,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
     }
 }
 
-fn performActions(cmd: *const BiDi.Command) !void {
+fn performActions(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
         actions: []const std.json.Value,
@@ -74,14 +74,14 @@ fn performActions(cmd: *const BiDi.Command) !void {
         .bidi = bidi,
         .arena = arena,
         .ticks = ticks,
-        .command_id = cmd.id,
+        .reply = cmd.takeReply(),
         .generation = bidi.input_state.generation,
     };
     return pending.run();
 }
 
 // Undo everything still held: keys and buttons in reverse press order.
-fn releaseActions(cmd: *const BiDi.Command) !void {
+fn releaseActions(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
     });
@@ -116,7 +116,7 @@ fn releaseActions(cmd: *const BiDi.Command) !void {
     return cmd.sendResult(struct {}{});
 }
 
-fn dispatchFailed(cmd: *const BiDi.Command, err: DispatchError) !void {
+fn dispatchFailed(cmd: *BiDi.Command, err: DispatchError) !void {
     if (err == error.OutOfMemory) {
         return err;
     }
@@ -243,7 +243,7 @@ const TickAction = struct {
 const Pending = struct {
     bidi: *BiDi,
     arena: *lp.Arena,
-    command_id: u64,
+    reply: BiDi.Reply,
     generation: u32,
     ticks: []const []const TickAction,
     next: usize = 0,
@@ -267,11 +267,11 @@ const Pending = struct {
         const bidi = self.bidi;
         while (self.next < self.ticks.len) {
             if (bidi.input_state.generation != self.generation) {
-                try bidi.sendError(self.command_id, "unknown error", "input state was released while actions were pending");
+                try bidi.replyError(self.reply, "unknown error", "input state was released while actions were pending");
                 return false;
             }
             const frame = bidi.user_context.session.currentFrame() orelse {
-                try bidi.sendError(self.command_id, "no such frame", "no frame");
+                try bidi.replyError(self.reply, "no such frame", "no frame");
                 return false;
             };
 
@@ -286,7 +286,7 @@ const Pending = struct {
                     if (err == error.OutOfMemory) {
                         return err;
                     }
-                    try bidi.sendError(self.command_id, errorCode(err), errorMessage(err));
+                    try bidi.replyError(self.reply, errorCode(err), errorMessage(err));
                     return false;
                 };
             }
@@ -297,7 +297,7 @@ const Pending = struct {
             }
         }
 
-        try bidi.sendResult(self.command_id, struct {}{});
+        try bidi.replyResult(self.reply, struct {}{});
         return false;
     }
 
@@ -305,17 +305,17 @@ const Pending = struct {
         const self: *Pending = @ptrCast(@alignCast(ctx));
 
         // need to capture it here, run can free self
-        const command_id = self.command_id;
+        const reply = self.reply;
 
         self.run() catch |err| {
-            log.err(.bidi, "performActions", .{ .err = err, .id = command_id });
+            log.err(.bidi, "performActions", .{ .err = err, .reply = reply });
         };
         return null;
     }
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *Pending = @ptrCast(@alignCast(ctx));
-        self.bidi.sendError(self.command_id, "no such frame", "frame destroyed while actions were pending") catch {};
+        self.bidi.replyError(self.reply, "no such frame", "frame destroyed while actions were pending") catch {};
         self.deinit();
     }
 };
