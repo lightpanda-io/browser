@@ -160,6 +160,11 @@ fn track(self: *ServiceWorkerContainer, scope: *ServiceWorkerGlobalScope) !*Serv
     const registration = try ServiceWorkerRegistration.init(scope, self, &frame.js.execution);
     errdefer registration.detach();
     try self._registrations.append(frame.arena, registration);
+
+    if (scope.hasActiveWorker()) {
+        self.workerActivated();
+    }
+
     return registration;
 }
 
