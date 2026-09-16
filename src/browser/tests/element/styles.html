@@ -244,3 +244,23 @@
   testing.expectEqual('red', impDiv.style.getPropertyValue('color'));
 }
 </script>
+
+<script id="computedStyleReadOnly">
+{
+  const div = document.createElement('div');
+  div.setAttribute('style', 'color: red; margin: 1px');
+  document.body.appendChild(div);
+
+  const cs = window.getComputedStyle(div);
+  testing.expectError('NoModificationAllowedError', () => cs.setProperty('width', '10px'));
+  testing.expectError('NoModificationAllowedError', () => cs.setProperty('width', '10px', 'bogus'));
+  testing.expectError('NoModificationAllowedError', () => cs.removeProperty('color'));
+  testing.expectError('NoModificationAllowedError', () => { cs.cssText = ''; });
+  testing.expectError('NoModificationAllowedError', () => { cs.cssFloat = 'left'; });
+  testing.expectError('NoModificationAllowedError', () => { cs.color = 'blue'; });
+
+  testing.expectEqual('color: red; margin: 1px', div.getAttribute('style'));
+  div.style.width = '50px';
+  testing.expectEqual('50px', cs.getPropertyValue('width'));
+}
+</script>

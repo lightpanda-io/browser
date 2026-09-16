@@ -153,6 +153,10 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+
     // Validate priority
     const priority = priority_ orelse "";
     const important = if (priority.len > 0) blk: {
@@ -162,9 +166,9 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
         break :blk true;
     } else false;
 
-    try self.setPropertyImpl(property_name, value, important, frame);
-
-    try self.syncStyleAttribute(frame);
+    if (try self.setPropertyImpl(property_name, value, important, frame)) {
+        try self.syncStyleAttribute(frame);
+    }
 }
 
 /// Apply one declaration parsed from a `style=` block. Unlike the imperative
@@ -177,7 +181,7 @@ fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Dec
             if (existing._important) return;
         }
     }
-    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
+    _ = try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, frame);
 }
 
 fn initOwnedString(allocator: Allocator, value: []const u8) !String {
@@ -186,10 +190,9 @@ fn initOwnedString(allocator: Allocator, value: []const u8) !String {
     return String.wrap(try allocator.dupe(u8, value));
 }
 
-fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !void {
+fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, frame: *Frame) !bool {
     if (value.len == 0) {
-        _ = try self.removePropertyImpl(property_name, frame);
-        return;
+        return (try self.removePropertyImpl(property_name, frame)) != null;
     }
 
     const normalized = normalizePropertyName(property_name, &frame.buf);
@@ -199,12 +202,13 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     // Find existing property
     if (self.findProperty(.wrap(normalized))) |existing| {
+        if (existing._value.eql(.wrap(normalized_value)) and existing._important == important) return false;
         const allocator = frame._factory.storageAllocator();
         const new_value = try initOwnedString(allocator, normalized_value);
         existing._value.deinit(allocator);
         existing._value = new_value;
         existing._important = important;
-        return;
+        return true;
     }
 
     // Create new property
@@ -215,17 +219,21 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
         ._important = important,
     });
     self._properties.append(&prop._node);
+    return true;
 }
 
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
-    const result = try self.removePropertyImpl(property_name, frame);
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    const result = (try self.removePropertyImpl(property_name, frame)) orelse return "";
     try self.syncStyleAttribute(frame);
     return result;
 }
 
-fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) ![]const u8 {
+fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, frame: *Frame) !?[]const u8 {
     const normalized = normalizePropertyName(property_name, &frame.buf);
-    const prop = self.findProperty(.wrap(normalized)) orelse return "";
+    const prop = self.findProperty(.wrap(normalized)) orelse return null;
 
     // the value might not be on the heap (it could be inlined in the small string
     // optimization), so we need to dupe it.
@@ -277,8 +285,12 @@ fn getFloat(self: *const CSSStyleDeclaration, frame: *Frame) []const u8 {
 }
 
 fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) !void {
-    try self.setPropertyImpl("float", value_ orelse "", false, frame);
-    try self.syncStyleAttribute(frame);
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    if (try self.setPropertyImpl("float", value_ orelse "", false, frame)) {
+        try self.syncStyleAttribute(frame);
+    }
 }
 
 fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
@@ -288,6 +300,15 @@ fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
 }
 
 pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
+    if (self._is_computed) {
+        return error.NoModificationAllowed;
+    }
+    try self.replaceCssText(text, frame);
+}
+
+// setCssText without the read-only check, for declarations that are never
+// computed (a CSSStyleRule's style).
+pub fn replaceCssText(self: *CSSStyleDeclaration, text: []const u8, frame: *Frame) !void {
     self.clearProperties(frame);
 
     try self.applyDeclarations(text, frame);
@@ -971,10 +992,10 @@ test "CSS property value storage is reused" {
     var style = CSSStyleDeclaration{};
     defer style.clearProperties(frame);
 
-    try style.setPropertyImpl("transform", "translate3d(1px,0,0)", false, frame);
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(1px,0,0)", false, frame));
     const first_ptr = style.findProperty(comptime .wrap("transform")).?._value.suffix.ptr;
-    try style.setPropertyImpl("transform", "translate3d(2px,0,0)", false, frame);
-    try style.setPropertyImpl("transform", "translate3d(3px,0,0)", false, frame);
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(2px,0,0)", false, frame));
+    try testing.expect(try style.setPropertyImpl("transform", "translate3d(3px,0,0)", false, frame));
 
     const property = style.findProperty(comptime .wrap("transform")).?;
     try testing.expectEqual(first_ptr, property._value.suffix.ptr);

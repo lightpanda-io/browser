@@ -22,6 +22,7 @@ pub const log = @import("log.zig");
 pub const mcp = @import("mcp.zig");
 pub const App = @import("App.zig");
 pub const Arena = @import("Arena.zig");
+pub const Regex = @import("Regex.zig");
 pub const Config = @import("Config.zig");
 pub const cookies = @import("cookies.zig");
 pub const datetime = @import("datetime.zig");
@@ -467,7 +468,7 @@ fn prepareBinary(arena: std.mem.Allocator, frame: *Frame, opts: FetchOpts) !Bina
 }
 
 fn pngOpts(frame: *Frame) screenshot.Opts {
-    return .fromViewport(frame._page.getViewport(), true);
+    return .fromViewport(frame.page.getViewport(), true);
 }
 
 fn dumpRoot(frame: *Frame, selector: ?[]const u8) !*Node {

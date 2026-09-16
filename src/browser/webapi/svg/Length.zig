@@ -65,7 +65,7 @@ pub const Unit = enum(u16) {
 const MAX_ANCESTOR_DEPTH = 32;
 
 pub fn detached(frame: *Frame) !*Length {
-    const arena = try frame._page.getArena(.tiny, "SVGLength");
+    const arena = try frame.page.getArena(.tiny, "SVGLength");
     errdefer arena.release();
     const self = try arena.create(Length);
     self.* = .{ ._rc = .{}, ._arena = arena };
@@ -279,7 +279,7 @@ fn nearestSvgViewport(element: *Element) ?*Element {
 }
 
 fn pageViewportDimension(direction: Direction, frame: *Frame) f64 {
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return switch (direction) {
         .horizontal => @floatFromInt(viewport.width),
         .vertical => @floatFromInt(viewport.height),

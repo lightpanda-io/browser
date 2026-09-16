@@ -387,7 +387,7 @@ const ConnectCallback = struct {
             .ports = &.{self.port},
             .bubbles = false,
             .cancelable = false,
-        }, wgs._page)).asEvent();
+        }, wgs.page)).asEvent();
 
         try wgs.dispatch(target, event, on_connect, .{ .context = "SharedWorkerGlobalScope.connect" });
         return null;

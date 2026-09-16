@@ -28,12 +28,12 @@ const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 
 fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
-    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+    const input_evt: *Event = try .initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
     frame._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
         lp.log.err(.app, "dispatch input event failed", .{ .err = err });
     };
 
-    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    const change_evt: *Event = try .initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
     frame._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
         lp.log.err(.app, "dispatch change event failed", .{ .err = err });
     };

@@ -50,8 +50,8 @@ pub const driver_guidance =
     \\  values are already in the tree — don't re-fetch via `nodeDetails`.
     \\- `nodeDetails(backendNodeId)` → a ready-to-use CSS `selector` that
     \\  resolves to one node, plus its id/class/attrs.
-    \\- `findElement(role, name)` → locate a candidate by role/name without
-    \\  parsing the whole tree.
+    \\- `findElement(role, name)` → locate a candidate by role and name (a
+    \\  substring, or `/regex/`) without parsing the whole tree.
     \\- `markdown(selector | backendNodeId)` → readable text for one
     \\  subtree. Use after `tree` has shown you where the interesting
     \\  region is.
@@ -683,7 +683,7 @@ pub const Tool = enum {
                     \\  "type": "object",
                     \\  "properties": {
                     \\    "role": { "type": "string", "description": "Optional ARIA role to match (e.g. 'button', 'link', 'textbox', 'checkbox')." },
-                    \\    "name": { "type": "string", "description": "Optional accessible name substring to match (case-insensitive)." }
+                    \\    "name": { "type": "string", "description": "Optional accessible name to match, case-insensitive: a substring, or a JavaScript regex literal such as /sign (in|up)/ (unanchored; flags i, m, s, u accepted; case-insensitive even without i, prefix (?-i) to make it case-sensitive)." }
                     \\  }
                     \\}
                 ),
@@ -814,8 +814,9 @@ pub fn errorMessage(err: ToolError) []const u8 {
 /// Outcome of running a tool against the page. Operational failures (OOM,
 /// missing page, invalid params) come out as Zig errors on the enclosing
 /// `!ToolResult`; `is_error = true` is the in-band signal for a JS-level
-/// failure (V8 caught a throw inside `evaluate`/`extract`) — the LLM consumes
-/// `text` either way to self-correct. Non-evaluate tools always set `is_error =
+/// failure (V8 caught a throw inside `evaluate`/`extract`) or any failure whose
+/// message carries detail the model needs — the LLM consumes `text` either way
+/// to self-correct. Non-evaluate tools always set `is_error =
 /// false` on success.
 pub const ToolResult = struct {
     text: []const u8,
@@ -924,7 +925,7 @@ fn dispatch(
         .press => .{ .text = try execPress(arena, session, registry, substituted) },
         .selectOption => .{ .text = try execSelectOption(arena, session, registry, substituted) },
         .setChecked => .{ .text = try execSetChecked(arena, session, registry, substituted) },
-        .findElement => .{ .text = try execFindElement(arena, session, registry, substituted) },
+        .findElement => execFindElement(arena, session, registry, substituted),
         .evaluate => execEvaluate(arena, session, registry, substituted),
         .extract => execExtract(arena, session, registry, substituted),
         .getEnv => .{ .text = try execGetEnv(arena, substituted) },
@@ -1368,7 +1369,7 @@ fn execScreenshot(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     const page = try ensurePage(session, registry, args.url, args.timeout);
     const scope = try resolveScope(session, registry, page, args.selector, args.backendNodeId);
     const state = lp.RenderTree.resolve(arena, scope, args.strip, page) catch return ToolError.OutOfMemory;
-    const opts: lp.screenshot.Opts = .fromViewport(page._page.getViewport(), args.fullPage);
+    const opts: lp.screenshot.Opts = .fromViewport(page.page.getViewport(), args.fullPage);
     var prepared = lp.screenshot.preparePng(arena, state, opts, page) catch
         return ToolError.InternalError;
 
@@ -1767,7 +1768,7 @@ fn awaitQueuedNavigation(session: *lp.Session, frame: *lp.Frame) ToolError!void 
     // Runner waits are keyed by Page root (a popup lives on its opener's
     // Page). Read it before processing: a synthetic root navigation frees
     // the Page in place.
-    const root_frame_id = frame._page.frame._frame_id;
+    const root_frame_id = frame.page.frame._frame_id;
     const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
     if (navigated == false) {
         return;
@@ -1794,7 +1795,7 @@ const ActionScope = struct {
 
 fn beginAction(session: *lp.Session) ActionScope {
     const frame = session.currentFrame();
-    return .{ .frame = frame, .popups = if (frame) |f| f._page.popups.items.len else 0 };
+    return .{ .frame = frame, .popups = if (frame) |f| f.page.popups.items.len else 0 };
 }
 
 /// Finish a state-changing action: drain any queued navigation triggered by
@@ -1813,14 +1814,14 @@ fn finalizeAction(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     if (before != null and before.? != page) registry.reset();
 
     var note: []const u8 = "";
-    if (page._page.popups.items.len > scope.popups) {
+    if (page.page.popups.items.len > scope.popups) {
         // The action opened a new window (target=_blank or window.open).
         // Follow it, as a user whose click opened a tab would.
         var runner = session.runner(.{});
-        runner.waitForFrame(page._page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
+        runner.waitForFrame(page.page.frame._frame_id, 10000, .{ .until = .done }) catch |err|
             return if (err == error.Cancelled) ToolError.Cancelled else ToolError.NavigationFailed;
         page = try requireFrame(session);
-        const popups = page._page.popups.items;
+        const popups = page.page.popups.items;
         if (popups.len > scope.popups) {
             page = popups[popups.len - 1];
             session.followPopup(page._frame_id);
@@ -2077,7 +2078,7 @@ fn execSetChecked(arena: std.mem.Allocator, session: *lp.Session, registry: *Nod
     return finalizeAction(arena, session, registry, scope, body);
 }
 
-fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError![]const u8 {
+fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegistry, arguments: ?std.json.Value) ToolError!ToolResult {
     const Params = struct {
         role: ?[]const u8 = null,
         name: ?[]const u8 = null,
@@ -2088,14 +2089,77 @@ fn execFindElement(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const page = try requireFrame(session);
 
+    var name_filter: ?lp.interactive.Name = null;
+    defer if (name_filter) |nf| switch (nf) {
+        .regex => |re| re.deinit(),
+        .substring => {},
+    };
+    if (args.name) |name| {
+        if (regexLiteral(name)) |lit| {
+            var options: lp.Regex.Options = .{ .case_insensitive = true, .unicode = true };
+            for (lit.flags) |flag| switch (flag) {
+                'i', 'u' => {},
+                's' => options.dot_all = true,
+                'm' => options.multiline = true,
+                else => return .{
+                    .text = try std.fmt.allocPrint(arena, "findElement: unsupported regex flag '{c}' in '{s}'", .{ flag, name }),
+                    .is_error = true,
+                },
+            };
+            var diag: lp.Regex.Diagnostic = .{};
+            const regex = session.browser.app.regex_context.compile(lit.body, options, &diag) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidRegex => return .{
+                    .text = try std.fmt.allocPrint(arena, "findElement: invalid name regex '{s}': {s} at offset {d}", .{ lit.body, diag.message(), diag.offset }),
+                    .is_error = true,
+                },
+            };
+            name_filter = .{ .regex = regex };
+        } else {
+            name_filter = .{ .substring = name };
+        }
+    }
+
     const matched = lp.interactive.findInteractiveElements(page.document.asNode(), arena, page, .{
         .role = args.role,
-        .name = args.name,
+        .name = name_filter,
     }) catch return ToolError.InternalError;
 
     lp.interactive.registerNodes(matched, registry) catch
         return ToolError.InternalError;
-    return renderJson(arena, matched);
+    return .{ .text = try renderJson(arena, matched) };
+}
+
+const RegexLiteral = struct {
+    body: []const u8,
+    flags: []const u8,
+};
+
+/// A JavaScript `/body/flags` literal, or null for plain text. A name really
+/// written as `/foo/` still matches itself, the search being unanchored.
+fn regexLiteral(text: []const u8) ?RegexLiteral {
+    if (text.len == 0 or text[0] != '/') return null;
+    const close = std.mem.lastIndexOfScalar(u8, text, '/') orelse return null;
+    if (close < 2) return null;
+    const flags = text[close + 1 ..];
+    for (flags) |flag| {
+        if (std.mem.indexOfScalar(u8, "dgimsuvy", flag) == null) return null;
+    }
+    return .{ .body = text[1..close], .flags = flags };
+}
+
+test "regexLiteral" {
+    for ([_][]const u8{ "foo", "/", "//", "//i", "/foo", "/foo/ bar", "/usr/bin" }) |text| {
+        try std.testing.expectEqual(null, regexLiteral(text));
+    }
+
+    const plain = regexLiteral("/foo/").?;
+    try std.testing.expectEqualStrings("foo", plain.body);
+    try std.testing.expectEqualStrings("", plain.flags);
+
+    const flagged = regexLiteral("/a/b/gi").?;
+    try std.testing.expectEqualStrings("a/b", flagged.body);
+    try std.testing.expectEqualStrings("gi", flagged.flags);
 }
 
 fn execGetEnv(arena: std.mem.Allocator, arguments: ?std.json.Value) ToolError![]const u8 {

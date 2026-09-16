@@ -1527,12 +1527,20 @@ const ScriptOutput = struct {
     }
 };
 
+/// Upper bound on script source, whether read from a file or piped in.
+const max_script_bytes = 10 * 1024 * 1024;
+
+/// `lightpanda run -` reads the script from stdin.
+const stdin_script_path = "-";
+
 fn runScript(self: *Agent, path: []const u8) bool {
     var script_arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer script_arena.deinit();
 
-    const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, script_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
-        self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
+    const from_stdin = std.mem.eql(u8, path, stdin_script_path);
+    const name = if (from_stdin) "<stdin>" else path;
+    const content = readScriptSource(script_arena.allocator(), path, from_stdin) catch |err| {
+        self.terminal.printError("Failed to read script '{s}': {s}", .{ name, @errorName(err) });
         return false;
     };
 
@@ -1555,8 +1563,8 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
     var output: ScriptOutput = .{ .terminal = &self.terminal };
     runtime.console_observer = .{ .context = @ptrCast(&output), .notify = ScriptOutput.observe };
-    self.terminal.beginTool("script", path);
-    const result = runtime.runSource(content, path);
+    self.terminal.beginTool("script", name);
+    const result = runtime.runSource(content, name);
     self.terminal.endTool();
 
     if (result catch |err| {
@@ -1569,8 +1577,17 @@ fn runScript(self: *Agent, path: []const u8) bool {
 
     // A script that printed nothing leaves no trace, so freeze the spinner into
     // a green bullet (like /goto); one that printed already showed its result.
-    if (!output.emitted) self.terminal.printScriptDone("script", path);
+    if (!output.emitted) self.terminal.printScriptDone("script", name);
     return true;
+}
+
+fn readScriptSource(allocator: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]u8 {
+    if (!from_stdin) {
+        return std.Io.Dir.cwd().readFileAlloc(lp.io, path, allocator, .limited(max_script_bytes));
+    }
+    var buf: [64 * 1024]u8 = undefined;
+    var stdin = std.Io.File.stdin().readerStreaming(lp.io, &buf);
+    return stdin.interface.allocRemaining(allocator, .limited(max_script_bytes));
 }
 
 /// Mirror a user-typed slash command into `self.conversation.messages` as if the

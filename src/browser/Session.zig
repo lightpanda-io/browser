@@ -569,7 +569,7 @@ pub fn idleSlice(self: *Session) u31 {
 }
 
 pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
-    return frame._page.scheduleNavigation(frame);
+    return frame.page.scheduleNavigation(frame);
 }
 
 // Drain one page's queued navigations and return whether any page had work.
@@ -730,7 +730,7 @@ fn _processFrameNavigation(self: *Session, frame: *Frame, qn: *QueuedNavigation)
 
     const frame_id = frame._frame_id;
     const reuse_window = frame.window;
-    const page = frame._page;
+    const page = frame.page;
     frame.js.detachGlobal();
     frame.deinit();
     frame.* = undefined;
@@ -780,7 +780,7 @@ fn processPopupNavigation(_: *Session, frame: *Frame, qn: *QueuedNavigation) !vo
     const saved_name = reuse_window._name;
     const saved_opener = reuse_window._opener;
     const frame_id = frame._frame_id;
-    const page = frame._page;
+    const page = frame.page;
 
     frame.js.detachGlobal();
     frame.deinit();
@@ -904,6 +904,9 @@ pub fn initiateRootNavigation(self: *Session, frame_id: u32, url: [:0]const u8, 
         log.err(.browser, "pending navigation start", .{ .err = err, .url = url });
         return err;
     };
+
+    live.frame.abortDocumentLoad();
+    live.frame.abortedDocumentIsComplete();
 }
 
 // Promote a pending replacement Page to be the live Page.
@@ -1054,4 +1057,32 @@ test "Session: retiring a pending page destroys it once" {
 
     // Would deinit `pending` twice if it had been queued twice.
     session.processDestroyQueues();
+}
+
+test "Session: console capture runs no page JS" {
+    const js = @import("js/js.zig");
+
+    const session = testing.test_session;
+    try session.enableConsoleCapture();
+    defer {
+        session.notification.unregister(.console_message, session);
+        session._console_capture = false;
+        session._console_messages.clearRetainingCapacity();
+    }
+
+    const frame = try testing.createFrame();
+    defer session.closeAllPages();
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.exec(
+        \\globalThis.probed = 0;
+        \\const probe = { toString() { globalThis.probed++; console.log('inner'); return 'outer'; } };
+        \\console.log('head', probe, 10n, Symbol('s'));
+    , null);
+
+    try testing.expectEqualSlices(u8, "[log] head [object Object] 10n Symbol(s)\n", session.drainConsoleMessages());
+    const probed = try ls.local.exec("globalThis.probed", null);
+    try testing.expectEqual(0, try probed.toF64());
 }

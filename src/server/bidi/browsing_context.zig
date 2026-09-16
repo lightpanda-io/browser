@@ -341,7 +341,7 @@ fn locateNodes(cmd: *const BiDi.Command) !void {
                     const list = Selector.querySelectorAll(root, selector, frame) catch |err| {
                         return invalidSelector(cmd, "css", selector, err);
                     };
-                    defer list.deinit(frame._page);
+                    defer list.deinit(frame.page);
                     try appendNodes(&remotes, arena, &serializer, list._nodes, max);
                 }
             },

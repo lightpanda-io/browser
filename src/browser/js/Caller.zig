@@ -658,7 +658,7 @@ fn serializeFunctionArgs(local: *const Local, info: FunctionCallbackInfo) ![]con
     for (0..info.length()) |i| {
         try buf.writer.print("{s}{d} - ", .{ separator, i + 1 });
         const js_value = info.getArg(@intCast(i), local);
-        try local.debugValue(js_value, &buf.writer);
+        try js_value.format(&buf.writer);
     }
     return buf.written();
 }

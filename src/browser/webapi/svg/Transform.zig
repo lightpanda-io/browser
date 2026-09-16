@@ -79,8 +79,8 @@ pub fn releaseRef(self: *Transform, page: *Page) void {
 }
 
 pub fn detached(frame: *Frame) !*Transform {
-    const matrix = try DOMMatrix.create(RO.identity(), true, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(RO.identity(), true, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{ ._matrix = matrix };
     self.attachMatrix();
@@ -89,8 +89,8 @@ pub fn detached(frame: *Frame) !*Transform {
 
 pub fn fromMatrix(init: ?DOMMatrix2DInit, frame: *Frame) !*Transform {
     const parsed = try fixup2D(init orelse .{});
-    const matrix = try DOMMatrix.create(parsed.m, true, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(parsed.m, true, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{ ._matrix = matrix };
     self.attachMatrix();
@@ -107,8 +107,8 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
         .skew_y => 6,
         else => return error.SyntaxError,
     };
-    const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(parsed.matrix, parsed.is_2d, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const self = try matrix._proto._arena.create(Transform);
     self.* = .{
         ._type = typ,
@@ -123,8 +123,8 @@ pub fn fromParsed(parsed: RO.ParsedTransform, frame: *Frame) !*Transform {
 
 pub fn clone(self: *const Transform, frame: *Frame) !*Transform {
     const current = self.getState();
-    const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame._page);
-    errdefer matrix._proto.deinit(frame._page);
+    const matrix = try DOMMatrix.create(current.matrix, current.is_2d, frame.page);
+    errdefer matrix._proto.deinit(frame.page);
     const cloned = try matrix._proto._arena.create(Transform);
     cloned.* = .{
         ._type = current.typ,

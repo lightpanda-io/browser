@@ -108,7 +108,8 @@ const parsererror_ns = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
 fn parserErrorDocument(frame: *Frame) !*Document.XMLDocument {
     const doc = try frame._factory.document(Document.XMLDocument{ ._proto = undefined });
     const root = try Frame.node_factory.createElementNS(doc.asDocument(), .unknown, "parsererror", null);
-    try frame._element_namespace_uris.put(frame.arena, root.as(Node.Element), parsererror_ns);
+    const page = doc.asDocument()._page;
+    try page.element_namespace_uris.put(page.frame_arena, root.as(Node.Element), parsererror_ns);
     const text = try Frame.node_factory.createTextNode(doc.asDocument(), "error");
     _ = try root.appendChild(text, frame);
     _ = try doc.asNode().appendChild(root, frame);

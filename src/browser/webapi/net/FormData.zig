@@ -1024,8 +1024,8 @@ test "FormData: multipart with file" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1061,8 +1061,8 @@ test "FormData: multipart with empty file defaults to octet-stream" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "", "", "");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "", "", "");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1094,8 +1094,8 @@ test "FormData: multipart escapes file name and filename" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "a\"b\r\nc.txt", "text/plain", "x");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "a\"b\r\nc.txt", "text/plain", "x");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1127,8 +1127,8 @@ test "FormData: file entry collapses to filename in urlencode" {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();
 
-    const file = try buildTestFile(allocator, frame._page, "hello.txt", "text/plain", "hello");
-    defer file._proto.releaseRef(frame._page);
+    const file = try buildTestFile(allocator, frame.page, "hello.txt", "text/plain", "hello");
+    defer file._proto.releaseRef(frame.page);
 
     var fd = FormData{
         ._rc = .{},
@@ -1330,7 +1330,7 @@ test "FormData: multipart parse with file" {
         "bytes\r\n" ++
         "--B--\r\n", "B", &frame.js.execution);
     defer for (fd._entries.items) |entry| switch (entry.value) {
-        .file => |file| file.releaseRef(frame._page),
+        .file => |file| file.releaseRef(frame.page),
         else => {},
     };
 

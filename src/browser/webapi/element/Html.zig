@@ -423,7 +423,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     // Keep the event alive past dispatch (which runs handlers/microtasks) so we
     // can read _prevent_default afterwards.
     event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
+    defer _ = event.releaseRef(frame.page);
 
     try frame._event_manager.dispatch(self.asEventTarget(), event);
 

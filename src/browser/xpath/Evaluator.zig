@@ -530,7 +530,7 @@ fn appendPreceding(self: *Evaluator, start: *Node, out: *std.ArrayList(*Node)) E
 fn appendAttributes(self: *Evaluator, node: *Node, out: *std.ArrayList(*Node)) Error!void {
     const el = node.is(Element) orelse return;
     for (el.attributeEntries()) |*entry| {
-        // Memoized via frame._attribute_lookup so repeated XPath queries
+        // Memoized via page.attribute_lookup so repeated XPath queries
         // (Capybara/Selenium polling) reuse the same *Attribute instead
         // of leaking fresh ones into page-lifetime storage on every call.
         const attribute = try el._attributes.getOrCreateAttribute(entry, el, self.frame);

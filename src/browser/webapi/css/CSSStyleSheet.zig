@@ -93,7 +93,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, fra
 
             const style_props = try style_rule.getStyle(frame);
             const style = style_props.asCSSStyleDeclaration();
-            try style.setCssText(s.block, frame);
+            try style.replaceCssText(s.block, frame);
             break :blk style_rule._proto;
         },
         // Opaque placeholder for at-rules. The CSS engine doesn't apply
@@ -182,7 +182,7 @@ fn parseInto(self: *CSSStyleSheet, text: []const u8, frame: *Frame) CSSError!voi
 
                 const style_props = try style_rule.getStyle(frame);
                 const style = style_props.asCSSStyleDeclaration();
-                try style.setCssText(s.block, frame);
+                try style.replaceCssText(s.block, frame);
                 break :blk style_rule._proto;
             },
             .at_rule => |a| try CSSRule.initAtRule(atRuleTypeFor(a.keyword), a.text, frame),

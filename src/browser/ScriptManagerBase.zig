@@ -955,7 +955,7 @@ pub const Script = struct {
         const fe = self.extra.frame;
         const frame = fe.frame;
         const Event = @import("webapi/Event.zig");
-        const event = Event.initTrusted(typ, .{}, frame._page) catch |err| {
+        const event = Event.initTrusted(typ, .{}, frame.page) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,

@@ -49,7 +49,7 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     // The html5ever wrapper-unwrap below rebinds children without going
     // through the insertion path, so recompute slot assignments for any
     // shadow tree this fragment landed in (idempotent; signals only on diff).
-    defer if (frame._element_shadow_roots.count() != 0) {
+    defer if (frame.page.element_shadow_roots.count() != 0) {
         const root = node.getRootNode(.{});
         if (root.is(ShadowRoot) != null) {
             slotting.assignSlottablesForTree(root, frame);

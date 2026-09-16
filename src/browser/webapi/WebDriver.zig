@@ -271,7 +271,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
                     .buttons = pressed_mask,
-                    .modifiers = frame._page.input_modifiers,
+                    .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
                 dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
@@ -421,7 +421,7 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
 
         // A modifier's own keydown already carries its flag; its keyup no
         // longer does.
-        setModifier(&frame._page.input_modifiers, key, is_down);
+        setModifier(&frame.page.input_modifiers, key, is_down);
 
         // Key actions have no explicit target; they go to the focused element,
         // or the document if nothing is focused. Resolved per action since a
@@ -517,7 +517,7 @@ fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
 }
 
 fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Frame) void {
-    const modifiers = frame._page.input_modifiers;
+    const modifiers = frame.page.input_modifiers;
     const event = KeyboardEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -543,7 +543,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
 }
 
 fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
-    const modifiers = frame._page.input_modifiers;
+    const modifiers = frame.page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -565,7 +565,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
 }
 
 fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, detail: u32, frame: *Frame) bool {
-    const modifiers = frame._page.input_modifiers;
+    const modifiers = frame.page.input_modifiers;
     const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
