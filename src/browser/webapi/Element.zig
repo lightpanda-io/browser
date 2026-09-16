@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const dump = @import("../dump.zig");
 const Frame = @import("../Frame.zig");
-const StyleManager = @import("../StyleManager.zig");
 const Factory = @import("../Factory.zig");
 
 const CSS = @import("CSS.zig");
@@ -1609,41 +1608,43 @@ pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
 
 pub const ScrollAxes = struct { x: bool = false, y: bool = false };
 
-/// Nearest ancestor-or-self that is a scroll container along any of `axes`.
-/// null once the chain reaches html/body: those scroll the viewport.
-pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ?*Element {
-    if (!axes.x and !axes.y) return null;
-    const owner = self.ownerFrame(frame) orelse return null;
+/// What a scroll along one axis lands on. html and body scroll the viewport,
+/// and so does a detached element.
+const ScrollTarget = union(enum) {
+    viewport,
+    container: *Element,
+
+    pub fn scrollBy(self: ScrollTarget, left: i32, top: i32, frame: *Frame) !void {
+        const opts: ScrollToOpts = .{ .opts = .{ .left = left, .top = top } };
+        return switch (self) {
+            .container => |el| el.scrollBy(opts, null, frame),
+            .viewport => frame.window.scrollBy(opts, null, frame),
+        };
+    }
+};
+
+/// Nearest ancestor-or-self scroll container along any of `axes`. The walk
+/// is cheap to repeat per axis: the cascade memoizes each element's props.
+pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTarget {
+    if (!axes.x and !axes.y) return .viewport;
+    const owner = self.ownerFrame(frame) orelse return .viewport;
     const style_manager = &owner._style_manager;
     var current: ?*Element = self;
     while (current) |el| : (current = el.parentElement()) {
-        const tag = el.getTag();
-        if (tag == .html or tag == .body) return null;
-        if ((axes.x and el.overflowScrolls(.x, style_manager)) or (axes.y and el.overflowScrolls(.y, style_manager))) {
-            return el;
+        if (el.scrollsViewport()) break;
+        const scrolls = style_manager.overflowAxes(el);
+        if ((axes.x and scrolls.x) or (axes.y and scrolls.y)) {
+            return .{ .container = el };
         }
     }
-    return null;
+    return .viewport;
 }
 
-// Only inline `overflow` is resolved: computed styles don't cascade stylesheet
-// rules, so a sheet-declared scroll container is treated as page content.
-fn overflowScrolls(self: *Element, axis: enum { x, y }, style_manager: *StyleManager) bool {
-    const longhand = switch (axis) {
-        .x => style_manager.inlineStyleValue(self, comptime .wrap("overflow-x")),
-        .y => style_manager.inlineStyleValue(self, comptime .wrap("overflow-y")),
+fn scrollsViewport(self: *const Element) bool {
+    return switch (self.getTag()) {
+        .html, .body => true,
+        else => false,
     };
-    const value = longhand orelse blk: {
-        // `overflow: <x> [<y>]`; a single value applies to both axes.
-        const shorthand = style_manager.inlineStyleValue(self, comptime .wrap("overflow")) orelse return false;
-        var it = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
-        const x = it.next() orelse return false;
-        break :blk switch (axis) {
-            .x => x,
-            .y => it.next() orelse x,
-        };
-    };
-    return std.ascii.eqlIgnoreCase(value, "auto") or std.ascii.eqlIgnoreCase(value, "scroll");
 }
 
 pub fn getScrollHeight(self: *Element, frame: *Frame) f64 {

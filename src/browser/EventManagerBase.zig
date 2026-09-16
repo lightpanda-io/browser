@@ -205,6 +205,24 @@ pub fn getListeners(self: *EventManagerBase, target: *EventTarget, event_type: S
     });
 }
 
+/// Whether the list still holds a listener, or one that can call
+/// preventDefault. A listener removed during a dispatch stays linked until
+/// the dispatch unwinds, but isn't "in" the list anymore, same as
+/// findListener.
+pub fn hasListener(list: *const std.DoublyLinkedList, comptime which: enum { any, non_passive }) bool {
+    var node = list.first;
+    while (node) |n| : (node = n.next) {
+        const listener: *align(8) Listener = @fieldParentPtr("node", n);
+        if (listener.removed) {
+            continue;
+        }
+        if (which == .any or !listener.passive) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Dispatching can be recursive from the compiler's point of view, so we need to
 // give it an explicit error set so that other parts of the code can use an
 // inferred error.

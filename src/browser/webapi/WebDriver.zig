@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const EventManagerBase = @import("../EventManagerBase.zig");
 const Modifiers = @import("../frame/user_input.zig").Modifiers;
 
 const Event = @import("Event.zig");
@@ -32,7 +31,6 @@ const EventTarget = @import("EventTarget.zig");
 const Cookie = @import("storage/Cookie.zig");
 const MouseEvent = @import("event/MouseEvent.zig");
 const TouchEvent = @import("event/TouchEvent.zig");
-const WheelEvent = @import("event/WheelEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
@@ -380,6 +378,9 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
             continue;
         }
 
+        const x = readI32(action, "x", 0);
+        const y = readI32(action, "y", 0);
+
         const origin = try action.get("origin");
         var el: ?*Element = null;
         if (origin.isObject()) {
@@ -387,7 +388,6 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         } else {
             // "viewport"/"pointer" origins: approximate hit-testing with
             // the faux layout's vertical axis, falling back to the root.
-            const y = readI32(action, "y", 0);
             el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
             if (el == null) {
                 el = frame.document.getDocumentElement();
@@ -397,7 +397,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
 
         const delta_x = readI32(action, "deltaX", 0);
         const delta_y = readI32(action, "deltaY", 0);
-        dispatchWheel(target, delta_x, delta_y, frame);
+        dispatchWheel(target, x, y, delta_x, delta_y, frame);
     }
 }
 
@@ -587,47 +587,12 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
     };
 }
 
-fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
-    // The UA dispatches scroll-blocking events as non-cancelable when every
-    // listener on the propagation path is passive: it already knows
-    // preventDefault can't be called.
-    const event = WheelEvent.initTrusted("wheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "wheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver wheel event", .{ .err = err });
-        return;
-    };
-
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    event.asEvent().acquireRef();
-    defer _ = event.asEvent().releaseRef(frame.page);
-    dispatch(el.asEventTarget(), event.asEvent(), frame, "wheel");
-
-    // Blink also fires the legacy mousewheel event.
-    const legacy = WheelEvent.initTrusted("mousewheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "mousewheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver mousewheel event", .{ .err = err });
-        return;
-    };
-    legacy.asEvent().acquireRef();
-    defer _ = legacy.asEvent().releaseRef(frame.page);
-    dispatch(el.asEventTarget(), legacy.asEvent(), frame, "mousewheel");
-
-    if (event.asEvent()._prevent_default or legacy.asEvent()._prevent_default) {
-        return;
-    }
-
-    Frame.user_input.wheelScroll(el, delta_x, delta_y, frame) catch |err| {
-        log.warn(.app, "webdriver scroll", .{ .err = err });
+// The action's x/y, which the caller already resolved the target from. An
+// element origin makes them offsets from its center, but the faux layout has
+// no center worth computing.
+fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame: *Frame) void {
+    Frame.user_input.wheel(frame, el, @floatFromInt(x), @floatFromInt(y), @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
+        log.warn(.app, "webdriver wheel", .{ .err = err });
     };
 }
 
@@ -637,43 +602,17 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     };
 }
 
-fn hasNonPassiveListener(el: *Element, typ: []const u8, frame: *Frame) bool {
-    // Listeners live in the event manager of the element's own frame (and the
-    // propagation path ends at that frame's window), which is not the caller's
-    // frame when the element belongs to e.g. an iframe's document.
-    const owner = el.ownerFrame(frame) orelse return false;
-    const base = &owner._event_manager.base;
-    var current: ?*@import("Node.zig") = el.asNode();
-    while (current) |node| : (current = node.parentNode()) {
-        if (anyNonPassive(base.getListeners(node.asEventTarget(), .wrap(typ)))) {
-            return true;
-        }
-    }
-    return anyNonPassive(base.getListeners(owner.window.asEventTarget(), .wrap(typ)));
-}
-
-fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
-    const list = list_ orelse return false;
-    var link = list.first;
-    while (link) |l| : (link = l.next) {
-        const listener: *align(8) EventManagerBase.Listener = @fieldParentPtr("node", l);
-        if (!listener.passive) {
-            return true;
-        }
-    }
-    return false;
-}
-
 fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
+    const owner = el.ownerFrame(frame) orelse return;
     const event = TouchEvent.initTrusted(typ, .{
         .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, typ, frame),
         .composed = true,
-    }, frame) catch |err| {
+    }, owner) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
         return;
     };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
+    event.asEvent()._cancelable_unless_passive = true;
+    dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 
 pub const JsApi = struct {

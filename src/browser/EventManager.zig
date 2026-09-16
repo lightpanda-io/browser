@@ -297,6 +297,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
 
     const path = path_buffer[0..path_len];
 
+    if (event._cancelable_unless_passive) {
+        event._cancelable = self.anyNonPassive(path, event);
+    }
+
     // Phase 1: Capturing phase (root → target, excluding target)
     // This happens for all events, regardless of bubbling
     event._event_phase = .capturing_phase;
@@ -305,8 +309,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         i -= 1;
         if (event._stop_propagation) return;
         const current_target = path[i];
-        if (self.base.getListeners(current_target, event._type_string)) |list| {
-            try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, true);
+        if (self.listenersFor(current_target, event)) |listeners| {
+            try self.dispatchPhase(listeners, current_target, event, &was_handled, &ls.local, true);
         }
     }
 
@@ -356,14 +360,14 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         // and once during the bubbling iteration, each with its own snapshot
         // of the listener list: a bubble listener added while running the
         // target's capture listeners must run.
-        if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, true);
+        if (self.listenersFor(target_et, event)) |listeners| {
+            try self.dispatchPhase(listeners, target_et, event, &was_handled, &ls.local, true);
             if (event._stop_propagation) {
                 return;
             }
         }
-        if (self.base.getListeners(target_et, event._type_string)) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, false);
+        if (self.listenersFor(target_et, event)) |listeners| {
+            try self.dispatchPhase(listeners, target_et, event, &was_handled, &ls.local, false);
             if (event._stop_propagation) {
                 return;
             }
@@ -412,11 +416,56 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
                 }
             }
 
-            if (self.base.getListeners(current_target, event._type_string)) |list| {
-                try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, false);
+            if (self.listenersFor(current_target, event)) |listeners| {
+                try self.dispatchPhase(listeners, current_target, event, &was_handled, &ls.local, false);
             }
         }
     }
+}
+
+/// Whether a listener on the path could call preventDefault. An inline
+/// handler always can; addEventListener listeners can unless passive.
+fn anyNonPassive(self: *EventManager, path: []const *EventTarget, event: *Event) bool {
+    for (path) |target| {
+        if (self.getInlineHandler(target, event) != null) {
+            return true;
+        }
+        if (self.listenersFor(target, event)) |listeners| {
+            if (EventManagerBase.hasListener(listeners.list, .non_passive)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+const TargetListeners = struct {
+    list: *std.DoublyLinkedList,
+    typ: lp.String,
+};
+
+/// The listeners `target` runs for `event`. Like Blink, a target with none
+/// for the event's type falls back to the type's legacy alias: a
+/// `mousewheel` listener fires only where no `wheel` listener is registered.
+fn listenersFor(self: *EventManager, target: *EventTarget, event: *const Event) ?TargetListeners {
+    if (self.base.getListeners(target, event._type_string)) |list| {
+        if (EventManagerBase.hasListener(list, .any)) {
+            return .{ .list = list, .typ = event._type_string };
+        }
+    }
+    const legacy = legacyType(event) orelse return null;
+    const list = self.base.getListeners(target, legacy) orelse return null;
+    return .{ .list = list, .typ = legacy };
+}
+
+fn legacyType(event: *const Event) ?lp.String {
+    if (!event._is_trusted) {
+        return null;
+    }
+    if (event._type_string.eql(comptime .wrap("wheel"))) {
+        return comptime .wrap("mousewheel");
+    }
+    return null;
 }
 
 fn processHandlerReturnValue(event: *Event, handler_return: ?js.Value) void {
@@ -432,9 +481,15 @@ fn currentEventForTarget(target: *EventTarget, event: *Event) ?*Event {
     return if (rootIsShadowRoot(target)) null else event;
 }
 
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
+fn dispatchPhase(self: *EventManager, listeners: TargetListeners, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime capture_only: ?bool) !void {
     const frame = self.frame;
     const base = &self.base;
+    const list = listeners.list;
+
+    // Listeners registered under a legacy name see the event under that name.
+    const real_type = event._type_string;
+    event._type_string = listeners.typ;
+    defer event._type_string = real_type;
 
     const window = frame.window;
     const prev_current_event = window._current_event;
