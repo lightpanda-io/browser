@@ -647,6 +647,13 @@ test "cdp.lp: semantic tree and node details read the node's own frame" {
     try testing.expectEqual("child-label", details.get("name").?.string);
     try testing.expectEqual("child-option", details.get("options").?.array.items[0].object.get("value").?.string);
 
+    // JSON format and interactiveOnly walk the same frame as the text format.
+    try ctx.processMessage(.{ .id = 5, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .interactiveOnly = true } });
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, (try dumpReply(&ctx, 5)).get("result").?.object.get("semanticTree").?, .{});
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "child-label") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "parent-") == null);
+
     // A document with no frame has no styles or layout to describe.
     const frameless = try root._factory.genericDocument(.{});
     const frameless_id = (try bc.node_registry.register(frameless.asNode())).id;
