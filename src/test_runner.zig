@@ -233,8 +233,7 @@ const Runner = struct {
         }
         Printer.fmt("\n", .{});
 
-        try slowest.display();
-        Printer.fmt("\n", .{});
+        slowest.display();
         // stats
         if (self.env.metrics) {
             const stdout = std.Io.File.stdout();
@@ -374,14 +373,18 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker) !void {
+    fn display(self: *SlowTracker) void {
         var slowest = self.slowest;
         const count = slowest.count();
+        if (count == 0) {
+            return;
+        }
         Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
         while (slowest.popMin()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }
+        Printer.fmt("\n", .{});
     }
 
     fn compareTiming(context: void, a: TestInfo, b: TestInfo) std.math.Order {
