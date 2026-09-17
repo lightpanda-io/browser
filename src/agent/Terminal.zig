@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const string = @import("../string.zig");
 const Config = lp.Config;
 const Schema = lp.Schema;
 const SlashCommand = @import("SlashCommand.zig");
@@ -117,7 +118,7 @@ pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bo
         const a = if (self.repl_arena) |*ra| ra else return;
         defer _ = a.reset(.retain_capacity);
         const bytes = formatBulletLine(a.allocator(), name, args, ok) catch return;
-        _ = self.spinner.emitAbove(bytes);
+        self.emitStderr(bytes);
         return;
     }
     if (self.stderr_is_tty) {
@@ -129,6 +130,13 @@ pub fn agentToolDone(self: *Terminal, name: []const u8, args: []const u8, ok: bo
             .{ ansi.dim, ansi.teal, name, ansi.reset, args },
         );
     }
+}
+
+/// Commit a finished line above the spinner, or straight to stderr when the
+/// spinner isn't running (non-tty REPL) so the line isn't silently dropped.
+fn emitStderr(self: *Terminal, bytes: []const u8) void {
+    if (self.spinner.emitAbove(bytes)) return;
+    _ = std.c.write(std.posix.STDERR_FILENO, bytes.ptr, bytes.len);
 }
 
 fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
@@ -286,12 +294,10 @@ pub fn printToolOutcome(self: *Terminal, name: []const u8, text: []const u8, is_
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
         const bytes = formatReplOutcome(a.allocator(), text, is_error) catch return;
-        if (self.spinner.emitAbove(bytes)) return;
-        _ = std.c.write(std.posix.STDERR_FILENO, (bytes).ptr, (bytes).len);
-        return;
+        return self.emitStderr(bytes);
     }
     if (!is_error and !self.verbosity.atLeast(.medium)) return;
-    const truncated = text[0..@min(text.len, max_result_display_len)];
+    const truncated = string.truncateUtf8(text, max_result_display_len);
     const ellipsis: []const u8 = if (text.len > max_result_display_len) "..." else "";
     const color: []const u8 = if (is_error) ansi.red else ansi.green;
     std.debug.print("{s}{s}[result: {s}]{s} {s}{s}\n", .{ ansi.dim, color, name, ansi.reset, truncated, ellipsis });
