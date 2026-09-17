@@ -934,3 +934,60 @@ test "cdp.input: dispatchKeyEvent cancelled keyDown suppresses its char" {
     try ctx.expectSentResult(null, .{ .id = 5 });
     try testing.expect((try ls.local.compileAndRun("inp.value === 'y' && window.keypresses.join('') === 'y'", null)).isTrue());
 }
+
+// Enter, as chromedp sends it: keyDown, a "\r" char, keyUp. Buttons click
+// after their keypress; the form submits at most once.
+test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const cases = [_]struct { id: []const u8, expect: []const u8 }{
+        .{ .id = "text", .expect = "keypress submit" },
+        .{ .id = "check", .expect = "keypress submit" },
+        .{ .id = "submit", .expect = "keypress click submit" },
+        .{ .id = "button", .expect = "keypress click submit" },
+        .{ .id = "ibutton", .expect = "keypress click" },
+        .{ .id = "reset", .expect = "keypress click" },
+    };
+
+    var id: u32 = 1;
+    for (cases) |c| {
+        var buf: [1024]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.fmt.bufPrint(&buf,
+            \\document.body.insertAdjacentHTML('beforeend', '<form id=f>' +
+            \\  '<input id=text><input id=check type=checkbox><input id=submit type=submit>' +
+            \\  '<button id=button>go</button><input id=ibutton type=button><input id=reset type=reset></form>');
+            \\window.events = [];
+            \\document.getElementById('f').addEventListener('submit', (e) => {{
+            \\  e.preventDefault();
+            \\  window.events.push('submit');
+            \\}});
+            \\var el = document.getElementById('{s}');
+            \\el.addEventListener('keypress', () => window.events.push('keypress'));
+            \\el.addEventListener('click', () => window.events.push('click'));
+            \\el.focus();
+        , .{c.id}), null);
+
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+
+        const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
+        try testing.expectEqualSlices(u8, c.expect, got);
+
+        _ = try ls.local.compileAndRun("document.getElementById('f').remove()", null);
+    }
+}

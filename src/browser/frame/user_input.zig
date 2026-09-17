@@ -696,6 +696,9 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         return;
     }
     const is_enter = text.len == 1 and (text[0] == '\r' or text[0] == '\n');
+    if (is_enter and enterClicks(target)) {
+        return dispatchKeyboardClick(frame, target);
+    }
 
     if (target.is(Element.Html.Input)) |input| {
         if (is_enter) {
@@ -740,10 +743,11 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     }
 
     if (key == .Enter and event.getIsTrusted()) {
-        if (target.is(Element)) |element| {
-            if (enterActivates(element)) {
-                // Enter generates a button-like "click" for  some elements
-                return dispatchKeyboardClick(frame, element);
+        // A link follows Enter on the keydown; buttons wait for the keypress,
+        // see typeChar.
+        if (target.is(Element.Html.Anchor)) |anchor| {
+            if (anchor.asElement().getAttributeInterned("href") != null) {
+                return dispatchKeyboardClick(frame, anchor.asElement());
             }
         }
     }
@@ -877,14 +881,11 @@ fn dispatchKeyboardClick(frame: *Frame, element: *Element) !void {
     try frame._event_manager.dispatch(element.asEventTarget(), event.asEvent());
 }
 
-// elements where enter on a keydown should dispatch a click-click event
-fn enterActivates(element: *Element) bool {
+// elements where Enter's keypress dispatches a click
+fn enterClicks(element: *Element) bool {
     const html_element = element.is(Element.Html) orelse return false;
     if (html_element._type == .button) {
         return true;
-    }
-    if (html_element._type == .anchor) {
-        return element.getAttributeInterned("href") != null;
     }
     if (element.is(Element.Html.Input)) |input| {
         return switch (input._input_type) {
