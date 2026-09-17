@@ -1430,11 +1430,12 @@ fn execTree(arena: std.mem.Allocator, session: *lp.Session, registry: *NodeRegis
     const page = try ensurePage(session, registry, args.url, args.timeout);
 
     const root_node = (try resolveOptionalNode(registry, args.backendNodeId)) orelse page.document.asNode();
+    const frame = root_node.ownerFrame(page) orelse return ToolError.NodeNotFound;
 
     const st = lp.SemanticTree{
         .dom_node = root_node,
         .registry = registry,
-        .frame = page,
+        .frame = frame,
         .arena = arena,
         .prune = true,
         .max_depth = args.maxDepth orelse std.math.maxInt(u32) - 1,
@@ -1453,7 +1454,8 @@ fn execNodeDetails(arena: std.mem.Allocator, session: *lp.Session, registry: *No
 
     const node = registry.lookup_by_id.get(args.backendNodeId) orelse
         return ToolError.NodeNotFound;
-    const details = lp.SemanticTree.getNodeDetails(arena, node.dom, registry, page) catch
+    const frame = node.dom.ownerFrame(page) orelse return ToolError.NodeNotFound;
+    const details = lp.SemanticTree.getNodeDetails(arena, node.dom, registry, frame) catch
         return ToolError.InternalError;
     return renderJson(arena, &details);
 }
