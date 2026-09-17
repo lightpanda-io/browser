@@ -495,13 +495,9 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             var registry = NodeRegistry.init(app.allocator);
             defer registry.deinit();
 
-            const st: SemanticTree = .{
-                .dom_node = state.root,
-                .registry = &registry,
-                .frame = frame,
-                .arena = frame.call_arena,
+            const st: SemanticTree = try .init(frame.call_arena, state.root, &registry, frame, .{
                 .prune = (mode == .semantic_tree_text),
-            };
+            });
 
             if (mode == .semantic_tree) {
                 try std.json.Stringify.value(st, .{}, writer);

@@ -40,12 +40,33 @@ dom_node: *Node,
 registry: *NodeRegistry,
 frame: *Frame, // we never visit iframes, every node we visit is in the same frame as dom_node
 arena: std.mem.Allocator,
-prune: bool = true,
-interactive_only: bool = false,
-max_depth: u32 = std.math.maxInt(u32) - 1,
+prune: bool,
+interactive_only: bool,
+max_depth: u32,
+
+pub const Opts = struct {
+    prune: bool = true,
+    interactive_only: bool = false,
+    max_depth: u32 = std.math.maxInt(u32) - 1,
+};
+
+/// `frame` only seeds the owner lookup; the tree is walked with the frame
+/// that owns `node`. A node whose document has no frame (DOMParser, XHR, or
+/// a frame that has since navigated away) has no styles or layout to
+/// describe.
+pub fn init(arena: std.mem.Allocator, node: *Node, registry: *NodeRegistry, frame: *Frame, opts: Opts) error{FramelessNode}!Self {
+    return .{
+        .dom_node = node,
+        .registry = registry,
+        .frame = node.ownerFrame(frame) orelse return error.FramelessNode,
+        .arena = arena,
+        .prune = opts.prune,
+        .interactive_only = opts.interactive_only,
+        .max_depth = opts.max_depth,
+    };
+}
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    assertOwns(self.frame, self.dom_node);
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
@@ -65,7 +86,6 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 }
 
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
-    assertOwns(self.frame, self.dom_node);
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
@@ -651,14 +671,12 @@ const NodeDetails = struct {
     }
 };
 
-pub fn getNodeDetails(
-    arena: std.mem.Allocator,
-    node: *Node,
-    registry: *NodeRegistry,
-    frame: *Frame,
-) !NodeDetails {
-    assertOwns(frame, node);
-    const cdp_node = try registry.register(node);
+pub fn nodeDetails(self: Self) !NodeDetails {
+    const arena = self.arena;
+    const node = self.dom_node;
+    const frame = self.frame;
+
+    const cdp_node = try self.registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
     var labels: Label.LabelByForIndex = .{};
@@ -733,13 +751,6 @@ pub fn getNodeDetails(
     };
 }
 
-fn assertOwns(frame: *const Frame, node: *const Node) void {
-    if (comptime lp.IS_DEBUG == false) {
-        return;
-    }
-    std.debug.assert(node.ownerFrame(frame) == frame);
-}
-
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
@@ -750,15 +761,7 @@ test "SemanticTree backendDOMNodeId" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = .{
-        .dom_node = frame.window._document.asNode(),
-        .registry = &registry,
-        .frame = frame,
-        .arena = testing.arena_allocator,
-        .prune = false,
-        .interactive_only = false,
-        .max_depth = std.math.maxInt(u32) - 1,
-    };
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false });
 
     const json_str = try std.json.Stringify.valueAlloc(testing.allocator, st, .{});
     defer testing.allocator.free(json_str);
@@ -774,15 +777,7 @@ test "SemanticTree max_depth" {
     defer page.close();
     const frame = page.frame().?;
 
-    const st: Self = .{
-        .dom_node = frame.window._document.asNode(),
-        .registry = &registry,
-        .frame = frame,
-        .arena = testing.arena_allocator,
-        .prune = false,
-        .interactive_only = false,
-        .max_depth = 1,
-    };
+    const st: Self = try .init(testing.arena_allocator, frame.window._document.asNode(), &registry, frame, .{ .prune = false, .max_depth = 1 });
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
