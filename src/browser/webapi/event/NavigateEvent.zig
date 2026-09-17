@@ -185,8 +185,6 @@ const InterceptOptions = struct {
 
 // https://html.spec.whatwg.org/#dom-navigateevent-intercept
 pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions) !void {
-    lp.log.warn(.browser, "navigate intercept 1", .{});
-
     if (!self._can_intercept) {
         return error.InvalidStateError;
     }
@@ -194,7 +192,6 @@ pub fn intercept(self: *NavigateEvent, opts: ?InterceptOptions) !void {
         return error.InvalidStateError;
     }
 
-    lp.log.warn(.browser, "navigate intercept 2", .{});
     self._intercepted = true;
 
     if (opts) |o| {
