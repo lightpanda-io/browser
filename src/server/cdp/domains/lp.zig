@@ -127,12 +127,13 @@ fn getSemanticTree(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const dom_node = if (params.backendNodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        frame.document.asNode();
+        root.document.asNode();
+    const frame = dom_node.ownerFrame(root) orelse return error.InvalidNodeId;
 
     var st = SemanticTree{
         .dom_node = dom_node,
@@ -247,12 +248,13 @@ fn getInteractiveElements(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const main_frame = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const root = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        frame.document.asNode();
+        main_frame.document.asNode();
+    const frame = root.ownerFrame(main_frame) orelse return error.InvalidNodeId;
 
     const elements = try interactive.collectInteractiveElements(root, cmd.arena, frame);
     try interactive.registerNodes(elements, &bc.node_registry);
@@ -269,9 +271,10 @@ fn getNodeDetails(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
+    const frame = node.ownerFrame(root) orelse return error.InvalidNodeId;
 
     const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, frame) catch return error.InternalError;
 
@@ -616,6 +619,43 @@ test "cdp.lp: dump formats, strip and scoping" {
     try testing.expect((try dumpReply(&ctx, 9)).get("error") != null);
 }
 
+// A backendNodeId can name a node in a child frame while the handler only
+// knows the root. Labels, datalists and styles must come from the node's own
+// document: the parent reuses every id and hides `.probe`.
+test "cdp.lp: semantic tree and node details read the node's own frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/semantic_tree_iframe.html", .target_id = "FID-000000000T".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+
+    const html = (child.document.getDocumentElement() orelse unreachable).asNode();
+    const input = (try child.document.querySelector(.wrap("input"), child)).?.asNode();
+    const html_id = (try bc.node_registry.register(html)).id;
+    const input_id = (try bc.node_registry.register(input)).id;
+
+    try ctx.processMessage(.{ .id = 1, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = html_id, .format = "text", .prune = false } });
+    const tree = (try dumpReply(&ctx, 1)).get("result").?.object.get("semanticTree").?.string;
+    try testing.expect(std.mem.indexOf(u8, tree, "child-label") != null);
+    try testing.expect(std.mem.indexOf(u8, tree, "child-option") != null);
+    try testing.expect(std.mem.indexOf(u8, tree, "child-probe") != null);
+    try testing.expect(std.mem.indexOf(u8, tree, "parent-") == null);
+
+    try ctx.processMessage(.{ .id = 2, .method = "LP.getNodeDetails", .params = .{ .backendNodeId = input_id } });
+    const details = (try dumpReply(&ctx, 2)).get("result").?.object.get("nodeDetails").?.object;
+    try testing.expectEqual("child-label", details.get("name").?.string);
+    try testing.expectEqual("child-option", details.get("options").?.array.items[0].object.get("value").?.string);
+
+    // A document with no frame has no styles or layout to describe.
+    const frameless = try root._factory.genericDocument(.{});
+    const frameless_id = (try bc.node_registry.register(frameless.asNode())).id;
+    try ctx.processMessage(.{ .id = 3, .method = "LP.getSemanticTree", .params = .{ .backendNodeId = frameless_id } });
+    try ctx.expectSentError(-31998, "InvalidNodeId", .{ .id = 3 });
+    try ctx.processMessage(.{ .id = 4, .method = "LP.getNodeDetails", .params = .{ .backendNodeId = frameless_id } });
+    try ctx.expectSentError(-31998, "InvalidNodeId", .{ .id = 4 });
+}
+
 test "cdp.lp: getInteractiveElements" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -630,6 +670,36 @@ test "cdp.lp: getInteractiveElements" {
 
     const result = (try ctx.getSentMessage(0)).?.object.get("result").?.object;
     try testing.expect(result.get("elements") != null);
+}
+
+test "cdp.lp: getInteractiveElements reads the node's own frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-T", .url = "cdp/interactive_iframe.html", .target_id = "FID-000000000T".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+
+    const html = (child.document.getDocumentElement() orelse unreachable).asNode();
+    const html_id = (try bc.node_registry.register(html)).id;
+
+    try ctx.processMessage(.{ .id = 1, .method = "LP.getInteractiveElements", .params = .{ .nodeId = html_id } });
+    const elements = (try dumpReply(&ctx, 1)).get("result").?.object.get("elements").?.array.items;
+
+    var found_hook = false;
+    var found_link = false;
+    for (elements) |el| {
+        const id = el.object.get("id") orelse continue;
+        if (std.mem.eql(u8, id.string, "child-hook")) {
+            found_hook = true;
+            try testing.expectEqual("listener", el.object.get("type").?.string);
+        } else if (std.mem.eql(u8, id.string, "child-link")) {
+            found_link = true;
+            try testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/cdp/iframe/target.html", el.object.get("href").?.string);
+        }
+    }
+    try testing.expect(found_link);
+    try testing.expect(found_hook);
 }
 
 test "cdp.lp: getStructuredData" {

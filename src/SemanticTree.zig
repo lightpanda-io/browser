@@ -38,13 +38,14 @@ const Self = @This();
 
 dom_node: *Node,
 registry: *NodeRegistry,
-frame: *Frame,
+frame: *Frame, // we never visit iframes, every node we visit is in the same frame as dom_node
 arena: std.mem.Allocator,
 prune: bool = true,
 interactive_only: bool = false,
 max_depth: u32 = std.math.maxInt(u32) - 1,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
+    assertOwns(self.frame, self.dom_node);
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
@@ -56,7 +57,6 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .label_index = &label_index,
-        .owner_frame = self.dom_node.ownerFrame(self.frame) orelse self.frame,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
@@ -65,6 +65,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 }
 
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
+    assertOwns(self.frame, self.dom_node);
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
     var xpath_buffer: std.ArrayList(u8) = .empty;
     const listener_targets = interactive.buildListenerTargetMap(self.frame, self.arena) catch |err| {
@@ -76,7 +77,6 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         .xpath_buffer = &xpath_buffer,
         .listener_targets = listener_targets,
         .label_index = &label_index,
-        .owner_frame = self.dom_node.ownerFrame(self.frame) orelse self.frame,
     };
     self.walk(&ctx, self.dom_node, null, &visitor, 1, 0) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
@@ -108,7 +108,6 @@ const WalkContext = struct {
     xpath_buffer: *std.ArrayList(u8),
     listener_targets: interactive.ListenerTargetMap,
     label_index: *Label.LabelByForIndex,
-    owner_frame: *Frame, // node's own frame, not the caller's (the dumped frame when the node's document has none)
 };
 
 fn walk(
@@ -132,7 +131,7 @@ fn walk(
 
         // Hidden subtrees are never entered, so below the root only the
         // element's own display matters.
-        const style_manager = &ctx.owner_frame._style_manager;
+        const style_manager = &self.frame._style_manager;
         const hidden = if (current_depth == 0)
             style_manager.isHidden(el, .{})
         else
@@ -658,6 +657,7 @@ pub fn getNodeDetails(
     registry: *NodeRegistry,
     frame: *Frame,
 ) !NodeDetails {
+    assertOwns(frame, node);
     const cdp_node = try registry.register(node);
     const axn = AXNode.fromNode(node);
     const role = try axn.getRole();
@@ -733,6 +733,13 @@ pub fn getNodeDetails(
     };
 }
 
+fn assertOwns(frame: *const Frame, node: *const Node) void {
+    if (comptime lp.IS_DEBUG == false) {
+        return;
+    }
+    std.debug.assert(node.ownerFrame(frame) == frame);
+}
+
 const testing = @import("testing.zig");
 
 test "SemanticTree backendDOMNodeId" {
@@ -757,40 +764,6 @@ test "SemanticTree backendDOMNodeId" {
     defer testing.allocator.free(json_str);
 
     try testing.expect(std.mem.indexOf(u8, json_str, "\"backendDOMNodeId\":") != null);
-}
-
-test "SemanticTree: styles come from the node's own frame" {
-    var registry: NodeRegistry = .init(testing.allocator);
-    defer registry.deinit();
-
-    // The caller's frame hides #inner; the frame that actually owns the walked
-    // subtree does not. A backendNodeId lookup can hand us a node from another
-    // frame, so the walk must not use the caller's stylesheets.
-    var page_a = try testing.pageTest("cdp/semantic_tree_frame_a.html", .{});
-    defer page_a.close();
-    var page_b = try testing.pageTest("cdp/semantic_tree_frame_b.html", .{});
-    defer page_b.close();
-
-    const frame_a = page_a.frame().?;
-    const frame_b = page_b.frame().?;
-
-    const target = (try frame_b.window._document.querySelector(.wrap("#target"), frame_b)).?.asNode();
-
-    const st: Self = .{
-        .dom_node = target,
-        .registry = &registry,
-        .frame = frame_a,
-        .arena = testing.arena_allocator,
-        .prune = false,
-        .interactive_only = false,
-        .max_depth = std.math.maxInt(u32) - 1,
-    };
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-
-    try st.textStringify(&aw.writer);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "inner-b") != null);
 }
 
 test "SemanticTree max_depth" {
