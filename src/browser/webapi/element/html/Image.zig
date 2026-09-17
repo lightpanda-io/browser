@@ -156,9 +156,10 @@ fn imageAddedCallback(self: *Image, frame: *Frame) !void {
     };
 }
 
-/// A <picture> mutation: only restart the load if it changed the selection.
+/// An insertion or <picture> mutation: only restart the load if it changed the
+/// selection. A parser-created image has selected nothing until its insertion.
 pub fn sourceChanged(self: *Image, frame: *Frame) !void {
-    // Yes, we can get collisions, but the even if it happens, the impact is low.
+    // Yes, we can get collisions, but even if it happens, the impact is low.
     if (std.hash.Wyhash.hash(0, self.selectSource(frame)) == self._selected_hash) {
         return;
     }
@@ -196,7 +197,8 @@ fn selectSource(self: *Image, frame: *Frame) []const u8 {
 }
 
 // Picks the candidate with the smallest density that is still >= 1, falling
-// back to the densest one.
+// back to the densest one. `sizes` isn't parsed: a width descriptor is always
+// measured against the full viewport width (the 100vw default).
 fn pickCandidate(srcset: []const u8, src: []const u8, viewport_width: u32) ?[]const u8 {
     var best: ?Candidate = null;
     var densest: ?Candidate = null;
@@ -224,9 +226,8 @@ fn pickCandidate(srcset: []const u8, src: []const u8, viewport_width: u32) ?[]co
     }
 
     if (src.len > 0 and !has_1x and !has_width) {
-        if (best == null or best.?.density > 1) {
-            return src;
-        }
+        // src is the 1x candidate, nothing in srcset can beat it.
+        return src;
     }
     const chosen = best orelse densest orelse return null;
     return chosen.url;
@@ -315,8 +316,8 @@ const SrcsetIterator = struct {
                     if (density != null or width != null) {
                         return null;
                     }
-                    const w = std.fmt.parseInt(u32, value, 10) catch return null;
-                    if (w == 0 or value[0] == '+') {
+                    const w = parseNonNegativeInt(value) orelse return null;
+                    if (w == 0) {
                         return null;
                     }
                     width = w;
@@ -325,7 +326,7 @@ const SrcsetIterator = struct {
                     if (density != null or has_height) {
                         return null;
                     }
-                    _ = std.fmt.parseInt(u32, value, 10) catch return null;
+                    _ = parseNonNegativeInt(value) orelse return null;
                     has_height = true;
                 },
                 else => return null,
@@ -339,6 +340,16 @@ const SrcsetIterator = struct {
             return null;
         }
         return .{ .density = density orelse 1 };
+    }
+
+    // parseInt also accepts a sign and '_' separators.
+    fn parseNonNegativeInt(value: []const u8) ?u32 {
+        for (value) |c| {
+            if (!std.ascii.isDigit(c)) {
+                return null;
+            }
+        }
+        return std.fmt.parseInt(u32, value, 10) catch null;
     }
 
     // parseFloat also accepts "inf", "nan", hex and a leading '+'.
@@ -396,15 +407,13 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
+    // The parser's images wait until they're inserted (sourceChanged), so a
+    // <picture> parent's <source> elements take part in the selection.
+    pub const parser_created_on_insert = true;
+
     pub fn created(node: *Node, frame: *Frame) !void {
         const self = node.as(Image);
         return self.imageAddedCallback(frame);
-    }
-
-    // The parser's images wait until they're linked, so a <picture> parent's
-    // <source> elements take part in the selection.
-    pub fn parserInserted(element: *Element, frame: *Frame) !void {
-        return element.as(Image).imageAddedCallback(frame);
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {

@@ -11,12 +11,40 @@
 
 <img id="parsed-srcset" srcset="/one.png 1x, /two.png 2x">
 
+<script>
+  // load doesn't bubble, but it can be captured before the elements exist
+  const fostered_loads = {};
+  document.addEventListener("load", (e) => {
+    fostered_loads[e.target.id] = (fostered_loads[e.target.id] ?? 0) + 1;
+  }, true);
+</script>
+
+<!-- foster parented: inserted before the table, not through the parser's append -->
+<table><img id="fostered" src="/fostered.png"></table>
+<picture>
+  <source srcset="/fostered-source.png">
+  <table><img id="fostered-picture" src="/fostered-src.png"></table>
+</picture>
+
 <script id="parsed">
 {
   testing.expectEqual(testing.ORIGIN + "/from-source.png", document.getElementById("parsed-img").currentSrc);
   testing.expectEqual(testing.ORIGIN + "/from-src.png", document.getElementById("parsed-img").src);
   testing.expectEqual(testing.ORIGIN + "/one.png", document.getElementById("parsed-srcset").currentSrc);
 }
+</script>
+
+<script id="fostered" type=module>
+  const state = await testing.async();
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual("TABLE", document.getElementById("fostered").nextElementSibling.tagName);
+    testing.expectEqual(1, fostered_loads["fostered"]);
+    testing.expectEqual(1, fostered_loads["fostered-picture"]);
+    testing.expectEqual(testing.ORIGIN + "/fostered-source.png", document.getElementById("fostered-picture").currentSrc);
+  });
 </script>
 
 <script id="img_srcset" type=module>
@@ -57,7 +85,7 @@
   await check(testing.ORIGIN + "/a,b.png");
 
   // invalid descriptors drop the candidate
-  img.srcset = "/bad.png 1q, /bad2.png 1x 2x, /good.png";
+  img.srcset = "/bad.png 1q, /bad2.png 1x 2x, /bad3.png 1_0w, /bad4.png +10w, /good.png";
   await check(testing.ORIGIN + "/good.png");
 
   // width descriptors are measured against the viewport width

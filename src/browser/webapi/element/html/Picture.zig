@@ -45,13 +45,10 @@ pub fn asNode(self: *Picture) *Node {
     return self.asElement().asNode();
 }
 
-// An <img> entering or leaving the picture, or a <source> changing before one.
+// A <source> entering the picture. Frame handles an inserted <img> itself.
 pub fn childInserted(parent: *Node, child: *Node, frame: *Frame) !void {
     if (parent.is(Picture) == null) {
         return;
-    }
-    if (child.is(Image)) |img| {
-        return img.sourceChanged(frame);
     }
     if (child.is(Source) != null) {
         return imagesFrom(child.nextSibling(), frame);

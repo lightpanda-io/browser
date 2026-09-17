@@ -2938,12 +2938,12 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     child._parent = parent;
 
     Element.Html.Select.childInserted(parent, child);
-    if (comptime from_parser) {
-        if (child.is(Element)) |el| {
-            _ = try Element.Build.call(el, "parserInserted", .{ el, self });
-        }
+    if (child.is(Element.Html.Image)) |img| {
+        // noop if it didn't actually change
+        try img.sourceChanged(self);
+    } else {
+        try Element.Html.Picture.childInserted(parent, child, self);
     }
-    try Element.Html.Picture.childInserted(parent, child, self);
 
     // Update live ranges for insertion (DOM spec insert step 6).
     // For .before/.after the child was inserted at a specific position;
