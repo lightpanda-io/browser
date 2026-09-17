@@ -56,6 +56,9 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
+    // rawKeyDown is a Chrome-internal event type not used for JS dispatch
+    if (params.type == .rawKeyDown) return;
+
     const bc = cmd.browser_context orelse return;
     const frame = bc.mainFrame() orelse return;
 
@@ -73,21 +76,23 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     };
 
     switch (params.type) {
-        // rawKeyDown is a Chrome-internal event type not used for JS dispatch
-        .rawKeyDown => {},
+        .rawKeyDown => unreachable,
         .keyDown => {
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), opts, frame);
             const prevented = try Frame.user_input.triggerKeyDown(frame, event, text);
             bc.suppress_next_char = prevented and text == null;
         },
-        .keyUp => try Frame.user_input.triggerKeyUp(frame, try KeyboardEvent.initTrusted(comptime .wrap("keyup"), opts, frame)),
+        .keyUp => {
+            const event = try KeyboardEvent.initTrusted(comptime .wrap("keyup"), opts, frame);
+            try Frame.user_input.triggerKeyUp(frame, event);
+        },
         .char => {
             const t = text orelse return;
             if (bc.suppress_next_char) {
                 bc.suppress_next_char = false;
                 return;
             }
-            const target = frame.window._document.getActiveElement() orelse return;
+            const target = Frame.user_input.focusedElement(frame) orelse return;
             const event = try KeyboardEvent.initTrusted(comptime .wrap("keypress"), opts, frame);
             try Frame.user_input.typeChar(frame, target, event, t);
         },
@@ -948,6 +953,27 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
     frame.js.localScope(&ls);
     defer ls.deinit();
 
+    _ = try ls.local.compileAndRun(
+        \\document.body.insertAdjacentHTML('beforeend', '<form id=f>' +
+        \\  '<input id=text><input id=check type=checkbox><input id=submit type=submit>' +
+        \\  '<button id=button>go</button><input id=ibutton type=button><input id=reset type=reset></form>');
+        \\const form = document.getElementById('f');
+        \\form.addEventListener('submit', (e) => {
+        \\  e.preventDefault();
+        \\  window.events.push('submit');
+        \\});
+        \\// Only the focused control's keypress and click are recorded.
+        \\for (const t of ['keypress', 'click']) {
+        \\  form.addEventListener(t, (e) => {
+        \\    if (e.target === document.activeElement) window.events.push(t);
+        \\  }, true);
+        \\}
+        \\window.arm = (id) => {
+        \\  window.events = [];
+        \\  document.getElementById(id).focus();
+        \\};
+    , null);
+
     const cases = [_]struct { id: []const u8, expect: []const u8 }{
         .{ .id = "text", .expect = "keypress submit" },
         .{ .id = "check", .expect = "keypress submit" },
@@ -959,21 +985,8 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
 
     var id: u32 = 1;
     for (cases) |c| {
-        var buf: [1024]u8 = undefined;
-        _ = try ls.local.compileAndRun(try std.fmt.bufPrint(&buf,
-            \\document.body.insertAdjacentHTML('beforeend', '<form id=f>' +
-            \\  '<input id=text><input id=check type=checkbox><input id=submit type=submit>' +
-            \\  '<button id=button>go</button><input id=ibutton type=button><input id=reset type=reset></form>');
-            \\window.events = [];
-            \\document.getElementById('f').addEventListener('submit', (e) => {{
-            \\  e.preventDefault();
-            \\  window.events.push('submit');
-            \\}});
-            \\var el = document.getElementById('{s}');
-            \\el.addEventListener('keypress', () => window.events.push('keypress'));
-            \\el.addEventListener('click', () => window.events.push('click'));
-            \\el.focus();
-        , .{c.id}), null);
+        var buf: [32]u8 = undefined;
+        _ = try ls.local.compileAndRun(try std.fmt.bufPrint(&buf, "arm('{s}')", .{c.id}), null);
 
         try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
         try ctx.expectSentResult(null, .{ .id = id });
@@ -987,7 +1000,5 @@ test "cdp.input: dispatchKeyEvent Enter clicks buttons and submits once" {
 
         const got = try (try ls.local.compileAndRun("window.events.join(' ')", null)).toStringSlice();
         try testing.expectEqualSlices(u8, c.expect, got);
-
-        _ = try ls.local.compileAndRun("document.getElementById('f').remove()", null);
     }
 }

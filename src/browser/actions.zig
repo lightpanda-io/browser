@@ -129,11 +129,10 @@ pub fn hover(node: *DOMNode, frame: *Frame) !void {
 }
 
 pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
-    const target_el: ?*Element = if (node) |n|
+    const target: *Element = if (node) |n|
         (n.is(Element) orelse return error.InvalidNodeType)
     else
-        null;
-    const target = if (target_el) |el| el.asEventTarget() else frame.document.asNode().asEventTarget();
+        Frame.user_input.focusedElement(frame) orelse return error.ActionFailed;
     const canonical = canonicalKey(key);
 
     const keydown_event: *KeyboardEvent = try .initTrusted(comptime .wrap("keydown"), .{
@@ -143,10 +142,7 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    _ = (if (target_el) |el|
-        Frame.user_input.pressKey(frame, el, keydown_event, Frame.user_input.textForKey(keydown_event))
-    else
-        frame._event_manager.dispatchCancelable(target, keydown_event.asEvent())) catch |err| {
+    _ = Frame.user_input.pressKey(frame, target, keydown_event, Frame.user_input.textForKey(keydown_event)) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };
@@ -158,7 +154,7 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    frame._event_manager.dispatch(target, keyup_event.asEvent()) catch |err| {
+    frame._event_manager.dispatch(target.asEventTarget(), keyup_event.asEvent()) catch |err| {
         lp.log.err(.app, "press keyup failed", .{ .err = err });
         return error.ActionFailed;
     };

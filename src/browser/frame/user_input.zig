@@ -624,33 +624,26 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     }, .{ .anchor = target_frame });
 }
 
-/// pressKey on the focused element.
 pub fn triggerKeyDown(frame: *Frame, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
-    const element = focusedElement(frame, keydown) orelse return false;
+    const element = focusedElement(frame) orelse {
+        keydown.asEvent().deinit(frame.page);
+        return false;
+    };
     return pressKey(frame, element, keydown, text);
 }
 
 pub fn triggerKeyUp(frame: *Frame, keyup: *KeyboardEvent) !void {
-    const element = focusedElement(frame, keyup) orelse return;
+    const element = focusedElement(frame) orelse {
+        keyup.asEvent().deinit(frame.page);
+        return;
+    };
     try frame._event_manager.dispatch(element.asEventTarget(), keyup.asEvent());
 }
 
-// `document.activeElement`, so with nothing focused a key still fires on
-// <body> and Tab's focus navigation can run.
-fn focusedElement(frame: *Frame, keyboard_event: *KeyboardEvent) ?*Element {
-    const element = frame.window._document.getActiveElement() orelse {
-        keyboard_event.asEvent().deinit(frame.page);
-        return null;
-    };
-    if (comptime lp.IS_DEBUG) {
-        log.debug(.frame, "frame key", .{
-            .url = frame.url,
-            .node = element,
-            .key = keyboard_event._key,
-            .type = frame._type,
-        });
-    }
-    return element;
+/// Where a key event goes: `document.activeElement`, so with nothing focused
+/// a key still fires on <body> and Tab's focus navigation can run.
+pub fn focusedElement(frame: *Frame) ?*Element {
+    return frame.window._document.getActiveElement();
 }
 
 /// Dispatches a trusted keydown on `target` then, unless cancelled, types
@@ -658,15 +651,23 @@ fn focusedElement(frame: *Frame, keyboard_event: *KeyboardEvent) ?*Element {
 /// char as its own event, as chromedp does). Returns whether the keydown was
 /// cancelled.
 pub fn pressKey(frame: *Frame, target: *Element, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
+    if (comptime lp.IS_DEBUG) {
+        log.debug(.frame, "frame keydown", .{
+            .url = frame.url,
+            .node = target,
+            .key = keydown._key,
+            .type = frame._type,
+        });
+    }
     const event = keydown.asEvent();
+    const t = text orelse return frame._event_manager.dispatchCancelable(target.asEventTarget(), event);
+
     // dispatch drops the event; keypressFor still needs it.
     event.acquireRef();
     defer event.releaseRef(frame.page);
-
     if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), event)) {
         return true;
     }
-    const t = text orelse return false;
     // logged like a default action's failure, not the key event's
     typeChar(frame, target, try keypressFor(frame, keydown), t) catch |err| {
         log.warn(.frame, "frame.keypress", .{ .err = err });
@@ -696,7 +697,7 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
         return;
     }
     const is_enter = text.len == 1 and (text[0] == '\r' or text[0] == '\n');
-    if (is_enter and enterClicks(target)) {
+    if (is_enter and isButton(target)) {
         return dispatchKeyboardClick(frame, target);
     }
 
@@ -718,7 +719,6 @@ pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text:
     }
 }
 
-/// The keypress mirroring `keydown`'s key and modifiers.
 fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
     return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
         .key = keydown.getKey().asString(),
@@ -743,22 +743,17 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     }
 
     if (key == .Enter and event.getIsTrusted()) {
-        // A link follows Enter on the keydown; buttons wait for the keypress,
-        // see typeChar.
-        if (target.is(Element.Html.Anchor)) |anchor| {
-            if (anchor.asElement().getAttributeInterned("href") != null) {
-                return dispatchKeyboardClick(frame, anchor.asElement());
+        if (target.is(Element)) |element| {
+            if (enterFollowsLink(element)) {
+                return dispatchKeyboardClick(frame, element);
             }
         }
     }
 
     if (target.is(Element.Html.Input)) |input| {
-        // Don't handle text input for radio/checkbox
-        const input_type = input._input_type;
-        if (input_type == .radio or input_type == .checkbox) {
+        if (!input.acceptsTextEntry()) {
             return;
         }
-
         return editKey(frame, keyboard_event, input, key);
     }
 
@@ -787,11 +782,8 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
 }
 
 fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !void {
-    if (@TypeOf(ctl) == *Element.Html.Input) {
-        const input_type = ctl._input_type;
-        if (input_type == .radio or input_type == .checkbox) {
-            return;
-        }
+    if (!ctl.acceptsTextEntry()) {
+        return;
     }
     if (try allowEdit(frame, ctl.asElement(), text, text, "insertText")) {
         try ctl.innerInsert(text, frame);
@@ -881,8 +873,15 @@ fn dispatchKeyboardClick(frame: *Frame, element: *Element) !void {
     try frame._event_manager.dispatch(element.asEventTarget(), event.asEvent());
 }
 
-// elements where Enter's keypress dispatches a click
-fn enterClicks(element: *Element) bool {
+// Which elements act on which key, and at which step: a link follows Enter on
+// the keydown, a button clicks on Enter's keypress (typeChar) and on Space's
+// keyup, as do checkboxes and radios for Space.
+fn enterFollowsLink(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    return html_element._type == .anchor and element.getAttributeInterned("href") != null;
+}
+
+fn isButton(element: *Element) bool {
     const html_element = element.is(Element.Html) orelse return false;
     if (html_element._type == .button) {
         return true;
@@ -896,19 +895,12 @@ fn enterClicks(element: *Element) bool {
     return false;
 }
 
-// elements where space on a keyup should dispatch a click-click event
 fn spaceActivates(element: *Element) bool {
-    const html_element = element.is(Element.Html) orelse return false;
-    if (html_element._type == .button) {
+    if (isButton(element)) {
         return true;
     }
-    if (element.is(Element.Html.Input)) |input| {
-        return switch (input._input_type) {
-            .button, .submit, .reset, .image, .checkbox, .radio => true,
-            else => false,
-        };
-    }
-    return false;
+    const input = element.is(Element.Html.Input) orelse return false;
+    return input._input_type == .checkbox or input._input_type == .radio;
 }
 
 // Sequential focus navigation: move `document.activeElement` to the next (Tab)
