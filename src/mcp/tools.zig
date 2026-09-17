@@ -1292,8 +1292,8 @@ test "MCP - Actions: click, fill, scroll, hover, press, selectOption, setChecked
 
     const result = try ls.local.exec(
         \\ JSON.stringify(window.seq) === JSON.stringify([
-        \\   'pointerdown:0:1:mouse:true', 'mousedown:0:1::true',
-        \\   'pointerup:0:0:mouse:true', 'mouseup:0:0::true', 'click:0:0:mouse:true'
+        \\   'pointerdown:0:1:0:mouse:true', 'mousedown:0:1:1::true',
+        \\   'pointerup:0:0:0:mouse:true', 'mouseup:0:0:1::true', 'click:0:0:1:mouse:true'
         \\ ]) &&
         \\ JSON.stringify(window.seqPrevented) === JSON.stringify(['pointerdown', 'pointerup', 'click']) &&
         \\ JSON.stringify(window.disabledEvents) === '[]' &&

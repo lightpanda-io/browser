@@ -67,11 +67,10 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         }
     }
 
-    dispatchPointer(element, "pointerdown", 0, 1, frame);
-    _ = dispatchMouse(element, "mousedown", 0, 1, 1, frame);
-    dispatchPointer(element, "pointerup", 0, 0, frame);
-    _ = dispatchMouse(element, "mouseup", 0, 0, 1, frame);
-    _ = dispatchMouse(element, "click", 0, 0, 1, frame);
+    // A dispatch error must never reject the testdriver command.
+    Frame.user_input.triggerClick(frame, element, frame._page.input_modifiers) catch |err| {
+        log.warn(.app, "webdriver click", .{ .err = err });
+    };
 }
 
 const WebDriverCookie = struct {
@@ -281,18 +280,18 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = true;
-            pressed_mask = buttonsMask(button);
+            pressed_mask = Frame.user_input.buttonsBitmask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, buttonsMask(button), frame);
+            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
             if (is_touch) {
                 dispatchTouch(el, "touchstart", frame);
             } else {
-                const suppressed = dispatchMouse(el, "mousedown", button, buttonsMask(button), click_count, frame);
+                const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
                     Frame.user_input.focusForMouseDown(frame, el) catch |err| {
                         log.warn(.app, "webdriver mousedown focus", .{ .err = err });
@@ -329,19 +328,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         // "pause" carries timing only and is ignored. ("pointerCancel" is not
         // emitted by the testdriver Actions builder.)
     }
-}
-
-// The `buttons` bitmask bit for a WebDriver button number: the flag order does
-// not follow the button numbering (left=1, right=2, middle=4).
-fn buttonsMask(button: i32) u16 {
-    return switch (button) {
-        0 => 1,
-        1 => 4,
-        2 => 2,
-        3 => 8,
-        4 => 16,
-        else => 0,
-    };
 }
 
 // A click whose mousedown and mouseup landed on different elements fires at

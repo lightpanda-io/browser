@@ -22,7 +22,6 @@ const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const MouseEvent = @import("webapi/event/MouseEvent.zig");
-const PointerEvent = @import("webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
@@ -39,41 +38,6 @@ fn dispatchInputAndChangeEvents(el: *Element, frame: *Frame) !void {
     };
 }
 
-fn dispatch(el: *Element, event: *Event, comptime typ: []const u8, frame: *Frame) !bool {
-    return frame._event_manager.dispatchCancelable(el.asEventTarget(), event) catch |err| {
-        lp.log.err(.app, "click " ++ typ ++ " failed", .{ .err = err });
-        return error.ActionFailed;
-    };
-}
-
-fn dispatchPointer(el: *Element, comptime typ: []const u8, buttons: u16, detail: u32, frame: *Frame) !bool {
-    const event: *PointerEvent = try .initTrusted(typ, .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .buttons = buttons,
-        .detail = detail,
-        .pointerId = 1,
-        .pointerType = "mouse",
-        .isPrimary = true,
-        .pressure = if (buttons != 0) 0.5 else 0.0,
-    }, frame);
-    return dispatch(el, event.asEvent(), typ, frame);
-}
-
-fn dispatchMouse(el: *Element, comptime typ: []const u8, buttons: u16, frame: *Frame) !bool {
-    const event: *MouseEvent = try .initTrusted(comptime .wrap(typ), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .buttons = buttons,
-        .detail = 1,
-    }, frame);
-    return dispatch(el, event.asEvent(), typ, frame);
-}
-
-/// The trusted primary-button gesture a real user click produces; widgets key
-/// off pointerdown/mousedown, not click alone.
 pub fn click(node: *DOMNode, frame: *Frame) !void {
     const el = node.is(Element) orelse return error.InvalidNodeType;
 
@@ -83,25 +47,10 @@ pub fn click(node: *DOMNode, frame: *Frame) !void {
 
     Frame.user_input.updateHoverTarget(frame, el, .{ .with_pointer = true });
 
-    // preventDefault() on pointerdown suppresses both compatibility mouse
-    // events (mousedown and mouseup) for the rest of this gesture; click
-    // still fires.
-    const suppress_mouse = try dispatchPointer(el, "pointerdown", 1, 0, frame);
-    if (!suppress_mouse) {
-        const suppress_focus = try dispatchMouse(el, "mousedown", 1, frame);
-        if (!suppress_focus) {
-            Frame.user_input.focusForMouseDown(frame, el) catch |err| {
-                lp.log.warn(.app, "click mousedown focus", .{ .err = err });
-            };
-        }
-    }
-
-    _ = try dispatchPointer(el, "pointerup", 0, 0, frame);
-    if (!suppress_mouse) {
-        _ = try dispatchMouse(el, "mouseup", 0, frame);
-    }
-
-    _ = try dispatchPointer(el, "click", 0, 1, frame);
+    Frame.user_input.triggerClick(frame, el, .{}) catch |err| {
+        lp.log.err(.app, "click failed", .{ .err = err });
+        return error.ActionFailed;
+    };
 }
 
 pub fn hover(node: *DOMNode, frame: *Frame) !void {
