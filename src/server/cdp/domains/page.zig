@@ -570,6 +570,17 @@ pub fn frameNavigate(bc: *CDP.BrowserContext, event: *const Notification.FrameNa
 }
 
 pub fn frameRemove(bc: *CDP.BrowserContext) void {
+    // Chrome names the dying default context before executionContextsCleared.
+    // Must precede resetContextGroup: after it the inspector no longer knows
+    // the context and this is a silent no-op (as is the page's own deferred
+    // destroyContext, so the event is sent once).
+    if (bc.mainFrame()) |frame| {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+        bc.inspector_session.inspector.contextDestroyed(ls.local.handle);
+    }
+
     // Clear all remote object mappings to prevent stale objectIds from being used
     // after the context is destroy
     bc.inspector_session.inspector.resetContextGroup();
@@ -589,6 +600,19 @@ pub fn frameRemove(bc: *CDP.BrowserContext) void {
     bc.reset();
 }
 
+fn announceMainWorld(bc: *CDP.BrowserContext, frame: *Frame, is_default: bool) void {
+    var buf: [128]u8 = undefined;
+    const aux_data = std.fmt.bufPrint(&buf, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{
+        &id.toFrameId(frame._frame_id),
+        &id.toLoaderId(frame._loader_id),
+    }) catch unreachable;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    bc.inspector_session.inspector.contextCreated(&ls.local, "", frame.origin orelse "", aux_data, is_default);
+}
+
 pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
     // Record a handle to the new page so the context can resolve its live
     // page/frame (mainFrame / mainPage) without a session-wide "current" shim.
@@ -602,12 +626,15 @@ pub fn frameCreated(bc: *CDP.BrowserContext, frame: *Frame) !void {
     // resetting either would lose it.
     const in_commit = bc.inCommit();
 
-    if (!in_commit) {
+    // frame_remove just reset the context group: announce the replacement's
+    // main world here so the clear and the announce stay paired, instead of
+    // clearing a second time from frameNavigated.
+    bc.main_world_announced = in_commit;
+    if (in_commit) {
+        announceMainWorld(bc, frame, true);
+    } else {
         _ = bc.cdp.frame_arena.reset(.{ .retain_with_limit = 1024 * 512 });
         bc.main_world_touched = false;
-    }
-
-    if (in_commit == false) {
         // Only retain captured responses until a navigation event. In CDP
         // terms, this is called a "renderer" and the cache-duration can be
         // controlled via Network.configureDurableMessages (which we don't
@@ -733,7 +760,11 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // frames (iframes), clearing all contexts would destroy the main frame's
     // context, causing Puppeteer's frame.evaluate()/frame.content() to hang
     // forever.
-    if (is_root_frame) {
+    // The in-place path (a pristine about:blank keeps its Frame) is the only
+    // one still needing the clear + announce here.
+    const announced = is_root_frame and bc.main_world_announced;
+    if (is_root_frame) bc.main_world_announced = false;
+    if (is_root_frame and !announced) {
         try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
     }
 
@@ -750,21 +781,8 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
         .frame = FrameWriter{ .bc = bc, .frame = frame },
     }, .{ .session_id = session_id });
 
-    {
-        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
+    if (!announced) announceMainWorld(bc, frame, is_root_frame);
 
-        var ls: js.Local.Scope = undefined;
-        frame.js.localScope(&ls);
-        defer ls.deinit();
-
-        bc.inspector_session.inspector.contextCreated(
-            &ls.local,
-            "",
-            frame.origin orelse "",
-            aux_data,
-            is_root_frame,
-        );
-    }
     // A worldName preload script seeds its world into every frame. This is the
     // only way for a world to reach a frame besides the explicit Page.createIsolatedWorld.
     for (bc.scripts_on_new_document.items) |script| {
@@ -2464,6 +2482,49 @@ test "cdp.frame: address-bar Page.navigate sends no Referer" {
         const v = try ls.local.exec("document.body.innerText.includes('referer=NONE')", null);
         try testing.expect(v.toBool());
     }
+}
+
+test "cdp.frame: a committed root navigation announces its main world at commit" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-CG", .url = "hi.html", .target_id = "FID-00000000CG".* });
+    try ctx.processMessage(.{ .id = 40, .method = "Runtime.enable", .sessionId = "SID-X" });
+
+    const frame = bc.mainFrame() orelse unreachable;
+    const old_id = testing.mainWorldContextId(bc, frame);
+    // Drain the initial load so the scan below only sees the navigation.
+    try ctx.expectSentEvent("Page.frameStoppedLoading", .{ .frameId = &id.toFrameId(frame._frame_id) }, .{ .session_id = "SID-X" });
+    const start = ctx.received.items.len;
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom1.html";
+    try ctx.processMessage(.{ .id = 41, .method = "Page.navigate", .sessionId = "SID-X", .params = .{ .url = url } });
+    try testing.waitForPage(bc);
+    try ctx.expectSentEvent("Page.frameNavigated", .{ .frame = .{ .url = url } }, .{ .session_id = "SID-X" });
+
+    var destroyed: ?usize = null;
+    var cleared: ?usize = null;
+    var created: ?usize = null;
+    var navigated: ?usize = null;
+    for (ctx.received.items[start..], start..) |msg, i| {
+        const method = (msg.object.get("method") orelse continue).string;
+        const params = msg.object.get("params");
+        if (std.mem.eql(u8, method, "Runtime.executionContextDestroyed")) {
+            if (params.?.object.get("executionContextId").?.integer == old_id) destroyed = i;
+        } else if (std.mem.eql(u8, method, "Runtime.executionContextsCleared")) {
+            try testing.expectEqual(null, cleared);
+            cleared = i;
+        } else if (std.mem.eql(u8, method, "Runtime.executionContextCreated")) {
+            const context = params.?.object.get("context").?.object;
+            const is_default = context.get("auxData").?.object.get("isDefault").?.bool;
+            if (is_default and context.get("id").?.integer != old_id and created == null) created = i;
+        } else if (std.mem.eql(u8, method, "Page.frameNavigated")) {
+            if (navigated == null) navigated = i;
+        }
+    }
+    try testing.expect(destroyed.? < cleared.?);
+    try testing.expect(cleared.? < created.?);
+    try testing.expect(created.? < navigated.?);
 }
 
 test "cdp.frame: addScriptToEvaluateOnNewDocument runImmediately evaluates in the current document" {

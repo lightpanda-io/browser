@@ -477,6 +477,9 @@ pub const BrowserContext = struct {
     // so that, if it has _not_ and the page is on its initial about:blank, we
     // can use the existing Frame/js.Context as-is.
     main_world_touched: bool = false,
+    // Set when frame_created announced the committed document's main world;
+    // frameNavigated must then not clear or re-announce it.
+    main_world_announced: bool = false,
 
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.

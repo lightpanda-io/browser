@@ -19,6 +19,8 @@
 const std = @import("std");
 
 const CDP = @import("CDP.zig");
+const js = @import("../../browser/js/js.zig");
+const Frame = @import("../../browser/Frame.zig");
 const Inbox = @import("../../Inbox.zig");
 const Driver = @import("../Driver.zig");
 
@@ -302,6 +304,13 @@ pub const TestContext = struct {
         }
     }
 };
+
+pub fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) i32 {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    return bc.inspector_session.inspector.getContextId(&ls.local);
+}
 
 pub fn context() !TestContext {
     var pair: [2]posix.socket_t = undefined;

@@ -1272,8 +1272,8 @@ test "cdp.dom: resolveNode into a child frame's context" {
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-RN", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
     const root = bc.mainFrame() orelse unreachable;
     const child = root.child_frames.items[0];
-    const child_main = try mainWorldContextId(bc, child);
-    try testing.expect(child_main != try mainWorldContextId(bc, root));
+    const child_main = testing.mainWorldContextId(bc, child);
+    try testing.expect(child_main != testing.mainWorldContextId(bc, root));
 
     // Register the child's <html> the way DOM.describeNode(objectId) would.
     const html = child.document.getDocumentElement() orelse unreachable;
@@ -1311,13 +1311,6 @@ test "cdp.dom: resolveNode into a child frame's context" {
         .executionContextId = 9999,
     } });
     try ctx.expectSentError(-31998, "ContextNotFound", .{ .id = 15 });
-}
-
-fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
-    var ls: js.Local.Scope = undefined;
-    frame.js.localScope(&ls);
-    defer ls.deinit();
-    return bc.inspector_session.inspector.getContextId(&ls.local);
 }
 
 // The result.object.objectId of the response to command `msg_id`.
