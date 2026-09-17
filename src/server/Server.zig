@@ -1977,14 +1977,14 @@ test "server: HTTP navigate" {
     var c = try createTestClient();
     defer c.deinit();
     {
-        const res = try sessionCommand(&c, &session_id, "/url", "not json");
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "not json");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid argument\",\"message\":\"invalid body\",\"stacktrace\":\"\"}}"));
     }
 
     const url = "http://127.0.0.1:9582/src/browser/tests/cdp/dom2.html";
     {
-        const res = try sessionCommand(&c, &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}");
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}");
         try testing.expectEqual("HTTP/1.1 200 OK\r\n" ++
             "Content-Length: 14\r\n" ++
             "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
@@ -2002,11 +2002,98 @@ test "server: HTTP navigate" {
     try testing.expect(std.mem.indexOf(u8, msg.data, "\"url\":\"" ++ url ++ "\"") != null);
 }
 
+test "server: HTTP page commands" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // the browsing context is opened by the first command that needs it
+    try testing.expectEqual("{\"value\":\"about:blank\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+
+    const handle = blk: {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":\""));
+        break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+    };
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window/handles", ""));
+        try testing.expectEqual(try std.fmt.allocPrint(testing.arena_allocator, "{{\"value\":[\"{s}\"]}}", .{handle}), body);
+    }
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/bidi/input.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+    try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+    try testing.expectEqual("{\"value\":\"bidi input\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/title", "")));
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/source", ""));
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":\"<!DOCTYPE html>\\n<html><head><title>bidi input</title>"));
+    }
+    {
+        const res = try c.httpRequestAlloc(try std.fmt.allocPrint(testing.arena_allocator, "GET /session/{s}/screenshot HTTP/1.1\r\n\r\n", .{&session_id}));
+        defer testing.allocator.free(res);
+        // base64 of the PNG signature
+        try testing.expect(std.mem.startsWith(u8, responseBody(res), "{\"value\":\"iVBORw0KGgo"));
+    }
+
+    // a click on the button, then a held key. The element origin is
+    // resolved after the pause parks the actions.
+    {
+        const actions = "{\"actions\":[" ++
+            "{\"type\":\"pointer\",\"id\":\"mouse\",\"parameters\":{\"pointerType\":\"mouse\"},\"actions\":[" ++
+            "{\"type\":\"pause\",\"duration\":20}," ++
+            "{\"type\":\"pointerMove\",\"x\":0,\"y\":0,\"origin\":{\"" ++ http_command.element_key ++ "\":\"1\"}}," ++
+            "{\"type\":\"pointerDown\",\"button\":0},{\"type\":\"pointerUp\",\"button\":0}]}," ++
+            "{\"type\":\"key\",\"id\":\"kb\",\"actions\":[{\"type\":\"pause\"},{\"type\":\"pause\"},{\"type\":\"pause\"},{\"type\":\"keyDown\",\"value\":\"a\"}]}]}";
+
+        // an element reference is a sharedId, so take #btn's over BiDi
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"browsingContext.locateNodes","params":{{"context":"{s}","locator":{{"type":"css","value":"#btn"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"sharedId\":\"1\"");
+
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/actions", actions)));
+        try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "DELETE", &session_id, "/actions", "")));
+
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":2,"method":"script.evaluate","params":{{"expression":"window.events.join(' ')","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"value\":\"mousemove@btn mousedown@btn mouseup@btn click@btn keydown:a@btn keyup:a@btn\"");
+    }
+    {
+        const res = try sessionCommand(&c, "POST", &session_id, "/actions", "{\"actions\":[{\"type\":\"key\",\"id\":\"kb\",\"actions\":[{\"type\":\"keyDown\"}]}]}");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid argument\"") != null);
+    }
+
+    // the reload lands on the same document
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/refresh", "{}")));
+    try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
+}
+
+fn responseBody(res: []const u8) []const u8 {
+    return res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
+}
+
+fn expectWebsocketContains(ws: *TestClient, expected: []const u8) !void {
+    const msg = try ws.readWebsocketMessage() orelse return error.NoMessage;
+    defer if (msg.cleanup_fragment) ws.reader.cleanup();
+    if (std.mem.indexOf(u8, msg.data, expected) == null) {
+        std.debug.print("expected {s} in {s}\n", .{ expected, msg.data });
+        return error.UnexpectedMessage;
+    }
+}
+
 test "server: HTTP command errors" {
     {
         var c = try createTestClient();
         defer c.deinit();
-        const res = try sessionCommand(&c, "00000000-0000-4000-8000-000000000000", "/url", "{}");
+        const res = try sessionCommand(&c, "POST", "00000000-0000-4000-8000-000000000000", "/url", "{}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"no such session\",\"stacktrace\":\"\"}}"));
     }
@@ -2018,14 +2105,14 @@ test "server: HTTP command errors" {
         var c = try createTestClient();
         defer c.deinit();
         var request_buf: [128]u8 = undefined;
-        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "GET /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
+        const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 405 Method Not Allowed\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown method\",\"message\":\"unknown method\",\"stacktrace\":\"\"}}"));
     }
     {
         var c = try createTestClient();
         defer c.deinit();
-        const res = try sessionCommand(&c, &session_id, "/nope", "{}");
+        const res = try sessionCommand(&c, "POST", &session_id, "/nope", "{}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
     }
@@ -2033,14 +2120,14 @@ test "server: HTTP command errors" {
     // a slow page keeps the navigate parked on the worker
     var slow = try createTestClient();
     defer slow.deinit();
-    try writeSessionCommand(&slow, &session_id, "/url", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/hi.html?delay_ms=500\"}");
+    try writeSessionCommand(&slow, "POST", &session_id, "/url", "{\"url\":\"http://127.0.0.1:9582/src/browser/tests/hi.html?delay_ms=500\"}");
     lp.io.sleep(.fromMilliseconds(50), .awake) catch {};
 
     // one command at a time
     {
         var c = try createTestClient();
         defer c.deinit();
-        const res = try sessionCommand(&c, &session_id, "/url", "{\"url\":\"about:blank\"}");
+        const res = try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"about:blank\"}");
         try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 500 Internal Server Error\r\n"));
         try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown error\",\"message\":\"a command is already in progress\",\"stacktrace\":\"\"}}"));
     }
@@ -2052,14 +2139,14 @@ test "server: HTTP command errors" {
     try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"invalid session id\",\"message\":\"session ended\",\"stacktrace\":\"\"}}"));
 }
 
-fn sessionCommand(c: *TestClient, session_id: *const [36]u8, command: []const u8, body: []const u8) ![]const u8 {
-    try writeSessionCommand(c, session_id, command, body);
+fn sessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8, command: []const u8, body: []const u8) ![]const u8 {
+    try writeSessionCommand(c, method, session_id, command, body);
     return c.httpRequest("");
 }
 
-fn writeSessionCommand(c: *TestClient, session_id: *const [36]u8, command: []const u8, body: []const u8) !void {
+fn writeSessionCommand(c: *TestClient, method: []const u8, session_id: *const [36]u8, command: []const u8, body: []const u8) !void {
     var head_buf: [128]u8 = undefined;
-    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "POST /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ session_id, command, body.len }));
+    try sys_net.writeAll(c.socket, try std.fmt.bufPrint(&head_buf, "{s} /session/{s}{s} HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{ method, session_id, command, body.len }));
     try sys_net.writeAll(c.socket, body);
 }
 

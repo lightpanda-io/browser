@@ -200,13 +200,36 @@ pub const NavigateOpts = struct {
 };
 
 pub fn navigate(cmd: *BiDi.Command, ctx: *Context, opts: NavigateOpts) !void {
-    const bidi = cmd.bidi;
-    const frame = bidi.user_context.session.currentFrame() orelse {
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("unknown error", "no frame");
     };
     const encoded_url = URL.resolveNavigation(frame.call_arena, opts.url, .{}) catch {
         return cmd.sendError("invalid argument", "invalid url");
     };
+    return startNavigation(cmd, ctx, frame, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } }, opts.wait);
+}
+
+// Reloads the current document, replaying its method and body like CDP's
+// Page.reload.
+pub fn reload(cmd: *BiDi.Command, ctx: *Context, wait: NavigateOpts.Wait) !void {
+    const frame = cmd.bidi.user_context.session.currentFrame() orelse {
+        return cmd.sendError("unknown error", "no frame");
+    };
+
+    // the frame's arena, which these live in, is gone once the reload commits
+    const arena = cmd.arena;
+    const url = try arena.dupeZ(u8, frame.url);
+    var nav_opts: Frame.NavigateOpts = .{ .reason = .address_bar, .kind = .reload };
+    if (frame._navigated_options) |prev| {
+        nav_opts.method = prev.method;
+        nav_opts.body = if (prev.body) |b| try arena.dupe(u8, b) else null;
+        nav_opts.header = if (prev.header) |h| try arena.dupeZ(u8, h) else null;
+    }
+    return startNavigation(cmd, ctx, frame, url, nav_opts, wait);
+}
+
+fn startNavigation(cmd: *BiDi.Command, ctx: *Context, frame: *Frame, url: [:0]const u8, nav_opts: Frame.NavigateOpts, wait: NavigateOpts.Wait) !void {
+    const bidi = cmd.bidi;
 
     // A second navigate supersedes an in-flight one; answer the old command
     // so the client isn't left waiting on it forever.
@@ -215,7 +238,7 @@ pub fn navigate(cmd: *BiDi.Command, ctx: *Context, opts: NavigateOpts) !void {
     // Set before starting: a navigation can reach its wait condition
     // synchronously (about:blank), which would fire the lifecycle callback
     // before we got a chance to record the pending command.
-    switch (opts.wait) {
+    switch (wait) {
         .none => {},
         .interactive => ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .interactive },
         .complete => ctx.pending_navigate = .{ .reply = cmd.takeReply(), .until = .complete },
@@ -225,13 +248,13 @@ pub fn navigate(cmd: *BiDi.Command, ctx: *Context, opts: NavigateOpts) !void {
     // navigated has nothing to preserve, so it navigates in place; a live
     // page goes through the pending-Page replacement machinery.
     const nav_result = if (frame._load_state == .waiting)
-        frame.navigate(encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } })
+        frame.navigate(url, nav_opts)
     else
-        bidi.user_context.session.initiateRootNavigation(frame._frame_id, encoded_url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+        bidi.user_context.session.initiateRootNavigation(frame._frame_id, url, nav_opts);
 
     nav_result catch |err| {
         log.warn(.bidi, "navigate", .{ .err = err });
-        if (opts.wait != .none and ctx.pending_navigate == null) {
+        if (wait != .none and ctx.pending_navigate == null) {
             // the lifecycle already answered it
             return;
         }
@@ -239,8 +262,8 @@ pub fn navigate(cmd: *BiDi.Command, ctx: *Context, opts: NavigateOpts) !void {
         return cmd.sendError("unknown error", "navigation failed");
     };
 
-    if (opts.wait == .none) {
-        return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = encoded_url });
+    if (wait == .none) {
+        return cmd.sendResult(.{ .navigation = &ctx.navigation_id, .url = url });
     }
 }
 

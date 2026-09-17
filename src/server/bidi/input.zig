@@ -25,6 +25,7 @@ const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
 
 const BiDi = @import("BiDi.zig");
 const remote_value = @import("remote_value.zig");
+const http_command = @import("http_command.zig");
 const browsing_context = @import("browsing_context.zig");
 
 const log = lp.log;
@@ -52,13 +53,17 @@ fn performActions(cmd: *BiDi.Command) !void {
     if ((try browsing_context.requireContext(cmd, p.context)) == null) {
         return;
     }
+    return perform(cmd, p.actions);
+}
 
+// The core of performActions, shared with the HTTP session's Perform Actions.
+pub fn perform(cmd: *BiDi.Command, actions: []const std.json.Value) !void {
     const bidi = cmd.bidi;
     const arena = try bidi.app.arena_pool.acquire(.small, "bidi input.Pending");
     // run takes onwership of arena, so errdefer can lead to a double-free.
     // explicit release on error instead, then transfer to run.
 
-    const ticks = parseTicks(bidi, arena.allocator(), p.actions) catch |err| {
+    const ticks = parseTicks(bidi, arena.allocator(), actions) catch |err| {
         arena.release();
         if (err == error.OutOfMemory) {
             return err;
@@ -89,7 +94,11 @@ fn releaseActions(cmd: *BiDi.Command) !void {
     if ((try browsing_context.requireContext(cmd, p.context)) == null) {
         return;
     }
+    return release(cmd);
+}
 
+// The core of releaseActions, shared with the HTTP session's Release Actions.
+pub fn release(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     const frame = bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("no such frame", "no frame");
@@ -113,7 +122,7 @@ fn releaseActions(cmd: *BiDi.Command) !void {
         }
     }
 
-    return cmd.sendResult(struct {}{});
+    return cmd.sendDone();
 }
 
 fn dispatchFailed(cmd: *BiDi.Command, err: DispatchError) !void {
@@ -297,7 +306,7 @@ const Pending = struct {
             }
         }
 
-        try bidi.replyResult(self.reply, struct {}{});
+        try bidi.replyDone(self.reply);
         return false;
     }
 
@@ -377,7 +386,7 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
 
         const parsed = try arena.alloc(Action, sa.actions.len);
         for (sa.actions, parsed) |raw, *action| {
-            action.* = try parseAction(sa.type, raw);
+            action.* = try parseAction(arena, sa.type, raw);
         }
         columns.appendAssumeCapacity(.{ .source = source, .actions = parsed });
 
@@ -398,7 +407,8 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
     return ticks;
 }
 
-fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
+// `arena` outlives the command: an action can run after its json is gone.
+fn parseAction(arena: Allocator, kind: Source.Kind, raw: std.json.Value) ParseError!Action {
     const obj = switch (raw) {
         .object => |o| o,
         else => return error.InvalidActions,
@@ -437,7 +447,7 @@ fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
             .x = try numberField(obj, "x"),
             .y = try numberField(obj, "y"),
             .duration = try uintField(obj, "duration", 0),
-            .origin = try originField(obj, .pointer),
+            .origin = try originField(arena, obj, .pointer),
         } },
         .scroll => .{ .scroll = .{
             .x = try numberField(obj, "x"),
@@ -445,7 +455,7 @@ fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
             .delta_x = try numberField(obj, "deltaX"),
             .delta_y = try numberField(obj, "deltaY"),
             .duration = try uintField(obj, "duration", 0),
-            .origin = try originField(obj, .wheel),
+            .origin = try originField(arena, obj, .wheel),
         } },
     };
 }
@@ -492,7 +502,7 @@ fn numberField(obj: std.json.ObjectMap, name: []const u8) ParseError!f64 {
     };
 }
 
-fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
+fn originField(arena: Allocator, obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
     const value = obj.get("origin") orelse return .viewport;
     switch (value) {
         .null => return .viewport,
@@ -506,6 +516,13 @@ fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
             return error.InvalidOrigin;
         },
         .object => |o| {
+            // an HTTP session's element reference
+            if (o.get(http_command.element_key)) |ref| {
+                return switch (ref) {
+                    .string => |s| .{ .element = try arena.dupe(u8, s) },
+                    else => error.InvalidOrigin,
+                };
+            }
             const typ = o.get("type") orelse return error.InvalidOrigin;
             if (typ != .string or std.mem.eql(u8, typ.string, "element") == false) {
                 return error.InvalidOrigin;
@@ -515,7 +532,7 @@ fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
                 else => return error.InvalidOrigin,
             };
             return switch (element.get("sharedId") orelse return error.InvalidOrigin) {
-                .string => |s| .{ .element = s },
+                .string => |s| .{ .element = try arena.dupe(u8, s) },
                 else => error.InvalidOrigin,
             };
         },
