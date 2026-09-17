@@ -31,7 +31,7 @@ const string = @import("../string.zig");
 const auth = @import("auth/auth.zig");
 const Candidate = zenai.provider.Candidate;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, or ORCAROUTER_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
