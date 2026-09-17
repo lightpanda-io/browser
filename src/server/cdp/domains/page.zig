@@ -785,6 +785,9 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
             if (!is_root_frame) {
                 continue;
             }
+            js_context.setOrigin(frame.origin) catch |err| {
+                log.warn(.cdp, "isolated world origin", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
+            };
             registerIsolatedWorldContext(arena, bc, isolated_world, js_context, frame, loader_id) catch |err| {
                 log.warn(.cdp, "isolated world context", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
             };
