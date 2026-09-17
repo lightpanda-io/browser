@@ -556,7 +556,7 @@ pub fn base(self: *const Frame) [:0]const u8 {
     return self.base_url orelse self.url;
 }
 
-fn referrerSource(self: *const Frame) [:0]const u8 {
+pub fn referrerSource(self: *const Frame) [:0]const u8 {
     var frame = self;
     while (std.mem.startsWith(u8, frame.url, "about:")) {
         // about:blank and about:srcdoc documents aren't valid referrer sources,
@@ -594,7 +594,9 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 
 // Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer) !void {
+pub fn headersForRequest(self: *Frame, transfer: *HttpClient.Transfer, opts: JS.Execution.HeadersForRequestOptions) !void {
+    if (!opts.referer) return;
+
     const arena = transfer.arena.allocator();
     if (try referrer.compute(arena, self.referrer_policy, self.referrerSource(), transfer.req.url)) |ref| {
         try transfer.setHeader("Referer", ref, .{});
@@ -1075,7 +1077,7 @@ pub fn makeRequest(self: *Frame, req: HttpClient.Request) !void {
     const transfer = try self._session.browser.http_client.newRequest(req, &self._http_owner);
     {
         errdefer transfer.deinit();
-        try self.headersForRequest(transfer);
+        try self.headersForRequest(transfer, .{});
     }
     transfer.submit() catch {};
 }
@@ -2434,7 +2436,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     {
         errdefer transfer.deinit();
         try transfer.setHeader("Accept", "text/css,*/*;q=0.1", .{});
-        try self.headersForRequest(transfer);
+        try self.headersForRequest(transfer, .{});
     }
 
     // Set the script-manager `is_evaluating` flag for the same reason

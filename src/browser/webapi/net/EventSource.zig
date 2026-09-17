@@ -201,7 +201,7 @@ fn connect(self: *EventSource) !void {
             // document's origin ("null" for opaque origins, like Chrome).
             try transfer.setHeader("Origin", exec.origin() orelse "null", .{});
         }
-        try exec.headersForRequest(transfer);
+        try exec.headersForRequest(transfer, .{});
     }
 
     self._transfer = transfer;

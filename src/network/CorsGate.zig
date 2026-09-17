@@ -486,6 +486,8 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     const owned_key = try arena.dupe(u8, key);
     const owned_origin = try arena.dupe(u8, origin);
 
+    const referer: ?[]const u8 = transfer.findRequestHeader("referer");
+
     const owned_header_names = try arena.alloc([]const u8, header_names.items.len);
     for (header_names.items, 0..) |name, i| {
         owned_header_names[i] = try arena.dupe(u8, name);
@@ -530,6 +532,10 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         transfer.req.origin orelse "null",
         .{},
     );
+
+    if (referer) |r| {
+        try fetch_transfer.setHeader("Referer", r, .{});
+    }
 
     // Access-Control-Allow-Methods
     try fetch_transfer.setHeader(

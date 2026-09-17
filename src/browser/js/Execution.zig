@@ -34,6 +34,7 @@ const Page = @import("../Page.zig");
 const Session = @import("../Session.zig");
 const Factory = @import("../Factory.zig");
 const HttpClient = @import("../../network/HttpClient.zig");
+const referrer = @import("../referrer.zig");
 const EventManagerBase = @import("../EventManagerBase.zig");
 
 const Console = @import("../webapi/Console.zig");
@@ -88,8 +89,22 @@ pub fn base(self: *const Execution) [:0]const u8 {
     return self.js.global.base();
 }
 
-pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer) !void {
-    return self.js.global.headersForRequest(transfer);
+pub const HeadersForRequestOptions = struct {
+    // Callers that compute their own Referer (e.g. fetch()'s referrer/referrerPolicy
+    // options) set this to false so we don't set a header here just to override it.
+    referer: bool = true,
+};
+
+pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer, opts: HeadersForRequestOptions) !void {
+    return self.js.global.headersForRequest(transfer, opts);
+}
+
+pub fn referrerSource(self: *const Execution) [:0]const u8 {
+    return self.js.global.referrerSource();
+}
+
+pub fn referrerPolicy(self: *const Execution) referrer.Policy {
+    return self.js.global.referrerPolicy();
 }
 
 pub fn isSameOrigin(self: *const Execution, url: [:0]const u8) bool {
