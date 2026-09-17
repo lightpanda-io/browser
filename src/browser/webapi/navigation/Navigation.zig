@@ -220,7 +220,7 @@ fn commitSameDocumentNavigation(
     frame.url = new_url;
     const location = try Location.init(frame.url, frame);
     location.acquireRef();
-    frame.window._location.releaseRef(frame._page);
+    frame.window._location.releaseRef(frame.page);
     frame.window._location = location;
     committed.resolve(source, {});
 
@@ -352,7 +352,7 @@ fn fireNavigateSuccess(self: *Navigation, frame: *Frame) void {
         const event = Event.initTrusted(
             .wrap("navigatesuccess"),
             null,
-            frame._page,
+            frame.page,
         ) catch |err| {
             log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
             return;
@@ -377,7 +377,7 @@ fn fireNavigateError(self: *Navigation, reason: js.Value, frame: *Frame) void {
                 .colno = 0,
                 .@"error" = reason.persist() catch null,
             },
-            frame._page,
+            frame.page,
         ) catch |err| {
             log.warn(.event, "Navigation.fireNavigateError", .{ .err = err });
             return;
@@ -645,7 +645,7 @@ pub fn navigateSameDocumentWithLocal(
         null,
         frame,
     );
-    defer navigate_event._proto.releaseRef(frame._page);
+    defer navigate_event._proto.releaseRef(frame.page);
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
@@ -772,7 +772,7 @@ pub fn navigateInner(
         null,
         frame,
     );
-    defer navigate_event._proto.releaseRef(frame._page);
+    defer navigate_event._proto.releaseRef(frame.page);
 
     if (navigate_event.asEvent().getDefaultPrevented()) {
         _ = try committed.persist();
