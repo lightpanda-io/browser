@@ -68,7 +68,7 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
     }
 
     // A dispatch error must never reject the testdriver command.
-    Frame.user_input.triggerClick(frame, element, frame._page.input_modifiers) catch |err| {
+    Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
         log.warn(.app, "webdriver click", .{ .err = err });
     };
 }
