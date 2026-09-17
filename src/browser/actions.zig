@@ -143,7 +143,10 @@ pub fn press(node: ?*DOMNode, key: []const u8, frame: *Frame) !void {
         .key = canonical,
     }, frame);
 
-    const prevented = frame._event_manager.dispatchCancelable(target, keydown_event.asEvent()) catch |err| {
+    const prevented = (if (target_el) |el|
+        Frame.user_input.pressKey(frame, el, keydown_event, Frame.user_input.textForKey(keydown_event))
+    else
+        frame._event_manager.dispatchCancelable(target, keydown_event.asEvent())) catch |err| {
         lp.log.err(.app, "press keydown failed", .{ .err = err });
         return error.ActionFailed;
     };

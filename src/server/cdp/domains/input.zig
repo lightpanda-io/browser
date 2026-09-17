@@ -43,7 +43,7 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
         key: []const u8 = "",
         code: ?[]const u8 = null,
         modifiers: u4 = 0,
-        text: ?[]const u8 = null,
+        text: []const u8 = "",
         // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
@@ -56,35 +56,41 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    // rawKeyDown is a Chrome-internal event type not used for JS dispatch
-    if (params.type == .rawKeyDown) return;
-
     const bc = cmd.browser_context orelse return;
     const frame = bc.mainFrame() orelse return;
 
-    const key_str = if (params.key.len > 0) params.key else params.text orelse "";
+    // Chrome types text only for an event carrying it: a keyDown with `text`
+    // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
+    const text: ?[]const u8 = if (params.text.len == 0) null else params.text;
     const KeyboardEvent = @import("../../../browser/webapi/event/KeyboardEvent.zig");
-    const keyboard_event = try KeyboardEvent.initTrusted(switch (params.type) {
-        .keyDown => comptime .wrap("keydown"),
-        .keyUp => comptime .wrap("keyup"),
-        .char => comptime .wrap("keypress"),
-        .rawKeyDown => unreachable,
-    }, .{
-        .key = key_str,
+    const opts: KeyboardEvent.Options = .{
+        .key = if (params.key.len > 0) params.key else params.text,
         .code = params.code,
         .altKey = params.modifiers & 1 == 1,
         .ctrlKey = params.modifiers & 2 == 2,
         .metaKey = params.modifiers & 4 == 4,
         .shiftKey = params.modifiers & 8 == 8,
-    }, frame);
-    try Frame.user_input.triggerKeyboard(frame, keyboard_event);
+    };
 
-    if (params.type == .char and !keyboard_event.asEvent().getDefaultPrevented()) {
-        if (params.text) |text| {
-            if (text.len > 0) {
-                try Frame.user_input.insertText(frame, text);
+    switch (params.type) {
+        // rawKeyDown is a Chrome-internal event type not used for JS dispatch
+        .rawKeyDown => {},
+        .keyDown => {
+            const event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), opts, frame);
+            const prevented = try Frame.user_input.triggerKeyDown(frame, event, text);
+            bc.suppress_next_char = prevented and text == null;
+        },
+        .keyUp => try Frame.user_input.triggerKeyUp(frame, try KeyboardEvent.initTrusted(comptime .wrap("keyup"), opts, frame)),
+        .char => {
+            const t = text orelse return;
+            if (bc.suppress_next_char) {
+                bc.suppress_next_char = false;
+                return;
             }
-        }
+            const target = frame.window._document.getActiveElement() orelse return;
+            const event = try KeyboardEvent.initTrusted(comptime .wrap("keypress"), opts, frame);
+            try Frame.user_input.typeChar(frame, target, event, t);
+        },
     }
 }
 
@@ -791,18 +797,13 @@ test "cdp.input: dispatchKeyEvent caret movement keys move the text entry cursor
     }
 }
 
-test "cdp.input: dispatchKeyEvent char text insertion" {
+// chromedp's SendKeys shape: a text-less keyDown, the char with the text, keyUp.
+test "cdp.input: dispatchKeyEvent text-less keyDown then char types once" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{
-        .reason = .address_bar,
-        .kind = .{ .push = null },
-    });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -813,56 +814,96 @@ test "cdp.input: dispatchKeyEvent char text insertion" {
         \\inp.value = '';
         \\inp.focus();
         \\window.events = [];
-        \\inp.addEventListener('keypress', (e) => window.events.push(e.key));
-        \\inp.addEventListener('input', (e) => window.events.push(inp.value));
+        \\for (const t of ['keydown', 'keypress', 'input', 'keyup']) {
+        \\  inp.addEventListener(t, (e) => window.events.push(t + ':' + (e.key ?? inp.value)));
+        \\}
     , null);
 
-    // Text is inserted and dispatches keypress and input.
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "Input.dispatchKeyEvent",
-        .params = .{ .type = "char", .key = "h", .text = "h" },
-    });
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "h", .code = "KeyH" } });
     try ctx.expectSentResult(null, .{ .id = 1 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === '' && window.events.join(',') === 'keydown:h'", null)).isTrue());
+
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "h", .text = "h" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "h", .code = "KeyH" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
     try testing.expect((try ls.local.compileAndRun(
-        \\inp.value === 'h' && window.events.join(',') === 'h,h'
+        \\inp.value === 'h' && window.events.join(',') === 'keydown:h,keypress:h,input:h,keyup:h'
     , null)).isTrue());
 
-    // A char event without a text field (e.g. Enter) must not insert its key name.
-    try ctx.processMessage(.{
-        .id = 2,
-        .method = "Input.dispatchKeyEvent",
-        .params = .{ .type = "char", .key = "Enter" },
-    });
-    try ctx.expectSentResult(null, .{ .id = 2 });
-    try testing.expect((try ls.local.compileAndRun("inp.value === 'h'", null)).isTrue());
+    // A char without text has nothing to type.
+    try ctx.processMessage(.{ .id = 4, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'h' && window.events.length === 4", null)).isTrue());
 
-    // With preventDefault on keypress, no character is inserted.
+    // A keyDown with text but no key (Puppeteer's shape for some keys) types it.
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .text = "z" } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'hz'", null)).isTrue());
+
+    // Enter's char is "\r": a line break in a <textarea>, never a literal "\r".
     _ = try ls.local.compileAndRun(
-        \\inp.addEventListener('keypress', (e) => { if (e.key === 'x') e.preventDefault(); });
+        \\const ta = document.createElement('textarea');
+        \\document.body.appendChild(ta);
+        \\ta.value = 'one';
+        \\ta.focus();
     , null);
-
-    try ctx.processMessage(.{
-        .id = 3,
-        .method = "Input.dispatchKeyEvent",
-        .params = .{ .type = "char", .key = "x", .text = "x" },
-    });
-    try ctx.expectSentResult(null, .{ .id = 3 });
-    try testing.expect((try ls.local.compileAndRun("inp.value === 'h'", null)).isTrue());
+    try ctx.processMessage(.{ .id = 6, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "Enter", .code = "Enter" } });
+    try ctx.expectSentResult(null, .{ .id = 6 });
+    try ctx.processMessage(.{ .id = 7, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "Enter", .text = "\r" } });
+    try ctx.expectSentResult(null, .{ .id = 7 });
+    try ctx.processMessage(.{ .id = 8, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyUp", .key = "Enter", .code = "Enter" } });
+    try ctx.expectSentResult(null, .{ .id = 8 });
+    try testing.expect((try ls.local.compileAndRun("ta.value === 'one\\n'", null)).isTrue());
 }
 
-test "cdp.input: dispatchKeyEvent keyDown text-only fallback" {
+test "cdp.input: dispatchKeyEvent char honors keypress and beforeinput vetoes" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
-    const bc = try ctx.loadBrowserContext(.{});
-    const page = try bc.session.createPage();
-    const frame = page.frame().?;
-    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{
-        .reason = .address_bar,
-        .kind = .{ .push = null },
-    });
-    try testing.waitForPage(bc);
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    // keypress fires before beforeinput, so it sees the digits the latter vetoes.
+    _ = try ls.local.compileAndRun(
+        \\const inp = document.getElementById('inp');
+        \\inp.value = '';
+        \\inp.focus();
+        \\window.keypresses = [];
+        \\inp.addEventListener('keypress', (e) => {
+        \\  window.keypresses.push(e.key);
+        \\  if (e.key === 'x') e.preventDefault();
+        \\});
+        \\inp.addEventListener('beforeinput', (e) => {
+        \\  if (/[0-9]/.test(e.data)) e.preventDefault();
+        \\});
+    , null);
+
+    var id: u32 = 1;
+    for ("a1x2b") |c| {
+        const key: []const u8 = &.{c};
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = key } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+        try ctx.processMessage(.{ .id = id, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = key, .text = key } });
+        try ctx.expectSentResult(null, .{ .id = id });
+        id += 1;
+    }
+    try testing.expect((try ls.local.compileAndRun(
+        \\inp.value === 'ab' && window.keypresses.join('') === 'a1x2b'
+    , null)).isTrue());
+}
+
+test "cdp.input: dispatchKeyEvent cancelled keyDown suppresses its char" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .url = "mcp_actions.html" });
+    const frame = bc.mainFrame().?;
 
     var ls: lp.js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -872,14 +913,24 @@ test "cdp.input: dispatchKeyEvent keyDown text-only fallback" {
         \\const inp = document.getElementById('inp');
         \\inp.value = '';
         \\inp.focus();
+        \\window.keypresses = [];
+        \\inp.addEventListener('keydown', (e) => { if (e.key === 'x') e.preventDefault(); });
+        \\inp.addEventListener('keypress', (e) => window.keypresses.push(e.key));
     , null);
 
-    // When keyDown omits `key`, `text` is used as the key and inserted.
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "Input.dispatchKeyEvent",
-        .params = .{ .type = "keyDown", .text = "z" },
-    });
+    // The char in the same message (keyDown with text) and in the next one
+    // (chromedp) are both dropped.
+    try ctx.processMessage(.{ .id = 1, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x", .text = "x" } });
     try ctx.expectSentResult(null, .{ .id = 1 });
-    try testing.expect((try ls.local.compileAndRun("inp.value === 'z'", null)).isTrue());
+    try ctx.processMessage(.{ .id = 2, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "x" } });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+    try ctx.processMessage(.{ .id = 3, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "x", .text = "x" } });
+    try ctx.expectSentResult(null, .{ .id = 3 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === '' && window.keypresses.length === 0", null)).isTrue());
+
+    try ctx.processMessage(.{ .id = 4, .method = "Input.dispatchKeyEvent", .params = .{ .type = "keyDown", .key = "y" } });
+    try ctx.expectSentResult(null, .{ .id = 4 });
+    try ctx.processMessage(.{ .id = 5, .method = "Input.dispatchKeyEvent", .params = .{ .type = "char", .key = "y", .text = "y" } });
+    try ctx.expectSentResult(null, .{ .id = 5 });
+    try testing.expect((try ls.local.compileAndRun("inp.value === 'y' && window.keypresses.join('') === 'y'", null)).isTrue());
 }

@@ -624,26 +624,106 @@ fn followLink(frame: *Frame, target: *Node, element: *Element, href: []const u8,
     }, .{ .anchor = target_frame });
 }
 
-pub fn triggerKeyboard(frame: *Frame, keyboard_event: *KeyboardEvent) !void {
-    const event = keyboard_event.asEvent();
-    // Dispatch to the effective active element. When nothing is explicitly
-    // focused this resolves to <body> (matching `document.activeElement`), so
-    // the keydown still fires and its default action — e.g. sequential focus
-    // navigation on Tab — can run.
-    const element = frame.window._document.getActiveElement() orelse {
-        event.deinit(frame.page);
-        return;
-    };
+/// pressKey on the focused element.
+pub fn triggerKeyDown(frame: *Frame, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
+    const element = focusedElement(frame, keydown) orelse return false;
+    return pressKey(frame, element, keydown, text);
+}
 
+pub fn triggerKeyUp(frame: *Frame, keyup: *KeyboardEvent) !void {
+    const element = focusedElement(frame, keyup) orelse return;
+    try frame._event_manager.dispatch(element.asEventTarget(), keyup.asEvent());
+}
+
+// `document.activeElement`, so with nothing focused a key still fires on
+// <body> and Tab's focus navigation can run.
+fn focusedElement(frame: *Frame, keyboard_event: *KeyboardEvent) ?*Element {
+    const element = frame.window._document.getActiveElement() orelse {
+        keyboard_event.asEvent().deinit(frame.page);
+        return null;
+    };
     if (comptime lp.IS_DEBUG) {
-        log.debug(.frame, "frame keydown", .{
+        log.debug(.frame, "frame key", .{
             .url = frame.url,
             .node = element,
             .key = keyboard_event._key,
             .type = frame._type,
         });
     }
-    try frame._event_manager.dispatch(element.asEventTarget(), event);
+    return element;
+}
+
+/// Dispatches a trusted keydown on `target` then, unless cancelled, types
+/// `text` (Chrome's WebKeyboardEvent.text; null when the client sends the
+/// char as its own event, as chromedp does). Returns whether the keydown was
+/// cancelled.
+pub fn pressKey(frame: *Frame, target: *Element, keydown: *KeyboardEvent, text: ?[]const u8) !bool {
+    const event = keydown.asEvent();
+    // dispatch drops the event; keypressFor still needs it.
+    event.acquireRef();
+    defer event.releaseRef(frame.page);
+
+    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), event)) {
+        return true;
+    }
+    const t = text orelse return false;
+    // logged like a default action's failure, not the key event's
+    typeChar(frame, target, try keypressFor(frame, keydown), t) catch |err| {
+        log.warn(.frame, "frame.keypress", .{ .err = err });
+    };
+    return false;
+}
+
+/// The text a key press produces, following Chrome's WebKeyboardEvent.text: the
+/// key itself when printable, "\r" for Enter, nothing when ctrl/meta turn the
+/// press into a shortcut.
+pub fn textForKey(keyboard_event: *const KeyboardEvent) ?[]const u8 {
+    if (keyboard_event.getCtrlKey() or keyboard_event.getMetaKey()) {
+        return null;
+    }
+    const key = keyboard_event.getKey();
+    if (key == .Enter) {
+        return "\r";
+    }
+    return if (key.isPrintable()) key.asString() else null;
+}
+
+/// The char half of a key press (Chrome's WebInputEvent::kChar): fires
+/// `keypress` on `target` and, unless a listener cancels it, performs the
+/// text edit it stands for.
+pub fn typeChar(frame: *Frame, target: *Element, keypress: *KeyboardEvent, text: []const u8) !void {
+    if (try frame._event_manager.dispatchCancelable(target.asEventTarget(), keypress.asEvent())) {
+        return;
+    }
+    const is_enter = text.len == 1 and (text[0] == '\r' or text[0] == '\n');
+
+    if (target.is(Element.Html.Input)) |input| {
+        if (is_enter) {
+            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
+        }
+        return insertInto(frame, input, text);
+    }
+
+    if (target.is(Element.Html.TextArea)) |textarea| {
+        if (is_enter) {
+            if (try allowEdit(frame, textarea.asElement(), null, "\n", "insertLineBreak")) {
+                try textarea.innerInsert("\n", frame);
+            }
+            return;
+        }
+        return insertInto(frame, textarea, text);
+    }
+}
+
+/// The keypress mirroring `keydown`'s key and modifiers.
+fn keypressFor(frame: *Frame, keydown: *const KeyboardEvent) !*KeyboardEvent {
+    return KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
+        .key = keydown.getKey().asString(),
+        .ctrlKey = keydown.getCtrlKey(),
+        .shiftKey = keydown.getShiftKey(),
+        .altKey = keydown.getAltKey(),
+        .metaKey = keydown.getMetaKey(),
+    }, frame);
 }
 
 pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
@@ -659,30 +739,16 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
         return moveFocus(frame, keyboard_event.getShiftKey() == false);
     }
 
-    if (event.getIsTrusted()) {
-        if ((key.isPrintable() or key == .Enter) and keyboard_event.getCtrlKey() == false and keyboard_event.getMetaKey() == false) {
-            // Fire a keypress for a printable (or Enter) keydown when ctrl/meta
-            // aren't pressed
-            if (try dispatchKeypress(frame, target, keyboard_event)) {
-                return;
-            }
-        }
-
-        if (key == .Enter) {
-            if (target.is(Element)) |element| {
-                if (enterActivates(element)) {
-                    // Enter generates a button-like "click" for  some elements
-                    return dispatchKeyboardClick(frame, element);
-                }
+    if (key == .Enter and event.getIsTrusted()) {
+        if (target.is(Element)) |element| {
+            if (enterActivates(element)) {
+                // Enter generates a button-like "click" for  some elements
+                return dispatchKeyboardClick(frame, element);
             }
         }
     }
 
     if (target.is(Element.Html.Input)) |input| {
-        if (key == .Enter) {
-            return frame.submitForm(input.asElement(), input.getForm(frame), .{});
-        }
-
         // Don't handle text input for radio/checkbox
         const input_type = input._input_type;
         if (input_type == .radio or input_type == .checkbox) {
@@ -693,21 +759,13 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
-        if (key == .Enter) {
-            if (try allowEdit(frame, event, textarea.asElement(), null, "\n", "insertLineBreak")) {
-                try textarea.innerInsert("\n", frame);
-            }
-            return;
-        }
-
         return editKey(frame, keyboard_event, textarea, key);
     }
 }
 
-// edit keys are handled by Input and TextArea the same
+// edit keys other than text insertion (typeChar's) are handled by Input and
+// TextArea the same
 fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: KeyboardEvent.Key) !void {
-    const event = keyboard_event.asEvent();
-
     if (caretMove(key, ctl)) |move| {
         // Word/paragraph motions (ctrl/alt/meta variants) aren't modeled.
         if (keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey()) {
@@ -718,16 +776,21 @@ fn editKey(frame: *Frame, keyboard_event: *KeyboardEvent, ctl: anytype, key: Key
 
     if (key == .Backspace or key == .Delete) {
         const forward = key == .Delete;
-        if (try allowEdit(frame, event, ctl.asElement(), null, null, deleteInputType(forward))) {
+        if (!keyboard_event.asEvent().getIsTrusted() or try allowEdit(frame, ctl.asElement(), null, null, deleteInputType(forward))) {
             try ctl.innerDelete(forward, frame);
         }
-        return;
     }
+}
 
-    if (key.isPrintable()) {
-        if (try allowEdit(frame, event, ctl.asElement(), key.asString(), key.asString(), "insertText")) {
-            try ctl.innerInsert(key.asString(), frame);
+fn insertInto(frame: *Frame, ctl: anytype, text: []const u8) !void {
+    if (@TypeOf(ctl) == *Element.Html.Input) {
+        const input_type = ctl._input_type;
+        if (input_type == .radio or input_type == .checkbox) {
+            return;
         }
+    }
+    if (try allowEdit(frame, ctl.asElement(), text, text, "insertText")) {
+        try ctl.innerInsert(text, frame);
     }
 }
 
@@ -750,15 +813,9 @@ fn deleteInputType(forward: bool) []const u8 {
     return if (forward) "deleteContentForward" else "deleteContentBackward";
 }
 
-// pre-edit events for a key's default action, can cancel the edit (i.e. by
-// returning false)
-fn allowEdit(frame: *Frame, keydown: *Event, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
-    if (keydown.getIsTrusted() == false) {
-        // only trusted events fire these events, so for a untrusted event, the
-        // edit isn't cancelled.
-        return true;
-    }
-
+// pre-edit events for a trusted key's default action, can cancel the edit
+// (i.e. by returning false)
+fn allowEdit(frame: *Frame, target: *Element, before_data: ?[]const u8, text_data: ?[]const u8, input_type: []const u8) !bool {
     {
         const before = (try InputEvent.initTrusted(comptime .wrap("beforeinput"), .{
             .bubbles = true,
@@ -806,23 +863,6 @@ pub fn handleKeyup(frame: *Frame, target: *Node, event: *Event) !void {
         // triggers a click-like event
         return dispatchKeyboardClick(frame, element);
     }
-}
-
-// Dispatch keypress mirroring `keydown`'s key and modifiers; returns true when
-// a listener canceled it.
-fn dispatchKeypress(frame: *Frame, target: *Node, keydown: *KeyboardEvent) !bool {
-    const event = (try KeyboardEvent.initTrusted(comptime .wrap("keypress"), .{
-        .bubbles = true,
-        .cancelable = true,
-        .composed = true,
-        .key = keydown.getKey().asString(),
-        .ctrlKey = keydown.getCtrlKey(),
-        .shiftKey = keydown.getShiftKey(),
-        .altKey = keydown.getAltKey(),
-        .metaKey = keydown.getMetaKey(),
-    }, frame)).asEvent();
-
-    return frame._event_manager.dispatchCancelable(target.asEventTarget(), event);
 }
 
 // keydown+enter or keyup+space trigger this syntthetic pointer event (under
@@ -951,21 +991,16 @@ fn focusOrderBefore(a: *Element, a_tab_index: i32, b: *Element, b_tab_index: i32
     return a_tab_index < b_tab_index;
 }
 
-// insertText is a shortcut to insert text into the active element.
+/// Text input without a key press (IME, paste): beforeinput but no keypress.
 pub fn insertText(frame: *Frame, v: []const u8) !void {
     const html_element = frame.document._active_element orelse return;
 
     if (html_element.is(Element.Html.Input)) |input| {
-        const input_type = input._input_type;
-        if (input_type == .radio or input_type == .checkbox) {
-            return;
-        }
-
-        return input.innerInsert(v, frame);
+        return insertInto(frame, input, v);
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
-        return textarea.innerInsert(v, frame);
+        return insertInto(frame, textarea, v);
     }
 }
 
