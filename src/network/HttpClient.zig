@@ -172,9 +172,10 @@ test_inbox: if (lp.IS_TEST) ?*Inbox else void = if (lp.IS_TEST) null else {},
 
 max_response_size: usize,
 
-// While a frame has a blocking (synchronous) request in flight, dispatch
-// holds back every other transfer for that frame so their callbacks can't
-// run JS while the parser is on the stack. frame_id -> blocking transfer id.
+// While a frame has a blocking (synchronous) request in flight, or waits for
+// a module import, dispatch holds back every other transfer for that frame so
+// their callbacks can't run JS while the parser is on the stack.
+// frame_id -> blocking transfer id.
 blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
 // Count of transfers parked for CDP interception (request or auth phase).
@@ -1424,9 +1425,26 @@ fn processTransfer(self: *Client, transfer: *Transfer) !void {
     transfer.state = .queued;
 }
 
+// Until released, a sync tick delivers only `transfer_id`
+pub fn blockOn(self: *Client, frame_id: u32, transfer_id: u32) !void {
+    try self.blocking_requests.putNoClobber(self.allocator, frame_id, transfer_id);
+
+    // maybe the transfer was already gated
+    var node = self.gated_queue.first;
+    while (node) |n| : (node = n.next) {
+        const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
+        if (transfer.id == transfer_id) {
+            transfer._gated = false;
+            self.gated_queue.remove(n);
+            self.dispatch_queue.append(n);
+            return;
+        }
+    }
+}
+
 // A blocking request is complete. Any completed transfer that was placed in the
 // gated_queue because of it can now be placed back in the dispatch queue.
-fn releaseBlocking(self: *Client, frame_id: u32) void {
+pub fn releaseBlocking(self: *Client, frame_id: u32) void {
     _ = self.blocking_requests.remove(frame_id);
     // items were added to the gate in order, so walking backwards restores that
     // order. (Order might not matter, but preserving it costs nothing)
@@ -2496,7 +2514,7 @@ pub const Transfer = struct {
         req.shutdown_callback = SyncContext.shutdownCallback;
 
         const frame_id = req.frame_id;
-        client.blocking_requests.putNoClobber(client.allocator, frame_id, self.id) catch |err| {
+        client.blockOn(frame_id, self.id) catch |err| {
             self.deinit();
             return err;
         };
