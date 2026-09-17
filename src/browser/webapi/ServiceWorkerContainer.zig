@@ -88,7 +88,7 @@ pub fn workerActivated(self: *ServiceWorkerContainer) void {
     }
 
     self.scheduleReady() catch |err| {
-        log.warn(.browser, "service worker ready", .{ .err = err });
+        log.warn(.browser, "SWC ready", .{ .err = err });
     };
 }
 
@@ -139,7 +139,7 @@ pub fn register(self: *ServiceWorkerContainer, url: []const u8, options: ?Regist
     };
 
     const scope = ServiceWorkerGlobalScope.getOrCreate(frame, script_url, scope_url, opts.type) catch |err| {
-        log.err(.browser, "ServiceWorker register", .{ .url = script_url, .err = err });
+        log.err(.browser, "SWC register", .{ .url = script_url, .err = err });
         resolver.rejectError("ServiceWorkerContainer.register", .{ .type_error = "Failed to register a ServiceWorker" });
         return resolver.promise();
     };

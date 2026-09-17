@@ -119,7 +119,7 @@ pub fn getUpdateViaCache(_: *const ServiceWorkerRegistration) []const u8 {
 }
 
 pub fn update(_: *ServiceWorkerRegistration, exec: *const Execution) !js.Promise {
-    log.warn(.not_implemented, "ServiceWorkerRegistration.update", .{});
+    log.warn(.not_implemented, "SWR.update", .{});
     const resolver = exec.js.local.?.createPromiseResolver();
     resolver.resolve("ServiceWorkerRegistration.update", {});
     return resolver.promise();

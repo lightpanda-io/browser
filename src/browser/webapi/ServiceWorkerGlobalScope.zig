@@ -131,12 +131,12 @@ fn init(
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch |err| {
-        log.err(.browser, "ServiceWorker request", .{ .url = owned_url, .err = err });
+        log.err(.browser, "SWGS request", .{ .url = owned_url, .err = err });
         return err;
     };
     self._script_load.?.transfer = transfer;
     transfer.submit() catch |err| {
-        log.err(.browser, "ServiceWorker request", .{ .url = owned_url, .err = err });
+        log.err(.browser, "SWGS request", .{ .url = owned_url, .err = err });
         return err;
     };
     return self;
@@ -224,7 +224,7 @@ fn httpHeaderCallback(transfer: *Transfer) !Transfer.HeaderResult {
 
     const status = transfer.responseStatus() orelse return .abort;
     if (status < 200 or status >= 300) {
-        log.warn(.browser, "ServiceWorker status", .{ .url = self._proto.url, .status = status });
+        log.warn(.browser, "SWGS status", .{ .url = self._proto.url, .status = status });
         return .abort;
     }
 
@@ -247,7 +247,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     defer self.releaseScriptLoad();
 
     if (comptime lp.IS_DEBUG) {
-        log.info(.browser, "service worker fetch done", .{
+        log.info(.browser, "SWGS fetch done", .{
             .url = self._proto.url,
             .len = self._script_load.?.buffer.items.len,
         });
@@ -266,7 +266,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self.releaseScriptLoad();
 
     if (err != error.TransferCanceled) {
-        log.err(.browser, "service worker fetch error", .{ .url = self._proto.url, .err = err });
+        log.err(.browser, "SWGS fetch error", .{ .url = self._proto.url, .err = err });
     }
 
     self.setState(.redundant);
@@ -303,7 +303,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
             }
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_load.?.arena.allocator(), err);
-            log.err(.browser, "service worker module error", .{ .url = url, .caught = caught });
+            log.err(.browser, "SWGS module error", .{ .url = url, .caught = caught });
             evaluated = false;
         };
     } else {
@@ -313,7 +313,7 @@ fn loadInitialScript(self: *ServiceWorkerGlobalScope, script: []const u8) !void 
             }
             js_context.page.recordJsError(err);
             const caught = try_catch.caughtOrError(self._script_load.?.arena.allocator(), err);
-            log.err(.browser, "service worker script error", .{ .url = url, .caught = caught });
+            log.err(.browser, "SWGS script error", .{ .url = url, .caught = caught });
             evaluated = false;
         };
     }
@@ -347,7 +347,7 @@ fn beginInstall(self: *ServiceWorkerGlobalScope) void {
             s.beginActivate();
         }
     }.done) catch |err| {
-        log.warn(.browser, "service worker install", .{ .url = self._proto.url, .err = err });
+        log.warn(.browser, "SWGS install", .{ .url = self._proto.url, .err = err });
         self.beginActivate();
     };
 }
@@ -365,7 +365,7 @@ fn beginActivate(self: *ServiceWorkerGlobalScope) void {
             s.finishActivation();
         }
     }.done) catch |err| {
-        log.warn(.browser, "service worker activate", .{ .url = self._proto.url, .err = err });
+        log.warn(.browser, "SWGS activate", .{ .url = self._proto.url, .err = err });
         self.finishActivation();
     };
 }
@@ -480,7 +480,7 @@ fn scheduleMessage(self: *ServiceWorkerGlobalScope, cloned_data: ?js.Value.Globa
 fn drainPendingMessages(self: *ServiceWorkerGlobalScope) void {
     for (self._pending_messages.items) |cloned_data| {
         self.scheduleMessage(cloned_data) catch |err| {
-            log.warn(.browser, "service worker drain msg failed", .{ .err = err });
+            log.warn(.browser, "SWGS drain msg failed", .{ .err = err });
             if (cloned_data) |d| {
                 d.release();
             }
