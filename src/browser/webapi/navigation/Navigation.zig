@@ -241,14 +241,9 @@ pub fn pushEntry(
     try self._entries.append(arena.allocator(), entry);
     self._index = index;
 
-    if (previous != null and should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous.?, .navigationType = @tagName(.push) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
+    if (should_dispatch) {
+        if (previous) |p| {
+            self.fireCurrentEntryChangeEvent(p, .{ .push = state.value }, frame);
         }
     }
 
@@ -292,17 +287,33 @@ pub fn replaceEntry(
     };
 
     if (should_dispatch) {
-        if (self._on_currententrychange) |cec| {
-            const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous, .navigationType = @tagName(.replace) },
-                frame,
-            )).asEvent();
-            try self.dispatch(cec, event, frame);
-        }
+        self.fireCurrentEntryChangeEvent(previous, .{ .replace = state.value }, frame);
     }
 
     return entry;
+}
+
+fn fireCurrentEntryChangeEvent(
+    self: *Navigation,
+    previous: *NavigationHistoryEntry,
+    kind: ?NavigationKind,
+    frame: *Frame,
+) void {
+    if (self._on_currententrychange) |cec| {
+        const event =
+            NavigationCurrentEntryChangeEvent.initTrusted(
+                .wrap("currententrychange"),
+                .{ .from = previous, .navigationType = if (kind) |k| @tagName(k) else null },
+                frame,
+            ) catch |err| {
+                log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
+                return;
+            };
+
+        self.dispatch(cec, event.asEvent(), frame) catch |err| {
+            log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
+        };
+    }
 }
 
 const NavigateOptions = struct {
@@ -393,15 +404,7 @@ pub fn navigateInner(
         try frame.queueHashChange(old_url, new_url);
     }
 
-    if (self._on_currententrychange) |cec| {
-        // If we haven't navigated off, let us fire off an a currententrychange.
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(kind) },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
+    self.fireCurrentEntryChangeEvent(previous, kind, frame);
 
     _ = try committed.persist();
     _ = try finished.persist();
@@ -436,14 +439,11 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, frame: *Frame) !Navigati
     const entry = self.getCurrentEntry();
     if (opts.state) |state| {
         const previous = entry;
-        entry._state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
-
-        const event = try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = @tagName(.reload) },
-            frame,
-        );
-        try self.dispatch(.{ .currententrychange = event }, frame);
+        entry._state = .{
+            .source = .navigation,
+            .value = state.toJson(arena.allocator()) catch return error.DataClone,
+        };
+        self.fireCurrentEntryChangeEvent(previous, .reload, frame);
     }
 
     return self.navigateInner(entry._url, .reload, frame);
@@ -480,14 +480,7 @@ fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, fra
         .value = options.state.toJson(arena.allocator()) catch return error.DataClone,
     };
 
-    if (self._on_currententrychange) |cec| {
-        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
-            .wrap("currententrychange"),
-            .{ .from = previous, .navigationType = null },
-            frame,
-        )).asEvent();
-        try self.dispatch(cec, event, frame);
-    }
+    self.fireCurrentEntryChangeEvent(previous, null, frame);
 }
 
 pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, frame: *Frame) !void {
@@ -530,6 +523,7 @@ pub const JsApi = struct {
     pub const entries = bridge.function(Navigation.entries, .{});
     pub const forward = bridge.function(Navigation.forward, .{});
     pub const navigate = bridge.function(Navigation.navigate, .{});
+    pub const reload = bridge.function(Navigation.reload, .{});
     pub const traverseTo = bridge.function(Navigation.traverseTo, .{});
     pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{});
 
