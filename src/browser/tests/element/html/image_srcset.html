@@ -176,3 +176,40 @@
     testing.expectEqual(1, loads);
   });
 </script>
+
+<script id="picture_fragment_parse" type=module>
+  // A fragment parse links its children onto the target in one go, without
+  // going through the insertion path, so the selection has to be redone
+  // afterwards; otherwise the img keeps the src it picked while it was still
+  // under the parser's wrapper, and later mutations compare against that.
+  const state = await testing.async();
+  const picture = document.createElement("picture");
+  document.body.append(picture);
+  picture.innerHTML = '<source srcset="/inner-source.png"><img src="/inner-img.png">';
+  const img = picture.querySelector("img");
+  const parsed = img.currentSrc;
+
+  // insertAdjacentHTML parses into a fragment and moves the children in one
+  // at a time, so it goes through the insertion path
+  const adjacent_picture = document.createElement("picture");
+  document.body.append(adjacent_picture);
+  adjacent_picture.insertAdjacentHTML("beforeend", '<source srcset="/adjacent-source.png"><img src="/adjacent-img.png">');
+  const adjacent = adjacent_picture.querySelector("img").currentSrc;
+
+  // let the parses' load events flush before counting
+  await new Promise(resolve => setTimeout(resolve, 10));
+  let loads = 0;
+  img.addEventListener("load", () => loads += 1);
+
+  // the source is gone, so the selection falls back to the img's own src
+  picture.querySelector("source").remove();
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual(testing.ORIGIN + "/inner-source.png", parsed);
+    testing.expectEqual(testing.ORIGIN + "/adjacent-source.png", adjacent);
+    testing.expectEqual(testing.ORIGIN + "/inner-img.png", img.currentSrc);
+    testing.expectEqual(1, loads);
+  });
+</script>

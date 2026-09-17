@@ -72,6 +72,15 @@ pub fn childRemoved(parent: *Node, child: *Node, next_sibling: ?*Node, frame: *F
     };
 }
 
+// parse.fragment links every child of a parent at once, so the <img> among
+// them never saw its <picture> parent.
+pub fn childrenInserted(parent: *Node, frame: *Frame) !void {
+    if (parent.is(Picture) == null) {
+        return;
+    }
+    return imagesFrom(parent.firstChild(), frame);
+}
+
 pub fn sourceChanged(source: *Node, frame: *Frame) !void {
     const parent = source._parent orelse return;
     if (parent.is(Picture) == null) {
