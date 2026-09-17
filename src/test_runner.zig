@@ -345,7 +345,9 @@ const SlowTracker = struct {
         const start = self.start;
         self.start = timestamp;
         const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
-        _ = is_unnamed_test;
+        if (is_unnamed_test) {
+            return ns;
+        }
 
         var slowest = &self.slowest;
 
