@@ -30,6 +30,7 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const Performance = @import("webapi/Performance.zig");
 const WorkerGlobalScope = @import("webapi/WorkerGlobalScope.zig");
 
+const JS = @import("js/js.zig");
 const Frame = @import("Frame.zig");
 const Session = @import("Session.zig");
 const referrer = @import("referrer.zig");
@@ -86,9 +87,9 @@ pub const GlobalScope = union(enum) {
         };
     }
 
-    pub fn headersForRequest(self: GlobalScope, transfer: *HttpClient.Transfer) !void {
+    pub fn headersForRequest(self: GlobalScope, transfer: *HttpClient.Transfer, opts: JS.Execution.HeadersForRequestOptions) !void {
         return switch (self) {
-            inline else => |g| g.headersForRequest(transfer),
+            inline else => |g| g.headersForRequest(transfer, opts),
         };
     }
 

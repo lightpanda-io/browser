@@ -89,8 +89,14 @@ pub fn base(self: *const Execution) [:0]const u8 {
     return self.js.global.base();
 }
 
-pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer) !void {
-    return self.js.global.headersForRequest(transfer);
+pub const HeadersForRequestOptions = struct {
+    // Callers that compute their own Referer (e.g. fetch()'s referrer/referrerPolicy
+    // options) set this to false so we don't set a header here just to override it.
+    referer: bool = true,
+};
+
+pub fn headersForRequest(self: *const Execution, transfer: *HttpClient.Transfer, opts: HeadersForRequestOptions) !void {
+    return self.js.global.headersForRequest(transfer, opts);
 }
 
 pub fn referrerSource(self: *const Execution) [:0]const u8 {

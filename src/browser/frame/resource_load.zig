@@ -98,7 +98,7 @@ pub fn image(frame: *Frame, img: *Element.Html.Image, src: []const u8) !void {
         // (or that turn away clients which don't look like browsers) key off
         // exactly this header.
         try transfer.setHeader("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", .{});
-        try frame.headersForRequest(transfer);
+        try frame.headersForRequest(transfer, .{});
     }
 
     // From here the transfer owns `load`. `submit` either succeeds or has

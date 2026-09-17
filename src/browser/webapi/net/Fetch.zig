@@ -144,7 +144,9 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
             try h.populateRequestHeaders(transfer);
         }
 
-        try exec.headersForRequest(transfer);
+        // fetch() computes its own Referer below, from request._referrer /
+        // request._referrer_policy, so skip the default one here.
+        try exec.headersForRequest(transfer, .{ .referer = false });
 
         const source: ?[:0]const u8 = switch (request._referrer) {
             .none => null,

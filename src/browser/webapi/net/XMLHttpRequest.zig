@@ -360,7 +360,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         try self._request_headers.populateRequestHeaders(transfer);
 
         if (transfer.req.credentialsAllowed()) {
-            try exec.headersForRequest(transfer);
+            try exec.headersForRequest(transfer, .{});
         }
     }
 
