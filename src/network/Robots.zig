@@ -89,8 +89,6 @@ pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{}, .content_signals = &.{} };
 
 pub const RobotStore = struct {
-    pub const DEFAULT_CAPACITY = 1_000;
-
     const RobotsEntry = union(enum) {
         present: Robots,
         allowed,
@@ -104,8 +102,8 @@ pub const RobotStore = struct {
     evictions: EvictionQueue([]const u8),
     mutex: std.Io.Mutex = .init,
 
-    pub fn init(allocator: std.mem.Allocator) RobotStore {
-        return .initCapacity(allocator, DEFAULT_CAPACITY);
+    pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
+        return .initCapacity(allocator, capacity);
     }
 
     pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) RobotStore {
@@ -1289,7 +1287,7 @@ test "Robots: content-signal prefers specific user-agent over wildcard" {
 test "Robots: RobotStore.getContentSignals round-trips" {
     const allocator = std.testing.allocator;
 
-    var store = RobotStore.init(allocator);
+    var store = RobotStore.init(allocator, 1000);
     defer store.deinit();
 
     const robots = try store.robotsFromBytes("MyBot",
