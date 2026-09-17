@@ -140,11 +140,8 @@ fn emitStderr(self: *Terminal, bytes: []const u8) void {
 }
 
 fn formatBulletLine(arena: std.mem.Allocator, name: []const u8, args: []const u8, ok: bool) ![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(arena);
-    const w = &aw.writer;
     const bullet_color = if (ok) ansi.green else ansi.red;
-    try w.print(bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
-    return aw.written();
+    return std.fmt.allocPrint(arena, bullet_line_fmt, .{ bullet_color, ansi.reset, ansi.dim, name, ansi.reset, args });
 }
 
 pub fn setIdleCallback(fun: ?*const c.ic_idle_fun_t, arg: ?*anyopaque) void {
@@ -357,12 +354,8 @@ pub fn printWarning(self: *Terminal, comptime fmt: []const u8, args: anytype) vo
 fn printSeverity(self: *Terminal, color: []const u8, label: []const u8, comptime fmt: []const u8, args: anytype) void {
     if (self.repl_arena) |*a| {
         defer _ = a.reset(.retain_capacity);
-        var aw: std.Io.Writer.Allocating = .init(a.allocator());
-        aw.writer.print("{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
-        const bytes = aw.written();
-        if (self.spinner.emitAbove(bytes)) return;
-        _ = std.c.write(std.posix.STDERR_FILENO, (bytes).ptr, (bytes).len);
-        return;
+        const bytes = std.fmt.allocPrint(a.allocator(), "{s}●{s} " ++ fmt ++ "\n", .{ color, ansi.reset } ++ args) catch return;
+        return self.emitStderr(bytes);
     }
     std.debug.print("{s}{s}{s}: " ++ fmt ++ "{s}\n", .{ ansi.bold, color, label } ++ args ++ .{ansi.reset});
 }
