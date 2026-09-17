@@ -212,24 +212,30 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
     self.async_scripts.append(&script.node);
 
     const owner = self.owner;
-    owner.makeRequest(.{
-        .ctx = script,
-        .url = url,
-        .method = .GET,
-        .origin = owner.origin(),
-        .request_mode = .cors,
-        .credentials_mode = .same_origin,
-        .resource_type = .script,
-        .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
-        .header_callback = Script.headerCallback,
-        .data_callback = Script.dataCallback,
-        .done_callback = Script.doneCallback,
-        .error_callback = Script.errorCallback,
-        .shutdown_callback = Script.shutdownCallback,
-    }) catch |err| {
-        self.async_scripts.remove(&script.node);
-        return err;
+    const transfer = blk: {
+        errdefer self.async_scripts.remove(&script.node);
+        const transfer = try owner.newRequest(.{
+            .ctx = script,
+            .url = url,
+            .method = .GET,
+            .origin = owner.origin(),
+            .request_mode = .cors,
+            .credentials_mode = .same_origin,
+            .resource_type = .script,
+            .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
+            .header_callback = Script.headerCallback,
+            .data_callback = Script.dataCallback,
+            .done_callback = Script.doneCallback,
+            .error_callback = Script.errorCallback,
+            .shutdown_callback = Script.shutdownCallback,
+        });
+        errdefer transfer.deinit();
+        try owner.headersForRequest(transfer);
+        break :blk transfer;
     };
+    gop.value_ptr.transfer_id = transfer.id;
+    // A synchronous failure is delivered through Script.errorCallback.
+    transfer.submit() catch {};
 }
 
 // <link rel=modulepreload href=...> (element set) or the prescan finding a
@@ -277,6 +283,24 @@ pub fn waitForImport(self: *ScriptManagerBase, url: [:0]const u8) !ModuleSource 
     defer self.endEvaluationWindow(was_evaluating);
 
     var client = self.client;
+
+    // We're inside V8's module instantiation. Nothing but this module's
+    // transfer may be delivered: any other callback can run JS (e.g. a fetch()
+    // resolving), and JS that import()s a module of the graph V8 is still
+    // linking re-enters instantiation and crashes V8.
+    const frame_id = self.owner.frameId();
+    const blocked = blk: {
+        const entry = self.imported_modules.get(url) orelse break :blk false;
+        if (entry.state != .loading) {
+            break :blk false;
+        }
+        try client.blockOn(frame_id, entry.transfer_id);
+        break :blk true;
+    };
+    defer if (blocked) {
+        client.releaseBlocking(frame_id);
+    };
+
     while (true) {
         // imported_modules can be mutated by client.tick, so we need to lookup
         // the entry on each iteration.
@@ -1018,6 +1042,9 @@ const ImportedModule = struct {
     // will never collect it (see preloadModuleHint). A dynamic import may
     // adopt a hint entry outright (see getAsyncImport).
     hint: bool = false,
+    // The transfer fetching the module, which waitForImport lets through the
+    // HttpClient's gate.
+    transfer_id: u32 = 0,
     state: State,
     buffer: std.ArrayList(u8) = .empty,
 

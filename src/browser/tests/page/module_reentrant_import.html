@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=reentrant-dynamic-import>
+  (async () => {
+    const state = await testing.async();
+    // The fetch completes while reentrant-root is still waiting for
+    // reentrant-c.js, i.e. inside V8's instantiation of reentrant-a.js. Its
+    // import() of that half-linked module must wait until the instantiation
+    // is done.
+    fetch('./modules/base.js?delay_ms=150').then(async () => {
+      const m = await import('./modules/reentrant-a.js');
+      state.resolve(m.a);
+    });
+
+    await state.done((a) => {
+      testing.expectEqual('c', a);
+    });
+  })();
+</script>
+
+<script id=reentrant-root type=module>
+  import { a } from "./modules/reentrant-a.js";
+  testing.expectEqual('c', a);
+</script>
