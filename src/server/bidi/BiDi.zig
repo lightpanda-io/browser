@@ -426,6 +426,11 @@ pub const Command = struct {
         return self.bidi.replyResult(self.reply(), result);
     }
 
+    pub fn sendDone(self: *Command) !void {
+        self.answered = true;
+        return self.bidi.replyDone(self.reply());
+    }
+
     pub fn sendError(self: *Command, code: []const u8, message: []const u8) !void {
         self.answered = true;
         return self.bidi.replyError(self.reply(), code, message);
@@ -490,6 +495,14 @@ pub fn replyResult(self: *BiDi, reply: Reply, result: anytype) !void {
     switch (reply) {
         .bidi => |id| return self.sendResult(id, result),
         .http => return self.respondHTTP(result),
+    }
+}
+
+// A command's empty success: BiDi's {}, HTTP's null.
+pub fn replyDone(self: *BiDi, reply: Reply) !void {
+    switch (reply) {
+        .bidi => |id| return self.sendResult(id, struct {}{}),
+        .http => return self.respondHTTP(null),
     }
 }
 
