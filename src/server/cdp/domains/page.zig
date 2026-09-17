@@ -778,7 +778,11 @@ pub fn frameNavigated(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
     // navigation as blink rebuilds a detached isolated-world window proxy.
     for (bc.isolated_worlds.items) |isolated_world| {
         if (isolated_world.contextFor(frame)) |js_context| {
-            // The context was already created ahead of time (createIsolatedWorld).
+            // The context was already created ahead of time and still carries
+            // the origin the frame had then. Move it onto the navigated origin.
+            js_context.setOrigin(frame.origin) catch |err| {
+                log.warn(.cdp, "isolated world origin", .{ .err = err, .world = isolated_world.name, .frame_id = frame._frame_id });
+            };
             // A child keeps the id the client was given. The root's id was just
             // invalidated by executionContextsCleared: the first navigation of a
             // pristine about:blank keeps the Frame and its contexts.
@@ -1541,6 +1545,94 @@ test "cdp.frame: isolated world survives the in-place first navigation" {
         .contextId = page_ctx,
     } });
     try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 45 });
+}
+
+// #1550: the kept context was created on the bootstrap about:blank and still
+// carried its opaque origin after the in-place navigation. A world context
+// shares its frame's Origin (same V8 security token, one Page.origins entry).
+test "cdp.frame: isolated world follows the in-place first navigation's origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    try ctx.processMessage(.{ .id = 40, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
+    try ctx.processMessage(.{ .id = 41, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
+    const bc = &ctx.cdp().browser_context.?;
+    const session_id = bc.session_id.?;
+    const root = bc.mainFrame() orelse unreachable;
+    const root_id = id.toFrameId(root._frame_id);
+
+    try ctx.processMessage(.{ .id = 42, .method = "Runtime.enable", .sessionId = session_id });
+    try ctx.processMessage(.{ .id = 43, .method = "Page.createIsolatedWorld", .sessionId = session_id, .params = .{
+        .frameId = &root_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const world = bc.isolated_worlds.items[0];
+
+    // The bootstrap about:blank has an opaque origin: one Origin per context.
+    try testing.expectEqual(null, root.origin);
+    try testing.expect(world.contextFor(root).?.origin != root.js.origin);
+
+    try ctx.processMessage(.{ .id = 44, .method = "Page.navigate", .sessionId = session_id, .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_one.html",
+    } });
+    try testing.waitForPage(bc);
+    try testing.expectEqual(root, bc.mainFrame().?);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", root.origin.?);
+
+    // Kept context, now on the navigated origin with the main world.
+    const world_context = world.contextFor(root) orelse return error.ContextNotFound;
+    try testing.expectEqual(root.js.origin, world_context.origin);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", world_context.origin.key);
+}
+
+// A child's world is created while its load is in flight (drivers do it on
+// Page.frameAttached). A cross-origin redirect then moves frame.origin before
+// frame_navigated: the kept context must follow, as the root's does.
+test "cdp.frame: isolated world follows a child's redirected origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-IW4", .url = "hi.html", .target_id = "FID-000000000X".* });
+    try ctx.processMessage(.{ .id = 70, .method = "Runtime.enable", .sessionId = "SID-X" });
+    try ctx.processMessage(.{ .id = 71, .method = "Page.navigate", .sessionId = "SID-X", .params = .{
+        .url = "http://127.0.0.1:9582/src/browser/tests/cdp/isolated_world_redirect.html",
+    } });
+
+    // The parent is parsed while the child's redirected, server-delayed
+    // response has yet to arrive: the child exists on its request origin.
+    var runner = bc.session.runner(.{});
+    try runner.waitForFrame(bc.page_handle.?.frame_id, 2000, .{ .until = .domcontentloaded });
+    const root = bc.mainFrame() orelse unreachable;
+    try testing.expectEqual(1, root.child_frames.items.len);
+    const child = root.child_frames.items[0];
+    const child_id = id.toFrameId(child._frame_id);
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", child.origin.?);
+
+    try ctx.processMessage(.{ .id = 72, .method = "Page.createIsolatedWorld", .params = .{
+        .frameId = &child_id,
+        .worldName = "utility",
+        .grantUniveralAccess = true,
+    } });
+    const child_ctx = try isolatedWorldContextId(bc, child);
+    const world = bc.isolated_worlds.items[0];
+    try testing.expectEqualSlices(u8, "http://127.0.0.1:9582", world.contextFor(child).?.origin.key);
+
+    try testing.waitForPage(bc);
+    try testing.expectEqual(child, root.child_frames.items[0]);
+    try testing.expectEqualSlices(u8, "http://localhost:9582", child.origin.?);
+
+    // Same context (the child keeps its id), now on the navigated origin.
+    try testing.expectEqual(child_ctx, try isolatedWorldContextId(bc, child));
+    const world_context = world.contextFor(child) orelse return error.ContextNotFound;
+    try testing.expectEqual(child.js.origin, world_context.origin);
+    try testing.expectEqualSlices(u8, "http://localhost:9582", world_context.origin.key);
+
+    try ctx.processMessage(.{ .id = 73, .method = "Runtime.evaluate", .sessionId = "SID-X", .params = .{
+        .expression = "document.title",
+        .contextId = child_ctx,
+    } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "Jobs page one" } }, .{ .id = 73 });
 }
 
 // A committed root navigation tears the old Page down later, with the same
