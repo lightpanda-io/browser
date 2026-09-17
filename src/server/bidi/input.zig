@@ -642,7 +642,11 @@ fn dispatchKey(frame: *Frame, comptime typ: []const u8, info: *const KeyInfo, mo
         .metaKey = modifiers.meta,
         .shiftKey = modifiers.shift,
     }, frame);
-    try user_input.triggerKeyboard(frame, event);
+    if (comptime std.mem.eql(u8, typ, "keydown")) {
+        _ = try user_input.triggerKeyDown(frame, event, user_input.textForKey(event));
+    } else {
+        try user_input.triggerKeyUp(frame, event);
+    }
 }
 
 fn setModifier(modifiers: *Modifiers, which: ?Modifier, down: bool) void {

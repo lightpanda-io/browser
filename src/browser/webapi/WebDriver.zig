@@ -409,15 +409,7 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
         // longer does.
         setModifier(&frame.page.input_modifiers, key, is_down);
 
-        // Key actions have no explicit target; they go to the focused element,
-        // or the document if nothing is focused. Resolved per action since a
-        // key's default action can move focus.
-        const target = if (frame.document._active_element) |el|
-            el.asEventTarget()
-        else
-            frame.document.asNode().asEventTarget();
-
-        dispatchKey(target, if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup"), key, frame);
+        dispatchKey(is_down, key, frame);
     }
 }
 
@@ -502,7 +494,10 @@ fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
     }
 }
 
-fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Frame) void {
+// Key actions have no explicit target; they go to the focused element,
+// resolved per action since a key's default action can move focus.
+fn dispatchKey(is_down: bool, key: []const u8, frame: *Frame) void {
+    const typ: lp.String = if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup");
     const modifiers = frame.page.input_modifiers;
     const event = KeyboardEvent.initTrusted(typ, .{
         .bubbles = true,
@@ -517,7 +512,12 @@ fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Fr
         log.warn(.app, "webdriver key event", .{ .err = err });
         return;
     };
-    dispatch(target, event.asEvent(), frame, typ.str());
+    (if (is_down)
+        Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event))
+    else
+        Frame.user_input.triggerKeyUp(frame, event)) catch |err| {
+        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+    };
 }
 
 fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {

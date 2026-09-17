@@ -289,7 +289,7 @@ const KeyboardEventOptions = struct {
     shiftKey: bool = false,
 };
 
-const Options = Event.inheritOptions(
+pub const Options = Event.inheritOptions(
     KeyboardEvent,
     KeyboardEventOptions,
 );

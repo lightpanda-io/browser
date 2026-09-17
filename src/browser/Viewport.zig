@@ -20,7 +20,7 @@ const Viewport = @This();
 
 width: u32,
 height: u32,
-scale: f32 = 1.0, // for screenshot raster
+scale: f32 = 1.0, // CSS px to device px
 // window.screen dimensions; null means the same as the viewport.
 screen_width: ?u32 = null,
 screen_height: ?u32 = null,
