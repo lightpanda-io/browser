@@ -133,17 +133,12 @@ fn getSemanticTree(cmd: anytype) !void {
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
         root.document.asNode();
-    const frame = dom_node.ownerFrame(root) orelse return error.InvalidNodeId;
 
-    var st = SemanticTree{
-        .dom_node = dom_node,
-        .registry = &bc.node_registry,
-        .frame = frame,
-        .arena = cmd.arena,
+    const st = SemanticTree.init(cmd.arena, dom_node, &bc.node_registry, root, .{
         .prune = params.prune orelse true,
         .interactive_only = params.interactiveOnly orelse false,
         .max_depth = params.maxDepth orelse std.math.maxInt(u32) - 1,
-    };
+    }) catch return error.InvalidNodeId;
 
     if (params.format) |format| {
         if (format == .text) {
@@ -274,9 +269,8 @@ fn getNodeDetails(cmd: anytype) !void {
     const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = (bc.node_registry.lookup_by_id.get(params.backendNodeId) orelse return error.InvalidNodeId).dom;
-    const frame = node.ownerFrame(root) orelse return error.InvalidNodeId;
-
-    const details = SemanticTree.getNodeDetails(cmd.arena, node, &bc.node_registry, frame) catch return error.InternalError;
+    const st = SemanticTree.init(cmd.arena, node, &bc.node_registry, root, .{}) catch return error.InvalidNodeId;
+    const details = st.nodeDetails() catch return error.InternalError;
 
     return cmd.sendResult(.{
         .nodeDetails = details,
