@@ -230,7 +230,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
             .shutdown_callback = Script.shutdownCallback,
         });
         errdefer transfer.deinit();
-        try owner.headersForRequest(transfer);
+        try owner.headersForRequest(transfer, .{});
         break :blk transfer;
     };
     gop.value_ptr.transfer_id = transfer.id;
