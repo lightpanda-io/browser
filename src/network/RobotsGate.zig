@@ -91,7 +91,6 @@ fn fetchThenResume(self: *RobotsGate, robots_url: [:0]const u8, transfer: *Trans
         .gate = self,
         .buffer = .empty,
         .arena = arena,
-        .arena_pool = client.arena_pool,
         .robots_url = owned_url,
     };
 
@@ -166,7 +165,6 @@ fn flushPending(self: *RobotsGate, robots_url: []const u8, outcome: Outcome) voi
 const RobotsContext = struct {
     gate: *RobotsGate,
     arena: *lp.Arena,
-    arena_pool: *ArenaPool,
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
