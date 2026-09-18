@@ -233,6 +233,7 @@ pub const RobotStore = struct {
 
         if (try self.evictions.insert(gop.key_ptr.*)) |evict_key| {
             if (self.map.fetchRemove(evict_key)) |kv| {
+                lp.metrics.robots_evictions.incr();
                 self.allocator.free(kv.key);
                 var entry = kv.value;
                 self.freeEntry(&entry);
