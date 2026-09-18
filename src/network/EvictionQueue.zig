@@ -47,10 +47,6 @@ pub fn EvictionQueue(comptime K: type) type {
             self.heap.deinit(self.allocator);
         }
 
-        pub fn count(self: *const Self) usize {
-            return self.heap.count();
-        }
-
         // Record a newly-inserted key. If this pushes the queue over
         // capacity, returns the oldest key so the caller can evict it from
         // its own map. Callers must only call this once per new key -- it
@@ -77,7 +73,7 @@ test "EvictionQueue: no eviction under capacity" {
     try testing.expectEqual(null, try q.insert("a"));
     try testing.expectEqual(null, try q.insert("b"));
     try testing.expectEqual(null, try q.insert("c"));
-    try testing.expectEqual(3, q.count());
+    try testing.expectEqual(3, q.heap.count());
 }
 
 test "EvictionQueue: evicts oldest key once over capacity" {
@@ -90,10 +86,10 @@ test "EvictionQueue: evicts oldest key once over capacity" {
     const evicted = try q.insert("c");
     try testing.expect(evicted != null);
     try testing.expectString("a", evicted.?);
-    try testing.expectEqual(2, q.count());
+    try testing.expectEqual(2, q.heap.count());
 
     const evicted2 = try q.insert("d");
     try testing.expect(evicted2 != null);
     try testing.expectString("b", evicted2.?);
-    try testing.expectEqual(2, q.count());
+    try testing.expectEqual(2, q.heap.count());
 }
