@@ -19,7 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
-const LruCache = @import("LruCache.zig").LruCache;
+const ClockCache = @import("ClockCache.zig").ClockCache;
 
 const log = lp.log;
 
@@ -99,7 +99,7 @@ pub const RobotStore = struct {
 
     allocator: std.mem.Allocator,
     map: RobotsMap,
-    evictions: LruCache([]const u8),
+    evictions: ClockCache([]const u8),
     mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
