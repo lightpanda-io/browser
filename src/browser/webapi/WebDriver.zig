@@ -512,12 +512,15 @@ fn dispatchKey(is_down: bool, key: []const u8, frame: *Frame) void {
         log.warn(.app, "webdriver key event", .{ .err = err });
         return;
     };
-    (if (is_down)
-        Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event))
-    else
-        Frame.user_input.triggerKeyUp(frame, event)) catch |err| {
-        log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
-    };
+    if (is_down) {
+        _ = Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event)) catch |err| {
+            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+        };
+    } else {
+        Frame.user_input.triggerKeyUp(frame, event) catch |err| {
+            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+        };
+    }
 }
 
 fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
