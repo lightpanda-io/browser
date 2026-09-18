@@ -288,9 +288,9 @@ pub fn selectFiles(self: *Input, files: []const *File, frame: *Frame) !void {
 
     // A file input fires `input` then `change`, both as plain bubbling Events
     // (not InputEvents — `inputType`/`data` only apply to editable text inputs).
-    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame._page);
+    const input_evt = try Event.initTrusted(comptime .wrap("input"), .{ .bubbles = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), input_evt);
-    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame._page);
+    const change_evt = try Event.initTrusted(comptime .wrap("change"), .{ .bubbles = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), change_evt);
 }
 
@@ -310,7 +310,7 @@ fn replaceFiles(self: *Input, files: []const *File, frame: *Frame) !void {
     }
 
     for (fl._files) |old| {
-        old._proto.releaseRef(frame._page);
+        old._proto.releaseRef(frame.page);
     }
 
     fl._files = dupe;
@@ -365,7 +365,7 @@ pub fn checkValidity(self: *Input, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid(frame)) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }
@@ -627,6 +627,7 @@ const entry = text_entry.TextEntry(Input);
 
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
+pub const acceptsTextEntry = entry.acceptsTextEntry;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const CaretMove = entry.CaretMove;

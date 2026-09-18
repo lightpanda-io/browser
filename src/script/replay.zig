@@ -163,7 +163,7 @@ pub fn cappedSource(arena: std.mem.Allocator, source: []const u8) []const u8 {
     return string.capBytes(arena, source, source_max_bytes);
 }
 
-const max_script_bytes = 10 * 1024 * 1024;
+pub const max_script_bytes = 10 * 1024 * 1024;
 
 /// The script at `path`, bounded. Shared by both replay surfaces.
 pub fn readScriptFile(arena: std.mem.Allocator, path: []const u8) ![]const u8 {

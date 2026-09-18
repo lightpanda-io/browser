@@ -25,6 +25,20 @@ pub const Declaration = struct {
     important: bool,
 };
 
+pub const OverflowValues = struct { x: []const u8, y: []const u8 };
+
+/// `overflow: <x> [<y>]`; a single value applies to both axes. More than two
+/// values is invalid and null, as is an empty declaration.
+pub fn splitOverflow(value: []const u8) ?OverflowValues {
+    var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+    const x = it.next() orelse return null;
+    const y = it.next() orelse x;
+    if (it.next() != null) {
+        return null;
+    }
+    return .{ .x = x, .y = y };
+}
+
 const TokenSpan = struct {
     token: Tokenizer.Token,
     start: usize,

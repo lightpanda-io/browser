@@ -252,7 +252,7 @@ fn fireToggle(
 
     // Keep the event alive while dispatching so we can read _prevent_default.
     event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
+    defer _ = event.releaseRef(frame.page);
 
     try frame._event_manager.dispatch(el.asEventTarget(), event);
     return event._prevent_default;

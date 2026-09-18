@@ -264,7 +264,7 @@ fn currentTransformMatrix(self: *Graphics, space: enum { viewport, screen }, fra
         matrix.c, matrix.d, 0, 0,
         0,        0,        1, 0,
         matrix.e, matrix.f, 0, 1,
-    }, true, frame._page);
+    }, true, frame.page);
 }
 
 fn transformMatrix(element: *Element) PathData.Matrix {

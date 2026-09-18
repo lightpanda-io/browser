@@ -41,6 +41,7 @@ const Frame = @import("Frame.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const Custom = @import("webapi/element/html/Custom.zig");
+const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 
 const String = lp.String;
 const Allocator = std.mem.Allocator;
@@ -105,6 +106,10 @@ fn route(self: *Self, frame: *Frame, reaction: Reaction) !void {
     }
 }
 
+pub fn enqueueUpgrade(self: *Self, frame: *Frame, element: *Custom, definition: *CustomElementDefinition) !void {
+    try self.route(frame, .{ .upgrade = .{ .element = element, .definition = definition } });
+}
+
 pub fn enqueueConnected(self: *Self, frame: *Frame, element: *Element) !void {
     try self.route(frame, .{ .connected = element });
 }
@@ -144,6 +149,7 @@ pub fn enqueueAttributeChanged(
 }
 
 pub const Reaction = union(enum) {
+    upgrade: struct { element: *Custom, definition: *CustomElementDefinition },
     connected: *Element,
     disconnected: *Element,
     move: *Element,

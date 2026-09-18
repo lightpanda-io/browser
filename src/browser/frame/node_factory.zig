@@ -39,6 +39,7 @@ const IFrame = Element.Html.IFrame;
 
 pub fn createElementNS(document: *const Node.Document, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
     const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator;
+    const from_clone = @TypeOf(attribute_iterator) == *Element.Attribute.List or @TypeOf(attribute_iterator) == *const Element.Attribute.List;
     const frame = frameOf(document);
 
     switch (namespace) {
@@ -855,6 +856,15 @@ pub fn createElementNS(document: *const Node.Document, namespace: Element.Namesp
                     return node;
                 }
 
+                if (from_clone) {
+                    const node = try createHtmlElementT(document, Element.Html.Custom, namespace, attribute_iterator, .{
+                        ._tag_name = tag_name,
+                        ._definition = null,
+                    });
+                    try realm._ce_reactions.enqueueUpgrade(realm, node.as(Element).is(Element.Html.Custom).?, definition.?);
+                    return node;
+                }
+
                 // https://dom.spec.whatwg.org/#concept-create-element, the
                 // synchronous branch. super() has to create its own element
                 const constructed = constructForToken(realm, definition.?, tag_name, from_parser) catch {
@@ -1060,6 +1070,10 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
 
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
+        if (comptime @TypeOf(attribute_iterator) == Parser.AttributeIterator and @hasDecl(E.Build, "parser_created_on_insert")) {
+            // The element wants its parent, it'll do this work when inserted.
+            return node;
+        }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
             log.err(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
             return err;

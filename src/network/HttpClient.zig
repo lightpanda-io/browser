@@ -172,9 +172,10 @@ test_inbox: if (lp.IS_TEST) ?*Inbox else void = if (lp.IS_TEST) null else {},
 
 max_response_size: usize,
 
-// While a frame has a blocking (synchronous) request in flight, dispatch
-// holds back every other transfer for that frame so their callbacks can't
-// run JS while the parser is on the stack. frame_id -> blocking transfer id.
+// While a frame has a blocking (synchronous) request in flight, or waits for
+// a module import, dispatch holds back every other transfer for that frame so
+// their callbacks can't run JS while the parser is on the stack.
+// frame_id -> blocking transfer id.
 blocking_requests: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
 // Count of transfers parked for CDP interception (request or auth phase).
@@ -1424,9 +1425,26 @@ fn processTransfer(self: *Client, transfer: *Transfer) !void {
     transfer.state = .queued;
 }
 
+// Until released, a sync tick delivers only `transfer_id`
+pub fn blockOn(self: *Client, frame_id: u32, transfer_id: u32) !void {
+    try self.blocking_requests.putNoClobber(self.allocator, frame_id, transfer_id);
+
+    // maybe the transfer was already gated
+    var node = self.gated_queue.first;
+    while (node) |n| : (node = n.next) {
+        const transfer: *Transfer = @fieldParentPtr("_queue_node", n);
+        if (transfer.id == transfer_id) {
+            transfer._gated = false;
+            self.gated_queue.remove(n);
+            self.dispatch_queue.append(n);
+            return;
+        }
+    }
+}
+
 // A blocking request is complete. Any completed transfer that was placed in the
 // gated_queue because of it can now be placed back in the dispatch queue.
-fn releaseBlocking(self: *Client, frame_id: u32) void {
+pub fn releaseBlocking(self: *Client, frame_id: u32) void {
     _ = self.blocking_requests.remove(frame_id);
     // items were added to the gate in order, so walking backwards restores that
     // order. (Order might not matter, but preserving it costs nothing)
@@ -1518,6 +1536,10 @@ fn drainInbox(self: *Client, mode: DrainMode) !void {
                 driver.onLink(link);
                 break :blk false;
             },
+            .bidi_http => |command| blk: {
+                driver.onHttp(command);
+                break :blk false;
+            },
             .quit => blk: {
                 driver.onQuit();
                 break :blk true; // quit always shutsdown
@@ -1550,14 +1572,14 @@ fn allowDuringSyncWait(msg: *Inbox.Message) bool {
         .cdp => |c| isFetchInterceptionMethod(c.input.method),
         // BiDi has no request interception yet, so nothing it can send is
         // safe to dispatch from inside a JS callback.
-        .bidi => false,
+        .bidi, .bidi_http => false,
     };
 }
 
 fn isTerminal(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .cdp, .bidi, .link => false,
+        .ping, .cdp, .bidi, .link, .bidi_http => false,
     };
 }
 
@@ -1575,7 +1597,7 @@ fn isFetchInterceptionMethod(method: []const u8) bool {
 fn isSyncWaitInterrupt(msg: *Inbox.Message) bool {
     return switch (msg.payload) {
         .close, .disconnect, .quit => true,
-        .ping, .link => false,
+        .ping, .link, .bidi_http => false,
         .cdp => |c| isTeardownMethod(c.input.method),
         // Frames aren't parsed on the Network thread for BiDi, so we
         // can't spot a teardown command without re-parsing here.
@@ -2492,7 +2514,7 @@ pub const Transfer = struct {
         req.shutdown_callback = SyncContext.shutdownCallback;
 
         const frame_id = req.frame_id;
-        client.blocking_requests.putNoClobber(client.allocator, frame_id, self.id) catch |err| {
+        client.blockOn(frame_id, self.id) catch |err| {
             self.deinit();
             return err;
         };
@@ -2691,6 +2713,27 @@ pub const Transfer = struct {
         return transfer.req.origin orelse "null";
     }
 
+    /// How this request reaches its target, which is what a cross-site
+    /// request's SameSite=Lax cookies hang on (RFC 6265bis 5.5).
+    ///
+    /// `.document` alone isn't a top-level navigation, `Frame.navigate` makes
+    /// a `.document` request for every frame it loads, and an iframe's src is
+    /// a navigation that just isn't a top-level one. The owner of a
+    /// `.document` request is the frame being navigated, so a parent on it
+    /// means we're loading a sub-frame.
+    ///
+    /// No owner means no attribution, and no way to show the request is
+    /// top-level: fail closed (such a request has no cookie jar either, so
+    /// `getCookieString` has already returned).
+    fn requestKind(self: *const Transfer) Cookie.RequestKind {
+        const req = &self.req;
+        if (req.resource_type != .document or self.owner == null) return .subresource;
+        const owner = self.owner.?;
+        if (owner.parent != null) return .subresource;
+
+        return if (req.method.isSafe()) .navigation else .unsafe_navigation;
+    }
+
     pub fn getCookieString(self: *Transfer, arena: Allocator) !?[:0]const u8 {
         const req = &self.req;
         if (!req.credentialsAllowed()) return null;
@@ -2700,7 +2743,7 @@ pub const Transfer = struct {
         try jar.forRequest(req.url, &aw.writer, .{
             .is_http = true,
             .origin_url = self.cookie_origin,
-            .is_navigation = req.resource_type == .document,
+            .kind = self.requestKind(),
         });
         if (aw.written().len == 0) {
             return null;
@@ -3391,6 +3434,15 @@ pub const Transfer = struct {
             break :blk resolved;
         };
 
+        if (req.request_mode == .cors and (URL.getUsername(url).len > 0 or URL.getPassword(url).len > 0)) {
+            const origin = req.origin orelse return error.RedirectWithCredentials;
+            if (transfer._cors_cross_origin or !URL.isSameOrigin(base, origin) or !URL.isSameOrigin(url, origin)) {
+                // Can only follow a redirect to a URL with credentials when
+                // we're staying on the same origin
+                return error.RedirectWithCredentials;
+            }
+        }
+
         // When the redirect target is not same-origin with the current URL,
         // the Authorization header must not follow the request to the new
         // origin.
@@ -3409,11 +3461,15 @@ pub const Transfer = struct {
         }
 
         try transfer.updateURL(url);
-        // 301, 302, 303 → change to GET, drop body.
-        // 307, 308 → keep method and body.
-        if (status == 301 or status == 302 or status == 303) {
+        const rewrite_to_get = ((status == 301 or status == 302) and req.method == .POST) or
+            (status == 303 and req.method != .GET and req.method != .HEAD);
+        if (rewrite_to_get) {
             req.method = .GET;
             req.body = null;
+            // Fetch's request-body headers must not outlive the body.
+            inline for (.{ "Content-Encoding", "Content-Language", "Content-Location", "Content-Type" }) |name| {
+                transfer.removeHeader(name);
+            }
         }
 
         if (req.referrer_policy) |policy| {
@@ -4406,7 +4462,7 @@ test "HttpClient: adblock verdicts apply per request" {
     var client: Client = undefined;
     initTestClient(&client, &pool);
 
-    var blocker: AdBlocker = try .init(testing.allocator);
+    var blocker: AdBlocker = try .init(testing.allocator, testing.test_app.regex_context);
     defer blocker.deinit();
     var list: std.Io.Reader = .fixed(
         \\||ads.example.com^
@@ -5088,6 +5144,124 @@ test "HttpClient: aborting a robots-parked transfer unlinks it from the gate" {
     try testing.expectEqual(0, client.transfers.count());
 }
 
+test "HttpClient: redirects drop body headers only when rewriting the method" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    const cases = [_]struct { status: u16, method: Method, expected: Method }{
+        .{ .status = 301, .method = .POST, .expected = .GET },
+        .{ .status = 302, .method = .POST, .expected = .GET },
+        .{ .status = 303, .method = .POST, .expected = .GET },
+        .{ .status = 307, .method = .POST, .expected = .POST },
+        .{ .status = 308, .method = .POST, .expected = .POST },
+        .{ .status = 301, .method = .PUT, .expected = .PUT },
+        .{ .status = 302, .method = .PUT, .expected = .PUT },
+        .{ .status = 303, .method = .PUT, .expected = .GET },
+        .{ .status = 303, .method = .PATCH, .expected = .GET },
+        .{ .status = 303, .method = .DELETE, .expected = .GET },
+        .{ .status = 301, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 302, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 303, .method = .HEAD, .expected = .HEAD },
+        .{ .status = 301, .method = .GET, .expected = .GET },
+        .{ .status = 302, .method = .GET, .expected = .GET },
+        .{ .status = 303, .method = .GET, .expected = .GET },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "redirect test");
+        defer arena.release();
+        const body: ?[]const u8 = if (case.method == .GET or case.method == .HEAD) null else "payload";
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = case.method,
+                .url = "http://example.com/start",
+                .body = body,
+                .origin = null,
+                .credentials_mode = .omit,
+                .request_mode = .no_cors,
+                .resource_type = .document,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        const body_headers = [_][]const u8{ "content-type", "Content-Encoding", "CONTENT-LANGUAGE", "Content-Location" };
+        for (body_headers) |name| try transfer.setHeader(name, "body-value", .{});
+        try transfer.setHeader("Accept", "text/html", .{});
+        try transfer.setHeader("X-Keep", "yes", .{});
+
+        try transfer.applyRedirectTarget(transfer.req.url, "/end", case.status);
+        try testing.expectEqual(case.expected, transfer.req.method);
+        const rewritten = case.method != case.expected;
+        if (rewritten or body == null) {
+            try testing.expectEqual(null, transfer.req.body);
+        } else {
+            try testing.expectEqual(body.?, transfer.req.body.?);
+        }
+        for (body_headers) |name| {
+            if (rewritten) {
+                try testing.expectEqual(null, transfer.findRequestHeader(name));
+            } else {
+                try testing.expectEqual("body-value", transfer.findRequestHeader(name).?);
+            }
+        }
+        try testing.expectEqual("text/html", transfer.findRequestHeader("accept").?);
+        try testing.expectEqual("yes", transfer.findRequestHeader("x-keep").?);
+        try testing.expectEqual("http://example.com/end", transfer.req.url);
+    }
+}
+
+test "HttpClient: cors redirect to a URL with credentials" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    const cases = [_]struct { mode: Request.RequestMode, url: [:0]const u8, location: []const u8, allowed: bool }{
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://b.test/", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://a.test/x", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user:pw@a.test/x", .allowed = true },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user:pw@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://user@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://a.test/r", .location = "http://:pw@b.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://b.test/r", .location = "http://user:pw@a.test/", .allowed = false },
+        .{ .mode = .cors, .url = "http://b.test/r", .location = "http://user:pw@b.test/", .allowed = false },
+        .{ .mode = .no_cors, .url = "http://b.test/r", .location = "http://user:pw@c.test/", .allowed = true },
+    };
+    for (cases) |case| {
+        const arena = try pool.acquire(.small, "redirect test");
+        defer arena.release();
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = case.url,
+                .origin = "http://a.test",
+                .credentials_mode = .omit,
+                .request_mode = case.mode,
+                .resource_type = .fetch,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        const result = transfer.applyRedirectTarget(transfer.req.url, case.location, 302);
+        if (case.allowed) {
+            try result;
+        } else {
+            try testing.expectError(error.RedirectWithCredentials, result);
+        }
+    }
+}
+
 test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
     // Regression for #2828: a CDP Fetch.fulfillRequest with a 3xx status + a
     // Location header must be followed like a real network redirect (re-issued
@@ -5137,6 +5311,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
 
+        try transfer.setHeader("Content-Type", "multipart/form-data; boundary=test", .{});
         transfer.park(.intercept_request);
         client.intercepted += 1;
 
@@ -5149,6 +5324,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         try testing.expectEqual("http://example.com/end", transfer.req.url);
         try testing.expectEqual(.GET, transfer.req.method);
         try testing.expectEqual(null, transfer.req.body);
+        try testing.expectEqual(null, transfer.findRequestHeader("content-type"));
         // Unparked exactly once; transfer is still alive.
         try testing.expectEqual(0, client.intercepted);
         try testing.expectEqual(1, client.transfers.count());
@@ -5179,6 +5355,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         };
         try client.transfers.putNoClobber(testing.allocator, transfer.id, transfer);
 
+        try transfer.setHeader("Content-Type", "multipart/form-data; boundary=test", .{});
         transfer.park(.intercept_request);
         client.intercepted += 1;
 
@@ -5190,6 +5367,7 @@ test "HttpClient: fulfillIntercepted follows a 3xx redirect" {
         try testing.expectEqual("http://example.com/other", transfer.req.url);
         try testing.expectEqual(.POST, transfer.req.method);
         try testing.expectEqual("payload", transfer.req.body.?);
+        try testing.expectEqual("multipart/form-data; boundary=test", transfer.findRequestHeader("content-type").?);
         try testing.expectEqual(0, client.intercepted);
         transfer.deinit();
     }

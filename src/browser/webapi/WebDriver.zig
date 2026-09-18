@@ -22,7 +22,6 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Frame = @import("../Frame.zig");
-const EventManagerBase = @import("../EventManagerBase.zig");
 const Modifiers = @import("../frame/user_input.zig").Modifiers;
 
 const Event = @import("Event.zig");
@@ -32,7 +31,6 @@ const EventTarget = @import("EventTarget.zig");
 const Cookie = @import("storage/Cookie.zig");
 const MouseEvent = @import("event/MouseEvent.zig");
 const TouchEvent = @import("event/TouchEvent.zig");
-const WheelEvent = @import("event/WheelEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
@@ -69,11 +67,10 @@ pub fn click(_: *const WebDriver, element: *Element, frame: *Frame) !void {
         }
     }
 
-    dispatchPointer(element, "pointerdown", 0, 1, frame);
-    _ = dispatchMouse(element, "mousedown", 0, 1, 1, frame);
-    dispatchPointer(element, "pointerup", 0, 0, frame);
-    _ = dispatchMouse(element, "mouseup", 0, 0, 1, frame);
-    _ = dispatchMouse(element, "click", 0, 0, 1, frame);
+    // A dispatch error must never reject the testdriver command.
+    Frame.user_input.triggerClick(frame, element, frame.page.input_modifiers) catch |err| {
+        log.warn(.app, "webdriver click", .{ .err = err });
+    };
 }
 
 const WebDriverCookie = struct {
@@ -97,7 +94,7 @@ fn getNamedCookie(_: *const WebDriver, name: []const u8, frame: *Frame) ?WebDriv
 
     jar.removeExpired(null);
     for (jar.cookies.items) |*cookie| {
-        if (cookie.appliesTo(&target, true, true, true) == false) {
+        if (cookie.appliesTo(&target, .{ .same_site = true, .is_http = true, .kind = .navigation }) == false) {
             continue;
         }
         if (std.mem.eql(u8, cookie.name, name) == false) {
@@ -273,7 +270,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
                     .buttons = pressed_mask,
-                    .modifiers = frame._page.input_modifiers,
+                    .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
                 dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
@@ -283,18 +280,18 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             pressed = true;
-            pressed_mask = buttonsMask(button);
+            pressed_mask = Frame.user_input.buttonsBitmask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
                 click_count += 1;
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, buttonsMask(button), frame);
+            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
             if (is_touch) {
                 dispatchTouch(el, "touchstart", frame);
             } else {
-                const suppressed = dispatchMouse(el, "mousedown", button, buttonsMask(button), click_count, frame);
+                const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
                     Frame.user_input.focusForMouseDown(frame, el) catch |err| {
                         log.warn(.app, "webdriver mousedown focus", .{ .err = err });
@@ -333,19 +330,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     }
 }
 
-// The `buttons` bitmask bit for a WebDriver button number: the flag order does
-// not follow the button numbering (left=1, right=2, middle=4).
-fn buttonsMask(button: i32) u16 {
-    return switch (button) {
-        0 => 1,
-        1 => 4,
-        2 => 2,
-        3 => 8,
-        4 => 16,
-        else => 0,
-    };
-}
-
 // A click whose mousedown and mouseup landed on different elements fires at
 // their nearest common inclusive ancestor element.
 fn commonClickTarget(down: *Element, up: *Element) *Element {
@@ -380,6 +364,9 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
             continue;
         }
 
+        const x = readI32(action, "x", 0);
+        const y = readI32(action, "y", 0);
+
         const origin = try action.get("origin");
         var el: ?*Element = null;
         if (origin.isObject()) {
@@ -387,7 +374,6 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
         } else {
             // "viewport"/"pointer" origins: approximate hit-testing with
             // the faux layout's vertical axis, falling back to the root.
-            const y = readI32(action, "y", 0);
             el = frame.document.elementFromVerticalPoint(@floatFromInt(y), frame) catch null;
             if (el == null) {
                 el = frame.document.getDocumentElement();
@@ -397,7 +383,7 @@ fn performWheelSource(source: js.Object, frame: *Frame) !void {
 
         const delta_x = readI32(action, "deltaX", 0);
         const delta_y = readI32(action, "deltaY", 0);
-        dispatchWheel(target, delta_x, delta_y, frame);
+        dispatchWheel(target, x, y, delta_x, delta_y, frame);
     }
 }
 
@@ -421,17 +407,9 @@ fn performKeySource(source: js.Object, frame: *Frame) !void {
 
         // A modifier's own keydown already carries its flag; its keyup no
         // longer does.
-        setModifier(&frame._page.input_modifiers, key, is_down);
+        setModifier(&frame.page.input_modifiers, key, is_down);
 
-        // Key actions have no explicit target; they go to the focused element,
-        // or the document if nothing is focused. Resolved per action since a
-        // key's default action can move focus.
-        const target = if (frame.document._active_element) |el|
-            el.asEventTarget()
-        else
-            frame.document.asNode().asEventTarget();
-
-        dispatchKey(target, if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup"), key, frame);
+        dispatchKey(is_down, key, frame);
     }
 }
 
@@ -516,8 +494,11 @@ fn setModifier(modifiers: *Modifiers, key: []const u8, pressed: bool) void {
     }
 }
 
-fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Frame) void {
-    const modifiers = frame._page.input_modifiers;
+// Key actions have no explicit target; they go to the focused element,
+// resolved per action since a key's default action can move focus.
+fn dispatchKey(is_down: bool, key: []const u8, frame: *Frame) void {
+    const typ: lp.String = if (is_down) comptime .wrap("keydown") else comptime .wrap("keyup");
+    const modifiers = frame.page.input_modifiers;
     const event = KeyboardEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -531,7 +512,15 @@ fn dispatchKey(target: *EventTarget, typ: lp.String, key: []const u8, frame: *Fr
         log.warn(.app, "webdriver key event", .{ .err = err });
         return;
     };
-    dispatch(target, event.asEvent(), frame, typ.str());
+    if (is_down) {
+        _ = Frame.user_input.triggerKeyDown(frame, event, Frame.user_input.textForKey(event)) catch |err| {
+            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+        };
+    } else {
+        Frame.user_input.triggerKeyUp(frame, event) catch |err| {
+            log.warn(.app, "webdriver dispatch", .{ .err = err, .type = typ.str() });
+        };
+    }
 }
 
 fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
@@ -543,7 +532,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
 }
 
 fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
-    const modifiers = frame._page.input_modifiers;
+    const modifiers = frame.page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
         .cancelable = true,
@@ -565,7 +554,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
 }
 
 fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, detail: u32, frame: *Frame) bool {
-    const modifiers = frame._page.input_modifiers;
+    const modifiers = frame.page.input_modifiers;
     const event = MouseEvent.initTrusted(comptime .wrap(typ), .{
         .bubbles = true,
         .cancelable = true,
@@ -587,56 +576,13 @@ fn dispatchMouse(el: *Element, comptime typ: []const u8, button: i32, buttons: u
     };
 }
 
-fn dispatchWheel(el: *Element, delta_x: i32, delta_y: i32, frame: *Frame) void {
-    // The UA dispatches scroll-blocking events as non-cancelable when every
-    // listener on the propagation path is passive: it already knows
-    // preventDefault can't be called.
-    const event = WheelEvent.initTrusted("wheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "wheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver wheel event", .{ .err = err });
-        return;
+// The action's x/y, which the caller already resolved the target from. An
+// element origin makes them offsets from its center, but the faux layout has
+// no center worth computing.
+fn dispatchWheel(el: *Element, x: i32, y: i32, delta_x: i32, delta_y: i32, frame: *Frame) void {
+    Frame.user_input.wheel(frame, el, @floatFromInt(x), @floatFromInt(y), @floatFromInt(delta_x), @floatFromInt(delta_y)) catch |err| {
+        log.warn(.app, "webdriver wheel", .{ .err = err });
     };
-
-    // Keep the event alive past dispatch so we can read _prevent_default.
-    event.asEvent().acquireRef();
-    defer _ = event.asEvent().releaseRef(frame._page);
-    dispatch(el.asEventTarget(), event.asEvent(), frame, "wheel");
-
-    // Blink also fires the legacy mousewheel event.
-    const legacy = WheelEvent.initTrusted("mousewheel", .{
-        .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, "mousewheel", frame),
-        .composed = true,
-        .deltaX = @floatFromInt(delta_x),
-        .deltaY = @floatFromInt(delta_y),
-    }, frame) catch |err| {
-        log.warn(.app, "webdriver mousewheel event", .{ .err = err });
-        return;
-    };
-    legacy.asEvent().acquireRef();
-    defer _ = legacy.asEvent().releaseRef(frame._page);
-    dispatch(el.asEventTarget(), legacy.asEvent(), frame, "mousewheel");
-
-    if (event.asEvent()._prevent_default or legacy.asEvent()._prevent_default) {
-        return;
-    }
-
-    // Apply the scroll and fire a trusted scroll event, mirroring actions.scroll.
-    const new_left: i32 = @as(i32, @intCast(el.getScrollLeft(frame))) + delta_x;
-    const new_top: i32 = @as(i32, @intCast(el.getScrollTop(frame))) + delta_y;
-    el.setScrollLeft(new_left, frame) catch {};
-    el.setScrollTop(new_top, frame) catch {};
-
-    const scroll_evt = Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, frame._page) catch |err| {
-        log.warn(.app, "webdriver scroll event", .{ .err = err });
-        return;
-    };
-    dispatch(el.asEventTarget(), scroll_evt, frame, "scroll");
 }
 
 fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8) void {
@@ -645,43 +591,17 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     };
 }
 
-fn hasNonPassiveListener(el: *Element, typ: []const u8, frame: *Frame) bool {
-    // Listeners live in the event manager of the element's own frame (and the
-    // propagation path ends at that frame's window), which is not the caller's
-    // frame when the element belongs to e.g. an iframe's document.
-    const owner = el.ownerFrame(frame) orelse return false;
-    const base = &owner._event_manager.base;
-    var current: ?*@import("Node.zig") = el.asNode();
-    while (current) |node| : (current = node.parentNode()) {
-        if (anyNonPassive(base.getListeners(node.asEventTarget(), .wrap(typ)))) {
-            return true;
-        }
-    }
-    return anyNonPassive(base.getListeners(owner.window.asEventTarget(), .wrap(typ)));
-}
-
-fn anyNonPassive(list_: ?*std.DoublyLinkedList) bool {
-    const list = list_ orelse return false;
-    var link = list.first;
-    while (link) |l| : (link = l.next) {
-        const listener: *align(8) EventManagerBase.Listener = @fieldParentPtr("node", l);
-        if (!listener.passive) {
-            return true;
-        }
-    }
-    return false;
-}
-
 fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
+    const owner = el.ownerFrame(frame) orelse return;
     const event = TouchEvent.initTrusted(typ, .{
         .bubbles = true,
-        .cancelable = hasNonPassiveListener(el, typ, frame),
         .composed = true,
-    }, frame) catch |err| {
+    }, owner) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
         return;
     };
-    dispatch(el.asEventTarget(), event.asEvent(), frame, typ);
+    event.asEvent()._cancelable_unless_passive = true;
+    dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 
 pub const JsApi = struct {

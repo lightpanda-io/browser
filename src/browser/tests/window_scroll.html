@@ -28,6 +28,16 @@
   testing.expectEqual(40, window.scrollY);
 </script>
 
+<script id=scrollTo_opts_omitted_axis_untouched>
+  window.scrollTo(30, 40);
+  window.scrollTo({ top: 60 });
+  testing.expectEqual(30, window.scrollX);
+  testing.expectEqual(60, window.scrollY);
+  window.scrollTo({ left: 10 });
+  testing.expectEqual(10, window.scrollX);
+  testing.expectEqual(60, window.scrollY);
+</script>
+
 <script id=scrollBy_negative_clamp>
   window.scrollTo(10, 10);
   window.scrollBy(-100, -100);

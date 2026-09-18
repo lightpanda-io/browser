@@ -1,0 +1,28 @@
+<!doctype html>
+<title>Original</title>
+<script>
+function navigateAndOpen() {
+  location.assign('../hi.html');
+  if (location.search === '?cancel') window.stop();
+  document.open();
+  document.write('<title>Rewritten</title>');
+  document.close();
+}
+
+if (location.search === '?interactive') {
+  document.addEventListener('readystatechange', () => {
+    if (document.readyState === 'interactive') navigateAndOpen();
+  });
+} else if (location.search === '?dcl') {
+  document.addEventListener('DOMContentLoaded', navigateAndOpen);
+} else if (location.search === '?write') {
+  // Scheduling a navigation does not abort the parser: Chrome keeps honouring
+  // document.write until the replacement commits. window.stop() cancels the
+  // navigation so the test can see what landed.
+  location.assign('../hi.html');
+  document.write('<p id="late">late</p>');
+  window.stop();
+} else {
+  navigateAndOpen();
+}
+</script>

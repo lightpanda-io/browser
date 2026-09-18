@@ -48,12 +48,12 @@ fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
 }
 
 pub fn getWidth(_: *const Screen, frame: *Frame) u32 {
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return viewport.screen_width orelse viewport.width;
 }
 
 pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
-    const viewport = frame._page.getViewport();
+    const viewport = frame.page.getViewport();
     return viewport.screen_height orelse viewport.height;
 }
 

@@ -1190,6 +1190,9 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/Worker.zig"),
     @import("../webapi/SharedWorker.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerContainer.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
     @import("../webapi/media/MediaError.zig"),
     @import("../webapi/media/TextTrackCue.zig"),
     @import("../webapi/media/VTTCue.zig"),
@@ -1268,10 +1271,10 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/collections/DOMStringList.zig"),
 });
 
-// APIs available on every Worker context global (constructors like URL,
-// Headers, etc.), regardless of worker kind. Each kind's snapshot context
-// adds its own global-scope type on top (DedicatedWorkerJsApis,
-// SharedWorkerJsApis below).
+// APIs available on EVERY worker global — dedicated, shared and service. This
+// is the WebIDL `[Exposed=Worker]` set, which covers all three. Each kind's
+// snapshot context adds its own global-scope type on top; dedicated and shared
+// additionally get worker_extended_apis below.
 // This is a subset of PageJsApis plus WorkerGlobalScope.
 // TODO: Expand this list to include all worker-appropriate APIs.
 const worker_common_apis = [_]type{
@@ -1332,19 +1335,13 @@ const worker_common_apis = [_]type{
     @import("../webapi/canvas/TextMetrics.zig"),
     @import("../webapi/canvas/CanvasGradient.zig"),
     @import("../webapi/canvas/CanvasPattern.zig"),
-    @import("../webapi/net/XMLHttpRequest.zig"),
-    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
-    @import("../webapi/net/XMLHttpRequestUpload.zig"),
     @import("../webapi/net/WebSocket.zig"),
     @import("../webapi/net/EventSource.zig"),
     @import("../webapi/FileReader.zig"),
-    @import("../webapi/FileReaderSync.zig"),
     @import("../webapi/ImageData.zig"),
     @import("../webapi/Performance.zig"),
     @import("../webapi/PerformanceObserver.zig"),
-    @import("../webapi/storage/CookieStore.zig"),
     @import("../webapi/storage/idb/idb.zig"),
-    @import("../webapi/event/CookieChangeEvent.zig"),
     @import("../webapi/BroadcastChannel.zig"),
     @import("../webapi/event/CustomEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
@@ -1355,8 +1352,28 @@ const worker_common_apis = [_]type{
     @import("../webapi/collections/DOMStringList.zig"),
 };
 
-pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_common_apis));
-pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_common_apis));
+// Additionally available on a dedicated or shared worker, but NOT on a service
+// worker. Both are blocking APIs that a service worker — which has to stay
+// responsive to lifecycle and (eventually) fetch events — must not have:
+// XMLHttpRequest is [Exposed=(Window,DedicatedWorker,SharedWorker)] and
+// FileReaderSync is [Exposed=(DedicatedWorker,SharedWorker)].
+const worker_extended_apis = worker_common_apis ++ [_]type{
+    @import("../webapi/net/XMLHttpRequest.zig"),
+    @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/net/XMLHttpRequestUpload.zig"),
+    @import("../webapi/FileReaderSync.zig"),
+};
+
+pub const DedicatedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/DedicatedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+pub const SharedWorkerJsApis = flattenTypes(&([_]type{@import("../webapi/SharedWorkerGlobalScope.zig")} ++ worker_extended_apis));
+
+pub const ServiceWorkerJsApis = flattenTypes(&([_]type{
+    @import("../webapi/ServiceWorkerGlobalScope.zig"),
+    @import("../webapi/ServiceWorker.zig"),
+    @import("../webapi/ServiceWorkerRegistration.zig"),
+    @import("../webapi/event/ExtendableEvent.zig"),
+    @import("../webapi/storage/CookieStore.zig"),
+} ++ worker_common_apis));
 
 // Master list of ALL JS APIs across all contexts.
 // Used by Env (class IDs, templates), JsApiLookup, and anywhere that needs
@@ -1368,6 +1385,9 @@ pub const JsApis = blk: {
         @import("../webapi/FileReaderSync.zig").JsApi,
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/SharedWorkerGlobalScope.zig").JsApi,
+        @import("../webapi/ServiceWorkerGlobalScope.zig").JsApi,
+        //ServiceWorker-only, so it isn't in PageJsApis either.
+        @import("../webapi/event/ExtendableEvent.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
         @import("../webapi/WorkerNavigator.zig").JsApi,

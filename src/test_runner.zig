@@ -231,12 +231,11 @@ const Runner = struct {
         if (leak > 0) {
             Printer.status(.fail, "{d} test{s} leaked\n", .{ leak, if (leak != 1) "s" else "" });
         }
-        Printer.fmt("\n", .{});
 
-        try slowest.display();
-        Printer.fmt("\n", .{});
+        slowest.display();
         // stats
         if (self.env.metrics) {
+            Printer.fmt("\n", .{});
             const stdout = std.Io.File.stdout();
             var writer = stdout.writerStreaming(io, &.{});
             const stats = self.ta.stats();
@@ -258,11 +257,10 @@ const Runner = struct {
         }
 
         if (fail_list.items.len > 0) {
-            Printer.status(.fail, "Failed Test Summary: \n", .{});
+            Printer.status(.fail, "\nFailed Test Summary: \n", .{});
             for (fail_list.items) |name| {
                 Printer.status(.fail, "- {s}\n", .{name});
             }
-            Printer.fmt("\n", .{});
         }
 
         std.process.exit(if (fail == 0) 0 else 1);
@@ -296,7 +294,13 @@ const Printer = struct {
             .skip => std.debug.print("\x1b[33m", .{}),
             else => {},
         }
-        std.debug.print(format ++ "\x1b[0m", args);
+        // Reset before a trailing newline so the escape never starts the next line.
+        const reset = "\x1b[0m";
+        if (comptime std.mem.endsWith(u8, format, "\n")) {
+            std.debug.print(format[0 .. format.len - 1] ++ reset ++ "\n", args);
+        } else {
+            std.debug.print(format ++ reset, args);
+        }
     }
 };
 
@@ -345,7 +349,9 @@ const SlowTracker = struct {
         const start = self.start;
         self.start = timestamp;
         const ns: u64 = @intCast(start.durationTo(timestamp).toNanoseconds());
-        _ = is_unnamed_test;
+        if (is_unnamed_test) {
+            return ns;
+        }
 
         var slowest = &self.slowest;
 
@@ -372,10 +378,13 @@ const SlowTracker = struct {
         return ns;
     }
 
-    fn display(self: *SlowTracker) !void {
+    fn display(self: *SlowTracker) void {
         var slowest = self.slowest;
         const count = slowest.count();
-        Printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
+        if (count == 0) {
+            return;
+        }
+        Printer.fmt("\nSlowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
         while (slowest.popMin()) |info| {
             const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             Printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });

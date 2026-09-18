@@ -133,7 +133,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 ._last_length = null,
                 ._filter = filter,
                 ._tw = TW.init(root, .{}),
-                ._cached_version = frame._page.dom_version,
+                ._cached_version = frame.page.dom_version,
             };
         }
 
@@ -402,7 +402,7 @@ pub fn NodeLive(comptime mode: Mode) type {
         }
 
         fn versionCheck(self: *Self, frame: *const Frame) bool {
-            const current = frame._page.dom_version;
+            const current = frame.page.dom_version;
             if (current == self._cached_version) {
                 return true;
             }

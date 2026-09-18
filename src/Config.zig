@@ -245,8 +245,9 @@ pub const LoadResources = packed struct(u4) {
     stylesheet: bool = false,
 };
 
-const ExperimentalFeatures = packed struct(u1) {
+pub const ExperimentalFeatures = packed struct(u2) {
     cors: bool = false,
+    serviceworker: bool = false,
 };
 
 /// Common CLI args.
@@ -1201,7 +1202,7 @@ pub fn parseArgs(allocator: Allocator, proc_args: std.process.Args) !Config {
     if (command == .run) {
         const run = command.run;
         if (run.script_file == null) {
-            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js>" });
+            log.fatal(.app, "missing script file", .{ .hint = "usage: lightpanda run <script.js | ->" });
             return error.MissingArgument;
         }
         // run's fields are a strict subset of Agent's (compile error otherwise).

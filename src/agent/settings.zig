@@ -31,7 +31,7 @@ const string = @import("../string.zig");
 const auth = @import("auth/auth.zig");
 const Candidate = zenai.provider.Candidate;
 
-pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, or MISTRAL_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
+pub const api_keys_hint = "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, HF_TOKEN, AI_GATEWAY_API_KEY, MISTRAL_API_KEY, OPENROUTER_API_KEY, or ORCAROUTER_API_KEY (Vertex AI: VERTEX_API_KEY, or GOOGLE_CLOUD_PROJECT via gcloud; Codex: a ChatGPT subscription via /provider codex)";
 
 /// Determine which provider to use and read its env key. Returns null
 /// only when no `--provider` was given AND no env key exists (the caller
@@ -336,9 +336,7 @@ pub fn resolveModelName(opts: Config.Agent, resolved: ?ResolvedProvider, remembe
     if (resolved) |r| {
         // Use the remembered model whenever it matches the chosen provider,
         // not only when the provider itself came from the remembered file.
-        if (remembered) |rem| {
-            if (rem.provider) |p| if (p == r.credential.provider) return rem.model;
-        }
+        if (remembered) |rem| if (rem.provider == r.credential.provider) return rem.model;
         return zenai.provider.defaultModel(r.credential.provider);
     }
     return "";
@@ -378,12 +376,6 @@ pub fn resolveSearchEngine(remembered: ?Remembered) lp.tools.SearchEngine {
     return .auto;
 }
 
-const ReconciledModel = union(enum) {
-    /// Owned by the allocator passed to reconcileModel.
-    use: []u8,
-    abort,
-};
-
 /// Validate `desired` against the provider's catalog, mirroring the interactive
 /// `/model` command. Empty list (unreachable server) leaves it unchecked; an
 /// explicit unlisted model is fatal. The local servers (Ollama, llama.cpp) have
@@ -395,23 +387,23 @@ pub fn reconcileModel(
     desired: []const u8,
     base_url: ?[:0]const u8,
     explicit: bool,
-) !ReconciledModel {
+) ![]u8 {
     // A subscription provider can't list models via the provider API; trust the
     // desired model as-is rather than error against `/models`.
-    if (auth.descriptorFor(credential.provider) != null) return .{ .use = try allocator.dupe(u8, desired) };
+    if (auth.descriptorFor(credential.provider) != null) return try allocator.dupe(u8, desired);
 
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const ids: []const []const u8 = zenai.provider.listChatModelIds(lp.io, allocator, arena.allocator(), credential.provider, credential.keySlice(), .{ .base_url = base_url, .environ = lp.environ() }) catch &.{};
-    if (ids.len == 0 or string.isOneOf(desired, ids)) return .{ .use = try allocator.dupe(u8, desired) };
+    if (ids.len == 0 or string.isOneOf(desired, ids)) return try allocator.dupe(u8, desired);
 
     if (!explicit) {
         switch (credential.provider) {
             .ollama, .llama_cpp => {},
-            else => return .{ .use = try allocator.dupe(u8, desired) },
+            else => return try allocator.dupe(u8, desired),
         }
         std.debug.print("Default {s} model '{s}' is not loaded; using '{s}'.\n", .{ @tagName(credential.provider), desired, ids[0] });
-        return .{ .use = try allocator.dupe(u8, ids[0]) };
+        return try allocator.dupe(u8, ids[0]);
     }
 
     if (credential.provider == .ollama) {
@@ -426,7 +418,7 @@ pub fn reconcileModel(
             .{ desired, @tagName(credential.provider) },
         );
     }
-    return .abort;
+    return error.ModelNotAvailable;
 }
 
 const testing = @import("../testing.zig");

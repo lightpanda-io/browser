@@ -198,14 +198,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     var providers_buf: [@typeInfo(Config.AiProvider).@"enum".fields.len]Candidate = undefined;
     const found_providers = settings.availableProviders(&providers_buf);
     const available_providers = try allocator.alloc([]const u8, found_providers.len);
-    var provider_count: usize = 0;
-    errdefer {
-        for (available_providers[0..provider_count]) |p| allocator.free(p);
-        allocator.free(available_providers);
-    }
     for (found_providers, 0..) |f, i| {
-        available_providers[i] = try allocator.dupe(u8, @tagName(f.provider));
-        provider_count = i + 1;
+        available_providers[i] = @tagName(f.provider);
     }
 
     if (opts.task != null and opts.script_file != null) {
@@ -302,13 +296,9 @@ pub fn init(allocator: std.mem.Allocator, app: *App, opts: Config.Agent) !*Agent
     if (resolved) |*r| if (!will_repl) {
         const remembered_matches = remembered != null and remembered.?.provider == r.credential.provider;
         const explicit = opts.model != null or remembered_matches;
-        switch (try settings.reconcileModel(allocator, &r.credential, model, opts.base_url, explicit)) {
-            .use => |m| {
-                allocator.free(model);
-                model = m;
-            },
-            .abort => return error.ModelNotAvailable,
-        }
+        const resolved_model = try settings.reconcileModel(allocator, &r.credential, model, opts.base_url, explicit);
+        allocator.free(model);
+        model = resolved_model;
     };
 
     const effort = settings.resolveEffort(opts, remembered, will_repl, if (resolved) |r| r.credential.provider else null);
@@ -396,7 +386,6 @@ pub fn deinit(self: *Agent) void {
     if (self.ai_client) |ai_client| ai_client.deinit(self.allocator);
     if (self.credential) |*c| c.deinit(self.allocator);
     self.allocator.free(self.model);
-    for (self.available_providers) |p| self.allocator.free(p);
     self.allocator.free(self.available_providers);
     self.allocator.destroy(self);
 }
@@ -716,9 +705,9 @@ fn runRepl(self: *Agent) void {
             },
             .tool_call => |tc| {
                 self.terminal.beginTool(tc.name(), slash_split.?.rest);
-                const result = self.runCommand(aa, cmd);
+                const result = self.runCommand(aa, tc);
                 self.terminal.endTool();
-                self.printCommandResult(cmd, result);
+                self.printCommandResult(tc, result);
                 if (!result.is_error) {
                     self.recordSaveCommand(navigationGoto(aa, tc.tool, tc.args) orelse cmd);
                 }
@@ -1208,33 +1197,18 @@ fn handleSave(self: *Agent, arena: std.mem.Allocator, rest: []const u8) void {
         self.terminal.printWarning("prompt ignored without an LLM; saving the recorded commands as-is", .{});
     }
     const resolved = self.resolveSavePathAndMode(arena, parsed.filename) orelse return;
-    const path = resolved.path;
-    const mode = resolved.mode;
 
-    // `path` aliases either an arena-owned string (first save) or
-    // `self.save_path` (subsequent saves to the same destination); only the
-    // former needs persisting into agent-owned memory.
-    var new_save_path: ?[]u8 = if (self.save_path == null)
-        self.allocator.dupe(u8, path) catch |err| {
-            self.terminal.printError("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
-            return;
-        }
-    else
-        null;
-    defer if (new_save_path) |p| self.allocator.free(p);
-
-    save.writeContentFile(path, self.appendSessionBaseline(arena, self.save_buffer.bytes()), mode) catch |err| {
-        self.terminal.printError("failed to save {s}: {s}", .{ path, @errorName(err) });
+    save.writeContentFile(resolved.path, self.appendSessionBaseline(arena, self.save_buffer.bytes()), resolved.mode) catch |err| {
+        self.terminal.printError("failed to save {s}: {s}", .{ resolved.path, @errorName(err) });
         return;
     };
 
-    if (new_save_path) |p| {
-        self.save_path = p;
-        new_save_path = null;
-    }
+    self.rememberSavePath(resolved.path) catch |err| {
+        self.terminal.printWarning("failed to remember save destination {s}: {s}", .{ resolved.path, @errorName(err) });
+    };
     const saved_lines = self.save_buffer.lines;
     self.save_buffer.reset();
-    self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, self.save_path.? });
+    self.terminal.printInfo("Saved {d} line(s) to {s}", .{ saved_lines, resolved.path });
 }
 
 /// `script` with the session's extract baseline as its trailing comment (stale
@@ -1456,7 +1430,9 @@ fn synthesizeSaveTo(self: *Agent, arena: std.mem.Allocator, path: []const u8, mo
         return;
     };
 
-    self.rememberSavePath(path);
+    self.rememberSavePath(path) catch |err| {
+        self.terminal.printWarning("failed to remember save destination {s}: {s}", .{ path, @errorName(err) });
+    };
     self.save_buffer.reset();
     self.terminal.printInfo("Saved synthesized script to {s}", .{path});
 }
@@ -1473,11 +1449,11 @@ fn synthesizeScriptText(self: *Agent, arena: std.mem.Allocator, path: []const u8
 }
 
 /// Persist `path` as the destination reused by a subsequent bare `/save`.
-fn rememberSavePath(self: *Agent, path: []const u8) void {
+fn rememberSavePath(self: *Agent, path: []const u8) !void {
     if (self.save_path) |old| {
         if (std.mem.eql(u8, old, path)) return;
     }
-    const dup = self.allocator.dupe(u8, path) catch return;
+    const dup = try self.allocator.dupe(u8, path);
     if (self.save_path) |old| self.allocator.free(old);
     self.save_path = dup;
 }
@@ -1619,13 +1595,7 @@ fn printSlashHelp(self: *Agent, arena: std.mem.Allocator, target: []const u8) vo
     self.terminal.printInfo("/{s} — {s}", .{ tool_schema.tool_name, tool_schema.description });
 }
 
-/// Caller contract: `cmd` must be `.tool_call` — `.comment` and `.llm` are
-/// filtered upstream, having no tool mapping.
-fn runCommand(self: *Agent, arena: std.mem.Allocator, cmd: Command) browser_tools.ToolResult {
-    const tc = switch (cmd) {
-        .tool_call => |t| t,
-        else => return .{ .text = "internal: command has no tool mapping", .is_error = true },
-    };
+fn runCommand(self: *Agent, arena: std.mem.Allocator, tc: Command.ToolCall) browser_tools.ToolResult {
     // The terminal can't show an image, but the conversation can.
     return self.callTool(arena, tc.name(), tc.args, .{ .inline_image = self.ai_client != null }) catch |err| .{
         .text = switch (err) {
@@ -1648,14 +1618,9 @@ fn callTool(self: *Agent, arena: std.mem.Allocator, tool_name: []const u8, args:
 /// Data output (/extract, /evaluate, /markdown, /tree, …) → plain stdout on
 /// success so a caller can pipe it. Everything else routes through
 /// `printToolOutcome`, which lays down the green ● / red ● dot shared with the
-/// LLM tool-call path. Callers only invoke this for `.tool_call` commands (the
-/// comment/login/acceptCookies branches take other paths).
-fn printCommandResult(self: *Agent, cmd: Command, result: browser_tools.ToolResult) void {
-    const tc = switch (cmd) {
-        .tool_call => |t| t,
-        else => return,
-    };
-    if (cmd.producesData() and !result.is_error) {
+/// LLM tool-call path.
+fn printCommandResult(self: *Agent, tc: Command.ToolCall, result: browser_tools.ToolResult) void {
+    if (tc.tool.producesData() and !result.is_error) {
         self.printData(tc.tool, result.text);
         return;
     }
@@ -1697,6 +1662,9 @@ const Finding = struct {
     failure: Failure,
 };
 
+/// `lightpanda run -` reads the script from stdin.
+const stdin_script_path = "-";
+
 fn runScript(self: *Agent, path: []const u8) bool {
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
@@ -1724,11 +1692,20 @@ fn runAndJudge(self: *Agent, arena: std.mem.Allocator, path: []const u8) RunJudg
 /// Null covers setup failures (unreadable file, runtime init, OOM) that a
 /// retry can't help.
 fn runScriptOutcome(self: *Agent, arena: std.mem.Allocator, path: []const u8) ?lp.replay.RunOutcome {
-    const content = lp.replay.readScriptFile(arena, path) catch |err| {
-        self.terminal.printError("Failed to read script '{s}': {s}", .{ path, @errorName(err) });
+    const from_stdin = std.mem.eql(u8, path, stdin_script_path);
+    const name = if (from_stdin) "<stdin>" else path;
+    const content = readScriptSource(arena, path, from_stdin) catch |err| {
+        self.terminal.printError("Failed to read script '{s}': {s}", .{ name, @errorName(err) });
         return null;
     };
-    return self.runSourceOutcome(arena, content, path);
+    return self.runSourceOutcome(arena, content, name);
+}
+
+fn readScriptSource(arena: std.mem.Allocator, path: []const u8, from_stdin: bool) ![]const u8 {
+    if (!from_stdin) return lp.replay.readScriptFile(arena, path);
+    var buf: [64 * 1024]u8 = undefined;
+    var stdin = std.Io.File.stdin().readerStreaming(lp.io, &buf);
+    return stdin.interface.allocRemaining(arena, .limited(lp.replay.max_script_bytes));
 }
 
 /// `runScriptOutcome` for source already in hand — heal validates its revised
@@ -1777,6 +1754,12 @@ fn runSourceOutcome(self: *Agent, arena: std.mem.Allocator, source: []const u8, 
 
 /// One-shot `--heal` run; counterpart of the REPL's `/load` heal offer.
 fn runScriptWithHeal(self: *Agent, path: []const u8) bool {
+    // Heal re-reads the script and commits the revision to its path; stdin
+    // offers neither.
+    if (std.mem.eql(u8, path, stdin_script_path)) {
+        self.terminal.printError("--heal needs a script file, not stdin", .{});
+        return false;
+    }
     var arena: std.heap.ArenaAllocator = .init(self.allocator);
     defer arena.deinit();
 
@@ -2214,26 +2197,23 @@ fn buildUserMessageParts(
             return error.UnsupportedAttachment;
         };
 
-        if (std.mem.startsWith(u8, mime, "text/")) {
-            const bytes = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(512 * 1024)) catch |err| {
-                log.err(.app, "read attachment failed", .{ .path = path, .err = err });
-                self.terminal.printError("could not read attachment: {s}", .{path});
-                return error.AttachmentReadFailed;
-            };
+        const is_text = std.mem.startsWith(u8, mime, "text/");
+        const limit: usize = if (is_text) 512 * 1024 else 20 * 1024 * 1024;
+        const content = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(limit)) catch |err| {
+            log.err(.app, "read attachment failed", .{ .path = path, .err = err });
+            self.terminal.printError("could not read attachment: {s}", .{path});
+            return error.AttachmentReadFailed;
+        };
+
+        if (is_text) {
             try text_prefix.print(
                 ma,
                 "[Attached file: {s}]\n{s}\n[End of attachment]\n\n",
-                .{ path, bytes },
+                .{ path, content },
             );
         } else {
-            const raw = std.Io.Dir.cwd().readFileAlloc(lp.io, path, ma, .limited(20 * 1024 * 1024)) catch |err| {
-                log.err(.app, "read attachment failed", .{ .path = path, .err = err });
-                self.terminal.printError("could not read attachment: {s}", .{path});
-                return error.AttachmentReadFailed;
-            };
-            const b64_len = std.base64.standard.Encoder.calcSize(raw.len);
-            const b64 = try ma.alloc(u8, b64_len);
-            _ = std.base64.standard.Encoder.encode(b64, raw);
+            const b64 = try ma.alloc(u8, std.base64.standard.Encoder.calcSize(content.len));
+            _ = std.base64.standard.Encoder.encode(b64, content);
             try inline_parts.append(ma, .{ .image = .{
                 .data = b64,
                 .mime_type = try ma.dupe(u8, mime),
@@ -2241,11 +2221,9 @@ fn buildUserMessageParts(
         }
     }
 
-    var parts: std.ArrayList(zenai.provider.ContentPart) = .empty;
     try text_prefix.appendSlice(ma, user_input);
-    try parts.append(ma, .{ .text = try text_prefix.toOwnedSlice(ma) });
-    for (inline_parts.items) |p| try parts.append(ma, p);
-    return parts.toOwnedSlice(ma);
+    try inline_parts.insert(ma, 0, .{ .text = try text_prefix.toOwnedSlice(ma) });
+    return inline_parts.toOwnedSlice(ma);
 }
 
 // Tool results are re-sent with every subsequent turn, so an unscoped read of
@@ -2366,9 +2344,7 @@ fn completionProviders(context: *anyopaque, arena: std.mem.Allocator) []const []
         if (reachable[i]) extra += 1;
     }
     const names = arena.alloc([]const u8, self.available_providers.len + auth.registry.len + 1 + extra) catch return &.{};
-    for (self.available_providers, 0..) |p, i| {
-        names[i] = arena.dupe(u8, p) catch return &.{};
-    }
+    @memcpy(names[0..self.available_providers.len], self.available_providers);
     var n = self.available_providers.len;
     // Subscription providers complete even without a stored token — selecting
     // one is what starts the login.

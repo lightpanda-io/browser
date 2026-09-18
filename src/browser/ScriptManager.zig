@@ -392,7 +392,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 }, &frame._http_owner);
                 {
                     errdefer transfer.deinit();
-                    try frame.headersForRequest(transfer);
+                    try frame.headersForRequest(transfer, .{});
                 }
 
                 const response = try transfer.submitSync();
@@ -448,7 +448,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .shutdown_callback = HttpClient.noopShutdown,
         });
         errdefer transfer.deinit();
-        try frame.headersForRequest(transfer);
+        try frame.headersForRequest(transfer, .{});
         break :blk transfer;
     };
 

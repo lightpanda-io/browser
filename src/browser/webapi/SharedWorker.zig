@@ -46,7 +46,6 @@ pub const Proto = EventTarget;
 
 _proto: *EventTarget,
 _port: *MessagePort,
-_on_error: ?js.Function.Global = null,
 
 const NameOrOpts = union(enum) {
     name: []const u8,
@@ -77,7 +76,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
         const s = try SharedWorkerGlobalScope.init(frame, resolved_url, options.name, options.type);
         errdefer s.deinit();
 
-        const page = frame._page;
+        const page = frame.page;
         try page.shared_workers.append(page.frame_arena, s);
         errdefer _ = page.shared_workers.pop();
 
@@ -87,7 +86,7 @@ pub fn init(url: []const u8, name_or_options: ?NameOrOpts, frame: *Frame) !*Shar
     };
 
     const port = try scope.connect(&frame.js.execution);
-    return frame._page.factory.eventTarget(SharedWorker{
+    return frame.page.factory.eventTarget(SharedWorker{
         ._proto = undefined,
         ._port = port,
     });
@@ -99,27 +98,6 @@ pub fn asEventTarget(self: *SharedWorker) *EventTarget {
 
 pub fn getPort(self: *const SharedWorker) *MessagePort {
     return self._port;
-}
-
-fn getOnError(self: *const SharedWorker) ?js.Function.Global {
-    return self._on_error;
-}
-
-fn setOnError(self: *SharedWorker, setter: ?FunctionSetter) void {
-    self._on_error = getFunctionFromSetter(setter);
-}
-
-const FunctionSetter = union(enum) {
-    func: js.Function.Global,
-    anything: js.Value,
-};
-
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
-    const setter = setter_ orelse return null;
-    return switch (setter) {
-        .func => |func| func,
-        .anything => null,
-    };
 }
 
 pub const JsApi = struct {
@@ -134,7 +112,6 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(SharedWorker.init, .{});
 
     pub const port = bridge.accessor(SharedWorker.getPort, null, .{});
-    pub const onerror = bridge.accessor(SharedWorker.getOnError, SharedWorker.setOnError, .{});
 };
 
 const testing = @import("../../testing.zig");

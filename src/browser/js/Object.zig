@@ -91,11 +91,7 @@ pub fn toValue(self: Object) js.Value {
 }
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
-    if (comptime lp.IS_DEBUG) {
-        return self.local.ctx.debugValue(self.toValue(), writer);
-    }
-    const str = self.toString() catch return error.WriteFailed;
-    return writer.writeAll(str);
+    return self.toValue().format(writer);
 }
 
 pub fn persist(self: Object) !Global {

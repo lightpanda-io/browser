@@ -25,17 +25,18 @@ const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
 
 const BiDi = @import("BiDi.zig");
 const remote_value = @import("remote_value.zig");
+const http_command = @import("http_command.zig");
 const browsing_context = @import("browsing_context.zig");
 
 const log = lp.log;
 const user_input = Frame.user_input;
 const Allocator = std.mem.Allocator;
 
-pub fn processMessage(cmd: *const BiDi.Command) !void {
+pub fn processMessage(cmd: *BiDi.Command, action: []const u8) !void {
     const command = std.meta.stringToEnum(enum {
         performActions,
         releaseActions,
-    }, cmd.action) orelse return error.UnknownCommand;
+    }, action) orelse return error.UnknownCommand;
 
     switch (command) {
         .performActions => return performActions(cmd),
@@ -43,7 +44,7 @@ pub fn processMessage(cmd: *const BiDi.Command) !void {
     }
 }
 
-fn performActions(cmd: *const BiDi.Command) !void {
+fn performActions(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
         actions: []const std.json.Value,
@@ -52,13 +53,17 @@ fn performActions(cmd: *const BiDi.Command) !void {
     if ((try browsing_context.requireContext(cmd, p.context)) == null) {
         return;
     }
+    return perform(cmd, p.actions);
+}
 
+// The core of performActions, shared with the HTTP session's Perform Actions.
+pub fn perform(cmd: *BiDi.Command, actions: []const std.json.Value) !void {
     const bidi = cmd.bidi;
     const arena = try bidi.app.arena_pool.acquire(.small, "bidi input.Pending");
     // run takes onwership of arena, so errdefer can lead to a double-free.
     // explicit release on error instead, then transfer to run.
 
-    const ticks = parseTicks(bidi, arena.allocator(), p.actions) catch |err| {
+    const ticks = parseTicks(bidi, arena.allocator(), actions) catch |err| {
         arena.release();
         if (err == error.OutOfMemory) {
             return err;
@@ -74,14 +79,14 @@ fn performActions(cmd: *const BiDi.Command) !void {
         .bidi = bidi,
         .arena = arena,
         .ticks = ticks,
-        .command_id = cmd.id,
+        .reply = cmd.takeReply(),
         .generation = bidi.input_state.generation,
     };
     return pending.run();
 }
 
 // Undo everything still held: keys and buttons in reverse press order.
-fn releaseActions(cmd: *const BiDi.Command) !void {
+fn releaseActions(cmd: *BiDi.Command) !void {
     const p = try cmd.params(struct {
         context: []const u8,
     });
@@ -89,7 +94,11 @@ fn releaseActions(cmd: *const BiDi.Command) !void {
     if ((try browsing_context.requireContext(cmd, p.context)) == null) {
         return;
     }
+    return release(cmd);
+}
 
+// The core of releaseActions, shared with the HTTP session's Release Actions.
+pub fn release(cmd: *BiDi.Command) !void {
     const bidi = cmd.bidi;
     const frame = bidi.user_context.session.currentFrame() orelse {
         return cmd.sendError("no such frame", "no frame");
@@ -113,10 +122,10 @@ fn releaseActions(cmd: *const BiDi.Command) !void {
         }
     }
 
-    return cmd.sendResult(struct {}{});
+    return cmd.sendDone();
 }
 
-fn dispatchFailed(cmd: *const BiDi.Command, err: DispatchError) !void {
+fn dispatchFailed(cmd: *BiDi.Command, err: DispatchError) !void {
     if (err == error.OutOfMemory) {
         return err;
     }
@@ -243,7 +252,7 @@ const TickAction = struct {
 const Pending = struct {
     bidi: *BiDi,
     arena: *lp.Arena,
-    command_id: u64,
+    reply: BiDi.Reply,
     generation: u32,
     ticks: []const []const TickAction,
     next: usize = 0,
@@ -267,11 +276,11 @@ const Pending = struct {
         const bidi = self.bidi;
         while (self.next < self.ticks.len) {
             if (bidi.input_state.generation != self.generation) {
-                try bidi.sendError(self.command_id, "unknown error", "input state was released while actions were pending");
+                try bidi.replyError(self.reply, "unknown error", "input state was released while actions were pending");
                 return false;
             }
             const frame = bidi.user_context.session.currentFrame() orelse {
-                try bidi.sendError(self.command_id, "no such frame", "no frame");
+                try bidi.replyError(self.reply, "no such frame", "no frame");
                 return false;
             };
 
@@ -286,7 +295,7 @@ const Pending = struct {
                     if (err == error.OutOfMemory) {
                         return err;
                     }
-                    try bidi.sendError(self.command_id, errorCode(err), errorMessage(err));
+                    try bidi.replyError(self.reply, errorCode(err), errorMessage(err));
                     return false;
                 };
             }
@@ -297,7 +306,7 @@ const Pending = struct {
             }
         }
 
-        try bidi.sendResult(self.command_id, struct {}{});
+        try bidi.replyDone(self.reply);
         return false;
     }
 
@@ -305,17 +314,17 @@ const Pending = struct {
         const self: *Pending = @ptrCast(@alignCast(ctx));
 
         // need to capture it here, run can free self
-        const command_id = self.command_id;
+        const reply = self.reply;
 
         self.run() catch |err| {
-            log.err(.bidi, "performActions", .{ .err = err, .id = command_id });
+            log.err(.bidi, "performActions", .{ .err = err, .reply = reply });
         };
         return null;
     }
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *Pending = @ptrCast(@alignCast(ctx));
-        self.bidi.sendError(self.command_id, "no such frame", "frame destroyed while actions were pending") catch {};
+        self.bidi.replyError(self.reply, "no such frame", "frame destroyed while actions were pending") catch {};
         self.deinit();
     }
 };
@@ -377,7 +386,7 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
 
         const parsed = try arena.alloc(Action, sa.actions.len);
         for (sa.actions, parsed) |raw, *action| {
-            action.* = try parseAction(sa.type, raw);
+            action.* = try parseAction(arena, sa.type, raw);
         }
         columns.appendAssumeCapacity(.{ .source = source, .actions = parsed });
 
@@ -398,7 +407,8 @@ fn parseTicks(bidi: *BiDi, arena: Allocator, actions: []const std.json.Value) Pa
     return ticks;
 }
 
-fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
+// `arena` outlives the command: an action can run after its json is gone.
+fn parseAction(arena: Allocator, kind: Source.Kind, raw: std.json.Value) ParseError!Action {
     const obj = switch (raw) {
         .object => |o| o,
         else => return error.InvalidActions,
@@ -437,7 +447,7 @@ fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
             .x = try numberField(obj, "x"),
             .y = try numberField(obj, "y"),
             .duration = try uintField(obj, "duration", 0),
-            .origin = try originField(obj, .pointer),
+            .origin = try originField(arena, obj, .pointer),
         } },
         .scroll => .{ .scroll = .{
             .x = try numberField(obj, "x"),
@@ -445,7 +455,7 @@ fn parseAction(kind: Source.Kind, raw: std.json.Value) ParseError!Action {
             .delta_x = try numberField(obj, "deltaX"),
             .delta_y = try numberField(obj, "deltaY"),
             .duration = try uintField(obj, "duration", 0),
-            .origin = try originField(obj, .wheel),
+            .origin = try originField(arena, obj, .wheel),
         } },
     };
 }
@@ -492,7 +502,7 @@ fn numberField(obj: std.json.ObjectMap, name: []const u8) ParseError!f64 {
     };
 }
 
-fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
+fn originField(arena: Allocator, obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
     const value = obj.get("origin") orelse return .viewport;
     switch (value) {
         .null => return .viewport,
@@ -506,6 +516,13 @@ fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
             return error.InvalidOrigin;
         },
         .object => |o| {
+            // an HTTP session's element reference
+            if (o.get(http_command.element_key)) |ref| {
+                return switch (ref) {
+                    .string => |s| .{ .element = try arena.dupe(u8, s) },
+                    else => error.InvalidOrigin,
+                };
+            }
             const typ = o.get("type") orelse return error.InvalidOrigin;
             if (typ != .string or std.mem.eql(u8, typ.string, "element") == false) {
                 return error.InvalidOrigin;
@@ -515,7 +532,7 @@ fn originField(obj: std.json.ObjectMap, source: Source.Kind) ParseError!Origin {
                 else => return error.InvalidOrigin,
             };
             return switch (element.get("sharedId") orelse return error.InvalidOrigin) {
-                .string => |s| .{ .element = s },
+                .string => |s| .{ .element = try arena.dupe(u8, s) },
                 else => error.InvalidOrigin,
             };
         },
@@ -570,7 +587,7 @@ fn dispatch(bidi: *BiDi, frame: *Frame, source: *Source, action: *const Action) 
             pointer.last_click_x = pointer.x;
             pointer.last_click_y = pointer.y;
 
-            try user_input.triggerMousePress(frame, pointer.x, pointer.y, button);
+            try user_input.triggerMousePress(frame, pointer.x, pointer.y, button, pointer.click_count);
         },
         .pointer_up => |button| {
             const pointer = &source.pointer;
@@ -625,7 +642,11 @@ fn dispatchKey(frame: *Frame, comptime typ: []const u8, info: *const KeyInfo, mo
         .metaKey = modifiers.meta,
         .shiftKey = modifiers.shift,
     }, frame);
-    try user_input.triggerKeyboard(frame, event);
+    if (comptime std.mem.eql(u8, typ, "keydown")) {
+        _ = try user_input.triggerKeyDown(frame, event, user_input.textForKey(event));
+    } else {
+        try user_input.triggerKeyUp(frame, event);
+    }
 }
 
 fn setModifier(modifiers: *Modifiers, which: ?Modifier, down: bool) void {

@@ -534,7 +534,8 @@ fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, 
     if (namespace == .unknown and namespace_string.len > 0) {
         // Same as Document.createElementNS: keep the URI so namespaceURI and
         // lookupNamespaceURI can return it.
-        try frame._element_namespace_uris.put(frame.arena, node.as(Element), try frame.dupeString(namespace_string));
+        const page = self.document._page;
+        try page.element_namespace_uris.put(page.frame_arena, node.as(Element), try frame.dupeString(namespace_string));
     }
 
     const pn = try self.arena.create(ParsedNode);

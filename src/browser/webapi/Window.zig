@@ -222,6 +222,10 @@ fn setInnerHeight(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "innerHeight");
 }
 
+fn setDevicePixelRatio(self: *Window, value: js.Value) void {
+    self.replaceGlobalProperty(value, "devicePixelRatio");
+}
+
 fn setScrollX(self: *Window, value: js.Value) void {
     self.replaceGlobalProperty(value, "scrollX");
 }
@@ -298,7 +302,10 @@ fn getSessionStorage(self: *Window) *storage.Lookup {
 }
 
 fn getCookieStore(self: *Window, exec: *Execution) !*CookieStore {
-    if (self._cookie_store) |cs| return cs;
+    if (self._cookie_store) |cs| {
+        return cs;
+    }
+
     const cs = try exec._factory.eventTarget(CookieStore{ ._proto = undefined });
     try cs.attach(exec);
     self._cookie_store = cs;
@@ -580,7 +587,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         return;
     }
 
-    frame._page.recordJsError(error.JsException);
+    frame.page.recordJsError(error.JsException);
 
     const target = self.asEventTarget();
     if (!frame._event_manager.hasDirectListeners(target, "error", self._on_error)) {
@@ -600,7 +607,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
-    }, frame._page);
+    }, frame.page);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -628,7 +635,7 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
 
     const event = error_event.asEvent();
     event.acquireRef();
-    defer event.releaseRef(frame._page);
+    defer event.releaseRef(frame.page);
 
     event._prevent_default = prevent_default;
     // Pass null as handler: onerror was already called above with 5 args.
@@ -659,7 +666,8 @@ fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]cons
     // (the element's own computed style) is a reasonable default for the
     // common probes
     const pseudo = Element.PseudoElement.parse(pseudo_element orelse "");
-    const gop = try frame._element_computed_styles.getOrPut(frame.arena, .{ .element = element, .pseudo = pseudo });
+    const page = frame.page;
+    const gop = try page.element_computed_styles.getOrPut(page.frame_arena, .{ .element = element, .pseudo = pseudo });
     if (!gop.found_existing) {
         if (pseudo == .other) {
             log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pseudo_element.? });
@@ -714,7 +722,7 @@ pub fn open(self: *Window, url_: ?[]const u8, target_: ?[]const u8, features_: ?
         return Access.init(frame.window, nav_target.window);
     }
 
-    const page = frame._page;
+    const page = frame.page;
 
     // Name-based reuse: if a popup with this name already exists, reuse it.
     // `_blank` is reserved and never reuses.
@@ -755,7 +763,7 @@ pub fn close(self: *Window) void {
     // Per spec, close() is only honored on script-opened windows. That
     // maps exactly to membership in page.popups.
     const frame = self._frame;
-    const page = frame._page;
+    const page = frame.page;
 
     var popup_index: usize = 0;
     while (popup_index < page.popups.items.len) : (popup_index += 1) {
@@ -913,30 +921,23 @@ pub fn getScrollY(self: *const Window) u32 {
 }
 
 fn getInnerWidth(_: *const Window, frame: *Frame) u32 {
-    return frame._page.getViewport().width;
+    return frame.page.getViewport().width;
 }
 
 // Faux-layout viewport height, used to decide whether an element is already
 // within view (e.g. scrollIntoViewIfNeeded).
 pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
-    return frame._page.getViewport().height;
+    return frame.page.getViewport().height;
 }
 
-const ScrollToOpts = union(enum) {
-    x: i32,
-    opts: Opts,
+fn getDevicePixelRatio(_: *const Window, frame: *Frame) f32 {
+    return frame.page.getViewport().scale;
+}
 
-    const Opts = struct {
-        behavior: []const u8 = "",
-        left: i32,
-        top: i32,
-    };
-};
-pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    const new_x: u32, const new_y: u32 = switch (opts) {
-        .x => |x| .{ @intCast(@max(x, 0)), @intCast(@max(0, y orelse 0)) },
-        .opts => |o| .{ @intCast(@max(0, o.left)), @intCast(@max(0, o.top)) },
-    };
+pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts.offsets(y);
+    const new_x: u32 = if (o.left) |left| @intCast(@max(0, left)) else self._scroll_pos.x;
+    const new_y: u32 = if (o.top) |top| @intCast(@max(0, top)) else self._scroll_pos.y;
 
     if (new_x == self._scroll_pos.x and new_y == self._scroll_pos.y) {
         return;
@@ -960,7 +961,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
                     return null;
                 }
 
-                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, f._page);
+                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, f.page);
                 try f._event_manager.dispatch(f.document.asEventTarget(), event);
                 pos.state = .end;
 
@@ -986,7 +987,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
                     .end => {},
                     .done => return null,
                 }
-                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, f._page);
+                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, f.page);
                 try f._event_manager.dispatch(f.document.asEventTarget(), event);
                 pos.state = .done;
 
@@ -998,21 +999,10 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void
     );
 }
 
-pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, frame: *Frame) !void {
-    // The scroll is relative to the current position. So compute to new
-    // absolute position.
-    var absx: i32 = undefined;
-    var absy: i32 = undefined;
-    switch (opts) {
-        .x => |x| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) +| x;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) +| (y orelse 0);
-        },
-        .opts => |o| {
-            absx = @as(i32, @intCast(self._scroll_pos.x)) +| o.left;
-            absy = @as(i32, @intCast(self._scroll_pos.y)) +| o.top;
-        },
-    }
+pub fn scrollBy(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
+    const o = opts.offsets(y);
+    const absx = @as(i32, @intCast(self._scroll_pos.x)) +| (o.left orelse 0);
+    const absy = @as(i32, @intCast(self._scroll_pos.y)) +| (o.top orelse 0);
     return self.scrollTo(.{ .x = absx }, absy, frame);
 }
 
@@ -1038,7 +1028,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
     };
 
     if (no_handler) {
-        frame._page.recordJsError(error.JsException);
+        frame.page.recordJsError(error.JsException);
     }
 
     const target = self.asEventTarget();
@@ -1046,7 +1036,7 @@ pub fn unhandledPromiseRejection(self: *Window, no_handler: bool, rejection: js.
         const event = (try @import("event/PromiseRejectionEvent.zig").init(event_name, .{
             .reason = if (rejection.reason()) |r| try r.persist() else null,
             .promise = try rejection.promise().persist(),
-        }, frame._page)).asEvent();
+        }, frame.page)).asEvent();
         try frame._event_manager.dispatchDirect(target, event, attribute_callback, .{ .context = "window.unhandledrejection" });
     }
 }
@@ -1121,7 +1111,7 @@ const PostMessageCallback = struct {
             .ports = self.ports,
             .bubbles = false,
             .cancelable = false,
-        }, frame._page)).asEvent();
+        }, frame.page)).asEvent();
         try frame._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
 
         return null;
@@ -1248,7 +1238,7 @@ pub const JsApi = struct {
     // the attribute rather than throwing.
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
-    pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
+    pub const devicePixelRatio = bridge.accessor(Window.getDevicePixelRatio, Window.setDevicePixelRatio, .{});
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
     pub const closed = bridge.accessor(Window.getClosed, null, .{});

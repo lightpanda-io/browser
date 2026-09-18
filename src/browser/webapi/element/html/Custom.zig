@@ -44,6 +44,7 @@ _definition: ?*CustomElementDefinition,
 _connected_callback_invoked: bool = false,
 _disconnected_callback_invoked: bool = false,
 _upgrade_failed: bool = false, // a failed upgrade is never retried
+_upgrade_in_progress: bool = false,
 
 pub fn asElement(self: *Custom) *Element {
     return Factory.protoOf(self).asElement();
@@ -62,6 +63,7 @@ pub fn asNode(self: *Custom) *Node {
 pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, frame: *Frame) error{OutOfMemory}!void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
+        if (custom._upgrade_in_progress) return;
         // Upgrade if a definition exists but isn't yet attached
         if (custom._definition == null) {
             if (custom._upgrade_failed) {
@@ -124,7 +126,7 @@ pub fn enqueueConnectedCallbackOnElement(comptime from_parser: bool, element: *E
 
 pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
+        if (custom._definition == null or custom._upgrade_in_progress) return;
         if (custom._disconnected_callback_invoked) return;
         custom._disconnected_callback_invoked = true;
         custom._connected_callback_invoked = false;
@@ -157,7 +159,7 @@ pub fn enqueueDisconnectedCallbackOnElement(element: *Element, frame: *Frame) vo
 // moves with it.
 pub fn enqueueMoveCallbackOnElement(element: *Element, frame: *Frame) void {
     const eligible = if (element.is(Custom)) |custom|
-        custom._definition != null
+        custom._definition != null and !custom._upgrade_in_progress
     else
         frame.getCustomizedBuiltInDefinition(element) != null;
 
@@ -191,7 +193,7 @@ pub fn enqueueShadowTreeCallbacks(host: *Element, comptime reaction: enum { conn
 
 pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Document, new_document: *Document, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
-        if (custom._definition == null) return;
+        if (custom._definition == null or custom._upgrade_in_progress) return;
     } else {
         if (frame.getCustomizedBuiltInDefinition(element) == null) return;
     }
@@ -202,6 +204,7 @@ pub fn enqueueAdoptedCallbackOnElement(element: *Element, old_document: *Documen
 
 pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, namespace: ?String, frame: *Frame) void {
     if (element.is(Custom)) |custom| {
+        if (custom._upgrade_in_progress) return;
         const definition = custom._definition orelse return;
         if (!definition.isAttributeObserved(name)) return;
     } else {
@@ -217,6 +220,11 @@ pub fn enqueueAttributeChangedCallbackOnElement(element: *Element, name: String,
 // Filtering already happened at enqueue time, so just fire unconditionally.
 pub fn fireReaction(reaction: Reaction, frame: *Frame) void {
     switch (reaction) {
+        .upgrade => |u| {
+            if (u.element._definition != null or u.element._upgrade_failed) return;
+            const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
+            CustomElementRegistry.upgradeCustomElement(u.element, u.definition, frame) catch {};
+        },
         .connected => |el| {
             if (el.is(Custom)) |custom| {
                 custom.invokeCallback("connectedCallback", .{}, frame);

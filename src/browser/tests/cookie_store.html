@@ -74,6 +74,24 @@
   });
 </script>
 
+<script id=loopback-is-trustworthy type=module>
+  // Served over plain http on 127.0.0.1, which browsers treat as trustworthy.
+  const state = await testing.async();
+  await cookieStore.set({ name: '__Host-lp', value: '1', path: '/' });
+  const item = await cookieStore.get('__Host-lp');
+  await cookieStore.delete('__Host-lp');
+
+  document.cookie = 'lp_secure=1; Secure';
+  const doc = document.cookie;
+  document.cookie = 'lp_secure=; Max-Age=0; Secure';
+  state.resolve();
+  await state.done(() => {
+    testing.expectEqual('__Host-lp', item.name);
+    testing.expectEqual(true, item.secure);
+    testing.expectEqual(true, doc.includes('lp_secure=1'));
+  });
+</script>
+
 <script id=change-event-binds-listeners-at-mutation type=module>
   const state = await testing.async();
   // A change enqueued while nobody is subscribed must not be delivered to a

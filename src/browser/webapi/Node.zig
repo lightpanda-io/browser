@@ -1215,8 +1215,7 @@ pub fn cloneNodeInto(self: *Node, deep: bool, document: *const Document, frame: 
             cloned._ready_state = .complete;
 
             if (deep) {
-                var child_it = self.childrenIterator();
-                while (child_it.next()) |child| {
+                for (try self.snapshotChildren(frame)) |child| {
                     if (try child.cloneNodeForAppending(true, cloned, frame)) |cloned_child| {
                         _ = cloned.asNode().appendChild(cloned_child, frame) catch return error.CloneError;
                     }
@@ -1257,6 +1256,26 @@ pub fn cloneNodeForAppending(self: *Node, deep: bool, document: *const Document,
         return null;
     }
     return cloned;
+}
+
+// A constructor run mid-clone can append to the node being cloned (a modal
+// that attaches itself to a shared root, say). Cloning walks a snapshot so
+// those additions aren't cloned in turn, which would never end.
+pub fn snapshotChildren(self: *Node, frame: *Frame) CloneError![]*Node {
+    var children: std.ArrayList(*Node) = .empty;
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        children.append(frame.call_arena, child) catch return error.CloneError;
+    }
+    return children.items;
+}
+
+pub fn cloneChildrenInto(self: *Node, parent: *Node, document: *const Document, frame: *Frame) CloneError!void {
+    for (try self.snapshotChildren(frame)) |child| {
+        if (try child.cloneNodeForAppending(true, document, frame)) |cloned| {
+            frame.appendNode(parent, cloned, .{}) catch return error.CloneError;
+        }
+    }
 }
 
 pub fn compareDocumentPosition(self: *Node, other: *Node) u16 {
@@ -1677,7 +1696,7 @@ pub fn assignedSlot(self: *Node, frame: *const Frame) ?*Element.Html.Slot {
     if (!self._flags.assigned_slot) {
         return null;
     }
-    return frame._assigned_slots.get(self);
+    return frame.page._assigned_slots.get(self);
 }
 
 pub const JsApi = struct {

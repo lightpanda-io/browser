@@ -140,6 +140,7 @@ const entry = text_entry.TextEntry(TextArea);
 
 pub const select = entry.select;
 pub const innerInsert = entry.innerInsert;
+pub const acceptsTextEntry = entry.acceptsTextEntry;
 pub const innerDelete = entry.innerDelete;
 pub const moveCaret = entry.moveCaret;
 pub const CaretMove = entry.CaretMove;
@@ -218,7 +219,7 @@ pub fn checkValidity(self: *TextArea, frame: *Frame) !bool {
     const v = ValidityState{ ._owner = self.asElement() };
     if (v.getValid(frame)) return true;
 
-    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame._page);
+    const event = try Event.initTrusted(comptime .wrap("invalid"), .{ .cancelable = true }, frame.page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
     return false;
 }

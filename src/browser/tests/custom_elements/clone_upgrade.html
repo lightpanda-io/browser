@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+
+<script id=clone_constructor_sees_copied_state>
+    {
+        let cloning = false;
+        let constructed;
+        let observed;
+        class CloneStateElement extends HTMLElement {
+            constructor() {
+                super();
+                if (cloning) {
+                    constructed = this;
+                    observed = [this.getAttribute('title'), this.children.length, this.textContent];
+                    this.setAttribute('from-constructor', 'yes');
+                    this.appendChild(document.createElement('span'));
+                }
+            }
+        }
+        customElements.define('clone-state-element', CloneStateElement);
+        const original = new CloneStateElement();
+        original.title = 'copied';
+        original.appendChild(document.createElement('b')).textContent = 'child';
+        cloning = true;
+        const copy = original.cloneNode(true);
+        testing.expectEqual(true, copy === constructed);
+        testing.expectEqual(true, copy instanceof CloneStateElement);
+        testing.expectEqual(['copied', 1, 'child'], observed);
+        testing.expectEqual('yes', copy.getAttribute('from-constructor'));
+        testing.expectEqual(2, copy.children.length);
+        testing.expectEqual(1, original.children.length);
+    }
+</script>
+
+<script id=reparented_clone_preserves_identity>
+    {
+        const source = document.body.appendChild(document.createElement('div'));
+        const constructed = [];
+        let cloning = false;
+        let connections = 0;
+        class ReparentedCloneElement extends HTMLElement {
+            constructor() {
+                super();
+                if (cloning) {
+                    constructed.push(this);
+                    if (constructed.length <= 8) source.appendChild(this);
+                }
+            }
+            connectedCallback() {
+                if (cloning) connections++;
+            }
+        }
+        customElements.define('reparented-clone-element', ReparentedCloneElement);
+        source.appendChild(new ReparentedCloneElement()).title = 'first';
+        source.appendChild(new ReparentedCloneElement()).title = 'second';
+        cloning = true;
+        const copy = source.cloneNode(true);
+        cloning = false;
+        testing.expectEqual(2, constructed.length);
+        testing.expectEqual(0, copy.children.length);
+        testing.expectEqual(4, source.children.length);
+        testing.expectEqual(true, source.children[2] === constructed[0]);
+        testing.expectEqual(true, source.children[3] === constructed[1]);
+        testing.expectEqual('first', constructed[0].title);
+        testing.expectEqual('second', constructed[1].title);
+        testing.expectEqual(0, connections);
+    }
+</script>
+
+<script id=clone_reactions_use_preconstruction_attributes>
+    {
+        let cloning = false;
+        const events = [];
+        class CloneReactionElement extends HTMLElement {
+            static get observedAttributes() { return ['title']; }
+            constructor() {
+                super();
+                if (cloning) {
+                    events.push(['constructor', this.title]);
+                    this.title = 'changed';
+                }
+            }
+            attributeChangedCallback(name, oldValue, newValue) {
+                events.push([name, oldValue, newValue]);
+            }
+        }
+        customElements.define('clone-reaction-element', CloneReactionElement);
+        const original = new CloneReactionElement();
+        original.title = 'copied';
+        events.length = 0;
+        cloning = true;
+        const copy = original.cloneNode();
+        cloning = false;
+        testing.expectEqual([['constructor', 'copied'], ['title', null, 'copied']], events);
+        testing.expectEqual('changed', copy.title);
+        testing.expectEqual('copied', original.title);
+    }
+</script>
+
+<script id=import_upgrades_the_copied_element>
+    {
+        let constructed;
+        let observed;
+        class ImportedCloneElement extends HTMLElement {
+            constructor() {
+                super();
+                constructed = this;
+                observed = [this.title, this.textContent, this.ownerDocument === document];
+            }
+        }
+        customElements.define('imported-clone-element', ImportedCloneElement);
+        const foreign = document.implementation.createHTMLDocument('foreign');
+        const original = foreign.createElement('imported-clone-element');
+        original.title = 'copied';
+        original.appendChild(foreign.createElement('b')).textContent = 'child';
+        const copy = document.importNode(original, true);
+        testing.expectEqual(true, copy === constructed);
+        testing.expectEqual(true, copy instanceof ImportedCloneElement);
+        testing.expectEqual(['copied', 'child', true], observed);
+        testing.expectEqual(true, original.ownerDocument === foreign);
+        testing.expectEqual(1, original.children.length);
+    }
+</script>
+
+<script id=failed_clone_upgrade_keeps_the_copied_node>
+    {
+        let cloning = false;
+        let constructed;
+        let attempts = 0;
+        let reported = 0;
+        const onError = (event) => {
+            if (event.message.includes('clone upgrade failed')) {
+                reported++;
+                event.preventDefault();
+            }
+        };
+        window.addEventListener('error', onError);
+        class FailedCloneElement extends HTMLElement {
+            constructor() {
+                super();
+                if (cloning) {
+                    constructed = this;
+                    attempts++;
+                    this.setAttribute('from-constructor', 'yes');
+                    throw new Error('clone upgrade failed');
+                }
+            }
+        }
+        customElements.define('failed-clone-element', FailedCloneElement);
+        const original = new FailedCloneElement();
+        original.title = 'copied';
+        cloning = true;
+        const copy = original.cloneNode();
+        customElements.upgrade(copy);
+        window.removeEventListener('error', onError);
+        testing.expectEqual(true, copy === constructed);
+        testing.expectEqual(true, copy instanceof FailedCloneElement);
+        testing.expectEqual('copied', copy.title);
+        testing.expectEqual('yes', copy.getAttribute('from-constructor'));
+        testing.expectEqual(1, attempts);
+        testing.expectEqual(1, reported);
+    }
+</script>
+
+<script id=upgrade_constructor_removes_itself>
+    {
+        const events = [];
+        const el = document.body.appendChild(document.createElement('self-removing-upgrade'));
+        customElements.define('self-removing-upgrade', class extends HTMLElement {
+            constructor() {
+                super();
+                this.remove();
+            }
+            connectedCallback() { events.push('connected'); }
+            disconnectedCallback() { events.push('disconnected'); }
+        });
+        testing.expectEqual(['connected'], events);
+        document.body.appendChild(el);
+        testing.expectEqual(['connected', 'connected'], events);
+        el.remove();
+        testing.expectEqual(['connected', 'connected', 'disconnected'], events);
+    }
+</script>
+
+<script id=clone_constructor_connects_itself>
+    {
+        let cloning = false;
+        const events = [];
+        class SelfConnectingClone extends HTMLElement {
+            constructor() {
+                super();
+                if (cloning) document.body.appendChild(this);
+            }
+            connectedCallback() { if (cloning) events.push('connected'); }
+            disconnectedCallback() { if (cloning) events.push('disconnected'); }
+        }
+        customElements.define('self-connecting-clone', SelfConnectingClone);
+        const original = new SelfConnectingClone();
+        cloning = true;
+        const copy = original.cloneNode();
+        testing.expectEqual(true, copy.isConnected);
+        testing.expectEqual([], events);
+        copy.remove();
+        testing.expectEqual(['disconnected'], events);
+        document.body.appendChild(copy);
+        testing.expectEqual(['disconnected', 'connected'], events);
+    }
+</script>

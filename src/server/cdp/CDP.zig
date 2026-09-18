@@ -459,6 +459,10 @@ pub const BrowserContext = struct {
     session_id: ?[]const u8,
     attached_sessions: std.ArrayList(AttachedSession) = .empty,
 
+    // A cancelled text-less keyDown drops the char message that follows it
+    // (chromedp's keyDown/char/keyUp split), as Chrome does.
+    suppress_next_char: bool = false,
+
     security_origin: []const u8,
     page_life_cycle_events: bool,
     secure_context_type: []const u8,

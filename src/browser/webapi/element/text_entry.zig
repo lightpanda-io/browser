@@ -29,10 +29,22 @@ const InputEvent = @import("../event/InputEvent.zig");
 
 pub fn TextEntry(comptime T: type) type {
     return struct {
+        /// Whether typing edits the control's value. Checkbox and radio share
+        /// Input's value machinery but no text goes into them.
+        pub fn acceptsTextEntry(self: *const T) bool {
+            if (!@hasField(T, "_input_type")) {
+                return true;
+            }
+            return switch (self._input_type) {
+                .checkbox, .radio => false,
+                else => true,
+            };
+        }
+
         pub fn select(self: *T, frame: *Frame) !void {
             const len: u32 = @intCast(self.getValue().len);
             try setSelectionRange(self, 0, len, null, frame);
-            const event = try Event.init("select", .{ .bubbles = true }, frame._page);
+            const event = try Event.init("select", .{ .bubbles = true }, frame.page);
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 
@@ -290,7 +302,7 @@ pub fn TextEntry(comptime T: type) type {
         }
 
         fn dispatchSelectionChangeEvent(self: *T, frame: *Frame) !void {
-            const event = try Event.init("selectionchange", .{ .bubbles = true }, frame._page);
+            const event = try Event.init("selectionchange", .{ .bubbles = true }, frame.page);
             try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
         }
 

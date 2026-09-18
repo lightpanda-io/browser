@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<head></head>
+<body>
+  <span id="s1" data-cp="5F" class="a b">x</span>
+  <div id="host"></div>
+  <div id="dhost"><template shadowrootmode="open"><p id="inner">in</p></template></div>
+  <button id="btn">b</button>
+  <script>
+    // Called by the parent test: these execute in this frame's realm.
+    function datasetOf(id) {
+      return document.getElementById(id).dataset;
+    }
+    function classListOf(id) {
+      return document.getElementById(id).classList;
+    }
+    function shadowRootOf(id) {
+      return document.getElementById(id).shadowRoot;
+    }
+    function onclickOf(id) {
+      return document.getElementById(id).onclick;
+    }
+    function clickById(id) {
+      document.getElementById(id).click();
+    }
+  </script>
+</body>

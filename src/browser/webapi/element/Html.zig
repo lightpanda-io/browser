@@ -423,7 +423,7 @@ pub fn click(self: *HtmlElement, frame: *Frame) !void {
     // Keep the event alive past dispatch (which runs handlers/microtasks) so we
     // can read _prevent_default afterwards.
     event.acquireRef();
-    defer _ = event.releaseRef(frame._page);
+    defer _ = event.releaseRef(frame.page);
 
     try frame._event_manager.dispatch(self.asEventTarget(), event);
 
@@ -1638,8 +1638,11 @@ fn handleChildElement(
     // is hidden through its parent. If you can el.innerText on an element, the
     // visibility of el.parent doesn't matter. So we only care about visibility
     // on the element itself and then on each child. This is much simpler too.
-    if (state.frame._style_manager.hasDisplayNone(he.asElement())) {
-        return;
+    const el = he.asElement();
+    if (el.ownerFrame(state.frame)) |owner| {
+        if (owner._style_manager.hasDisplayNone(el)) {
+            return;
+        }
     }
 
     if (he._type == .br) {
