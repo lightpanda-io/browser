@@ -80,7 +80,7 @@ fn sendInspector(cmd: *CDP.Command) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     // the result to return is handled directly by the inspector.
-    bc.callInspector(cmd.input.json);
+    try bc.callInspector(cmd);
 }
 
 // Object arguments stay remote handles; serializing them would execute page JS.
@@ -178,6 +178,32 @@ test "cdp.runtime: inspector-handled methods pass through" {
 
     try ctx.processMessage(.{ .id = 52, .method = "Runtime.discardConsoleEntries" });
     try ctx.expectSentResult(null, .{ .id = 52 });
+}
+
+// Playwright's browserContext.newCDPSession attaches a second session to the
+// page and sends Runtime commands through it. The inspector's answer must
+// carry that session's id: the driver keys its pending callbacks by session
+// and asserts on a response it can't match (lightpanda-io/browser#1838).
+test "cdp.runtime: inspector responses go to the session that sent the command" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-RT2", .url = "hi.html", .target_id = "FID-0000000RT2".*, .session_id = "SID-PRIMARY" });
+    try bc.attached_sessions.append(bc.arena, .{ .id = "SID-AUX", .parent_id = null });
+
+    try ctx.processMessage(.{ .id = 60, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "1 + 1", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 2, .description = "2" } }, .{ .id = 60, .session_id = "SID-AUX" });
+    try testing.expectEqual(0, bc.inspector_call_sessions.count());
+
+    // The primary session keeps working as before.
+    try ctx.processMessage(.{ .id = 61, .method = "Runtime.evaluate", .sessionId = "SID-PRIMARY", .params = .{ .expression = "2 + 2", .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 4, .description = "4" } }, .{ .id = 61, .session_id = "SID-PRIMARY" });
+
+    // A response the inspector produces after the dispatch (awaitPromise
+    // answers from a microtask) still finds its session.
+    try ctx.processMessage(.{ .id = 62, .method = "Runtime.evaluate", .sessionId = "SID-AUX", .params = .{ .expression = "Promise.resolve('late')", .awaitPromise = true, .returnByValue = true } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "string", .value = "late" } }, .{ .id = 62, .session_id = "SID-AUX" });
+    try testing.expectEqual(0, bc.inspector_call_sessions.count());
 }
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {

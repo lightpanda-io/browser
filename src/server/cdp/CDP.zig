@@ -474,6 +474,7 @@ pub const BrowserContext = struct {
     // entries evicted by resetFrame can linger harmlessly until reset.
     set_child_nodes_sent: std.AutoHashMapUnmanaged(NodeRegistry.Id, void) = .empty,
 
+    inspector_call_sessions: std.AutoHashMapUnmanaged(i64, []const u8) = .empty,
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
 
@@ -626,6 +627,7 @@ pub const BrowserContext = struct {
         self.node_registry.deinit();
         self.node_search_list.deinit();
         self.set_child_nodes_sent.deinit(self.cdp.allocator);
+        self.inspector_call_sessions.deinit(self.cdp.allocator);
 
         // Session.deinit (called via closeSession above) already cleared this
         // notification off any ownerless CorsGate/RobotsGate transfers.
@@ -1132,13 +1134,31 @@ pub const BrowserContext = struct {
         }
     }
 
-    pub fn callInspector(self: *const BrowserContext, msg: []const u8) void {
-        self.inspector_session.send(msg);
+    /// Forwards `cmd`'s raw JSON to the V8 inspector, which answers through onInspectorResponse.
+    pub fn callInspector(self: *BrowserContext, cmd: *const Command) !void {
+        try self.trackInspectorCall(cmd);
+        self.inspector_session.send(cmd.input.json);
         self.session.browser.env.runMicrotasks();
     }
 
-    pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-        sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
+    // Remembers which non-primary session `cmd` came from, so that its response
+    // can be stamped with that session.
+    fn trackInspectorCall(self: *BrowserContext, cmd: *const Command) !void {
+        const id = cmd.input.id orelse return;
+        const input_session_id = cmd.input.session_id orelse return;
+        if (self.session_id) |primary| {
+            if (std.mem.eql(u8, primary, input_session_id)) {
+                return;
+            }
+        }
+        const session_id = self.cdp.resolveSessionId(input_session_id) orelse return;
+        try self.inspector_call_sessions.put(self.cdp.allocator, id, session_id);
+    }
+
+    pub fn onInspectorResponse(ctx: *anyopaque, call_id: u32, msg: []const u8) void {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const session_id = self.inspector_call_sessions.fetchRemove(@intCast(call_id));
+        sendInspectorMessage(self, msg, if (session_id) |kv| kv.value else null) catch |err| {
             log.err(.cdp, "send inspector response", .{ .err = err });
         };
     }
@@ -1155,16 +1175,17 @@ pub const BrowserContext = struct {
             log.debug(.cdp, "inspector event", .{ .method = method });
         }
 
-        sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
+        sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg, null) catch |err| {
             log.err(.cdp, "send inspector event", .{ .err = err });
         };
     }
 
-    // This is hacky x 2. First, we create the JSON payload by gluing our
-    // session_id onto it. Second, we're much more client/websocket aware than
-    // we should be.
-    fn sendInspectorMessage(self: *BrowserContext, msg: []const u8) !void {
-        const session_id = self.session_id orelse {
+    // This is hacky x 2. First, we create the JSON payload by gluing a
+    // session_id onto it: `explicit_session_id` (the session a response
+    // belongs to) or else the primary session (all events). Second, we're
+    // much more client/websocket aware than we should be.
+    fn sendInspectorMessage(self: *BrowserContext, msg: []const u8, explicit_session_id: ?[]const u8) !void {
+        const session_id = explicit_session_id orelse self.session_id orelse {
             // We no longer have an active session. What should we do
             // in this case?
             return;
