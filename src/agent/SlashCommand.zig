@@ -88,24 +88,20 @@ pub fn findMeta(name: []const u8) ?*const MetaCommand {
 const browser_tools = lp.tools;
 const llm_values = std.enums.values(Command.LlmCommand);
 
-/// Every slash-invocable name: browser tools, LLM triggers, meta commands.
-pub const all_names: [browser_tools.names.len + meta_commands.len + llm_values.len][]const u8 = blk: {
-    var arr: [browser_tools.names.len + meta_commands.len + llm_values.len][]const u8 = undefined;
-    var idx: usize = 0;
-    for (browser_tools.names) |n| {
-        arr[idx] = n;
-        idx += 1;
-    }
-    for (llm_values) |lc| {
-        arr[idx] = @tagName(lc);
-        idx += 1;
-    }
-    for (meta_commands) |m| {
-        arr[idx] = m.name;
-        idx += 1;
-    }
+const llm_names = blk: {
+    var arr: [llm_values.len][]const u8 = undefined;
+    for (llm_values, &arr) |v, *slot| slot.* = @tagName(v);
     break :blk arr;
 };
+
+const meta_names = blk: {
+    var arr: [meta_commands.len][]const u8 = undefined;
+    for (meta_commands, &arr) |m, *slot| slot.* = m.name;
+    break :blk arr;
+};
+
+/// Every slash-invocable name: browser tools, LLM triggers, meta commands.
+pub const all_names = browser_tools.names ++ llm_names ++ meta_names;
 
 /// Closest command name within two edits, or null — for "did you mean?" on typos.
 pub fn closestCommand(name: []const u8) ?[]const u8 {

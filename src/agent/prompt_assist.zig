@@ -569,10 +569,8 @@ fn renderMetaHint(state: *State, meta: *const SlashCommand.MetaCommand, body: []
     }
 
     if (body.len == 0) {
-        var frags: [1][]const u8 = .{meta.hint};
-        return writeHints(if (ends_ws) "" else " ", &frags);
+        return writeHints(if (ends_ws) "" else " ", &.{meta.hint});
     }
-    if (ends_ws) return null;
     if (meta.tag == .load or meta.tag == .save) return ghostPathFirstMatch(body);
     return ghostFirstMatch(meta.values, body, "");
 }
