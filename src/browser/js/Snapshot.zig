@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("js.zig");
+const WasmStreaming = @import("WasmStreaming.zig");
 const bridge = @import("bridge.zig");
 const reflect = @import("../reflect.zig");
 
@@ -151,6 +152,11 @@ pub fn create() !Snapshot {
     var data_start: usize = 0;
     const isolate = v8.v8__SnapshotCreator__getIsolate(snapshot_creator).?;
     defer v8.v8__Isolate__LowMemoryNotification(isolate);
+
+    // WebAssembly.compileStreaming/instantiateStreaming are installed at
+    // context genesis, and only if the isolate has a streaming callback. The
+    // pointer is not serialized; the runtime isolate registers its own.
+    v8.v8__Isolate__SetWasmStreamingCallback(isolate, WasmStreaming.callback);
 
     {
         // CreateBlob, which we'll call once everything is setup, MUST NOT
