@@ -507,6 +507,35 @@
   }
 </script>
 
+<script id=fetch_metadata_headers type=module>
+  {
+    // The test server is loopback, so potentially trustworthy.
+    const state = await testing.async();
+    const parse = (text) => {
+      const got = {};
+      for (const line of text.trim().split('\n')) {
+        const sep = line.indexOf(': ');
+        got[line.slice(0, sep).toLowerCase()] = line.slice(sep + 2);
+      }
+      return got;
+    };
+    const same = parse(await (await fetch('/echo_headers')).text());
+    const same_origin_mode = parse(await (await fetch('/echo_headers', { mode: 'same-origin' })).text());
+    // 127.0.0.1 -> localhost is cross-site, and the chain keeps it.
+    const cross = parse(await (await fetch('/redirect_cross_echo_headers')).text());
+    state.resolve();
+
+    await state.done(() => {
+      testing.expectEqual('same-origin', same['sec-fetch-site']);
+      testing.expectEqual('cors', same['sec-fetch-mode']);
+      testing.expectEqual('empty', same['sec-fetch-dest']);
+      testing.expectEqual(undefined, same['sec-fetch-user']);
+      testing.expectEqual('same-origin', same_origin_mode['sec-fetch-mode']);
+      testing.expectEqual('cross-site', cross['sec-fetch-site']);
+    });
+  }
+</script>
+
 <script id=fetch_redirect_referer type=module>
   {
     const state = await testing.async();

@@ -675,6 +675,9 @@ pub fn newRequest(self: *Client, req: Request, owner: ?*Owner) anyerror!*Transfe
 
         const raw_origin: ?[]const u8 = req.origin orelse if (owner) |o| o.scope.origin() else null;
         owned.origin = if (raw_origin) |origin| try arena.dupe(u8, origin) else null;
+        if (req.initiator_origin) |origin| {
+            owned.initiator_origin = try arena.dupe(u8, origin);
+        }
 
         // The body can be larger, so callers can signal, via the
         // `body_outlives_request` flag that they guarantee that the body
@@ -1060,6 +1063,7 @@ fn pipeline(self: *Client, transfer: *Transfer, from: SubmitFrom) !void {
 
             if (transfer.req.internal == false) {
                 try setOriginHeader(transfer);
+                try setFetchMetadataHeaders(transfer, transfer.destination());
             }
 
             if (self.obey_cors and !transfer.req.internal) {
@@ -1151,6 +1155,45 @@ fn setOriginHeader(transfer: *Transfer) !void {
     }
 
     try transfer.setHeader("Origin", transfer.effectiveOrigin(), .{});
+}
+
+pub fn setFetchMetadataHeaders(transfer: *Transfer, dest: []const u8) !void {
+    const req = &transfer.req;
+
+    const site: Transfer.FetchSite = if (transfer._fetch_site) |previous|
+        previous.next(req)
+    else if (req.request_mode == .navigate and req.initiator_origin == null)
+        .none
+    else
+        .forRequest(req);
+    transfer._fetch_site = site;
+
+    if (URL.isPotentiallyTrustworthy(req.url) == false) {
+        var i: usize = 0;
+        while (i < transfer.req_headers.items.len) {
+            const hdr = transfer.req_headers.items[i];
+            if (hdr.source == .user_agent and std.ascii.startsWithIgnoreCase(hdr.name, "sec-fetch-")) {
+                _ = transfer.req_headers.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+        return;
+    }
+
+    try transfer.setHeader("Sec-Fetch-Site", @tagName(site), .{});
+    try transfer.setHeader("Sec-Fetch-Mode", switch (req.request_mode) {
+        .cors => "cors",
+        .no_cors => "no-cors",
+        .same_origin => "same-origin",
+        .navigate => "navigate",
+    }, .{});
+    // Only a navigation the user started (address bar, CDP) has an activation
+    // to report; we don't track the transient kind a click gives a script.
+    if (req.request_mode == .navigate and req.initiator_origin == null) {
+        try transfer.setHeader("Sec-Fetch-User", "?1", .{});
+    }
+    try transfer.setHeader("Sec-Fetch-Dest", dest, .{});
 }
 
 // RobotsGate resumption.
@@ -1982,6 +2025,10 @@ pub const Request = struct {
     // The Origin of the Request.
     origin: ?[]const u8,
 
+    // The origin of the document that started a navigation. null for a
+    // navigation the user started (address bar, CDP).
+    initiator_origin: ?[]const u8 = null,
+
     // Requests that are internal to the browser and skip various layers,
     // these do not need to be deferred and do not obey robots.txt.
     internal: bool = false,
@@ -2017,6 +2064,13 @@ pub const Request = struct {
     // every caller decides — pass `HttpClient.noopShutdown` to opt out,
     // knowingly.
     shutdown_callback: ShutdownCallback,
+
+    // What Sec-Fetch-Site is measured against: a navigation's initiator,
+    // everything else's own origin.
+    fn initiatorOrigin(req: *const Request) []const u8 {
+        const origin = if (req.request_mode == .navigate) req.initiator_origin else req.origin;
+        return origin orelse "null";
+    }
 
     pub fn credentialsAllowed(req: *const Request) bool {
         return switch (req.credentials_mode) {
@@ -2358,6 +2412,50 @@ pub const Transfer = struct {
     // Set once a redirect target origin differs from origin of the URL
     // that redirected to it.
     _cors_origin_tainted: bool = false,
+
+    // Sec-Fetch-Site so far. null until the first hop is evaluated.
+    _fetch_site: ?FetchSite = null,
+
+    // Ordered matters, from closest to furthest
+    const FetchSite = enum {
+        @"same-origin",
+        @"same-site",
+        @"cross-site",
+        none,
+
+        fn forRequest(req: *const Request) FetchSite {
+            const origin = req.initiatorOrigin();
+            if (URL.isSameOrigin(req.url, origin)) {
+                return .@"same-origin";
+            }
+            const same_scheme = std.mem.eql(u8, URL.getProtocol(req.url), URL.getProtocol(origin));
+            if (same_scheme and Cookie.areHostsSameSite(URL.getHostname(req.url), URL.getHostname(origin))) {
+                return .@"same-site";
+            }
+            return .@"cross-site";
+        }
+
+        fn next(self: FetchSite, req: *const Request) FetchSite {
+            if (self == .none) {
+                return .none;
+            }
+            // it can only get further, so redirect a -> b -> a doesn't appear as a -> a
+            return @enumFromInt(@max(@intFromEnum(self), @intFromEnum(forRequest(req))));
+        }
+    };
+
+    // Fetch's request destination, as Sec-Fetch-Dest spells it.
+    pub fn destination(self: *const Transfer) []const u8 {
+        return switch (self.req.resource_type) {
+            // The owner of a document request is the frame being navigated.
+            .document => if (self.owner != null and self.owner.?.parent != null) "iframe" else "document",
+            .xhr, .fetch, .eventsource => "empty",
+            .script => "script",
+            .stylesheet => "style",
+            .image => "image",
+            .worker => "worker",
+        };
+    }
 
     pub const State = union(enum) {
         // Pre-commit. Only valid inside the request flow (Client.request
@@ -5259,6 +5357,85 @@ test "HttpClient: cors redirect to a URL with credentials" {
         } else {
             try testing.expectError(error.RedirectWithCredentials, result);
         }
+    }
+}
+
+test "HttpClient: fetch metadata headers" {
+    var pool = ArenaPool.init(testing.allocator, .{});
+    defer pool.deinit();
+    var client: Client = undefined;
+    initTestClient(&client, &pool);
+
+    {
+        // A navigation the user started.
+        const arena = try pool.acquire(.small, "fetch metadata test");
+        defer arena.release();
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = "https://a.test/",
+                .origin = "https://a.test",
+                .credentials_mode = .include,
+                .request_mode = .navigate,
+                .resource_type = .document,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        try setFetchMetadataHeaders(&transfer, transfer.destination());
+        try testing.expectEqual("none", transfer.findRequestHeader("sec-fetch-site").?);
+        try testing.expectEqual("navigate", transfer.findRequestHeader("sec-fetch-mode").?);
+        try testing.expectEqual("?1", transfer.findRequestHeader("sec-fetch-user").?);
+        try testing.expectEqual("document", transfer.findRequestHeader("sec-fetch-dest").?);
+
+        // none sticks across redirects
+        transfer.req.url = "https://b.test/";
+        try setFetchMetadataHeaders(&transfer, transfer.destination());
+        try testing.expectEqual("none", transfer.findRequestHeader("sec-fetch-site").?);
+    }
+
+    {
+        const arena = try pool.acquire(.small, "fetch metadata test");
+        defer arena.release();
+        var transfer: Transfer = .{
+            .arena = arena,
+            .owner = null,
+            .req = .{
+                .method = .GET,
+                .url = "https://www.a.test/",
+                .origin = "https://a.test",
+                .initiator_origin = "https://b.test",
+                .credentials_mode = .include,
+                .request_mode = .no_cors,
+                .resource_type = .image,
+                .shutdown_callback = noopShutdown,
+                .ctx = undefined,
+            },
+            .client = &client,
+            .id = 1,
+            .start_time = 0,
+        };
+        try setFetchMetadataHeaders(&transfer, transfer.destination());
+        try testing.expectEqual("same-site", transfer.findRequestHeader("sec-fetch-site").?);
+        try testing.expectEqual("no-cors", transfer.findRequestHeader("sec-fetch-mode").?);
+        try testing.expectEqual(null, transfer.findRequestHeader("sec-fetch-user"));
+        try testing.expectEqual("image", transfer.findRequestHeader("sec-fetch-dest").?);
+
+        // an insecure hop drops them
+        transfer.req.url = "http://a.test/";
+        try setFetchMetadataHeaders(&transfer, transfer.destination());
+        try testing.expectEqual(null, transfer.findRequestHeader("sec-fetch-site"));
+        try testing.expectEqual(null, transfer.findRequestHeader("sec-fetch-dest"));
+
+        // coming back to a same-origin URL keeps the furthest site so far
+        transfer.req.url = "https://a.test/";
+        try setFetchMetadataHeaders(&transfer, transfer.destination());
+        try testing.expectEqual("cross-site", transfer.findRequestHeader("sec-fetch-site").?);
     }
 }
 
