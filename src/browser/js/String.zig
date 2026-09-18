@@ -153,3 +153,23 @@ pub fn toOneByteSlice(self: String, allocator: Allocator) ![]u8 {
     }
     return buf;
 }
+
+pub fn writeUtf8(
+    self: String,
+    dest: []u8,
+    flags: enum(c_uint) {
+        none = v8.WRITE_NONE,
+        null_terminate = v8.WRITE_NULL_TERMINATE,
+        replace_invalid_utf8 = v8.WRITE_REPLACE_INVALID_UTF8,
+    },
+    processed_characters_len: ?*usize,
+) usize {
+    return v8.v8__String__WriteUtf8(
+        self.handle,
+        self.local.isolate.handle,
+        dest.ptr,
+        dest.len,
+        @intFromEnum(flags),
+        processed_characters_len,
+    );
+}
