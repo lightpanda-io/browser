@@ -138,8 +138,10 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const entry = self.map.get(url) orelse return null;
-        return switch (entry) {
+        const kv = self.map.getEntry(url) orelse return null;
+        self.evictions.touch(kv.key_ptr.*);
+
+        return switch (kv.value_ptr.*) {
             .allowed => .allowed,
             .disallowed => .blocked,
             .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
