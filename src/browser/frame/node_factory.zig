@@ -1070,6 +1070,10 @@ fn createHtmlElementT(document: *const Node.Document, comptime E: type, namespac
 
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
+        if (comptime @TypeOf(attribute_iterator) == Parser.AttributeIterator and @hasDecl(E.Build, "parser_created_on_insert")) {
+            // The element wants its parent, it'll do this work when inserted.
+            return node;
+        }
         @call(.auto, @field(E.Build, "created"), .{ node, frame }) catch |err| {
             log.err(.frame, "build.created", .{ .tag = node.getNodeName(&frame.buf), .err = err, .type = frame._type, .url = frame.url });
             return err;

@@ -2696,6 +2696,7 @@ pub fn removeNode(self: *Frame, parent: *Node, child: *Node, opts: RemoveNodeOpt
     child._parent = null;
 
     Element.Html.Select.childRemoved(parent, child);
+    Element.Html.Picture.childRemoved(parent, child, next_sibling, self);
 
     // Update live ranges for removal (DOM spec remove steps 4-7)
     if (child_index_for_ranges) |idx| {
@@ -2939,6 +2940,12 @@ fn _insertNodeRelative(self: *Frame, comptime from_parser: bool, parent: *Node, 
     child._parent = parent;
 
     Element.Html.Select.childInserted(parent, child);
+    if (child.is(Element.Html.Image)) |img| {
+        // noop if it didn't actually change
+        try img.sourceChanged(self);
+    } else {
+        try Element.Html.Picture.childInserted(parent, child, self);
+    }
 
     // Update live ranges for insertion (DOM spec insert step 6).
     // For .before/.after the child was inserted at a specific position;

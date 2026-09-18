@@ -95,8 +95,10 @@ pub fn fragment(frame: *Frame, node: *Node, html: []const u8, opts: FragmentPars
     while (it.next()) |child| {
         child._parent = node;
     }
-    // Nor did the options among them reach their select.
+    // Nor did the options among them reach their select, nor the images
+    // their picture.
     Element.Html.Select.childrenInserted(node);
+    try Element.Html.Picture.childrenInserted(node, frame);
 }
 
 // Build a detached XMLDocument from `xml` (DOMParser.parseFromString and
