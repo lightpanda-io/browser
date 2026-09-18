@@ -19,7 +19,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub fn EvictionQueue(comptime K: type) type {
+pub fn LruCache(comptime K: type) type {
     return struct {
         const Self = @This();
 
@@ -74,8 +74,8 @@ pub fn EvictionQueue(comptime K: type) type {
 
 const testing = @import("../testing.zig");
 
-test "EvictionQueue: no eviction under capacity" {
-    var q = EvictionQueue([]const u8).init(testing.allocator, 3);
+test "LruCache: no eviction under capacity" {
+    var q = LruCache([]const u8).init(testing.allocator, 3);
     defer q.deinit();
 
     try testing.expectEqual(null, try q.insert("a"));
@@ -84,8 +84,8 @@ test "EvictionQueue: no eviction under capacity" {
     try testing.expectEqual(3, q.list.len());
 }
 
-test "EvictionQueue: evicts oldest key once over capacity" {
-    var q = EvictionQueue([]const u8).init(testing.allocator, 2);
+test "LruCache: evicts oldest key once over capacity" {
+    var q = LruCache([]const u8).init(testing.allocator, 2);
     defer q.deinit();
 
     try testing.expectEqual(null, try q.insert("a"));
@@ -102,8 +102,8 @@ test "EvictionQueue: evicts oldest key once over capacity" {
     try testing.expectEqual(2, q.list.len());
 }
 
-test "EvictionQueue: touch properly prevents eviction on oldest" {
-    var q = EvictionQueue([]const u8).init(testing.allocator, 2);
+test "LruCache: touch properly prevents eviction on oldest" {
+    var q = LruCache([]const u8).init(testing.allocator, 2);
     defer q.deinit();
 
     try testing.expectEqual(null, try q.insert("a"));
