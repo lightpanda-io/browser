@@ -617,6 +617,29 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     return URL.isSameOrigin(url, current_origin);
 }
 
+// Like Chrome, every ancestor must be potentially trustworthy, not just the
+// top-level document the spec looks at: an https iframe inside an http page
+// is not a secure context.
+pub fn isSecureContext(self: *const Frame) bool {
+    var frame: ?*const Frame = self;
+    while (frame) |f| : (frame = f.parent) {
+        if (f.isPotentiallyTrustworthy() == false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn isPotentiallyTrustworthy(self: *const Frame) bool {
+    if (self.origin) |origin| {
+        return URL.isPotentiallyTrustworthy(origin);
+    }
+    // No origin: either an opaque one (data:, which is never trustworthy), a
+    // file: document, or an about:blank/srcdoc with nothing to inherit from.
+    const url = self.url;
+    return std.mem.eql(u8, url, "about:blank") or std.mem.eql(u8, url, "about:srcdoc") or std.mem.startsWith(u8, url, "file:");
+}
+
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
     lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
@@ -3898,6 +3921,44 @@ test "Page: isSameOrigin" {
     try testing.expectEqual(false, frame.isSameOrigin(""));
     try testing.expectEqual(false, frame.isSameOrigin("not-a-url"));
     try testing.expectEqual(false, frame.isSameOrigin("//origin.com/foo"));
+}
+
+test "Frame: isSecureContext" {
+    var top: Frame = undefined;
+    top.parent = null;
+    var child: Frame = undefined;
+    child.parent = &top;
+    child.url = "about:blank";
+    child.origin = null;
+
+    top.url = "https://origin.com/";
+    top.origin = "https://origin.com";
+    try testing.expectEqual(true, top.isSecureContext());
+
+    child.origin = "http://127.0.0.1:9582";
+    try testing.expectEqual(true, child.isSecureContext());
+    child.origin = "http://sub.localhost";
+    try testing.expectEqual(true, child.isSecureContext());
+    child.origin = "http://origin.com";
+    try testing.expectEqual(false, child.isSecureContext());
+
+    // no origin: about:blank/srcdoc with nothing to inherit, file: or opaque
+    child.origin = null;
+    try testing.expectEqual(true, child.isSecureContext());
+    child.url = "about:srcdoc";
+    try testing.expectEqual(true, child.isSecureContext());
+    child.url = "file:///tmp/index.html";
+    try testing.expectEqual(true, child.isSecureContext());
+    child.url = "data:text/html,hello";
+    try testing.expectEqual(false, child.isSecureContext());
+
+    // a trustworthy frame inside an untrustworthy one isn't a secure context
+    top.url = "http://origin.com/";
+    top.origin = "http://origin.com";
+    child.url = "https://origin.com/";
+    child.origin = "https://origin.com";
+    try testing.expectEqual(false, top.isSecureContext());
+    try testing.expectEqual(false, child.isSecureContext());
 }
 
 test "Frame: superseded documents omit DOMContentLoaded and load" {

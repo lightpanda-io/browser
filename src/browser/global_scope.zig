@@ -81,6 +81,13 @@ pub const GlobalScope = union(enum) {
         };
     }
 
+    pub fn isSecureContext(self: GlobalScope) bool {
+        return switch (self) {
+            .frame => |f| f.isSecureContext(),
+            .worker => |w| w._secure_context,
+        };
+    }
+
     pub fn frameId(self: GlobalScope) u32 {
         return switch (self) {
             inline else => |g| g._frame_id,

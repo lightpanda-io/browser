@@ -420,7 +420,8 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     return context;
 }
 
-// When ServiceWorkers are disabled (as they are by default), this must be false:
+// When ServiceWorkers are disabled (as they are by default), or the frame isn't
+// a secure context, this must be false:
 //     'serviceWorker' in navigator
 // If you disable ServiceWorkers in FireFox (about:config) this is the behavior
 // you get, and it seems to be the safest way to not break sites. BUT, the
@@ -428,7 +429,7 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 // its own Navigator.prototype (2 Gets + 1 Delete).
 // (If this proves to be an issue, we could swap the logic, and dynamically ADD
 // it when it is enabled, but that's a lot more code).
-fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+pub fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
     if (comptime is_frame) {
         self.deletePrototypeMember(v8_context, global_obj, "navigator", "service_worker");
     }

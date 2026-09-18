@@ -164,10 +164,9 @@ fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
-// NOTE, Env.createContext will remove the binding for this API at runtime if
-// ServiceWorkers are not enabled (and by default, they are not).
-// TODO: service workers should only exist where window.isSecureContext === true,
-// but we always return false.
+// NOTE, the binding for this API is removed at runtime if ServiceWorkers are
+// not enabled (Env.createContext; by default, they are not) or if the frame
+// isn't a secure context (Context.setOrigin).
 fn getServiceWorker(self: *Navigator, frame: *Frame) !*ServiceWorkerContainer {
     if (self._service_worker) |sw| {
         return sw;

@@ -16,6 +16,8 @@ const report = {
   // Blink has this as [Exposed=Window]; a service worker would get
   // ExtendableCookieChangeEvent, which we don't implement.
   hasCookieChangeEvent: typeof CookieChangeEvent !== 'undefined',
+  // Inherited from a page served from loopback; always true for a service worker.
+  isSecureContext: self.isSecureContext,
 };
 
 // A global postMessage exists on DedicatedWorkerGlobalScope only.
@@ -28,6 +30,7 @@ if (typeof postMessage === 'function') {
   if (report.hasCookieChangeEvent) bad.push('CookieChangeEvent');
   if (!report.hasCookieStoreCtor) bad.push('missing CookieStore');
   if (!report.hasCookieStoreProp) bad.push('missing cookieStore');
+  if (report.isSecureContext !== true) bad.push('isSecureContext');
   if (bad.length) {
     throw new Error('service worker realm: ' + bad.join(', '));
   }

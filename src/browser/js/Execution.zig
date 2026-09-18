@@ -131,6 +131,10 @@ pub fn origin(self: *const Execution) ?[]const u8 {
     return self.js.global.origin();
 }
 
+pub fn isSecureContext(self: *const Execution) bool {
+    return self.js.global.isSecureContext();
+}
+
 pub fn frameId(self: *const Execution) u32 {
     return self.js.global.frameId();
 }

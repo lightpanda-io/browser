@@ -220,14 +220,14 @@ pub fn getProtocol(raw: []const u8) []const u8 {
     return raw[0 .. pos + 1];
 }
 
-pub fn isSecure(raw: [:0]const u8) bool {
+pub fn isSecure(raw: []const u8) bool {
     return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
 /// Cryptographic scheme or loopback host. Browsers let such origins use
 /// secure-only features (Secure cookies, prefixed cookie names) so that
 /// plain-http local development behaves like production.
-pub fn isPotentiallyTrustworthy(raw: [:0]const u8) bool {
+pub fn isPotentiallyTrustworthy(raw: []const u8) bool {
     return isSecure(raw) or isLoopbackHost(getHostname(raw));
 }
 
