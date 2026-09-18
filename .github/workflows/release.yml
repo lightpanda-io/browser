@@ -269,3 +269,41 @@ jobs:
             --field release="$RELEASE" \
             --field publish=pypi
           echo "dispatched; the publish waits for pypi environment approval on $PYTHON_REPO"
+
+  update-js-package:
+    # Version tags only (never nightly): start the npm build on
+    # lightpanda-js. It bundles this release's binaries, publishes to npm
+    # once a maintainer approves the `npm` environment deployment there, and
+    # then records the matching release on that repo itself — the app token
+    # below can start workflows there but cannot write repository contents.
+    if: github.ref_type == 'tag'
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate token for lightpanda-js
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: lightpanda-io
+          repositories: lightpanda-js
+
+      - name: Start the lightpanda-js npm build
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          JS_REPO: lightpanda-io/lightpanda-js
+        run: |
+          if ! echo "$RELEASE" | grep -qE '^v?[0-9]+(\.[0-9]+)+$'; then
+            echo "tag $RELEASE is not version-shaped; not releasing to npm"
+            exit 0
+          fi
+          if gh release view "$RELEASE" --repo "$JS_REPO" >/dev/null 2>&1; then
+            echo "release $RELEASE already exists on $JS_REPO; nothing to do"
+            exit 0
+          fi
+          gh workflow run npm.yml --repo "$JS_REPO" \
+            --field release="$RELEASE" \
+            --field publish=npm
+          echo "dispatched; the publish waits for npm environment approval on $JS_REPO"
