@@ -465,7 +465,7 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return;
         }
         const sleep_ms: usize = switch (try runner.tickForFrame(page.frame_id, 20, .{ .until = .done })) {
-            .done => 20,
+            .done => @min(test_session.browser.msToNextTask() orelse 20, 20), // could be at BLOCKING_NESTING, so wait a bit more
             .ok => |next_ms| @min(next_ms, 20),
         };
 
@@ -477,7 +477,14 @@ fn runWebApiTest(test_file: [:0]const u8, timeout_ms: u32) !void {
             return error.TestTimedOut;
         }
         wait_ms -= @intCast(ms_elapsed);
-        lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+
+        // WebSocket connection doesn't count as pending work, but we much prefer
+        // waiting on on activity than a blind sleep.
+        const http_client = &test_session.browser.http_client;
+        const waited = http_client.activity().ws_conns > 0 and try http_client.tick(@intCast(sleep_ms));
+        if (waited == false) {
+            lp.io.sleep(.fromMilliseconds(@intCast(sleep_ms)), .awake) catch {};
+        }
     }
 }
 

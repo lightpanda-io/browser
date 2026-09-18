@@ -474,9 +474,8 @@ fn testSignal(sig: std.posix.SIG, mode: SignalTestMode) !void {
         return error.ForkFailed;
     }
     if (pid == 0) {
-        // Keep a regression from hanging the runner or writing a large core.
-        const limit: std.posix.rlimit = .{ .cur = 0, .max = 0 };
-        _ = std.c.setrlimit(.CORE, &limit);
+        // Keep a regression from hanging the runner or writing a core.
+        _ = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_DUMPABLE), 0, 0, 0, 0);
         const default: std.posix.Sigaction = .{ .handler = .{ .handler = std.posix.SIG.DFL }, .mask = std.posix.sigemptyset(), .flags = 0 };
         std.posix.sigaction(.ALRM, &default, null);
         std.posix.sigaction(.PIPE, &default, null);

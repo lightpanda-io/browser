@@ -20,6 +20,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const js = @import("js/js.zig");
+const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
 const HttpClient = @import("../network/HttpClient.zig");
@@ -521,9 +522,16 @@ test "Runner: networkidle notifies child frames" {
 
     // A `.networkidle` wait resolves via `is_done` once the page is fully
     // idle, which can happen before the 500ms idle-notification hold. Keep
-    // ticking (like the CDP serve loop does) until the notifications fire.
+    // ticking (like the CDP serve loop does) until the notifications fire,
+    // backdating each started hold so the test doesn't spend it.
+    const held_since = lp.datetime.milliTimestamp(.boot) -| 600;
     var attempts: usize = 0;
     while (frame._notified_network_idle != .done and attempts < 50) : (attempts += 1) {
+        const children = frame.child_frames.items;
+        for ([_]*Frame{ frame, children[0], children[1] }) |f| {
+            if (f._notified_network_idle == .triggered) f._notified_network_idle = .{ .triggered = held_since };
+            if (f._notified_network_almost_idle == .triggered) f._notified_network_almost_idle = .{ .triggered = held_since };
+        }
         _ = try runner.tickForFrame(page.frame_id, 20, .{ .until = .networkidle });
         lp.io.sleep(.fromMilliseconds(25), .awake) catch {};
     }
@@ -611,9 +619,9 @@ test "Runner: waits out a throttled navigation" {
     const http_client = &session.browser.http_client;
 
     // Enable the per-host navigation throttle for this test only, and spend
-    // 127.0.0.1's slot so the navigation below has to wait ~300ms.
+    // 127.0.0.1's slot so the navigation below has to wait ~100ms.
     const network = http_client.network;
-    network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 300, 1);
+    network.rate_limiter = @import("../network/RateLimiter.zig").init(testing.allocator, 100, 1);
     defer {
         network.rate_limiter.?.deinit();
         network.rate_limiter = null;
@@ -631,7 +639,7 @@ test "Runner: waits out a throttled navigation" {
     var runner = session.runner(.{});
     try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
     const elapsed = lp.datetime.milliTimestamp(.boot) - start;
-    try testing.expectEqual(true, elapsed >= 250);
+    try testing.expectEqual(true, elapsed >= 80);
     try testing.expectEqual(0, http_client.delayed_count);
 
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
