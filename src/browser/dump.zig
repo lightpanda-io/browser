@@ -101,17 +101,26 @@ fn rootUncapped(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, frame: 
         }
     }
 
-    return _deep(doc.asNode(), opts, false, writer, frame);
+    return _deep(doc.asNode(), opts, writer, frame);
 }
 
-pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
-    if (opts.max_bytes == null) return _deep(node, opts, false, writer, frame);
+pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) Error!void {
+    if (opts.max_bytes == null) {
+        return _deep(node, opts, writer, frame);
+    }
 
     var lw: LimitedWriter = .init(writer, opts.max_bytes);
-    _deep(node, opts, false, &lw.writer, frame) catch |err| {
+    _deep(node, opts, &lw.writer, frame) catch |err| {
         if (!lw.truncated) return err;
         try writer.writeAll(LimitedWriter.truncation_marker);
     };
+}
+
+fn _deep(node: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) Error!void {
+    var walk: Walk = .init(opts, writer, frame);
+    defer walk.deinit();
+    try walk.visit(node, false);
+    return walk.run();
 }
 
 pub fn render(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
@@ -122,162 +131,265 @@ pub fn render(state: RenderTree.State, opts: Opts, writer: *std.Io.Writer, frame
     return deep(state.root, o, writer, frame);
 }
 
-fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, frame: *Frame) error{WriteFailed}!void {
-    switch (node._type) {
-        .cdata => {
-            if (opts.pruned) |set| {
-                if (set.contains(node)) return;
-            }
-            const cd = node.subtype(Node.CData);
-            if (node.is(Node.CData.Comment)) |_| {
-                try writer.writeAll("<!--");
-                try writer.writeAll(cd.getData().str());
-                try writer.writeAll("-->");
-            } else if (node.is(Node.CData.ProcessingInstruction)) |pi| {
-                try writer.writeAll("<?");
-                try writer.writeAll(pi._target);
-                try writer.writeAll(" ");
-                try writer.writeAll(cd.getData().str());
-                try writer.writeAll("?>");
-            } else {
-                if (shouldEscapeText(node._parent)) {
-                    try writeEscapedText(cd.getData().str(), writer);
-                } else {
-                    try writer.writeAll(cd.getData().str());
-                }
-            }
-        },
-        .element => {
-            const el = node.subtype(Node.Element);
-            if (shouldStripElement(el, opts.strip, opts.pruned, frame)) {
-                return;
-            }
+const Error = error{ WriteFailed, OutOfMemory };
 
-            // When opts.shadow == .rendered, we normally skip any element with
-            // a slot attribute. Only the "active" element will get rendered into
-            // the <slot name="X">. However, the `deep` function is itself used
-            // to render that "active" content, so when we're trying to render
-            // it, we don't want to skip it.
-            if ((comptime force_slot == false) and opts.shadow == .rendered) {
-                if (el.getSlot()) |_| {
-                    // Skip - will be rendered by the Slot if it's the active container
-                    return;
-                }
-            }
+// Very large trees can stackoverflow, hence we switch to an iterative walk
+const Walk = struct {
+    opts: Opts,
+    writer: *std.Io.Writer,
+    frame: *Frame,
+    stack: std.ArrayList(Open) = .empty,
 
-            try el.format(writer);
+    // Content still to write, followed by the end tag
+    const Open = struct {
+        end_tag: ?[]const u8,
+        rest: Rest,
+    };
 
-            if (opts.shadow == .rendered) {
-                if (el.is(Slot)) |slot| {
-                    try dumpSlotContent(slot, opts, writer, frame);
-                    return writer.writeAll("</slot>");
-                }
-            }
-            switch (opts.shadow) {
-                .skip => {},
-                .complete, .rendered => {
-                    if (el.hostedShadowRoot(frame)) |shadow| {
-                        try children(shadow.asNode(), opts, writer, frame);
-                        // In rendered mode, light DOM is only shown through slots, not directly
-                        if (opts.shadow == .rendered) {
-                            // Skip rendering light DOM children
-                            if (!isVoidElement(el)) {
-                                try writer.writeAll("</");
-                                try writer.writeAll(el.getTagNameDump());
-                                try writer.writeByte('>');
-                            }
-                            return;
-                        }
-                    }
-                },
-                .declarative => |declarative| {
-                    if (el.hostedShadowRoot(frame)) |shadow| {
-                        if (shouldSerializeShadow(shadow, declarative)) {
-                            try writeDeclarativeShadow(shadow, opts, writer, frame);
-                        }
-                    }
-                },
-            }
+    const Rest = union(enum) {
+        siblings: ?*Node,
+        // Nodes assigned to a slot. Rendered despite their slot attribute.
+        assigned: []const *Node,
+        // An iframe's content document (opts.with_frames)
+        document: ?*Node.Document,
+    };
 
-            if (opts.with_frames and el.is(IFrame) != null) {
-                const iframe = el.as(IFrame);
-                if (iframe.getContentDocument()) |doc| {
-                    // A frame's document should always ahave a frame, but
-                    // I'm not willing to crash a release build on that assertion.
-                    if (comptime lp.IS_DEBUG) {
-                        std.debug.assert(doc._frame != null);
-                    }
-                    if (doc._frame) |f| {
-                        try writer.writeByte('\n');
-                        root(doc, opts, writer, f) catch return error.WriteFailed;
-                        try writer.writeByte('\n');
-                    }
-                }
-            } else {
-                try children(node, opts, writer, frame);
-            }
-
-            if (!isVoidElement(el)) {
-                try writer.writeAll("</");
-                try writer.writeAll(el.getTagNameDump());
-                try writer.writeByte('>');
-            }
-        },
-        .document => try children(node, opts, writer, frame),
-        .document_type => {
-            const dt = node.subtype(Node.DocumentType);
-            try writer.writeAll("<!DOCTYPE ");
-            try writer.writeAll(dt.getName());
-
-            const public_id = dt.getPublicId();
-            const system_id = dt.getSystemId();
-            if (public_id.len != 0 and system_id.len != 0) {
-                try writer.writeAll(" PUBLIC \"");
-                try writeEscapedText(public_id, writer);
-                try writer.writeAll("\" \"");
-                try writeEscapedText(system_id, writer);
-                try writer.writeByte('"');
-            } else if (public_id.len != 0) {
-                try writer.writeAll(" PUBLIC \"");
-                try writeEscapedText(public_id, writer);
-                try writer.writeByte('"');
-            } else if (system_id.len != 0) {
-                try writer.writeAll(" SYSTEM \"");
-                try writeEscapedText(system_id, writer);
-                try writer.writeByte('"');
-            }
-            try writer.writeAll(">\n");
-        },
-        .document_fragment => try children(node, opts, writer, frame),
-        .attribute => {
-            // Not called normally, but can be called via XMLSerializer.serializeToString
-            // in which case it should return an empty string
-            try writer.writeAll("");
-        },
+    fn init(opts: Opts, writer: *std.Io.Writer, frame: *Frame) Walk {
+        return .{ .opts = opts, .writer = writer, .frame = frame };
     }
-}
 
-// Element.getHTML / ShadowRoot.getHTML
-pub fn getHTML(node: *Node, declarative: Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) !void {
-    const opts = Opts{ .shadow = .{ .declarative = declarative } };
-    if (node.is(Node.Element)) |el| {
-        if (el.hostedShadowRoot(frame)) |shadow| {
-            if (shouldSerializeShadow(shadow, declarative)) {
-                // if the element's shadowroot tree is rendered before its
-                // children (assume the opts say that it should serialize the
-                // shadowroot at all (i.e. shouldSerializeShadow).
-                try writeDeclarativeShadow(shadow, opts, writer, frame);
+    // No JS runs during a walk, so nothing resets local_arena under the stack.
+    // The stack is normally its latest allocation: it grows in place, and
+    // freeing it here hands the bytes back even when no Caller ever resets
+    // the arena (CDP, fetch).
+    fn deinit(self: *Walk) void {
+        self.stack.deinit(self.frame.local_arena);
+    }
+
+    fn run(self: *Walk) Error!void {
+        while (self.stack.items.len > 0) {
+            // Cursors advance before visit(), which can grow (move) the stack.
+            const top = &self.stack.items[self.stack.items.len - 1];
+            switch (top.rest) {
+                .siblings => |*cursor| if (cursor.*) |n| {
+                    cursor.* = n.nextSibling();
+                    try self.visit(n, false);
+                    continue;
+                },
+                .assigned => |*nodes| if (nodes.len > 0) {
+                    const n = nodes.*[0];
+                    nodes.* = nodes.*[1..];
+                    try self.visit(n, true);
+                    continue;
+                },
+                .document => |*doc| if (doc.*) |d| {
+                    doc.* = null;
+                    try self.contentDocument(d);
+                    continue;
+                },
+            }
+            const done = self.stack.pop().?;
+            if (done.end_tag) |name| {
+                try self.writeEndTag(name);
             }
         }
     }
-    return children(node, opts, writer, frame);
+
+    fn open(self: *Walk, end_tag: ?[]const u8, rest: Rest) !void {
+        return self.stack.append(self.frame.local_arena, .{ .end_tag = end_tag, .rest = rest });
+    }
+
+    fn writeEndTag(self: *Walk, name: []const u8) !void {
+        try self.writer.writeAll("</");
+        try self.writer.writeAll(name);
+        try self.writer.writeByte('>');
+    }
+
+    fn contentDocument(self: *Walk, doc: *Node.Document) !void {
+        if (comptime lp.IS_DEBUG) {
+            // A frame's document should always have a frame, but
+            // I'm not willing to crash a release build on that assertion.
+            std.debug.assert(doc._frame != null);
+        }
+        if (doc._frame) |f| {
+            try self.writer.writeByte('\n');
+            root(doc, self.opts, self.writer, f) catch return error.WriteFailed;
+            try self.writer.writeByte('\n');
+        }
+    }
+
+    // The spec's "attach a declarative shadow root" serialization: attribute order
+    // is fixed, and boolean attributes serialize with an explicit ="".
+    fn declarativeShadow(self: *Walk, shadow: *Node.ShadowRoot) !void {
+        const writer = self.writer;
+        try writer.writeAll("<template shadowrootmode=\"");
+        try writer.writeAll(@tagName(shadow._mode));
+        try writer.writeByte('"');
+        if (shadow._delegates_focus) {
+            try writer.writeAll(" shadowrootdelegatesfocus=\"\"");
+        }
+        if (shadow._serializable) {
+            try writer.writeAll(" shadowrootserializable=\"\"");
+        }
+        if (shadow._clonable) {
+            try writer.writeAll(" shadowrootclonable=\"\"");
+        }
+        try writer.writeByte('>');
+        try self.open("template", .{ .siblings = shadow.asNode().firstChild() });
+    }
+
+    fn visit(self: *Walk, node: *Node, force_slot: bool) Error!void {
+        const opts = self.opts;
+        const writer = self.writer;
+        const frame = self.frame;
+
+        switch (node._type) {
+            .cdata => {
+                if (opts.pruned) |set| {
+                    if (set.contains(node)) return;
+                }
+                const cd = node.subtype(Node.CData);
+                if (node.is(Node.CData.Comment)) |_| {
+                    try writer.writeAll("<!--");
+                    try writer.writeAll(cd.getData().str());
+                    try writer.writeAll("-->");
+                } else if (node.is(Node.CData.ProcessingInstruction)) |pi| {
+                    try writer.writeAll("<?");
+                    try writer.writeAll(pi._target);
+                    try writer.writeAll(" ");
+                    try writer.writeAll(cd.getData().str());
+                    try writer.writeAll("?>");
+                } else {
+                    if (shouldEscapeText(node._parent)) {
+                        try writeEscapedText(cd.getData().str(), writer);
+                    } else {
+                        try writer.writeAll(cd.getData().str());
+                    }
+                }
+            },
+            .element => {
+                const el = node.subtype(Node.Element);
+                if (shouldStripElement(el, opts.strip, opts.pruned, frame)) {
+                    return;
+                }
+
+                // When opts.shadow == .rendered, we normally skip any element with
+                // a slot attribute. Only the "active" element will get rendered into
+                // the <slot name="X">. force_slot is set when rendering that
+                // "active" content, in which case we don't want to skip it.
+                if (force_slot == false and opts.shadow == .rendered) {
+                    if (el.getSlot()) |_| {
+                        // Skip - will be rendered by the Slot if it's the active container
+                        return;
+                    }
+                }
+
+                try el.format(writer);
+
+                if (opts.shadow == .rendered) {
+                    if (el.is(Slot)) |slot| {
+                        const assigned = slot.assignedNodes(null, frame) catch &.{};
+                        if (assigned.len > 0) {
+                            return self.open("slot", .{ .assigned = assigned });
+                        }
+                        return self.open("slot", .{ .siblings = node.firstChild() });
+                    }
+                }
+
+                const end_tag: ?[]const u8 = if (isVoidElement(el)) null else el.getTagNameDump();
+
+                const shadow = switch (opts.shadow) {
+                    .skip => null,
+                    .complete, .rendered, .declarative => el.hostedShadowRoot(frame),
+                };
+
+                const sr = shadow orelse {
+                    if (opts.with_frames and el.is(IFrame) != null) {
+                        return self.open(end_tag, .{ .document = el.as(IFrame).getContentDocument() });
+                    }
+                    if (node.firstChild()) |first| {
+                        return self.open(end_tag, .{ .siblings = first });
+                    }
+                    // No children: skip the stack
+                    if (end_tag) |name| {
+                        try self.writeEndTag(name);
+                    }
+                    return;
+                };
+
+                switch (opts.shadow) {
+                    .skip => unreachable,
+                    // In rendered mode, light DOM is only shown through slots, not directly
+                    .rendered => try self.open(end_tag, .{ .siblings = sr.asNode().firstChild() }),
+                    // The stack is LIFO: the light DOM is opened first so that the
+                    // shadow tree, opened after, is written before it.
+                    .complete => {
+                        try self.open(end_tag, .{ .siblings = node.firstChild() });
+                        try self.open(null, .{ .siblings = sr.asNode().firstChild() });
+                    },
+                    .declarative => |declarative| {
+                        try self.open(end_tag, .{ .siblings = node.firstChild() });
+                        if (shouldSerializeShadow(sr, declarative)) {
+                            try self.declarativeShadow(sr);
+                        }
+                    },
+                }
+            },
+            .document, .document_fragment => try self.open(null, .{ .siblings = node.firstChild() }),
+            .document_type => {
+                const dt = node.subtype(Node.DocumentType);
+                try writer.writeAll("<!DOCTYPE ");
+                try writer.writeAll(dt.getName());
+
+                const public_id = dt.getPublicId();
+                const system_id = dt.getSystemId();
+                if (public_id.len != 0 and system_id.len != 0) {
+                    try writer.writeAll(" PUBLIC \"");
+                    try writeEscapedText(public_id, writer);
+                    try writer.writeAll("\" \"");
+                    try writeEscapedText(system_id, writer);
+                    try writer.writeByte('"');
+                } else if (public_id.len != 0) {
+                    try writer.writeAll(" PUBLIC \"");
+                    try writeEscapedText(public_id, writer);
+                    try writer.writeByte('"');
+                } else if (system_id.len != 0) {
+                    try writer.writeAll(" SYSTEM \"");
+                    try writeEscapedText(system_id, writer);
+                    try writer.writeByte('"');
+                }
+                try writer.writeAll(">\n");
+            },
+            .attribute => {
+                // Not called normally, but can be called via XMLSerializer.serializeToString
+                // in which case it should return an empty string
+            },
+        }
+    }
+};
+
+// Element.getHTML / ShadowRoot.getHTML
+pub fn getHTML(node: *Node, declarative: Opts.Shadow.Declarative, writer: *std.Io.Writer, frame: *Frame) Error!void {
+    var walk: Walk = .init(.{ .shadow = .{ .declarative = declarative } }, writer, frame);
+    defer walk.deinit();
+
+    try walk.open(null, .{ .siblings = node.firstChild() });
+    if (node.is(Node.Element)) |el| {
+        if (el.hostedShadowRoot(frame)) |shadow| {
+            if (shouldSerializeShadow(shadow, declarative)) {
+                // the element's shadowroot tree is rendered before its children
+                try walk.declarativeShadow(shadow);
+            }
+        }
+    }
+    return walk.run();
 }
 
-pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    var it = parent.childrenIterator();
-    while (it.next()) |child| {
-        try deep(child, opts, writer, frame);
-    }
+pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, frame: *Frame) Error!void {
+    var walk: Walk = .init(opts, writer, frame);
+    defer walk.deinit();
+    try walk.open(null, .{ .siblings = parent.firstChild() });
+    return walk.run();
 }
 
 pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
@@ -332,38 +444,6 @@ fn shouldSerializeShadow(shadow: *const Node.ShadowRoot, declarative: Opts.Shado
         }
     }
     return false;
-}
-
-// The spec's "attach a declarative shadow root" serialization: attribute order
-// is fixed, and boolean attributes serialize with an explicit ="".
-fn writeDeclarativeShadow(shadow: *Node.ShadowRoot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    try writer.writeAll("<template shadowrootmode=\"");
-    try writer.writeAll(@tagName(shadow._mode));
-    try writer.writeByte('"');
-    if (shadow._delegates_focus) {
-        try writer.writeAll(" shadowrootdelegatesfocus=\"\"");
-    }
-    if (shadow._serializable) {
-        try writer.writeAll(" shadowrootserializable=\"\"");
-    }
-    if (shadow._clonable) {
-        try writer.writeAll(" shadowrootclonable=\"\"");
-    }
-    try writer.writeByte('>');
-    try children(shadow.asNode(), opts, writer, frame);
-    try writer.writeAll("</template>");
-}
-
-fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, frame: *Frame) !void {
-    const assigned = slot.assignedNodes(null, frame) catch return;
-
-    if (assigned.len > 0) {
-        for (assigned) |assigned_node| {
-            try _deep(assigned_node, opts, true, writer, frame);
-        }
-    } else {
-        try children(slot.asNode(), opts, writer, frame);
-    }
 }
 
 fn isVoidElement(el: *Node.Element) bool {
@@ -593,7 +673,11 @@ const testing = @import("../testing.zig");
 // <base> element), so reusing one frame across opts would leak that mutation
 // into later dumps.
 fn expectDump(opts: Opts, expected: []const u8) !void {
-    var page = try testing.pageTest("dump.html", .{});
+    return expectPageDump("dump.html", opts, expected);
+}
+
+fn expectPageDump(comptime file: []const u8, opts: Opts, expected: []const u8) !void {
+    var page = try testing.pageTest(file, .{});
     defer page.close();
 
     const frame = page.frame().?;
@@ -744,4 +828,106 @@ fn expectShellDump(html: []const u8, expected: []const u8) !void {
     defer aw.deinit();
     try deep(div.asNode(), .{ .strip = .{ .shell = true } }, &aw.writer, frame);
     try testing.expectString(expected, aw.written());
+}
+
+test "dump: deep nesting doesn't overflow the native stack" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const depth = 50_000;
+    const doc = frame.window._document;
+    var top = (try doc.createElement("i", null, frame)).asNode();
+    for (1..depth) |_| {
+        const parent = (try doc.createElement("i", null, frame)).asNode();
+        _ = try parent.appendChild(top, frame);
+        top = parent;
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try deep(top, .{}, &aw.writer, frame);
+    try testing.expectEqual(depth * "<i></i>".len, aw.written().len);
+    try testing.expectString("<i><i>", aw.written()[0..6]);
+    try testing.expectString("</i></i>", aw.written()[aw.written().len - 8 ..]);
+}
+
+test "dump: shadow modes" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const doc = frame.window._document;
+    const host = try doc.createElement("div", null, frame);
+    _ = try doc.asNode().appendChild(host.asNode(), frame);
+    const shadow = try host.attachShadow(.{ .mode = .open }, frame);
+    try Frame.parse.htmlAsChildren(frame, shadow.asNode(),
+        \\<h2><slot name="t"><b>unused fallback</b></slot></h2><slot></slot><slot name="none"><i>fallback</i><br></slot>
+    );
+    try Frame.parse.htmlAsChildren(frame, host.asNode(),
+        \\<span slot="t">T<em>e</em></span><p>one</p>text<span slot="zz">orphan</span><p>two</p>
+    );
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    // Assigned nodes replace a slot's fallback; a node whose slot doesn't
+    // exist isn't rendered at all.
+    try deep(host.asNode(), .{ .shadow = .rendered }, &aw.writer, frame);
+    try testing.expectString(
+        \\<div><h2><slot name="t"><span slot="t">T<em>e</em></span></slot></h2><slot><p>one</p>text<p>two</p></slot><slot name="none"><i>fallback</i><br></slot></div>
+    , aw.written());
+
+    // The shadow tree as authored, then the light DOM
+    aw.clearRetainingCapacity();
+    try deep(host.asNode(), .{ .shadow = .complete }, &aw.writer, frame);
+    try testing.expectString(
+        \\<div><h2><slot name="t"><b>unused fallback</b></slot></h2><slot></slot><slot name="none"><i>fallback</i><br></slot><span slot="t">T<em>e</em></span><p>one</p>text<span slot="zz">orphan</span><p>two</p></div>
+    , aw.written());
+
+    aw.clearRetainingCapacity();
+    try deep(host.asNode(), .{ .shadow = .skip }, &aw.writer, frame);
+    try testing.expectString(
+        \\<div><span slot="t">T<em>e</em></span><p>one</p>text<span slot="zz">orphan</span><p>two</p></div>
+    , aw.written());
+}
+
+const frames_dump =
+    \\<!DOCTYPE html>
+    \\<html><head></head><body><p>before</p><iframe srcdoc="&lt;p&gt;inner&lt;/p&gt;&lt;iframe srcdoc='&lt;b&gt;deep&lt;/b&gt;'&gt;&lt;/iframe&gt;">
+    \\<!DOCTYPE html><html><head></head><body><p>inner</p><iframe srcdoc="&lt;b&gt;deep&lt;/b&gt;">
+    \\<!DOCTYPE html><html><head></head><body><b>deep</b></body></html>
+    \\</iframe></body></html>
+    \\</iframe><p>after</p></body></html>
+;
+
+test "dump: an iframe's own children are dumped without with_frames" {
+    try expectPageDump("dump_frames.html", .{},
+        \\<!DOCTYPE html>
+        \\<html><head></head><body><p>before</p><iframe srcdoc="&lt;p&gt;inner&lt;/p&gt;&lt;iframe srcdoc='&lt;b&gt;deep&lt;/b&gt;'&gt;&lt;/iframe&gt;">ignored</iframe><p>after</p></body></html>
+    );
+}
+
+test "dump: with_frames dumps nested content documents" {
+    try expectPageDump("dump_frames.html", .{ .with_frames = true }, frames_dump);
+}
+
+test "dump: with_frames and with_base inject a <base> in every document" {
+    try expectPageDump("dump_frames.html", .{ .with_frames = true, .with_base = true },
+        \\<!DOCTYPE html>
+        \\<html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump_frames.html"></head><body><p>before</p><iframe srcdoc="&lt;p&gt;inner&lt;/p&gt;&lt;iframe srcdoc='&lt;b&gt;deep&lt;/b&gt;'&gt;&lt;/iframe&gt;">
+        \\<!DOCTYPE html><html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump_frames.html"></head><body><p>inner</p><iframe srcdoc="&lt;b&gt;deep&lt;/b&gt;">
+        \\<!DOCTYPE html><html><head><base href="http://127.0.0.1:9582/src/browser/tests/dump_frames.html"></head><body><b>deep</b></body></html>
+        \\</iframe></body></html>
+        \\</iframe><p>after</p></body></html>
+    );
+}
+
+// Each content document gets its own LimitedWriter; the cut must still happen
+// once, with a single marker and no end tags after it.
+test "dump: max_bytes cut inside a nested content document" {
+    const cut = comptime std.mem.indexOf(u8, frames_dump, "<b>deep").? + 4;
+    try expectPageDump(
+        "dump_frames.html",
+        .{ .with_frames = true, .max_bytes = cut },
+        frames_dump[0..cut] ++ LimitedWriter.truncation_marker,
+    );
 }
