@@ -610,7 +610,14 @@ fn getFrameOwner(cmd: *CDP.Command) !void {
         return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
     };
 
-    const node = try bc.node_registry.register(frame.window._document.asNode());
+    // The element hosting the frame, as in Chrome; the main frame has none.
+    // Clients (Stagehand's frameLocator, Playwright's contentFrame) match this
+    // backendNodeId against the <iframe> they resolved in the parent.
+    const iframe = frame.iframe orelse {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    };
+
+    const node = try bc.node_registry.register(iframe.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
 }
 
@@ -1311,6 +1318,46 @@ test "cdp.dom: resolveNode into a child frame's context" {
         .executionContextId = 9999,
     } });
     try ctx.expectSentError(-31998, "ContextNotFound", .{ .id = 15 });
+}
+
+test "cdp.dom: getFrameOwner returns the owner iframe element" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-FO", .url = "cdp/isolated_world.html", .target_id = "FID-000000000X".* });
+    const root = bc.mainFrame() orelse unreachable;
+    const child = root.child_frames.items[0];
+    const iframe_node = try bc.node_registry.register(child.iframe.?.asNode());
+
+    try ctx.processMessage(.{ .id = 10, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
+        .frameId = &id.toFrameId(child._frame_id),
+    } });
+    try ctx.expectSentResult(.{ .nodeId = iframe_node.id, .backendNodeId = iframe_node.id }, .{ .id = 10 });
+
+    // The owner element names the frame it hosts.
+    try ctx.processMessage(.{ .id = 11, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = iframe_node.id,
+    } });
+    try ctx.expectSentResult(.{ .node = .{
+        .localName = "iframe",
+        .frameId = &id.toFrameId(child._frame_id),
+    } }, .{ .id = 11 });
+
+    // So does the document element, for its own frame.
+    const child_html = try bc.node_registry.register(child.window._document.getDocumentElement().?.asNode());
+    try ctx.processMessage(.{ .id = 12, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
+        .backendNodeId = child_html.id,
+    } });
+    try ctx.expectSentResult(.{ .node = .{
+        .localName = "html",
+        .frameId = &id.toFrameId(child._frame_id),
+    } }, .{ .id = 12 });
+
+    // The main frame has no owner.
+    try ctx.processMessage(.{ .id = 13, .method = "DOM.getFrameOwner", .sessionId = "SID-X", .params = .{
+        .frameId = &id.toFrameId(root._frame_id),
+    } });
+    try ctx.expectSentError(-32000, "Frame with the given id does not belong to the target.", .{ .id = 13 });
 }
 
 fn mainWorldContextId(bc: *CDP.BrowserContext, frame: *const Frame) !i32 {
