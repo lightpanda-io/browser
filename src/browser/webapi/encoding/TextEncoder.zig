@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026 Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const v8 = js.v8;
 
 const TextEncoder = @This();
 _pad: bool = false,
@@ -26,23 +27,65 @@ pub fn init() TextEncoder {
     return .{};
 }
 
-pub fn encode(_: *const TextEncoder, v_: ?js.Value) !js.TypedArray(u8) {
-    const v = v_ orelse return .{ .values = "" };
+pub fn encode(_: *const TextEncoder, v_: ?js.Value, exec: *const js.Execution) !js.Value {
+    const local = exec.js.local.?;
 
-    if (v.isUndefined()) {
-        return .{ .values = "" };
+    // The input is an optional USVString defaulting to "": undefined is the
+    // default, anything else (null included) is stringified.
+    const source = blk: {
+        const v = v_ orelse break :blk local.newString("");
+        if (v.isUndefined()) {
+            break :blk local.newString("");
+        }
+        break :blk try v.toString();
+    };
+
+    const array = local.createTypedArray(.uint8, source.len());
+    const slice = array.slice();
+    _ = v8.v8__String__WriteUtf8(
+        source.handle,
+        source.local.isolate.handle,
+        slice.ptr,
+        slice.len,
+        v8.WRITE_REPLACE_INVALID_UTF8,
+        null,
+    );
+
+    return .{ .local = local, .handle = array.handle };
+}
+
+// https://encoding.spec.whatwg.org/#dom-textencoder-encodeinto
+// `read` counts UTF-16 code units consumed from the source, `written` counts
+// bytes written into the destination.
+pub const EncodeIntoResult = struct {
+    read: usize,
+    written: usize,
+};
+
+pub fn encodeInto(_: *const TextEncoder, source_: js.Value, destination_: js.Value) !EncodeIntoResult {
+    // The source is a USVString, so anything is stringified, as encode does.
+    // Binding it as a []const u8 would instead hand us the raw bytes of a
+    // typed array, which could even alias the destination.
+    const source = try source_.toString();
+
+    if (!destination_.isUint8Array()) {
+        return error.InvalidArgument;
     }
+    const dest = try destination_.toZig([]u8);
 
-    if (v.isNull()) {
-        return .{ .values = "null" };
-    }
+    // V8 encodes straight into the destination, never writing a partial
+    // sequence, and replaces lone surrogates as the USVString conversion would.
+    var read: usize = 0;
+    const written = v8.v8__String__WriteUtf8(
+        source.handle,
+        source.local.isolate.handle,
+        dest.ptr,
+        dest.len,
+        v8.WRITE_REPLACE_INVALID_UTF8,
+        &read,
+    );
 
-    const str = try v.toStringSlice();
-    if (!std.unicode.utf8ValidateSlice(str)) {
-        return error.InvalidUtf8;
-    }
-
-    return .{ .values = str };
+    return .{ .read = read, .written = written };
 }
 
 pub const JsApi = struct {
@@ -56,7 +99,8 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(TextEncoder.init, .{});
-    pub const encode = bridge.function(TextEncoder.encode, .{ .as_typed_array = true });
+    pub const encode = bridge.function(TextEncoder.encode, .{});
+    pub const encodeInto = bridge.function(TextEncoder.encodeInto, .{});
     pub const encoding = bridge.property("utf-8", .{ .template = false });
 };
 
