@@ -3,9 +3,6 @@ name: orderfile
 # Regenerates orderfile/lightpanda.ld + orderfile/v8.txt from a profile of the
 # CDP bench and opens a pull request with the result, every night or on demand
 # from the Actions tab. See orderfile/README.md.
-#
-# release.yml runs the same ./.github/actions/orderfile, but builds with the
-# profile instead of committing it.
 
 env:
   LIGHTPANDA_DISABLE_TELEMETRY: true
@@ -56,7 +53,7 @@ jobs:
       - uses: ./.github/actions/orderfile
         id: orderfile
         with:
-          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64
+          build-args: -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dorderfile=orderfile/lightpanda.ld -Dcpu=x86_64
 
       - name: open a pull request
         env:

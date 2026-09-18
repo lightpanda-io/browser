@@ -32,6 +32,7 @@
 //!
 //! usage: mark_hot_sections <in.a> <hot-symbols.txt> <out.a>
 const std = @import("std");
+const elf = @import("elf.zig");
 
 const Allocator = std.mem.Allocator;
 const HotSet = std.StringHashMapUnmanaged(void);
@@ -51,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
     const out_path = args.next() orelse return error.Usage;
 
     const cwd = std.Io.Dir.cwd();
-    const archive = try cwd.readFileAlloc(io, in_path, gpa, .unlimited);
+    const archive = try elf.mapFile(io, in_path);
     const hot_list = try cwd.readFileAlloc(io, hot_path, gpa, .unlimited);
 
     var hot: HotSet = .empty;
@@ -64,7 +65,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var out: std.ArrayList(u8) = .empty;
-    const renamed = try rewriteArchive(gpa, archive, &hot, &out);
+    const members = try elf.archiveMembers(gpa, archive) orelse return error.NotAnArchive;
+    const renamed = try rewriteArchive(gpa, members, &hot, &out);
     try cwd.writeFile(io, .{ .sub_path = out_path, .data = out.items });
     if (renamed == 0) {
         return error.NoHotSections;
@@ -72,64 +74,40 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const Member = struct {
-    header: *const [60]u8,
-    name: []const u8,
+    member: elf.Member,
     body: []const u8,
-    old_offset: usize,
     new_offset: usize = 0,
 };
 
-fn rewriteArchive(gpa: Allocator, archive: []const u8, hot: *const HotSet, out: *std.ArrayList(u8)) !usize {
-    if (std.mem.startsWith(u8, archive, "!<arch>\n") == false) {
-        return error.NotAnArchive;
-    }
-
-    var members: std.ArrayList(Member) = .empty;
-    var pos: usize = 8;
-    while (pos + 60 <= archive.len) {
-        const header = archive[pos..][0..60];
-        const size = try std.fmt.parseInt(usize, std.mem.trimEnd(u8, header[48..58], " "), 10);
-        if (pos + 60 + size > archive.len) {
-            return error.TruncatedArchive;
-        }
-        try members.append(gpa, .{
-            .header = header,
-            .name = std.mem.trimEnd(u8, header[0..16], " "),
-            .body = archive[pos + 60 ..][0..size],
-            .old_offset = pos,
-        });
-        pos += 60 + size + (size & 1);
-    }
-
+fn rewriteArchive(gpa: Allocator, archive: []const elf.Member, hot: *const HotSet, out: *std.ArrayList(u8)) !usize {
+    const members = try gpa.alloc(Member, archive.len);
     var renamed: usize = 0;
-    for (members.items) |*m| {
-        if (!std.mem.startsWith(u8, m.body, "\x7fELF")) {
-            continue;
-        }
-        if (try markMember(gpa, m.body, hot, &renamed)) |body| {
+    for (members, archive) |*m, member| {
+        m.* = .{ .member = member, .body = member.body };
+        if (try markMember(gpa, member.body, hot, &renamed)) |body| {
             m.body = body;
         }
     }
 
     var offsets: std.AutoHashMapUnmanaged(usize, usize) = .empty;
-    pos = 8;
-    for (members.items) |*m| {
+    var pos: usize = 8;
+    for (members) |*m| {
         m.new_offset = pos;
-        try offsets.put(gpa, m.old_offset, pos);
+        try offsets.put(gpa, m.member.offset, pos);
         pos += 60 + m.body.len + (m.body.len & 1);
     }
 
     try out.ensureTotalCapacity(gpa, pos);
     out.appendSliceAssumeCapacity("!<arch>\n");
-    for (members.items) |m| {
-        var header = m.header.*;
-        _ = try std.fmt.bufPrint(header[48..58], "{d:<10}", .{m.body.len});
-        out.appendSliceAssumeCapacity(&header);
+    for (members) |m| {
+        var header = m.member.header.*;
+        _ = try std.fmt.bufPrint(&header.ar_size, "{d:<10}", .{m.body.len});
+        out.appendSliceAssumeCapacity(std.mem.asBytes(&header));
         const start = out.items.len;
         out.appendSliceAssumeCapacity(m.body);
-        if (std.mem.eql(u8, m.name, "/")) {
+        if (header.isSymtab()) {
             try remapIndex(u32, out.items[start..], &offsets);
-        } else if (std.mem.eql(u8, m.name, "/SYM64/")) {
+        } else if (header.isSymtab64()) {
             try remapIndex(u64, out.items[start..], &offsets);
         }
         if (m.body.len & 1 == 1) {
@@ -157,104 +135,38 @@ fn remapIndex(comptime T: type, index: []u8, offsets: *const std.AutoHashMapUnma
     }
 }
 
-fn cstr(table: []const u8, offset: usize) ![]const u8 {
-    if (offset >= table.len) {
-        return error.BadStringOffset;
-    }
-    return std.mem.sliceTo(table[offset..], 0);
-}
-
 /// Returns the rewritten object, or null when no section of it is hot.
-fn markMember(gpa: Allocator, elf: []const u8, hot: *const HotSet, renamed: *usize) !?[]const u8 {
-    // ELF64 little-endian only; anything else is passed through untouched.
-    if (elf.len < 64 or elf[4] != 2 or elf[5] != 1) {
-        return null;
-    }
-    const shoff: usize = @intCast(std.mem.readInt(u64, elf[0x28..][0..8], .little));
-    const shentsize = std.mem.readInt(u16, elf[0x3A..][0..2], .little);
-    const shnum = std.mem.readInt(u16, elf[0x3C..][0..2], .little);
-    const shstrndx = std.mem.readInt(u16, elf[0x3E..][0..2], .little);
-    if (shentsize != 64 or shnum == 0 or shstrndx >= shnum) {
-        return null;
-    }
-    if (shoff + @as(usize, shnum) * 64 > elf.len) {
-        return error.BadElf;
-    }
-
-    const Shdr = struct {
-        name: u32,
-        type: u32,
-        offset: usize,
-        size: usize,
-        link: u32,
-
-        fn read(e: []const u8, at: usize) @This() {
-            return .{
-                .name = std.mem.readInt(u32, e[at..][0..4], .little),
-                .type = std.mem.readInt(u32, e[at + 4 ..][0..4], .little),
-                .offset = @intCast(std.mem.readInt(u64, e[at + 24 ..][0..8], .little)),
-                .size = @intCast(std.mem.readInt(u64, e[at + 32 ..][0..8], .little)),
-                .link = std.mem.readInt(u32, e[at + 40 ..][0..4], .little),
-            };
-        }
-    };
-    const shdrs = try gpa.alloc(Shdr, shnum);
-    for (shdrs, 0..) |*sh, i| {
-        sh.* = Shdr.read(elf, shoff + i * 64);
-    }
-
-    const section = struct {
-        fn bytes(e: []const u8, sh: Shdr) ![]const u8 {
-            if (sh.offset + sh.size > e.len) {
-                return error.BadElf;
-            }
-            return e[sh.offset..][0..sh.size];
-        }
-    };
-    const shstrtab = try section.bytes(elf, shdrs[shstrndx]);
+fn markMember(gpa: Allocator, bytes: []const u8, hot: *const HotSet, renamed: *usize) !?[]const u8 {
+    // Anything but ELF64 little-endian is passed through untouched.
+    const obj = try elf.Object.parse(gpa, bytes) orelse return null;
+    const shnum = obj.sections.len;
 
     // The hot symbol that defines each section, if any.
     const hot_sym = try gpa.alloc(?[]const u8, shnum);
     @memset(hot_sym, null);
-    for (shdrs) |sh| {
-        if (sh.type != 2) {
-            continue; // SHT_SYMTAB
+    for (try obj.symbols(gpa)) |sym| {
+        if (!sym.definedIn(obj)) {
+            continue;
         }
-        if (sh.link >= shnum) {
-            return error.BadElf;
+        if (sym.type != .OBJECT and sym.type != .FUNC) {
+            continue;
         }
-        const strtab = try section.bytes(elf, shdrs[sh.link]);
-        const symtab = try section.bytes(elf, sh);
-        var i: usize = 0;
-        while (i + 24 <= symtab.len) : (i += 24) {
-            const st_name = std.mem.readInt(u32, symtab[i..][0..4], .little);
-            const st_type = symtab[i + 4] & 0xf;
-            const st_shndx = std.mem.readInt(u16, symtab[i + 6 ..][0..2], .little);
-            if (st_shndx == 0 or st_shndx >= shnum) {
-                continue;
-            }
-            if (st_type != 1 and st_type != 2) {
-                continue; // STT_OBJECT, STT_FUNC
-            }
-
-            if (hot_sym[st_shndx] != null) {
-                continue;
-            }
-            const name = try cstr(strtab, st_name);
-            if (hot.contains(name)) {
-                hot_sym[st_shndx] = name;
-            }
+        if (hot_sym[sym.shndx] != null) {
+            continue;
+        }
+        if (hot.contains(sym.name)) {
+            hot_sym[sym.shndx] = sym.name;
         }
     }
 
     var new_shstrtab: std.ArrayList(u8) = .empty;
-    try new_shstrtab.appendSlice(gpa, shstrtab);
+    try new_shstrtab.appendSlice(gpa, try obj.bytesOf(obj.sections[obj.header.shstrndx]));
     const new_name = try gpa.alloc(?u32, shnum);
     @memset(new_name, null);
     var count: usize = 0;
-    for (shdrs, 0..) |sh, idx| {
-        if (sh.type != 1) {
-            continue; // SHT_PROGBITS
+    for (obj.sections, 0..) |sh, idx| {
+        if (sh.type != std.elf.SHT_PROGBITS) {
+            continue;
         }
         const sym = hot_sym[idx] orelse continue;
         // Leave V8's embedded builtins blob (a single multi-symbol .text
@@ -266,9 +178,8 @@ fn markMember(gpa: Allocator, elf: []const u8, hot: *const HotSet, renamed: *usi
         if (std.mem.startsWith(u8, sym, "Builtins_")) {
             continue;
         }
-        const name = try cstr(shstrtab, sh.name);
         const generic = for (generic_names) |g| {
-            if (std.mem.eql(u8, name, g)) {
+            if (std.mem.eql(u8, sh.name, g)) {
                 break true;
             }
         } else false;
@@ -276,7 +187,7 @@ fn markMember(gpa: Allocator, elf: []const u8, hot: *const HotSet, renamed: *usi
             continue;
         }
         new_name[idx] = @intCast(new_shstrtab.items.len);
-        try new_shstrtab.appendSlice(gpa, if (std.mem.startsWith(u8, name, ".text")) ".text.hot." else ".rodata.hot.");
+        try new_shstrtab.appendSlice(gpa, if (std.mem.startsWith(u8, sh.name, ".text")) ".text.hot." else ".rodata.hot.");
         try new_shstrtab.appendSlice(gpa, sym);
         try new_shstrtab.append(gpa, 0);
         count += 1;
@@ -284,20 +195,20 @@ fn markMember(gpa: Allocator, elf: []const u8, hot: *const HotSet, renamed: *usi
     if (count == 0) return null;
 
     var buf: std.ArrayList(u8) = .empty;
-    try buf.ensureTotalCapacity(gpa, elf.len + 8 + new_shstrtab.items.len);
-    buf.appendSliceAssumeCapacity(elf);
+    try buf.ensureTotalCapacity(gpa, bytes.len + 8 + new_shstrtab.items.len);
+    buf.appendSliceAssumeCapacity(bytes);
     while (buf.items.len % 8 != 0) {
         buf.appendAssumeCapacity(0);
     }
     const strtab_offset = buf.items.len;
     buf.appendSliceAssumeCapacity(new_shstrtab.items);
 
-    const shstr_hdr = shoff + @as(usize, shstrndx) * 64;
+    const shstr_hdr = obj.headerOffset(obj.header.shstrndx);
     std.mem.writeInt(u64, buf.items[shstr_hdr + 24 ..][0..8], strtab_offset, .little);
     std.mem.writeInt(u64, buf.items[shstr_hdr + 32 ..][0..8], new_shstrtab.items.len, .little);
     for (new_name, 0..) |maybe, idx| {
         const off = maybe orelse continue;
-        std.mem.writeInt(u32, buf.items[shoff + idx * 64 ..][0..4], off, .little);
+        std.mem.writeInt(u32, buf.items[obj.headerOffset(idx)..][0..4], off, .little);
     }
     renamed.* += count;
     return buf.items;
