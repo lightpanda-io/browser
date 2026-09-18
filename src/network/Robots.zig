@@ -103,10 +103,6 @@ pub const RobotStore = struct {
     mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
-        return .initCapacity(allocator, capacity);
-    }
-
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) RobotStore {
         return .{
             .allocator = allocator,
             .map = .empty,
