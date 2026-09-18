@@ -35,6 +35,7 @@ const TreeWalker = @import("../webapi/TreeWalker.zig");
 const TextEvent = @import("../webapi/event/TextEvent.zig");
 const InputEvent = @import("../webapi/event/InputEvent.zig");
 const MouseEvent = @import("../webapi/event/MouseEvent.zig");
+const TouchEvent = @import("../webapi/event/TouchEvent.zig");
 const WheelEvent = @import("../webapi/event/WheelEvent.zig");
 const PointerEvent = @import("../webapi/event/PointerEvent.zig");
 const KeyboardEvent = @import("../webapi/event/KeyboardEvent.zig");
@@ -502,6 +503,80 @@ fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !voi
 fn deltaToScroll(d: f64) i32 {
     if (std.math.isNan(d)) return 0;
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
+}
+
+/// The CDP-tracked touch contact: single-touch scope, identifier 0.
+pub const TouchContact = struct {
+    target: *Element,
+    x: f64,
+    y: f64,
+};
+
+fn isTouchLift(typ: []const u8) bool {
+    return std.mem.eql(u8, typ, "touchend") or std.mem.eql(u8, typ, "touchcancel");
+}
+
+/// Shared by WebDriver's touch actions and CDP's Input.dispatchTouchEvent.
+/// Single-touch: identifier 0. The caller supplies the target (no hit-test),
+/// so touchmove/touchend/touchcancel can stay pinned to the touchstart
+/// element instead of re-resolving at the current point.
+pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: []const u8, x: f64, y: f64) !void {
+    const active = !isTouchLift(typ);
+
+    const event: *TouchEvent = try .initTrustedWithTouch(typ, .{
+        .bubbles = true,
+        .composed = true,
+    }, .{
+        .identifier = 0,
+        .target = target,
+        .clientX = x,
+        .clientY = y,
+    }, active, frame);
+
+    // touchcancel is never cancelable per spec; the others follow the same
+    // passive-listener-dependent rule as wheel (see EventManager).
+    if (!std.mem.eql(u8, typ, "touchcancel")) {
+        event.asEvent()._cancelable_unless_passive = true;
+    }
+
+    try frame._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+}
+
+pub fn hasActiveTouch(frame: *Frame) bool {
+    return frame.page.input_touch_contact != null;
+}
+
+/// CDP path: hit-test on touchstart, then keep that target for move/end/cancel.
+pub fn triggerTouch(frame: *Frame, typ: []const u8, x: f64, y: f64) !void {
+    const page = frame.page;
+    const is_start = std.mem.eql(u8, typ, "touchstart");
+    const target = if (!is_start)
+        (if (page.input_touch_contact) |c| c.target else null)
+    else
+        null;
+    const resolved = target orelse (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
+    if (comptime lp.IS_DEBUG) {
+        log.debug(.frame, "frame touch", .{
+            .url = frame.url,
+            .node = resolved,
+            .x = x,
+            .y = y,
+            .type = frame._type,
+        });
+    }
+    try dispatchTouchEventOn(frame, resolved, typ, x, y);
+    page.input_touch_contact = .{ .target = resolved, .x = x, .y = y };
+}
+
+/// CDP TouchEnd/TouchCancel with an empty touchPoints list: dispatch at the
+/// stored contact instead of (0, 0).
+pub fn triggerTouchLift(frame: *Frame, typ: []const u8) !void {
+    const contact = frame.page.input_touch_contact orelse return;
+    // Consume the state before the fallible dispatch, so a dispatch that
+    // fails partway through (e.g. a listener throws) can't leave a stale
+    // contact that locks out every future touchStart for this page.
+    frame.page.input_touch_contact = null;
+    try dispatchTouchEventOn(frame, contact.target, typ, contact.x, contact.y);
 }
 
 /// Whether the element has a click activation behavior that handleClick

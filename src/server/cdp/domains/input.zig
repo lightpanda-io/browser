@@ -19,6 +19,7 @@
 const std = @import("std");
 const CDP = @import("../CDP.zig");
 const Frame = @import("../../../browser/Frame.zig");
+const Element = @import("../../../browser/webapi/Element.zig");
 
 const dom_button = Frame.user_input.mouse_button;
 
@@ -26,12 +27,14 @@ pub fn processMessage(cmd: *CDP.Command) !void {
     const action = std.meta.stringToEnum(enum {
         dispatchKeyEvent,
         dispatchMouseEvent,
+        dispatchTouchEvent,
         insertText,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .dispatchKeyEvent => return dispatchKeyEvent(cmd),
         .dispatchMouseEvent => return dispatchMouseEvent(cmd),
+        .dispatchTouchEvent => return dispatchTouchEvent(cmd),
         .insertText => return insertText(cmd),
     }
 }
@@ -151,6 +154,71 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
         .mouseWheel => try Frame.user_input.triggerMouseWheel(frame, params.x, params.y, params.deltaX, params.deltaY),
     }
     // result already sent
+}
+
+// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
+//
+// Single-touch scope: exactly one touchPoint on TouchStart/TouchMove, none on
+// TouchEnd/TouchCancel (which lift the stored contact tracked on Page). A
+// client sending more than one point is rejected outright rather than
+// silently dropping every point past the first.
+// The only supported contact ID is 0 (also used when id is omitted).
+fn dispatchTouchEvent(cmd: *CDP.Command) !void {
+    const params = (cmd.params(struct {
+        type: Type,
+        touchPoints: []const struct {
+            x: f64,
+            y: f64,
+            id: f64 = 0,
+            // radius/rotationAngle/force are accepted by CDP but not
+            // implemented for this single-touch scope.
+        },
+
+        const Type = enum {
+            touchStart,
+            touchMove,
+            touchEnd,
+            touchCancel,
+        };
+    }) catch return error.InvalidParams) orelse return error.InvalidParams;
+
+    switch (params.type) {
+        .touchStart, .touchMove => if (params.touchPoints.len != 1) return error.InvalidParams,
+        .touchEnd, .touchCancel => if (params.touchPoints.len != 0) return error.InvalidParams,
+    }
+    for (params.touchPoints) |point| {
+        if (point.id != 0) return error.InvalidParams;
+    }
+
+    const bc = cmd.browser_context orelse {
+        try cmd.sendResult(null, .{});
+        return;
+    };
+    const frame = bc.mainFrame() orelse {
+        try cmd.sendResult(null, .{});
+        return;
+    };
+
+    switch (params.type) {
+        // Single-touch scope: a second touchStart while the one supported
+        // contact is still active would overwrite it, losing the original
+        // target/coordinates and reporting two starts for one contact.
+        .touchStart => {
+            if (Frame.user_input.hasActiveTouch(frame)) return error.InvalidParams;
+        },
+        .touchMove, .touchEnd, .touchCancel => {
+            if (!Frame.user_input.hasActiveTouch(frame)) return error.InvalidParams;
+        },
+    }
+
+    try cmd.sendResult(null, .{});
+
+    switch (params.type) {
+        .touchStart => try Frame.user_input.triggerTouch(frame, "touchstart", params.touchPoints[0].x, params.touchPoints[0].y),
+        .touchMove => try Frame.user_input.triggerTouch(frame, "touchmove", params.touchPoints[0].x, params.touchPoints[0].y),
+        .touchEnd => try Frame.user_input.triggerTouchLift(frame, "touchend"),
+        .touchCancel => try Frame.user_input.triggerTouchLift(frame, "touchcancel"),
+    }
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-insertText
@@ -1007,6 +1075,463 @@ test "cdp.input: chorded mousedown focuses its target unless pointerdown or mous
         , null);
         try testing.expect(result.isTrue());
     }
+}
+
+test "cdp.input: dispatchTouchEvent touchStart populates touches/targetTouches/changedTouches" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchstart', (e) => {
+        \\  window.result = e.touches.length === 1 &&
+        \\    e.targetTouches.length === 1 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.touches[0].target === t &&
+        \\    e.touches[0] === e.changedTouches[0] &&
+        \\    e.touches !== e.targetTouches;
+        \\  window.touchX = e.touches[0].clientX;
+        \\  window.touchY = e.touches[0].clientY;
+        \\});
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
+    });
+
+    const result = try ls.local.compileAndRun("window.result === true && window.touchX === document.getElementById('hoverTarget').getBoundingClientRect().x && window.touchY === document.getElementById('hoverTarget').getBoundingClientRect().y", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent touchEnd empties touches but keeps changedTouches" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchend', (e) => {
+        \\  window.result = e.touches.length === 0 &&
+        \\    e.targetTouches.length === 0 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.changedTouches[0].target === t &&
+        \\    e.changedTouches[0].clientX === t.getBoundingClientRect().x &&
+        \\    e.changedTouches[0].clientY === t.getBoundingClientRect().y;
+        \\});
+    , null);
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+    });
+
+    const result = try ls.local.compileAndRun("window.result === true", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent empty touchStart is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
+}
+
+test "cdp.input: dispatchTouchEvent a multi-contact touchStart/touchMove is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{ .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 10 } } },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchMove", .touchPoints = &.{ .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 10 } } },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
+}
+
+test "cdp.input: dispatchTouchEvent empty touchEnd with no active contact is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
+}
+
+test "cdp.input: dispatchTouchEvent touchMove with no active contact is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = 0, .y = 0 }} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
+}
+
+test "cdp.input: dispatchTouchEvent unsupported IDs cannot create or change a contact" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    _ = try ls.local.compileAndRun(
+        \\window.touchEvents = [];
+        \\const target = document.getElementById('hoverTarget');
+        \\for (const type of ['touchstart', 'touchmove', 'touchend']) {
+        \\  target.addEventListener(type, e => {
+        \\    const t = e.changedTouches[0];
+        \\    touchEvents.push([e.type, t.identifier, t.clientX, t.clientY]);
+        \\  });
+        \\}
+    , null);
+    const x = try (try ls.local.compileAndRun("target.getBoundingClientRect().x", null)).toF64();
+    const y = try (try ls.local.compileAndRun("target.getBoundingClientRect().y", null)).toF64();
+
+    // IDs outside the supported single-contact subset are rejected even
+    // before the first contact, including fractional and negative IDs.
+    for ([_]f64{ 7, -1, 0.5 }) |id| {
+        try ctx.processMessage(.{
+            .id = 1,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = id }} },
+        });
+        try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 1 });
+        try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    }
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = x, .y = y, .id = 0 }} },
+    });
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 100, .y = y + 100, .id = 8 }} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 3 });
+    try testing.expectEqual(x, frame.page.input_touch_contact.?.x);
+    try testing.expectEqual(y, frame.page.input_touch_contact.?.y);
+
+    // Omitted ID means 0, so an ordinary move still belongs to the contact.
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchMove", .touchPoints = &.{.{ .x = x + 1, .y = y + 2 }} },
+    });
+    try ctx.processMessage(.{
+        .id = 5,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+    });
+    try testing.expect(!Frame.user_input.hasActiveTouch(frame));
+    try testing.expect((try ls.local.compileAndRun(
+        \\JSON.stringify(touchEvents) === JSON.stringify([
+        \\  ['touchstart', 0, target.getBoundingClientRect().x, target.getBoundingClientRect().y],
+        \\  ['touchmove', 0, target.getBoundingClientRect().x + 1, target.getBoundingClientRect().y + 2],
+        \\  ['touchend', 0, target.getBoundingClientRect().x + 1, target.getBoundingClientRect().y + 2]
+        \\])
+    , null)).isTrue());
+}
+
+// Single-touch scope: a second touchStart must not overwrite the contact.
+test "cdp.input: dispatchTouchEvent a second touchStart while a contact is active is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('hoverTarget')
+        \\  .addEventListener('touchstart', () => { window.starts = (window.starts || 0) + 1; });
+    , null);
+
+    const first_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const first_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+    const other_x = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().x", null)).toF64();
+    const other_y = try (try ls.local.compileAndRun("document.getElementById('btn').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = first_x, .y = first_y }} },
+    });
+
+    // A second touchStart at a different point is rejected outright.
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = other_x, .y = other_y }} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
+
+    // The original contact is untouched: exactly one touchstart fired, and
+    // touchEnd still resolves against the first target's coordinates.
+    _ = try ls.local.compileAndRun(
+        \\document.getElementById('hoverTarget')
+        \\  .addEventListener('touchend', (e) => {
+        \\    window.endedOnOriginal = e.changedTouches[0].clientX === document.getElementById('hoverTarget').getBoundingClientRect().x;
+        \\  });
+    , null);
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{} },
+    });
+
+    const result = try ls.local.compileAndRun("window.starts === 1 && window.endedOnOriginal === true", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent populated touchEnd/touchCancel is InvalidParams" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const rect_x = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().x", null)).toF64();
+    const rect_y = try (try ls.local.compileAndRun("document.getElementById('hoverTarget').getBoundingClientRect().y", null)).toF64();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
+    });
+
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchEnd", .touchPoints = &.{.{ .x = rect_x, .y = rect_y }} },
+    });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
+}
+
+// Regression coverage for the 2026-09-17 touch-input audit's four reproduced
+// findings (reviews/2026-09-17-touch-input-audit.md), adapted from its
+// standalone probes (reviews/touch-audit-probes.zig) into the tree.
+test "cdp.input: dispatchTouchEvent touchcancel is never cancelable" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchcancel', e => {
+        \\  e.preventDefault();
+        \\  window.result = !e.cancelable && !e.defaultPrevented;
+        \\}, {passive: false});
+        \\t;
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, "touchcancel", 10, 20);
+    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent a passive-only touchstart listener is not cancelable" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchstart', e => { window.result = !e.cancelable; }, {passive: true});
+        \\t;
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, "touchstart", 10, 20);
+    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent a non-passive listener makes touchstart cancelable" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchstart', e => { window.result = e.cancelable; });
+        \\t;
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, "touchstart", 10, 20);
+    try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent a closed-shadow touch target retargets to the host" {
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    var tc: lp.js.TryCatch = undefined;
+    tc.init(&ls.local);
+    defer tc.deinit();
+
+    const value = try ls.local.compileAndRun(
+        \\const host = document.createElement('div');
+        \\document.body.appendChild(host);
+        \\const root = host.attachShadow({mode: 'closed'});
+        \\const inner = document.createElement('button');
+        \\root.appendChild(inner);
+        \\host.addEventListener('touchstart', e => {
+        \\  window.eventTargetOK = e.target === host;
+        \\  window.touchTargetOK = e.touches[0].target === host;
+        \\});
+        \\inner;
+    , null);
+    const target = try ls.local.jsValueToZig(*Element, value);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, "touchstart", 10, 20);
+    const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
+    try testing.expect(result.isTrue());
+}
+
+test "cdp.input: dispatchTouchEvent repeated touches reads have bounded arena storage" {
+    const TouchEvent = @import("../../../browser/webapi/event/TouchEvent.zig");
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const target = frame.document.getDocumentElement().?;
+
+    const event = try TouchEvent.initTrustedWithTouch("touchstart", null, .{
+        .target = target,
+        .clientX = 10,
+        .clientY = 20,
+    }, true, frame);
+    event.asEvent().acquireRef();
+    defer event.asEvent().releaseRef(frame.page);
+
+    // Warm all three caches (touches, targetTouches, changedTouches are each
+    // a distinct cached TouchList) before measuring, so the loop only
+    // exercises the cache-hit path.
+    _ = try event.getTouches();
+    _ = try event.getTargetTouches();
+    _ = try event.getChangedTouches();
+    const before = event.asEvent()._arena.bytes;
+    for (0..10_000) |_| {
+        _ = try event.getTouches();
+        _ = try event.getTargetTouches();
+        _ = try event.getChangedTouches();
+    }
+    const after = event.asEvent()._arena.bytes;
+    try testing.expectEqual(before, after);
 }
 
 test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
