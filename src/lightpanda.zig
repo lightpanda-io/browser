@@ -64,9 +64,13 @@ const Node = @import("browser/webapi/Node.zig");
 const Selector = @import("browser/webapi/selector/Selector.zig");
 
 pub const Agent = @import("agent/Agent.zig");
+pub const Baseline = @import("script/Baseline.zig");
 pub const skill = @import("script/skill.zig");
 pub const Recorder = @import("script/Recorder.zig");
 pub const Runtime = @import("script/Runtime.zig");
+pub const extract = @import("script/extract.zig");
+pub const heal = @import("script/heal.zig");
+pub const replay = @import("script/replay.zig");
 pub const Schema = @import("script/Schema.zig");
 pub const Command = @import("script/command.zig").Command;
 
