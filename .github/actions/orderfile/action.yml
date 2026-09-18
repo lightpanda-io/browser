@@ -1,17 +1,17 @@
 name: "Orderfile"
 description: "Regenerate orderfile/lightpanda.ld and orderfile/v8.txt from a profile of the CDP bench"
 
-# Runs orderfile/tools/regen.sh, which writes the two files back into the
-# checkout. What the caller does with them (commit, or just build) is its own
-# business. See orderfile/README.md.
+# Runs `zig build orderfile`, which writes the two files back into the
+# checkout and the profile into zig-out/orderfile. What the caller does with
+# them (commit, or just build) is its own business. See orderfile/README.md.
 #
-# Needs a Linux runner with sudo (the script flips
+# Needs a Linux runner with sudo (the profile flips
 # /sys/kernel/debug/fault_around_bytes), plus node, go, python3 and binutils.
 # Call it after ./.github/actions/install and after the v8 snapshot.
 
 inputs:
   build-args:
-    description: 'zig build args for the profiling build: the release build args minus -Dorderfile'
+    description: 'zig build args of the release build, -Dorderfile included'
     required: true
   runs:
     description: 'CDP bench iterations'
@@ -24,7 +24,7 @@ inputs:
 
 outputs:
   out-dir:
-    description: 'Scratch directory with the profile: resident.json, hot.text, hot.rodata, gen_order.stats, result.txt and the generated lightpanda.ld / v8.txt'
+    description: 'Directory with the profile: resident.json, hot.text, hot.rodata, bench.out, gen_order.stats and result.txt'
     value: ${{ steps.out.outputs.dir }}
 
 runs:
@@ -42,24 +42,23 @@ runs:
       working-directory: demo
 
     # Its own step, so the path is still an output when the profile fails.
-    - name: profile scratch directory
+    - name: profile directory
       id: out
       shell: bash
-      run: echo "dir=$RUNNER_TEMP/orderfile-regen" >> "$GITHUB_OUTPUT"
+      run: echo "dir=$GITHUB_WORKSPACE/zig-out/orderfile" >> "$GITHUB_OUTPUT"
 
     - name: regenerate the profile
       shell: bash
       env:
         DEMO_DIR: demo
         RUNS: ${{ inputs.runs }}
-        OUT: ${{ steps.out.outputs.dir }}
         BUILD_ARGS: ${{ inputs.build-args }}
       run: |
         # BUILD_ARGS is a list of flags, it has to word-split.
         # shellcheck disable=SC2086
-        orderfile/tools/regen.sh $BUILD_ARGS
+        zig build orderfile $BUILD_ARGS
 
-    # $OUT dies with the runner, and a failed profile is the one case where
+    # zig-out dies with the runner, and a failed profile is the one case where
     # the page dump and the bench output are worth reading afterwards.
     - name: upload profile
       if: failure()
@@ -67,13 +66,7 @@ runs:
       with:
         name: orderfile-profile
         path: |
-          ${{ steps.out.outputs.dir }}/result.txt
-          ${{ steps.out.outputs.dir }}/gen_order.stats
-          ${{ steps.out.outputs.dir }}/hot.text
-          ${{ steps.out.outputs.dir }}/hot.rodata
-          ${{ steps.out.outputs.dir }}/resident.json
-          ${{ steps.out.outputs.dir }}/link.line
-          ${{ steps.out.outputs.dir }}/bench.out
-          ${{ steps.out.outputs.dir }}/lightpanda.ld
-          ${{ steps.out.outputs.dir }}/v8.txt
+          ${{ steps.out.outputs.dir }}
+          orderfile/lightpanda.ld
+          orderfile/v8.txt
         retention-days: 10

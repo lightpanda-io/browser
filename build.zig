@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const orderfile = @import("orderfile/orderfile.zig");
 
 const lightpanda_version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch unreachable;
 const min_zig_version = std.SemanticVersion.parse(@import("build.zig.zon").minimum_zig_version) catch unreachable;
@@ -90,7 +91,7 @@ pub fn build(b: *Build) !void {
     const use_llvm = b.option(bool, "use_llvm", "Use the LLVM backend") orelse !dev_fast;
     // Hot-code layout for the Linux release artifacts, see orderfile/README.md.
     // Opt-in (CI passes it): it needs LLD and costs link time on every build.
-    const orderfile = b.option([]const u8, "orderfile", "Linker script packing hot sections, e.g. orderfile/lightpanda.ld (Linux/LLD release builds)");
+    const orderfile_path = b.option([]const u8, "orderfile", "Linker script packing hot sections, e.g. orderfile/lightpanda.ld (Linux/LLD release builds)");
 
     const version = resolveVersion(b);
     std.debug.print("Lightpanda {f}\n", .{version});
@@ -118,7 +119,7 @@ pub fn build(b: *Build) !void {
 
     const fmt_step = b.step("fmt", "Check code formatting");
     const fmt = b.addFmt(.{
-        .paths = &.{ "src", "build.zig", "build.zig.zon" },
+        .paths = &.{ "src", "orderfile", "build.zig", "build.zig.zon" },
         .check = true,
     });
     fmt_step.dependOn(&fmt.step);
@@ -127,14 +128,14 @@ pub fn build(b: *Build) !void {
     // With an orderfile, the prebuilt V8 archive is rewritten so its hot
     // functions' sections can be addressed by the linker script.
     const v8_archive: ?Build.LazyPath = if (prebuilt_v8_path) |path| .{ .cwd_relative = path } else null;
-    const v8_for_link = if (orderfile != null and v8_archive != null and !shared_v8) markHotSections(b, v8_archive.?) else v8_archive;
+    const v8_for_link = if (orderfile_path != null and v8_archive != null and !shared_v8) orderfile.markHotSections(b, v8_archive.?) else v8_archive;
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, v8_for_link, shared_v8);
-    linkCurl(b, lightpanda_module, deps, enable_tsan, orderfile != null);
+    linkCurl(b, lightpanda_module, deps, enable_tsan, orderfile_path != null);
     linkRust(b, lightpanda_module, deps);
     linkZenai(b, lightpanda_module);
-    linkIsocline(b, lightpanda_module);
-    linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile != null);
-    linkPcre2(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile != null);
+    linkIsocline(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
+    linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
+    linkPcre2(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -153,18 +154,21 @@ pub fn build(b: *Build) !void {
     const exe_config: ExeConfig = .{
         .check = check,
         .lightpanda_module = lightpanda_module,
-        .target = target,
-        .optimize = optimize,
-        .use_llvm = use_llvm,
-        .orderfile = orderfile,
-        .sanitize_c = enable_csan,
-        .sanitize_thread = enable_tsan,
+        .link = .{
+            .target = target,
+            .optimize = optimize,
+            .use_llvm = use_llvm,
+            .sanitize_c = enable_csan,
+            .sanitize_thread = enable_tsan,
+        },
+        .orderfile = orderfile_path,
     };
 
     {
         // browser
         const exe = addExe(b, exe_config, "lightpanda", "lightpanda_exe_check", "src/main.zig");
         b.installArtifact(exe);
+        orderfile.addStep(b, exe_config.link, exe.root_module, v8_for_link, orderfile_path);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -228,47 +232,36 @@ const Deps = struct {
 const ExeConfig = struct {
     check: *Build.Step,
     lightpanda_module: *Build.Module,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    use_llvm: bool,
+    link: orderfile.Link,
     orderfile: ?[]const u8,
-    sanitize_c: ?std.zig.SanitizeC,
-    sanitize_thread: bool,
 };
 
 fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8, root_source_file: []const u8) *Build.Step.Compile {
-    const exe = b.addExecutable(.{
-        .name = name,
-        .use_llvm = config.use_llvm,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path(root_source_file),
-            .target = config.target,
-            .optimize = config.optimize,
-            .sanitize_c = config.sanitize_c,
-            .sanitize_thread = config.sanitize_thread,
-            .imports = &.{
-                .{ .name = "lightpanda", .module = config.lightpanda_module },
-            },
-        }),
+    const root_module = b.createModule(.{
+        .root_source_file = b.path(root_source_file),
+        .target = config.link.target,
+        .optimize = config.link.optimize,
+        .sanitize_c = config.link.sanitize_c,
+        .sanitize_thread = config.link.sanitize_thread,
+        .imports = &.{
+            .{ .name = "lightpanda", .module = config.lightpanda_module },
+        },
     });
-
-    if (config.orderfile) |path| {
-        // Per-function/per-datum sections exist only so the orderfile script
-        // can place individual hot functions; the self-hosted backend used by
-        // Debug builds does not support them on the C libraries, so they are
-        // gated on the orderfile being set (release/LLVM only).
-        exe.link_function_sections = true;
-        exe.link_data_sections = true;
-        exe.linker_script = .{ .cwd_relative = path };
-    }
 
     const exe_check = b.addLibrary(.{
         .name = check_name,
-        .root_module = exe.root_module,
+        .root_module = root_module,
     });
     config.check.dependOn(&exe_check.step);
 
-    return exe;
+    if (config.orderfile) |path| {
+        return orderfile.addExe(b, config.link, name, root_module, .{ .cwd_relative = path });
+    }
+    return b.addExecutable(.{
+        .name = name,
+        .use_llvm = config.link.use_llvm,
+        .root_module = root_module,
+    });
 }
 
 fn devFastGlibcVersion(b: *Build) std.SemanticVersion {
@@ -336,23 +329,6 @@ fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
     }
     std.debug.print("Can't parse the `{s} default:` value from .github/actions/install/action.yml; prebuilt V8 discovery skipped.\n", .{key});
     return null;
-}
-
-/// Renames the hot V8 functions' sections (`.text` -> `.text.hot.<sym>`, see
-/// orderfile/mark_hot_sections.zig) so the orderfile script can gather them.
-fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
-    const tool = b.addExecutable(.{
-        .name = "mark_hot_sections",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("orderfile/mark_hot_sections.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseSafe,
-        }),
-    });
-    const run = b.addRunArtifact(tool);
-    run.addFileArg(archive);
-    run.addFileArg(b.path("orderfile/v8.txt"));
-    return run.addOutputFileArg("libc_v8.a");
 }
 
 /// Per-function/per-datum sections let the -Dorderfile linker script place
@@ -1015,12 +991,17 @@ fn linkZenai(b: *Build, mod: *Build.Module) void {
     mod.addImport("zenai", dep.module("zenai"));
 }
 
-fn linkIsocline(b: *Build, mod: *Build.Module) void {
+fn linkIsocline(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, section: bool) void {
     const dep = b.dependency("isocline", .{});
-    mod.addIncludePath(dep.path("include"));
-    mod.addCSourceFile(.{
+
+    const lib_mod = cLibModule(b, deps.target, deps.optimize, is_tsan);
+    lib_mod.sanitize_c = enable_csan;
+    lib_mod.addIncludePath(dep.path("include"));
+    lib_mod.addCSourceFile(.{
         .file = dep.path("src/isocline.c"),
     });
+    const lib = sectionize(b.addLibrary(.{ .name = "isocline", .root_module = lib_mod }), section);
+    mod.linkLibrary(lib);
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = dep.path("include/isocline.h"),

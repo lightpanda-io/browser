@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""usage: gen_order.py <hot.text> <hot.rodata> <out.ld> [--v8 <libc_v8.a> <v8.txt>] <obj-or-archive>...
+"""usage: gen_order.py <hot.text> <hot.rodata> <out.ld> [--v8 <libc_v8.a> <v8.txt>]
+                    [--stats <file>] [--zig-cache <dir>] <obj-or-archive>...
 
 Builds a symbol -> (file, section) map from the objects and emits an INSERT
 linker script that places the hot sections in .text.hot / .rodata.hot ahead of
@@ -10,23 +11,42 @@ LLD tests every input section against every unscoped pattern, which turns a
 With --v8, symbols defined in that archive are written to <v8.txt> for
 mark_hot_sections.zig instead, and the script matches them with one
 `.text.hot.*` / `.rodata.hot.*` glob (V8's sections are all named `.text`).
+
+--zig-cache names Zig's global cache `o/` directory, where the libc++,
+libc++abi, libunwind and compiler_rt archives Zig links itself live under
+unknown hashes. Only their members' names matter to the script, and every copy
+shares those, so all copies are read.
 """
-import sys, subprocess, collections, re, os
-hot_text, hot_rodata, out = sys.argv[1:4]
-objs = sys.argv[4:]
+import sys, subprocess, collections, re, os, argparse, glob
+ap = argparse.ArgumentParser()
+ap.add_argument("hot_text"); ap.add_argument("hot_rodata"); ap.add_argument("out")
+ap.add_argument("--v8", nargs=2, metavar=("LIBC_V8_A", "V8_TXT"))
+ap.add_argument("--stats", metavar="FILE")
+ap.add_argument("--zig-cache", metavar="DIR")
+ap.add_argument("objs", nargs="*")
+args = ap.parse_intermixed_args()
+hot_text, hot_rodata, out = args.hot_text, args.hot_rodata, args.out
+objs = list(args.objs)
 v8_archive = v8_out = None
-if objs and objs[0] == "--v8":
-    v8_archive, v8_out = os.path.basename(objs[1]), objs[2]
-    objs = [objs[1]] + objs[3:]
+if args.v8:
+    v8_archive, v8_out = os.path.basename(args.v8[0]), args.v8[1]
+    objs.insert(0, args.v8[0])
+if args.zig_cache:
+    for name in ("libc++.a", "libc++abi.a", "libunwind.a", "libcompiler_rt.a"):
+        objs += sorted(glob.glob(os.path.join(args.zig_cache, "*", name)))
+objs = list(dict.fromkeys(os.path.realpath(o) for o in objs))
 loc_of = collections.defaultdict(set)  # symbol -> {(archive, file, section)}
 for o in objs:
     p = subprocess.run(["objdump", "-t", o], capture_output=True, text=True).stdout
     fname = archive = os.path.basename(o)
+    elf = True
     for line in p.splitlines():
-        m = re.match(r"^(.+?):\s+file format elf", line)
+        m = re.match(r"^(.+?):\s+file format (\S+)", line)
         if m:
             fname = os.path.basename(m.group(1))
+            elf = m.group(2).startswith("elf")
             continue
+        if not elf: continue
         # value flags section<TAB>size name  -- the section can contain spaces (zig)
         if "\t" not in line: continue
         left, right = line.split("\t", 1)
@@ -73,4 +93,7 @@ with open(out, "w") as f:
     f.write("SECTIONS {\n  .rodata.hot : {\n" + "\n".join(r) + "\n  }\n} INSERT BEFORE .rodata;\n")
 if v8_out:
     with open(v8_out, "w") as f: f.write("\n".join(dict.fromkeys(v8_syms)) + "\n")
-for k, v in sorted(stats.items()): print(f"{k}: {v}")
+report = "".join(f"{k}: {v}\n" for k, v in sorted(stats.items()))
+if args.stats:
+    with open(args.stats, "w") as f: f.write(report)
+sys.stdout.write(report)

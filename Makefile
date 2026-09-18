@@ -77,7 +77,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev orderfile download-v8 run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -108,6 +108,10 @@ build: build-v8-snapshot
 	@printf "\033[36mBuilding (release fast)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
+
+## Regenerate the hot-code profile (orderfile/, Linux, needs root and ../demo)
+orderfile: build-v8-snapshot
+	@$(ZIG) build $(ZIGFLAGS) orderfile -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dorderfile=orderfile/lightpanda.ld -Dcpu=x86_64 || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 
 ## Build in debug mode
 build-dev:

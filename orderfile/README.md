@@ -59,24 +59,32 @@ below), with no change in run duration.
 ```bash
 # root for /sys/kernel/debug/fault_around_bytes; ../demo checked out with
 # `npm install` done; node, go, python3 and binutils on the PATH.
-orderfile/tools/regen.sh -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dcpu=x86_64
+make orderfile
+# or, with the release build's args (-Dorderfile included: it selects the
+# sectioned object build the profile is taken from):
+zig build orderfile -Doptimize=ReleaseFast -Dsnapshot_path=../../snapshot.bin -Dorderfile=orderfile/lightpanda.ld -Dcpu=x86_64
 ```
 
-The script
+The `orderfile` step
 
-1. builds with an empty linker script (the unordered binary; the
-   `--verbose-link` line of that build is where `gen_order.py` gets the
-   objects and archives it maps symbols to sections with);
-2. runs the CDP bench (`demo/puppeteer/cdp.js`, 100 runs) against it with
-   fault-around set to 4KB, dumps the pages that are resident
-   (`pagemap.py`), turns them into hot symbol lists in address order
-   (`hotlist.py`) and into the new `lightpanda.ld` / `v8.txt`
-   (`gen_order.py`);
-3. re-runs that build's `ld.lld` line with the new script to check that it
-   links (the script is a cache input of the whole exe compilation, so
-   building with it would be a second full compile; the relink takes
-   seconds and is the same link, bar V8's hot-marked archive coming from
-   the previous `v8.txt`, which does not affect whether the script parses).
+1. builds the release exe without a script: the unordered binary;
+2. runs the CDP bench (`demo/puppeteer/cdp.js`, 100 runs; `tools/profile.sh`,
+   env `DEMO_DIR`, `RUNS`, `RAMDIR`) against it with fault-around set to 4KB,
+   dumps the pages that are resident (`pagemap.py`) and turns them into hot
+   symbol lists in address order (`hotlist.py`);
+3. turns those into the new `lightpanda.ld` / `v8.txt` (`gen_order.py`),
+   mapping symbols to their object file with `objdump` over the link inputs:
+   the Zig object (`lightpanda_zcu.o`, which Zig leaves next to the exe in
+   its cache directory), the C libraries, the Rust staticlib and the V8
+   archive from the build graph, plus the libc++/libunwind/compiler_rt
+   archives Zig links from its global cache (every copy there has the same
+   member names, which is all the script needs);
+4. builds with the new script and runs `lightpanda version`. The script is
+   an input of the whole exe compilation, so this is a second compile of the
+   Zig code; the dependencies are cached;
+5. writes the two files into `orderfile/` and the profile (`hot.text`,
+   `resident.json`, `result.txt`, `gen_order.stats`, ...) into
+   `zig-out/orderfile/`.
 
 Whether the new profile is any good is not measured here; the e2e bench's
 `MAX_VmHWM` gate is, on the next push to `main`.
