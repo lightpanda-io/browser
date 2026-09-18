@@ -6,7 +6,7 @@ description: "Regenerate orderfile/lightpanda.ld and orderfile/v8.txt from a pro
 # them (commit, or just build) is its own business. See orderfile/README.md.
 #
 # Needs a Linux runner with sudo (the profile flips
-# /sys/kernel/debug/fault_around_bytes), plus node, go, python3 and binutils.
+# /sys/kernel/debug/fault_around_bytes), plus node and go.
 # Call it after ./.github/actions/install and after the v8 snapshot.
 
 inputs:
@@ -24,7 +24,7 @@ inputs:
 
 outputs:
   out-dir:
-    description: 'Directory with the profile: resident.json, hot.text, hot.rodata, bench.out, gen_order.stats and result.txt'
+    description: 'Directory with the profile: resident.txt, hot.text, hot.rodata, bench.out, gen_order.stats and result.txt'
     value: ${{ steps.out.outputs.dir }}
 
 runs:

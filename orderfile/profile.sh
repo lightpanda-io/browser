@@ -3,13 +3,13 @@
 # pages of its text and rodata resident at 4KB fault-around, as hot symbol
 # lists. Run by `zig build orderfile`, see orderfile/README.md.
 #
-# usage: profile.sh <lightpanda> <out-dir>
-#   Writes hot.text and hot.rodata (symbols in address order), resident.json,
-#   bench.out and result.txt into <out-dir>.
+# usage: profile.sh <lightpanda> <hotlist> <out-dir>
+#   <hotlist> is the tool built from hotlist.zig. Writes hot.text and
+#   hot.rodata (symbols in address order), resident.txt, bench.out and
+#   result.txt into <out-dir>.
 #
 # Needs root (sudo) for /sys/kernel/debug/fault_around_bytes, a checkout of
-# lightpanda-io/demo (DEMO_DIR, npm install done), node, go, python3 and
-# binutils.
+# lightpanda-io/demo (DEMO_DIR, npm install done), node and go.
 #
 # Environment:
 #   DEMO_DIR  demo checkout (default ../demo, next to the repository)
@@ -18,9 +18,9 @@
 set -euo pipefail
 
 BIN=$1
-OUT=$2
-TOOLS=$(cd "$(dirname "$0")" && pwd)
-DEMO_DIR=${DEMO_DIR:-$TOOLS/../../../demo}
+HOTLIST=$2
+OUT=$3
+DEMO_DIR=${DEMO_DIR:-$(dirname "$0")/../../demo}
 RUNS=${RUNS:-100}
 RAMDIR=${RAMDIR:-/dev/shm}
 FAULT_AROUND=/sys/kernel/debug/fault_around_bytes
@@ -41,8 +41,7 @@ set_fault_around() { echo "$1" | sudo tee "$FAULT_AROUND" > /dev/null; }
 
 # The tmpfs copy the binary is benched from: on ext4 with a recent kernel,
 # large page-cache folios are mapped whole and hide the 64KB-window behaviour.
-# It outlives the bench: the resident pages dump names it, and hotlist.py
-# matches mappings by path.
+# It outlives the bench: hotlist matches the mappings by that path.
 RAM=$RAMDIR/lightpanda-profile-$$
 
 PIDS=()
@@ -75,13 +74,12 @@ PID=$!
 sleep 1
 (cd "$DEMO_DIR" && RUNS=$RUNS node puppeteer/cdp.js > "$OUT/bench.out")
 sleep 2
-python3 "$TOOLS/pagemap.py" "$PID" "$OUT/resident.json" >&2
+"$HOTLIST" "$PID" "$RAM" "$OUT"
 HOT_SET_KB=$(grep VmHWM "/proc/$PID/status" | grep -oP '\d+')
 kill "$PID"
 while kill -0 "$PID" 2> /dev/null; do sleep 0.2; done
 set_fault_around "$FAULT_AROUND_DEFAULT"
 
-python3 "$TOOLS/hotlist.py" "$RAM" "$OUT/resident.json" "$OUT/hot" >&2
-[ -s "$OUT/hot.text" ] || { echo "empty profile, see $OUT/resident.json" >&2; exit 1; }
+[ -s "$OUT/hot.text" ] || { echo "empty profile, see $OUT/resident.txt" >&2; exit 1; }
 printf 'hot set %sKB resident at 4KB fault-around: %s text, %s rodata symbols\n' \
     "$HOT_SET_KB" "$(wc -l < "$OUT/hot.text")" "$(wc -l < "$OUT/hot.rodata")" | tee "$OUT/result.txt" >&2

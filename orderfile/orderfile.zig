@@ -48,18 +48,22 @@ pub fn addExe(b: *Build, link: Link, name: []const u8, root_module: *Build.Modul
     return exe;
 }
 
-/// Renames the hot V8 functions' sections (`.text` -> `.text.hot.<sym>`, see
-/// orderfile/mark_hot_sections.zig) so the orderfile script can gather them.
-pub fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
-    const tool = b.addExecutable(.{
-        .name = "mark_hot_sections",
+/// One of the host tools in this directory.
+fn tool(b: *Build, name: []const u8) *Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = name,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("orderfile/mark_hot_sections.zig"),
+            .root_source_file = b.path(b.fmt("orderfile/{s}.zig", .{name})),
             .target = b.graph.host,
             .optimize = .ReleaseSafe,
         }),
     });
-    const run = b.addRunArtifact(tool);
+}
+
+/// Renames the hot V8 functions' sections (`.text` -> `.text.hot.<sym>`, see
+/// orderfile/mark_hot_sections.zig) so the orderfile script can gather them.
+pub fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
+    const run = b.addRunArtifact(tool(b, "mark_hot_sections"));
     run.addFileArg(archive);
     run.addFileArg(b.path("orderfile/v8.txt"));
     return run.addOutputFileArg("libc_v8.a");
@@ -67,7 +71,7 @@ pub fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
 
 /// `zig build orderfile`: regenerates orderfile/lightpanda.ld and v8.txt from
 /// a profile of the CDP bench, see orderfile/README.md. The bench needs root,
-/// a ../demo checkout and node; the build args are those of the release
+/// a ../demo checkout, node and go; the build args are those of the release
 /// build, -Dorderfile included (it sections the C libraries).
 pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?Build.LazyPath, orderfile_path: ?[]const u8) void {
     const step = b.step("orderfile", "Regenerate orderfile/lightpanda.ld and v8.txt from a profile of the CDP bench (Linux release build with -Dorderfile; needs root, ../demo and node)");
@@ -94,13 +98,13 @@ pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?B
     const zcu = unordered.getEmittedBin().dirname().path(b, "lightpanda_zcu.o");
 
     const profile = b.addSystemCommand(&.{"bash"});
-    profile.addFileArg(b.path("orderfile/tools/profile.sh"));
+    profile.addFileArg(b.path("orderfile/profile.sh"));
     profile.addFileArg(unordered.getEmittedBin());
+    profile.addFileArg(tool(b, "hotlist").getEmittedBin());
     const hot = profile.addOutputDirectoryArg("profile");
     profile.has_side_effects = true;
 
-    const gen = b.addSystemCommand(&.{"python3"});
-    gen.addFileArg(b.path("orderfile/tools/gen_order.py"));
+    const gen = b.addRunArtifact(tool(b, "gen_order"));
     gen.addFileArg(hot.path(b, "hot.text"));
     gen.addFileArg(hot.path(b, "hot.rodata"));
     const ld = gen.addOutputFileArg("lightpanda.ld");
@@ -110,7 +114,7 @@ pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?B
     gen.addArg("--stats");
     const stats = gen.addOutputFileArg("gen_order.stats");
     // libc++, libunwind and compiler_rt come from Zig's global cache; the
-    // script only needs their members' names, which every copy shares.
+    // generator only needs their members' names, which every copy shares.
     gen.addArg("--zig-cache");
     gen.addArg(b.pathJoin(&.{ b.graph.global_cache_root.path.?, "o" }));
     gen.addFileArg(zcu);
