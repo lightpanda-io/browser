@@ -80,6 +80,10 @@ local_arena: Allocator,
 url: [:0]const u8,
 // Same-origin constraint: a worker's origin is inherited from its parent frame.
 origin: ?[]const u8 = null,
+// Inherited from the creating frame, captured at creation since the worker
+// can outlive it. Always true for a service worker: only a secure context can
+// register one.
+_secure_context: bool,
 buf: [1024]u8 = undefined, // same size as frame.buf
 // Document charset (matches Page.charset). Workers default to UTF-8.
 charset: []const u8 = "UTF-8",
@@ -151,6 +155,7 @@ pub fn init(
             .url = url,
             .arena = arena,
             .origin = frame.origin,
+            ._secure_context = tag == .service or frame.isSecureContext(),
             .js = undefined,
             ._call_arena = call_arena,
             ._local_arena = local_arena,
@@ -312,6 +317,10 @@ fn getScheduler(self: *WorkerGlobalScope) *Scheduler {
 
 pub fn performance(self: *WorkerGlobalScope) *Performance {
     return self._performance;
+}
+
+fn getIsSecureContext(self: *const WorkerGlobalScope) bool {
+    return self._secure_context;
 }
 
 pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
@@ -629,6 +638,5 @@ pub const JsApi = struct {
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
-    // Return false since workers don't have secure-context-only APIs
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    pub const isSecureContext = bridge.accessor(WorkerGlobalScope.getIsSecureContext, null, .{});
 };

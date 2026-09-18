@@ -344,6 +344,10 @@ fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
+fn getIsSecureContext(self: *const Window) bool {
+    return self._frame.isSecureContext();
+}
+
 fn getFrameElement(self: *const Window) ?*Element.Html.IFrame {
     return self._frame.iframe;
 }
@@ -1239,11 +1243,7 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Window.scrollTo, .{});
     pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
-    // Return false since we don't have secure-context-only APIs implemented
-    // (webcam, geolocation, clipboard, etc.)
-    // This is safer and could help avoid processing errors by hinting at
-    // sites not to try to access those features
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
 
     // [Replaceable] (CSSOM-View): the getter reads the page's runtime viewport
     // (overridable via Emulation.setDeviceMetricsOverride); the setter overwrites

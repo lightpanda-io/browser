@@ -23,6 +23,24 @@
   }
 </script>
 
+<script id="service_worker_absent_outside_secure_context" type=module>
+  // navigator.serviceWorker is [SecureContext]. A data: document has an opaque
+  // origin, so it isn't one, and (like Chrome) doesn't get the accessor.
+  {
+    const state = await testing.async();
+    window.addEventListener('message', (e) => state.resolve(e.data));
+
+    const f = document.createElement('iframe');
+    f.src = "data:text/html,<script>parent.postMessage({secure: isSecureContext, sw: 'serviceWorker' in navigator}, '*')<\/script>";
+    document.body.appendChild(f);
+
+    await state.done((data) => {
+      testing.expectEqual(false, data.secure);
+      testing.expectEqual(false, data.sw);
+    });
+  }
+</script>
+
 <script id="service_worker_realm_exclusions" type=module>
   // A service worker's realm is worker_common_apis, not worker_extended_apis:
   // the blocking APIs a dedicated/shared worker gets must not be there. A
@@ -54,6 +72,7 @@
       // Both realms keep the async pieces.
       testing.expectEqual(true, fromDedicated.hasFetch);
       testing.expectEqual(true, fromDedicated.hasWebSocket);
+      testing.expectEqual(true, fromDedicated.isSecureContext);
       // CookieStore is [Exposed=(ServiceWorker,Window)]: none of the three
       // should be reachable from a dedicated worker.
       testing.expectEqual(false, fromDedicated.hasCookieStoreCtor);
