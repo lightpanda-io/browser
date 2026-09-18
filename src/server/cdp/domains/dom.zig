@@ -1343,13 +1343,13 @@ test "cdp.dom: getFrameOwner returns the owner iframe element" {
         .frameId = &id.toFrameId(child._frame_id),
     } }, .{ .id = 11 });
 
-    // So does a document, for its own frame.
-    const child_document = try bc.node_registry.register(child.window._document.asNode());
+    // So does the document element, for its own frame.
+    const child_html = try bc.node_registry.register(child.window._document.getDocumentElement().?.asNode());
     try ctx.processMessage(.{ .id = 12, .method = "DOM.describeNode", .sessionId = "SID-X", .params = .{
-        .backendNodeId = child_document.id,
+        .backendNodeId = child_html.id,
     } });
     try ctx.expectSentResult(.{ .node = .{
-        .nodeName = "#document",
+        .localName = "html",
         .frameId = &id.toFrameId(child._frame_id),
     } }, .{ .id = 12 });
 

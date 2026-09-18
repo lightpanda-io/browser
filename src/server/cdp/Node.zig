@@ -220,8 +220,9 @@ pub const Writer = struct {
             try w.objectField("localName");
             try w.write(element.getLocalName());
 
-            // Chrome names the hosted frame on frame-owner elements; that's how
-            // clients pair an <iframe> with its Page.frameAttached id.
+            // Chrome names the hosted frame on frame-owner elements and the own
+            // frame on the document element; that's how clients pair an <iframe>
+            // with its Page.frameAttached id.
             if (element.is(IFrame)) |iframe| {
                 if (iframe.getContentDocument()) |document| {
                     if (document._frame) |child| {
@@ -229,17 +230,17 @@ pub const Writer = struct {
                         try w.write(&id.toFrameId(child._frame_id));
                     }
                 }
+            } else if (dom_node._parent) |dom_parent| {
+                if (dom_parent._type == .document) {
+                    if (dom_parent.subtype(DOMNode.Document)._frame) |frame| {
+                        try w.objectField("frameId");
+                        try w.write(&id.toFrameId(frame._frame_id));
+                    }
+                }
             }
         } else {
             try w.objectField("localName");
             try w.write("");
-
-            if (dom_node._type == .document) {
-                if (dom_node.subtype(DOMNode.Document)._frame) |frame| {
-                    try w.objectField("frameId");
-                    try w.write(&id.toFrameId(frame._frame_id));
-                }
-            }
         }
 
         try w.objectField("nodeType");
