@@ -233,6 +233,28 @@ fn caPathValidator(
     }
 }
 
+fn robotStoreEntryLimitValidator(_: Allocator, args: *std.process.Args.Iterator, target: *?u32) !void {
+    const str = args.next() orelse return error.MissingArgument;
+    const value = std.fmt.parseInt(u32, str, 10) catch {
+        log.fatal(.app, "invalid option value", .{
+            .arg = "--robot-store-entry-limit",
+            .value = str,
+            .hint = "must be a positive integer",
+        });
+        return error.InvalidArgument;
+    };
+
+    if (value == 0) {
+        log.fatal(.app, "invalid option value", .{
+            .arg = "--robot-store-entry-limit",
+            .value = str,
+            .hint = "must be at least 1",
+        });
+        return error.InvalidArgument;
+    }
+    target.* = value;
+}
+
 pub const HttpVersion = enum {
     auto,
     @"1.1",
@@ -253,7 +275,7 @@ pub const ExperimentalFeatures = packed struct(u2) {
 /// Common CLI args.
 const CommonOptions = .{
     .{ .name = "obey_robots", .type = bool },
-    .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000 },
+    .{ .name = "robot_store_entry_limit", .type = ?u32, .default = 1000, .validator = robotStoreEntryLimitValidator },
     .{ .name = "proxy_bearer_token", .type = ?[:0]const u8 },
     .{ .name = "http_proxy", .type = ?[:0]const u8 },
     .{ .name = "http_max_concurrent", .type = ?u8 },

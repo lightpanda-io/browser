@@ -36,6 +36,7 @@ pub fn LruCache(comptime K: type) type {
         map: Map = .empty,
 
         pub fn init(allocator: Allocator, capacity: usize) Self {
+            std.debug.assert(capacity > 0);
             return .{ .allocator = allocator, .capacity = capacity };
         }
 
