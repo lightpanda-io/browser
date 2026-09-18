@@ -23,43 +23,51 @@ pub fn EvictionQueue(comptime K: type) type {
     return struct {
         const Self = @This();
 
-        const Item = struct {
-            seq: u64,
+        const Map = if (K == []const u8) std.StringHashMapUnmanaged(*Entry) else std.AutoArrayHashMapUnmanaged(K, *Entry);
+
+        const Entry = struct {
             key: K,
+            node: std.DoublyLinkedList.Node = .{},
         };
-
-        fn olderFirst(_: void, a: Item, b: Item) std.math.Order {
-            return std.math.order(a.seq, b.seq);
-        }
-
-        const Heap = std.PriorityQueue(Item, void, olderFirst);
 
         allocator: Allocator,
         capacity: usize,
-        next_seq: u64 = 0,
-        heap: Heap = .empty,
+        list: std.DoublyLinkedList = .{},
+        map: Map = .empty,
 
         pub fn init(allocator: Allocator, capacity: usize) Self {
             return .{ .allocator = allocator, .capacity = capacity };
         }
 
         pub fn deinit(self: *Self) void {
-            self.heap.deinit(self.allocator);
+            var it = self.map.valueIterator();
+            while (it.next()) |node| self.allocator.destroy(node.*);
+            self.map.deinit(self.allocator);
         }
 
-        // Record a newly-inserted key. If this pushes the queue over
-        // capacity, returns the oldest key so the caller can evict it from
-        // its own map. Callers must only call this once per new key -- it
-        // does not check for duplicates.
         pub fn insert(self: *Self, key: K) !?K {
-            const seq = self.next_seq;
-            self.next_seq += 1;
+            const entry = try self.allocator.create(Entry);
+            entry.* = .{ .key = key };
+            try self.map.put(self.allocator, key, entry);
+            self.list.append(&entry.node);
 
-            try self.heap.push(self.allocator, .{ .seq = seq, .key = key });
-            if (self.heap.count() <= self.capacity) {
-                return null;
-            }
-            return self.heap.pop().?.key;
+            if (self.map.count() <= self.capacity) return null;
+            return self.evictOldest();
+        }
+
+        pub fn touch(self: *Self, key: K) void {
+            const entry = self.map.get(key).?;
+            self.list.remove(&entry.node);
+            self.list.append(&entry.node);
+        }
+
+        fn evictOldest(self: *Self) ?K {
+            const node = self.list.popFirst() orelse return null;
+            const entry: *Entry = @fieldParentPtr("node", node);
+            const key = entry.key;
+            _ = self.map.remove(key);
+            self.allocator.destroy(entry);
+            return key;
         }
     };
 }
@@ -73,7 +81,7 @@ test "EvictionQueue: no eviction under capacity" {
     try testing.expectEqual(null, try q.insert("a"));
     try testing.expectEqual(null, try q.insert("b"));
     try testing.expectEqual(null, try q.insert("c"));
-    try testing.expectEqual(3, q.heap.count());
+    try testing.expectEqual(3, q.list.len());
 }
 
 test "EvictionQueue: evicts oldest key once over capacity" {
@@ -86,10 +94,30 @@ test "EvictionQueue: evicts oldest key once over capacity" {
     const evicted = try q.insert("c");
     try testing.expect(evicted != null);
     try testing.expectString("a", evicted.?);
-    try testing.expectEqual(2, q.heap.count());
+    try testing.expectEqual(2, q.list.len());
 
     const evicted2 = try q.insert("d");
     try testing.expect(evicted2 != null);
     try testing.expectString("b", evicted2.?);
-    try testing.expectEqual(2, q.heap.count());
+    try testing.expectEqual(2, q.list.len());
+}
+
+test "EvictionQueue: touch properly prevents eviction on oldest" {
+    var q = EvictionQueue([]const u8).init(testing.allocator, 2);
+    defer q.deinit();
+
+    try testing.expectEqual(null, try q.insert("a"));
+    try testing.expectEqual(null, try q.insert("b"));
+    q.touch("a");
+
+    const evicted = try q.insert("c");
+    try testing.expect(evicted != null);
+    try testing.expectString("b", evicted.?);
+    try testing.expectEqual(2, q.list.len());
+    q.touch("a");
+
+    const evicted2 = try q.insert("d");
+    try testing.expect(evicted2 != null);
+    try testing.expectString("c", evicted2.?);
+    try testing.expectEqual(2, q.list.len());
 }
