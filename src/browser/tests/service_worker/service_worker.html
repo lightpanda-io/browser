@@ -367,3 +367,27 @@
     });
   }
 </script>
+
+<script id="service_worker_precache" type=module>
+  // What the worker's install handler stored is what the page reads: one
+  // store per origin, shared by both realms.
+  {
+    const state = await testing.async();
+    await caches.delete('sw-precache');
+
+    const reg = await navigator.serviceWorker.register('./cache-worker.js', { scope: './precache/' });
+    await workerReached(reg.installing, 'activated');
+
+    const cache = await caches.open('sw-precache');
+    const keys = await cache.keys();
+    const script = await (await caches.match('./lifecycle-worker.js')).text();
+    const json = await (await cache.match('/xhr/json')).json();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(2, keys.length);
+      testing.expectTrue(script.includes("seen.push('install')"));
+      testing.expectEqual('9000!!!', json.over);
+    });
+  }
+</script>

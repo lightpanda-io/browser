@@ -320,10 +320,8 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
     // Get the global object for the context
     const global_obj = v8.v8__Context__Global(v8_context).?;
 
-    if (comptime is_frame) {
-        if (global._session.experimental_features.serviceworker == false) {
-            self.hideServiceWorker(v8_context, global_obj);
-        }
+    if (global._session.experimental_features.serviceworker == false) {
+        self.hideServiceWorker(is_frame, v8_context, global_obj);
     }
 
     // Store our TAO inside the internal field of the global object. This
@@ -430,17 +428,32 @@ fn _createContext(self: *Env, global: anytype, params: ContextParams) !*Context 
 // its own Navigator.prototype (2 Gets + 1 Delete).
 // (If this proves to be an issue, we could swap the logic, and dynamically ADD
 // it when it is enabled, but that's a lot more code).
-fn hideServiceWorker(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+fn hideServiceWorker(self: *const Env, comptime is_frame: bool, v8_context: *const v8.Context, global_obj: *const v8.Object) void {
+    if (comptime is_frame) {
+        self.deletePrototypeMember(v8_context, global_obj, "navigator", "service_worker");
+    }
+
+    // A [Global] interface's members are on its prototype and mirrored onto the
+    // global itself.
+    self.deletePrototypeMember(v8_context, global_obj, if (comptime is_frame) "window" else "worker_global_scope", "caches");
+    var deleted: v8.MaybeBool = undefined;
+    v8.v8__Object__Delete(global_obj, v8_context, @ptrCast(self.disabled_api_names.get(self.isolate.handle, "caches")), &deleted);
+    if (deleted.has_value == false or deleted.value == false) {
+        log.warn(.js, "failed to hide experimental API", .{ .interface = "global", .member = "caches" });
+    }
+}
+
+fn deletePrototypeMember(self: *const Env, v8_context: *const v8.Context, global_obj: *const v8.Object, comptime interface: []const u8, comptime member: []const u8) void {
     const isolate = self.isolate.handle;
     const names = &self.disabled_api_names;
 
-    const constructor = v8.v8__Object__Get(global_obj, v8_context, @ptrCast(names.get(isolate, "navigator"))) orelse return;
+    const constructor = v8.v8__Object__Get(global_obj, v8_context, @ptrCast(names.get(isolate, interface))) orelse return;
     const prototype = v8.v8__Object__Get(@ptrCast(constructor), v8_context, @ptrCast(names.get(isolate, "prototype"))) orelse return;
 
     var deleted: v8.MaybeBool = undefined;
-    v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, "service_worker")), &deleted);
+    v8.v8__Object__Delete(@ptrCast(prototype), v8_context, @ptrCast(names.get(isolate, member)), &deleted);
     if (deleted.has_value == false or deleted.value == false) {
-        log.warn(.js, "failed to hide navigator.serviceWorker", .{});
+        log.warn(.js, "failed to hide experimental API", .{ .interface = interface, .member = member });
     }
 }
 
@@ -756,14 +769,20 @@ fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callcon
 
 const DisabledApiNames = struct {
     navigator: v8.Eternal,
+    window: v8.Eternal,
+    worker_global_scope: v8.Eternal,
     prototype: v8.Eternal,
     service_worker: v8.Eternal,
+    caches: v8.Eternal,
 
     fn init(isolate: *v8.Isolate) DisabledApiNames {
         var self: DisabledApiNames = undefined;
         intern(isolate, &self.navigator, "Navigator");
+        intern(isolate, &self.window, "Window");
+        intern(isolate, &self.worker_global_scope, "WorkerGlobalScope");
         intern(isolate, &self.prototype, "prototype");
         intern(isolate, &self.service_worker, "serviceWorker");
+        intern(isolate, &self.caches, "caches");
         return self;
     }
 

@@ -41,9 +41,10 @@ const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
-const storage = @import("storage/storage.zig");
 const idb = @import("storage/idb/idb.zig");
+const storage = @import("storage/storage.zig");
 const CookieStore = @import("storage/CookieStore.zig");
+const CacheStorage = @import("cache/CacheStorage.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
@@ -77,6 +78,7 @@ _visual_viewport: *VisualViewport,
 _performance: *Performance,
 _cookie_store: ?*CookieStore = null,
 _idb_factory: ?*idb.IDBFactory = null,
+_caches: ?*CacheStorage = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -319,6 +321,15 @@ fn getIndexedDB(self: *Window, exec: *Execution) !*idb.IDBFactory {
     const f = try exec._factory.create(idb.IDBFactory{});
     self._idb_factory = f;
     return f;
+}
+
+fn getCaches(self: *Window, exec: *Execution) !*CacheStorage {
+    if (self._caches) |c| {
+        return c;
+    }
+    const c = try exec._factory.create(CacheStorage{});
+    self._caches = c;
+    return c;
 }
 
 pub fn getOrigin(self: *const Window) []const u8 {
@@ -1173,6 +1184,7 @@ pub const JsApi = struct {
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
     pub const cookieStore = bridge.accessor(Window.getCookieStore, null, .{});
     pub const indexedDB = bridge.accessor(Window.getIndexedDB, null, .{});
+    pub const caches = bridge.accessor(Window.getCaches, null, .{});
     pub const origin = bridge.accessor(Window.getOrigin, Window.setOrigin, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .deletable = false });
     pub const history = bridge.accessor(Window.getHistory, null, .{});

@@ -338,6 +338,15 @@ fn consume(self: *Response, exec: *const Execution) !void {
     }
 }
 
+pub fn consumeBytes(self: *Response, exec: *const Execution) ![]const u8 {
+    try self.consume(exec);
+    return switch (self._body) {
+        .empty => "",
+        .bytes => |b| b,
+        .stream => exec.js.local.?.typeError("Response with a ReadableStream body is unsupported"),
+    };
+}
+
 pub fn getText(self: *Response, exec: *const Execution) !js.Promise {
     return self.consumeAs(.text, exec);
 }

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="caches_absent_without_the_flag">
+  // `caches` rides on --experimental-features serviceworker. Like
+  // navigator.serviceWorker it is absent rather than null, and only the way in
+  // is removed.
+  {
+    testing.expectFalse('caches' in window);
+    testing.expectEqual(undefined, window.caches);
+    testing.expectTrue(typeof CacheStorage === 'function');
+    testing.expectTrue(typeof Cache === 'function');
+  }
+</script>
+
+<script id="caches_absent_in_a_worker" type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker('./disabled-worker.js');
+    const data = await new Promise((resolve) => {
+      worker.onmessage = (e) => resolve(e.data);
+    });
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(false, data.present);
+      testing.expectEqual('function', data.constructor);
+    });
+  }
+</script>
