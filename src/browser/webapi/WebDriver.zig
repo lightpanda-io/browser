@@ -301,14 +301,19 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
+            if (is_touch and down_target == null) {
+                // No matching pointerDown in this source (a bare pointerUp,
+                // or a second pointerUp after the first already consumed the
+                // contact): nothing is pressed to release. Dispatching
+                // pointerup/touchend here would fabricate events for a
+                // gesture that never started.
+                continue;
+            }
             pressed = false;
             pressed_mask = 0;
             dispatchPointer(el, "pointerup", button, 0, frame);
             if (is_touch) {
-                // A pointerUp with no preceding pointerDown in this source
-                // still dispatches touchend, matching the mouse path's
-                // fallback below, instead of silently dropping it.
-                dispatchTouch(down_target orelse el, "touchend", frame);
+                dispatchTouch(down_target.?, "touchend", frame);
             } else {
                 _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
                 const click_target = commonClickTarget(down_target orelse el, el);
@@ -715,5 +720,80 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
         "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true",
         null,
     );
+    try testing.expect(result.isTrue());
+}
+
+// An unmatched touch release (no preceding pointerDown in the source) must
+// not fabricate a touchend: per the WebDriver spec, releasing a button
+// that isn't pressed is a no-op.
+test "WebApi: WebDriver a touch pointerUp with no preceding pointerDown dispatches no touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawTouchend = false;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.sawTouchend = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.sawTouchend === false", null);
+    try testing.expect(result.isTrue());
+}
+
+// A second pointerUp for the same source (no intervening pointerDown) must
+// not fire a second touchend for a contact the first release already ended.
+test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.touchendCount = 0;
+        \\document.getElementById('hoverTarget').addEventListener('touchend', () => { window.touchendCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: document.getElementById('hoverTarget') },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.touchendCount === 1", null);
     try testing.expect(result.isTrue());
 }
