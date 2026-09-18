@@ -262,10 +262,15 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             const el = target orelse continue;
             if (is_touch) {
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                // Touch pointers implicitly capture on pointerdown: while
+                // pressed, both the Pointer Event and the Touch stay pinned
+                // to the down target, not wherever this move landed.
                 if (pressed) {
-                    // Touch.target is the element that received touchstart.
-                    dispatchTouch(down_target orelse continue, "touchmove", frame);
+                    const captured = down_target orelse continue;
+                    dispatchPointer(captured, "pointermove", 0, pressed_mask, frame);
+                    dispatchTouch(captured, .touchmove, frame);
+                } else {
+                    dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
                 }
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
@@ -289,7 +294,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             }
             dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
             if (is_touch) {
-                dispatchTouch(el, "touchstart", frame);
+                dispatchTouch(el, .touchstart, frame);
             } else {
                 const suppressed = dispatchMouse(el, "mousedown", button, Frame.user_input.buttonsBitmask(button), click_count, frame);
                 if (!suppressed) {
@@ -301,22 +306,25 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         } else if (action_type.eql(comptime .wrap("pointerUp"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            if (is_touch and down_target == null) {
+            if (down_target == null) {
                 // No matching pointerDown in this source (a bare pointerUp,
                 // or a second pointerUp after the first already consumed the
                 // contact): nothing is pressed to release. Dispatching
-                // pointerup/touchend here would fabricate events for a
-                // gesture that never started.
+                // pointerup/mouseup/touchend/click here would fabricate
+                // events for a press that never happened.
                 continue;
             }
             pressed = false;
             pressed_mask = 0;
-            dispatchPointer(el, "pointerup", button, 0, frame);
+            // Touch pointers stay captured to the down target for the
+            // release too, same as the move above.
+            const pointer_target = if (is_touch) down_target.? else el;
+            dispatchPointer(pointer_target, "pointerup", button, 0, frame);
             if (is_touch) {
-                dispatchTouch(down_target.?, "touchend", frame);
+                dispatchTouch(down_target.?, .touchend, frame);
             } else {
                 _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
-                const click_target = commonClickTarget(down_target orelse el, el);
+                const click_target = commonClickTarget(down_target.?, el);
                 last_click_button = button;
                 last_click_target = click_target;
                 if (button == 0) {
@@ -600,10 +608,11 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
 }
 
 // Action sequences do not track viewport coordinates (same as dispatchMouse
-// / dispatchPointer), so clientX/clientY are 0 here.
-fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
+// / dispatchPointer), so clientX/clientY are 0 here. WebDriver has no CDP-style
+// client-chosen id, so this source's single contact is always identifier 0.
+fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
-    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0) catch |err| {
+    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0, 0) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
     };
 }
@@ -694,6 +703,10 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
         \\window.moveOnB = false;
         \\window.endOnA = false;
         \\window.endOnB = false;
+        \\window.pointerMoveOnACount = 0;
+        \\window.pointerMoveOnBCount = 0;
+        \\window.pointerUpOnA = false;
+        \\window.pointerUpOnB = false;
         \\a.addEventListener('touchmove', (e) => {
         \\  window.moveOnA = e.touches.length === 1 && e.touches[0].target === a;
         \\});
@@ -702,6 +715,13 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
         \\  window.endOnA = e.changedTouches.length === 1 && e.changedTouches[0].target === a;
         \\});
         \\b.addEventListener('touchend', () => { window.endOnB = true; });
+        \\// The initial unpressed pointerMove(origin: a) also lands on `a`,
+        \\// so the count (not just "did it fire on a") is what discriminates
+        \\// the captured second move from an uncaptured one landing on `b`.
+        \\a.addEventListener('pointermove', () => { window.pointerMoveOnACount++; });
+        \\b.addEventListener('pointermove', () => { window.pointerMoveOnBCount++; });
+        \\a.addEventListener('pointerup', () => { window.pointerUpOnA = true; });
+        \\b.addEventListener('pointerup', () => { window.pointerUpOnB = true; });
         \\window.webdriver.actionSequence([{
         \\  type: 'pointer',
         \\  parameters: { pointerType: 'touch' },
@@ -716,8 +736,13 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
 
     try testing.waitForFrame();
 
+    // Pointer Events implicitly capture to the pointerdown element for a
+    // touch source: the pressed pointermove and the pointerup must stay on
+    // `a`, never reach `b`, exactly like the Touch events above.
     const result = try ls.local.compileAndRun(
-        "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true",
+        "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true" ++
+            " && window.pointerMoveOnACount === 2 && window.pointerMoveOnBCount === 0" ++
+            " && window.pointerUpOnA === true && window.pointerUpOnB !== true",
         null,
     );
     try testing.expect(result.isTrue());
@@ -795,5 +820,91 @@ test "WebApi: WebDriver a second touch pointerUp dispatches no second touchend" 
     try testing.waitForFrame();
 
     const result = try ls.local.compileAndRun("window.touchendCount === 1", null);
+    try testing.expect(result.isTrue());
+}
+
+// The WebDriver "release a button that isn't pressed is a no-op" rule
+// applies to every pointer type, not just touch: a bare mouse pointerUp
+// must not fabricate pointerup/mouseup/click either.
+test "WebApi: WebDriver a mouse pointerUp with no preceding pointerDown dispatches no click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.sawPointerup = false;
+        \\window.sawMouseup = false;
+        \\window.sawClick = false;
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('pointerup', () => { window.sawPointerup = true; });
+        \\t.addEventListener('mouseup', () => { window.sawMouseup = true; });
+        \\t.addEventListener('click', () => { window.sawClick = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.sawPointerup === false && window.sawMouseup === false && window.sawClick === false",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
+
+// A second mouse pointerUp for the same source (no intervening pointerDown)
+// must not fire a second click for a press the first release already ended.
+test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.clickCount = 0;
+        \\window.dblclickCount = 0;
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('click', () => { window.clickCount++; });
+        \\t.addEventListener('dblclick', () => { window.dblclickCount++; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'mouse' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.clickCount === 1 && window.dblclickCount === 0", null);
     try testing.expect(result.isTrue());
 }
