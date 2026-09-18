@@ -84,6 +84,9 @@ pub fn newInstanceThrow(self: *const Function) !js.Object {
     if (local.ctx.env.terminatePending()) {
         return error.ExecutionTerminated;
     }
+    if (local.ctx.env.stackExhausted()) {
+        return error.StackExhausted;
+    }
 
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
@@ -169,6 +172,9 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
     // stop running JS and unwind".
     if (local.ctx.env.terminatePending()) {
         return error.ExecutionTerminated;
+    }
+    if (local.ctx.env.stackExhausted()) {
+        return error.StackExhausted;
     }
 
     // When we're calling a function from within JavaScript itself, this isn't
