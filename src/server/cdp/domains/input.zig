@@ -1104,7 +1104,8 @@ test "cdp.input: dispatchTouchEvent touchStart populates touches/targetTouches/c
         \\    e.targetTouches.length === 1 &&
         \\    e.changedTouches.length === 1 &&
         \\    e.touches[0].target === t &&
-        \\    e.touches[0] === e.changedTouches[0];
+        \\    e.touches[0] === e.changedTouches[0] &&
+        \\    e.touches !== e.targetTouches;
         \\  window.touchX = e.touches[0].clientX;
         \\  window.touchY = e.touches[0].clientY;
         \\});
@@ -1517,7 +1518,12 @@ test "cdp.input: dispatchTouchEvent repeated touches reads have bounded arena st
     event.asEvent().acquireRef();
     defer event.asEvent().releaseRef(frame.page);
 
+    // Warm all three caches (touches, targetTouches, changedTouches are each
+    // a distinct cached TouchList) before measuring, so the loop only
+    // exercises the cache-hit path.
     _ = try event.getTouches();
+    _ = try event.getTargetTouches();
+    _ = try event.getChangedTouches();
     const before = event.asEvent()._arena.bytes;
     for (0..10_000) |_| {
         _ = try event.getTouches();

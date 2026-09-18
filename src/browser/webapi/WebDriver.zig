@@ -305,7 +305,10 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             pressed_mask = 0;
             dispatchPointer(el, "pointerup", button, 0, frame);
             if (is_touch) {
-                dispatchTouch(down_target orelse continue, "touchend", frame);
+                // A pointerUp with no preceding pointerDown in this source
+                // still dispatches touchend, matching the mouse path's
+                // fallback below, instead of silently dropping it.
+                dispatchTouch(down_target orelse el, "touchend", frame);
             } else {
                 _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
                 const click_target = commonClickTarget(down_target orelse el, el);

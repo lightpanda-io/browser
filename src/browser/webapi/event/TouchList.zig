@@ -24,13 +24,14 @@ const TouchEvent = @import("TouchEvent.zig");
 
 // https://w3c.github.io/touch-events/#idl-def-touchlist
 //
-// Length 0 or 1 (single-touch scope). Indexed binding follows NodeList; RC
-// delegates to the event. TouchEvent caches one TouchList per (active,
-// changed) pair so repeated reads don't grow the event's arena.
+// Length 0 or 1 (single-touch scope): holds the event's single Touch
+// directly rather than a slice, so there's no backing array to alias between
+// the (up to) three TouchLists a TouchEvent caches. Indexed binding follows
+// NodeList; RC delegates to the event.
 const TouchList = @This();
 
 _event: *TouchEvent,
-_touches: []const *Touch,
+_touch: ?*Touch,
 
 pub fn acquireRef(self: *TouchList) void {
     self._event.asEvent().acquireRef();
@@ -41,21 +42,21 @@ pub fn releaseRef(self: *TouchList, page: *Page) void {
 }
 
 fn length(self: *const TouchList) u32 {
-    return @intCast(self._touches.len);
+    return if (self._touch != null) 1 else 0;
 }
 
 pub fn indexedGet(self: *TouchList, index: usize, _: *Frame) !*Touch {
-    if (index >= self._touches.len) {
+    if (index != 0) {
         return error.NotHandled;
     }
-    return self._touches[index];
+    return self._touch orelse error.NotHandled;
 }
 
 pub fn item(self: *TouchList, index: usize) ?*Touch {
-    if (index >= self._touches.len) {
+    if (index != 0) {
         return null;
     }
-    return self._touches[index];
+    return self._touch;
 }
 
 pub const JsApi = struct {
@@ -72,8 +73,9 @@ pub const JsApi = struct {
     pub const item = bridge.function(TouchList.item, .{});
 
     fn getIndexes(self: *TouchList, frame: *Frame) !js.Array {
-        var arr = frame.js.local.?.newArray(@intCast(self._touches.len));
-        for (0..self._touches.len) |i| {
+        const len: u32 = if (self._touch != null) 1 else 0;
+        var arr = frame.js.local.?.newArray(len);
+        for (0..len) |i| {
             _ = try arr.set(@intCast(i), i, .{});
         }
         return arr;

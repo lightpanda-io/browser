@@ -565,19 +565,18 @@ pub fn triggerTouch(frame: *Frame, typ: []const u8, x: f64, y: f64) !void {
         });
     }
     try dispatchTouchEventOn(frame, resolved, typ, x, y);
-    if (isTouchLift(typ)) {
-        page.input_touch_contact = null;
-    } else {
-        page.input_touch_contact = .{ .target = resolved, .x = x, .y = y };
-    }
+    page.input_touch_contact = .{ .target = resolved, .x = x, .y = y };
 }
 
 /// CDP TouchEnd/TouchCancel with an empty touchPoints list: dispatch at the
 /// stored contact instead of (0, 0).
 pub fn triggerTouchLift(frame: *Frame, typ: []const u8) !void {
     const contact = frame.page.input_touch_contact orelse return;
-    try dispatchTouchEventOn(frame, contact.target, typ, contact.x, contact.y);
+    // Consume the state before the fallible dispatch, so a dispatch that
+    // fails partway through (e.g. a listener throws) can't leave a stale
+    // contact that locks out every future touchStart for this page.
     frame.page.input_touch_contact = null;
+    try dispatchTouchEventOn(frame, contact.target, typ, contact.x, contact.y);
 }
 
 /// Whether the element has a click activation behavior that handleClick

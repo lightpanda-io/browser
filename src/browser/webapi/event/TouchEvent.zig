@@ -48,8 +48,8 @@ _ctrl_key: bool = false,
 _shift_key: bool = false,
 _touch: ?Touch = null,
 _touch_active: bool = false,
-_touch_slot: [1]*Touch = undefined,
-_active_list: ?*TouchList = null,
+_touches_list: ?*TouchList = null,
+_target_touches_list: ?*TouchList = null,
 _changed_list: ?*TouchList = null,
 
 pub const TouchEventOptions = struct {
@@ -130,40 +130,40 @@ pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
     return &self._touch.?._target;
 }
 
-// touches/targetTouches share one cache slot (`active_only`): both always
-// hold the same zero-or-one-element set in single-touch scope, and the spec
-// doesn't require them to be distinct (SameObject) objects.
-fn touchList(self: *TouchEvent, active_only: bool) !*TouchList {
-    const cache = if (active_only) &self._active_list else &self._changed_list;
+// touches and targetTouches hold the same zero-or-one-element set in
+// single-touch scope, but each still gets its own cached TouchList: `e.touches
+// !== e.targetTouches` in a real browser, since [SameObject] only guarantees
+// identity across repeated reads of one attribute, not equality between two
+// different attributes.
+fn touchList(self: *TouchEvent, active_only: bool, cache: *?*TouchList) !*TouchList {
     if (cache.*) |list| {
         return list;
     }
 
     const arena = self.asEvent()._arena;
-    var touches: []const *Touch = &.{};
+    var touch: ?*Touch = null;
     if (self._touch) |*t| {
         if (!active_only or self._touch_active) {
-            self._touch_slot[0] = t;
-            touches = self._touch_slot[0..1];
+            touch = t;
         }
     }
 
     const list = try arena.create(TouchList);
-    list.* = .{ ._event = self, ._touches = touches };
+    list.* = .{ ._event = self, ._touch = touch };
     cache.* = list;
     return list;
 }
 
 pub fn getTouches(self: *TouchEvent) !*TouchList {
-    return self.touchList(true);
+    return self.touchList(true, &self._touches_list);
 }
 
 pub fn getTargetTouches(self: *TouchEvent) !*TouchList {
-    return self.touchList(true);
+    return self.touchList(true, &self._target_touches_list);
 }
 
 pub fn getChangedTouches(self: *TouchEvent) !*TouchList {
-    return self.touchList(false);
+    return self.touchList(false, &self._changed_list);
 }
 
 pub fn getAltKey(self: *const TouchEvent) bool {
