@@ -26,6 +26,7 @@ const Factory = @import("../../Factory.zig");
 
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+const ErrorEvent = @import("../event/ErrorEvent.zig");
 
 const log = lp.log;
 
@@ -44,6 +45,8 @@ const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEnt
 
 _proto: *EventTarget,
 _on_currententrychange: ?js.Function.Global = null,
+_on_navigatesuccess: ?js.Function.Global = null,
+_on_navigateerror: ?js.Function.Global = null,
 
 _current_navigation_kind: ?NavigationKind = null,
 
@@ -65,6 +68,12 @@ fn asEventTarget(self: *Navigation) *EventTarget {
 pub fn onRemoveFrame(self: *Navigation) void {
     if (self._on_currententrychange) |cb| cb.release();
     self._on_currententrychange = null;
+
+    if (self._on_navigatesuccess) |cb| cb.release();
+    self._on_navigatesuccess = null;
+
+    if (self._on_navigateerror) |cb| cb.release();
+    self._on_navigateerror = null;
 
     for (self._entries.items) |entry| {
         if (entry._on_dispose) |cb| cb.release();
@@ -293,6 +302,48 @@ pub fn replaceEntry(
     return entry;
 }
 
+fn fireNavigateSuccess(self: *Navigation, frame: *Frame) void {
+    if (self._on_navigatesuccess) |ons| {
+        const event = Event.initTrusted(
+            .wrap("navigatesuccess"),
+            null,
+            frame.page,
+        ) catch |err| {
+            log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
+            return;
+        };
+
+        self.dispatch(ons, event, frame) catch |err| {
+            log.warn(.event, "Navigation.fireNavigateSuccess dispatch", .{ .err = err });
+        };
+    }
+}
+
+fn fireNavigateError(self: *Navigation, reason: js.Value, frame: *Frame) void {
+    if (self._on_navigateerror) |one| {
+        const message = std.fmt.allocPrint(frame.call_arena, "{f}", .{reason}) catch "navigate error";
+
+        const err_event = ErrorEvent.initTrusted(
+            .wrap("navigateerror"),
+            .{
+                .message = message,
+                .filename = frame.url,
+                .lineno = 0,
+                .colno = 0,
+                .@"error" = reason.persist() catch null,
+            },
+            frame.page,
+        ) catch |err| {
+            log.warn(.event, "Navigation.fireNavigateError", .{ .err = err });
+            return;
+        };
+
+        self.dispatch(one, err_event.asEvent(), frame) catch |err| {
+            log.warn(.event, "Navigation.fireNavigateError dispatch", .{ .err = err });
+        };
+    }
+}
+
 fn fireCurrentEntryChangeEvent(
     self: *Navigation,
     previous: *NavigationHistoryEntry,
@@ -314,6 +365,16 @@ fn fireCurrentEntryChangeEvent(
             log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
         };
     }
+}
+
+fn resolveFinished(
+    self: *Navigation,
+    resolver: js.PromiseResolver,
+    comptime source: []const u8,
+    frame: *Frame,
+) void {
+    resolver.resolve(source, {});
+    self.fireNavigateSuccess(frame);
 }
 
 const NavigateOptions = struct {
@@ -362,9 +423,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation push", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation push", {});
-
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                self.resolveFinished(finished, "navigation push", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -375,9 +435,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation replace", {});
-
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, true);
+                self.resolveFinished(finished, "navigation replace", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -390,7 +449,8 @@ pub fn navigateInner(
 
                 committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation traverse", {});
+                self.fireCurrentEntryChangeEvent(previous, kind, frame);
+                self.resolveFinished(finished, "navigation traverse", frame);
             } else {
                 try frame.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = frame });
             }
@@ -403,8 +463,6 @@ pub fn navigateInner(
     if (is_same_document and !std.mem.eql(u8, old_url, new_url)) {
         try frame.queueHashChange(old_url, new_url);
     }
-
-    self.fireCurrentEntryChangeEvent(previous, kind, frame);
 
     _ = try committed.persist();
     _ = try finished.persist();
@@ -505,6 +563,24 @@ fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
     }
 }
 
+fn getOnNavigateSuccess(self: *Navigation) ?js.Function.Global {
+    return self._on_navigatesuccess;
+}
+
+fn setOnNavigateSuccess(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_navigatesuccess) |old| old.release();
+    self._on_navigatesuccess = if (listener) |l| try l.persistWithThis(self) else null;
+}
+
+fn getOnNavigateError(self: *Navigation) ?js.Function.Global {
+    return self._on_navigateerror;
+}
+
+fn setOnNavigateError(self: *Navigation, listener: ?js.Function) !void {
+    if (self._on_navigateerror) |old| old.release();
+    self._on_navigateerror = if (listener) |l| try l.persistWithThis(self) else null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Navigation);
 
@@ -530,6 +606,16 @@ pub const JsApi = struct {
     pub const oncurrententrychange = bridge.accessor(
         Navigation.getOnCurrentEntryChange,
         Navigation.setOnCurrentEntryChange,
+        .{},
+    );
+    pub const onnavigatesuccess = bridge.accessor(
+        Navigation.getOnNavigateSuccess,
+        Navigation.setOnNavigateSuccess,
+        .{},
+    );
+    pub const onnavigateerror = bridge.accessor(
+        Navigation.getOnNavigateError,
+        Navigation.setOnNavigateError,
         .{},
     );
 };
