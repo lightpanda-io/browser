@@ -46,6 +46,7 @@ const WorkerLocation = @import("WorkerLocation.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
 const idb = @import("storage/idb/idb.zig");
+const CacheStorage = @import("cache/CacheStorage.zig");
 const MessagePort = @import("MessagePort.zig");
 const SharedWorkerGlobalScope = @import("SharedWorkerGlobalScope.zig");
 const ServiceWorkerGlobalScope = @import("ServiceWorkerGlobalScope.zig");
@@ -109,6 +110,7 @@ _crypto: Crypto = .init,
 _navigator: WorkerNavigator = .init,
 _performance: *Performance,
 _idb_factory: ?*idb.IDBFactory = null,
+_caches: ?*CacheStorage = null,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
 _on_unhandled_rejection: ?JS.Function.Global = null,
@@ -545,6 +547,15 @@ fn clearInterval(self: *WorkerGlobalScope, id: u32) void {
     self._timers.clear(id);
 }
 
+fn getCaches(self: *WorkerGlobalScope, exec: *JS.Execution) !*CacheStorage {
+    if (self._caches) |c| {
+        return c;
+    }
+    const c = try exec._factory.create(CacheStorage{});
+    self._caches = c;
+    return c;
+}
+
 fn getIndexedDB(self: *WorkerGlobalScope, exec: *JS.Execution) !*idb.IDBFactory {
     if (self._idb_factory) |f| {
         return f;
@@ -600,6 +611,7 @@ pub const JsApi = struct {
     pub const self = bridge.accessor(WorkerGlobalScope.getSelf, WorkerGlobalScope.setSelf, .{});
     pub const location = bridge.accessor(WorkerGlobalScope.getLocation, null, .{});
     pub const indexedDB = bridge.accessor(WorkerGlobalScope.getIndexedDB, null, .{});
+    pub const caches = bridge.accessor(WorkerGlobalScope.getCaches, null, .{});
 
     pub const onerror = bridge.accessor(WorkerGlobalScope.getOnError, WorkerGlobalScope.setOnError, .{});
     pub const onrejectionhandled = bridge.accessor(WorkerGlobalScope.getOnRejectionHandled, WorkerGlobalScope.setOnRejectionHandled, .{});

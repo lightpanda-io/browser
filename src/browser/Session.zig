@@ -25,6 +25,7 @@ const Config = @import("../Config.zig");
 const History = @import("webapi/History.zig");
 const storage = @import("webapi/storage/storage.zig");
 const IdbManager = @import("webapi/storage/idb/idb.zig").Manager;
+const CacheStore = @import("webapi/cache/Store.zig");
 const Factory = @import("Factory.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
@@ -53,8 +54,8 @@ arena: *lp.Arena,
 history: History,
 navigation: *Navigation,
 storage_shed: storage.Shed,
-// Per-origin IndexedDB engines
-idb: IdbManager,
+idb: IdbManager, // Per-origin IndexedDB engines
+cache_store: CacheStore, // Per-origin CacheStorage
 // Backs `globalThis.lp.*`; values pre-stringified so the prelude splices
 // them in without re-encoding.
 bridge_store: std.StringHashMapUnmanaged([]const u8) = .empty,
@@ -170,6 +171,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .navigation = navigation,
         .storage_shed = .{},
         .idb = IdbManager.init(allocator),
+        .cache_store = CacheStore.init(allocator),
         .browser = browser,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator, notification),
@@ -213,6 +215,7 @@ pub fn deinit(self: *Session) void {
 
     self.storage_shed.deinit(self.browser.app.allocator);
     self.idb.deinit();
+    self.cache_store.deinit();
     {
         const allocator = self.browser.app.allocator;
         var it = self.bridge_store.iterator();
