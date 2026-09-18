@@ -30,7 +30,6 @@ const EventTarget = @import("EventTarget.zig");
 
 const Cookie = @import("storage/Cookie.zig");
 const MouseEvent = @import("event/MouseEvent.zig");
-const TouchEvent = @import("event/TouchEvent.zig");
 const PointerEvent = @import("event/PointerEvent.zig");
 const KeyboardEvent = @import("event/KeyboardEvent.zig");
 const Label = @import("element/html/Label.zig");
@@ -265,7 +264,8 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             if (is_touch) {
                 dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
                 if (pressed) {
-                    dispatchTouch(el, "touchmove", frame);
+                    // Touch.target is the element that received touchstart.
+                    dispatchTouch(down_target orelse continue, "touchmove", frame);
                 }
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
@@ -305,7 +305,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             pressed_mask = 0;
             dispatchPointer(el, "pointerup", button, 0, frame);
             if (is_touch) {
-                dispatchTouch(el, "touchend", frame);
+                dispatchTouch(down_target orelse continue, "touchend", frame);
             } else {
                 _ = dispatchMouse(el, "mouseup", button, 0, click_count, frame);
                 const click_target = commonClickTarget(down_target orelse el, el);
@@ -591,17 +591,13 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     };
 }
 
+// Action sequences do not track viewport coordinates (same as dispatchMouse
+// / dispatchPointer), so clientX/clientY are 0 here.
 fn dispatchTouch(el: *Element, comptime typ: []const u8, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
-    const event = TouchEvent.initTrusted(typ, .{
-        .bubbles = true,
-        .composed = true,
-    }, owner) catch |err| {
+    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
-        return;
     };
-    event.asEvent()._cancelable_unless_passive = true;
-    dispatch(el.asEventTarget(), event.asEvent(), owner, typ);
 }
 
 pub const JsApi = struct {
@@ -619,3 +615,102 @@ pub const JsApi = struct {
     pub const actionSequence = bridge.function(WebDriver.actionSequence, .{});
     pub const click = bridge.function(WebDriver.click, .{});
 };
+
+const testing = @import("../../testing.zig");
+
+test "WebApi: WebDriver touch actionSequence populates touches" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const t = document.getElementById('hoverTarget');
+        \\t.addEventListener('touchstart', (e) => {
+        \\  window.start = e.touches.length === 1 &&
+        \\    e.targetTouches.length === 1 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.touches[0].target === t;
+        \\});
+        \\t.addEventListener('touchend', (e) => {
+        \\  window.end = e.touches.length === 0 &&
+        \\    e.targetTouches.length === 0 &&
+        \\    e.changedTouches.length === 1 &&
+        \\    e.changedTouches[0].target === t;
+        \\});
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: t },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun("window.start === true && window.end === true", null);
+    try testing.expect(result.isTrue());
+}
+
+test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
+    if (!lp.build_config.wpt_extensions) return error.SkipZigTest;
+
+    const page = try testing.pageTest("mcp_actions.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\const a = document.getElementById('hoverTarget');
+        \\const b = document.getElementById('btn');
+        \\window.moveOnA = false;
+        \\window.moveOnB = false;
+        \\window.endOnA = false;
+        \\window.endOnB = false;
+        \\a.addEventListener('touchmove', (e) => {
+        \\  window.moveOnA = e.touches.length === 1 && e.touches[0].target === a;
+        \\});
+        \\b.addEventListener('touchmove', () => { window.moveOnB = true; });
+        \\a.addEventListener('touchend', (e) => {
+        \\  window.endOnA = e.changedTouches.length === 1 && e.changedTouches[0].target === a;
+        \\});
+        \\b.addEventListener('touchend', () => { window.endOnB = true; });
+        \\window.webdriver.actionSequence([{
+        \\  type: 'pointer',
+        \\  parameters: { pointerType: 'touch' },
+        \\  actions: [
+        \\    { type: 'pointerMove', origin: a },
+        \\    { type: 'pointerDown', button: 0 },
+        \\    { type: 'pointerMove', origin: b },
+        \\    { type: 'pointerUp', button: 0 },
+        \\  ],
+        \\}]);
+    , null);
+
+    try testing.waitForFrame();
+
+    const result = try ls.local.compileAndRun(
+        "window.moveOnA === true && window.moveOnB !== true && window.endOnA === true && window.endOnB !== true",
+        null,
+    );
+    try testing.expect(result.isTrue());
+}
