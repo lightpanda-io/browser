@@ -517,7 +517,7 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
         .notification = transfer.req.notification,
         .origin = transfer.req.origin,
         .credentials_mode = .omit,
-        .request_mode = .no_cors,
+        .request_mode = .cors,
         .ctx = ctx,
         .header_callback = CorsPreflightContext.headerCallback,
         .done_callback = CorsPreflightContext.doneCallback,
@@ -536,6 +536,10 @@ fn fetchThenResume(self: *CorsGate, transfer: *Transfer) !void {
     if (referer) |r| {
         try fetch_transfer.setHeader("Referer", r, .{});
     }
+
+    // internal requests skip this step, so we do it manually here
+    fetch_transfer._fetch_site = transfer._fetch_site;
+    try HttpClient.setFetchMetadataHeaders(fetch_transfer, transfer.destination());
 
     // Access-Control-Allow-Methods
     try fetch_transfer.setHeader(
