@@ -358,7 +358,8 @@ fn resolveNode(cmd: *CDP.Command) !void {
     const js_context = if (params.executionContextId) |context_id|
         findContext(bc, root, context_id) orelse return error.ContextNotFound
     else
-        nodeFrame(node.dom, root).js;
+        // orelse root is safe here since there's no frame-specific state being used
+        (node.dom.ownerFrame(root) orelse root).js;
 
     var ls: js.Local.Scope = undefined;
     js_context.localScope(&ls);
@@ -381,16 +382,6 @@ fn resolveNode(cmd: *CDP.Command) !void {
         .description = try remote_object.getDescription(arena),
         .objectId = try remote_object.getObjectId(arena),
     } }, .{});
-}
-
-// The frame owning the node's document. Synthetic documents (DOMParser,
-// DOMImplementation) have no frame and fall back to the root.
-fn nodeFrame(dom_node: *DOMNode, root: *Frame) *Frame {
-    const document = if (dom_node._type == .document)
-        dom_node.subtype(DOMNode.Document)
-    else
-        dom_node.ownerDocument(root) orelse return root;
-    return document._frame orelse root;
 }
 
 // The context the inspector announced under `context_id`: any frame's main
@@ -668,12 +659,14 @@ fn setFileInputFiles(cmd: *CDP.Command) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const root = bc.mainFrame() orelse return error.FrameNotLoaded;
 
     const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
     const input = element.is(Input) orelse return error.NotAnInputElement;
     if (input._input_type != .file) return error.NotAFileInput;
+    // input/change fire through the owner frame's EventManager.
+    const frame = element.ownerFrame(root) orelse return error.InvalidNodeId;
 
     var files = try cmd.arena.alloc(*File, params.files.len);
     {
@@ -1157,6 +1150,49 @@ test "cdp.dom: setFileInputFiles errors when a path is missing" {
         },
     });
     try ctx.expectSentError(-31998, "FileNotFound", .{ .id = 3 });
+}
+
+test "cdp.dom: focus and setFileInputFiles fire in the node's own frame" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-A", .url = "cdp/input_iframe.html" });
+    const child = bc.mainFrame().?.child_frames.items[0];
+
+    const text = child.document.getElementById("text", child) orelse unreachable;
+    const upload = child.document.getElementById("upload", child) orelse unreachable;
+    const text_node = try bc.node_registry.register(text.asNode());
+    const upload_node = try bc.node_registry.register(upload.asNode());
+
+    try std.Io.Dir.cwd().createDirPath(lp.io, ".zig-cache/tmp");
+    var tmp_dir = try std.Io.Dir.cwd().openDir(lp.io, ".zig-cache/tmp", .{});
+    defer tmp_dir.close(lp.io);
+    {
+        const f = try tmp_dir.createFile(lp.io, "upload.txt", .{ .truncate = true });
+        defer f.close(lp.io);
+        try f.writeStreamingAll(lp.io, "hello upload");
+    }
+
+    try ctx.processMessage(.{ .id = 1, .method = "DOM.focus", .params = .{ .nodeId = text_node.id } });
+    try ctx.expectSentResult(null, .{ .id = 1 });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "DOM.setFileInputFiles",
+        .params = .{
+            .nodeId = upload_node.id,
+            .files = &[_][]const u8{".zig-cache/tmp/upload.txt"},
+        },
+    });
+    try ctx.expectSentResult(null, .{ .id = 2 });
+
+    // The child's listeners only see events dispatched through its own frame.
+    var ls: lp.js.Local.Scope = undefined;
+    child.js.localScope(&ls);
+    defer ls.deinit();
+    const result = try ls.local.compileAndRun(
+        \\window.__evts.join(',') === 'focus:text,focusin:text,input:upload,change:upload'
+    , null);
+    try testing.expect(result.isTrue());
 }
 
 test "cdp.dom: isXPathQuery heuristic" {

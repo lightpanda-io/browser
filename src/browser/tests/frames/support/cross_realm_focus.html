@@ -3,4 +3,13 @@
 <body>
   <input id="fin">
   <input id="fin2">
+  <script>
+    // Listeners live in this frame's realm; the parent reads `events` back.
+    window.events = [];
+    for (const t of ['focus', 'focusin', 'blur', 'focusout']) {
+      document.addEventListener(t, (e) => {
+        window.events.push(`${e.type}:${e.target.id}:${e instanceof FocusEvent}`);
+      }, true);
+    }
+  </script>
 </body>

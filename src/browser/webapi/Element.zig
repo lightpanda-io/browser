@@ -1222,7 +1222,8 @@ pub fn focus(self: *Element, frame: *Frame) !void {
         return;
     }
 
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    const owner = self.ownerFrame(frame) orelse return;
+    const doc = owner.document;
     const old_active = doc._active_element;
     if (old_active == self) {
         return;
@@ -1230,54 +1231,56 @@ pub fn focus(self: *Element, frame: *Frame) !void {
 
     // Per HTML spec §6.4.4, an element must be "being rendered" (not
     // display:none on self or any ancestor) to be focusable.
-    if (!self.isVisible(frame)) {
+    if (!self.isVisible(owner)) {
         return;
     }
 
     const FocusEvent = @import("event/FocusEvent.zig");
 
     const new_target = self.asEventTarget();
-    doc.setActiveElement(self, frame);
+    doc.setActiveElement(self, owner);
 
     if (old_active) |old| {
         const old_target = old.asEventTarget();
 
         // Dispatch blur on old element (no bubble, composed)
-        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, frame);
-        try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+        const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, owner);
+        try owner._event_manager.dispatch(old_target, blur_event.asEvent());
 
         // Dispatch focusout on old element (bubbles, composed)
-        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, frame);
-        try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+        const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, owner);
+        try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
     const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
 
     // Dispatch focus on new element (no bubble, composed)
-    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, frame);
-    try frame._event_manager.dispatch(new_target, focus_event.asEvent());
+    const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, owner);
+    try owner._event_manager.dispatch(new_target, focus_event.asEvent());
 
     // Dispatch focusin on new element (bubbles, composed)
-    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, frame);
-    try frame._event_manager.dispatch(new_target, focusin_event.asEvent());
+    const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, owner);
+    try owner._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
 pub fn blur(self: *Element, frame: *Frame) !void {
-    const doc = self.asNode().ownerDocument(frame) orelse frame.document;
+    // A frameless document never has a focused element.
+    const owner = self.ownerFrame(frame) orelse return;
+    const doc = owner.document;
     if (doc._active_element != self) return;
 
-    doc.setActiveElement(null, frame);
+    doc.setActiveElement(null, owner);
 
     const FocusEvent = @import("event/FocusEvent.zig");
     const old_target = self.asEventTarget();
 
     // Dispatch blur (no bubble, composed)
-    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, frame);
-    try frame._event_manager.dispatch(old_target, blur_event.asEvent());
+    const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, owner);
+    try owner._event_manager.dispatch(old_target, blur_event.asEvent());
 
     // Dispatch focusout (bubbles, composed)
-    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, frame);
-    try frame._event_manager.dispatch(old_target, focusout_event.asEvent());
+    const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, owner);
+    try owner._event_manager.dispatch(old_target, focusout_event.asEvent());
 }
 
 pub fn getChildren(self: *Element, frame: *Frame) !collections.NodeLive(.child_elements) {

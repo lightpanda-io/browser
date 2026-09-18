@@ -716,8 +716,8 @@ pub const BrowserContext = struct {
         // (`Label.findLabelByFor` against `ownerDocument`) and visibility
         // checks (`frame._style_manager`) are per-frame; getting this wrong on
         // cross-frame queries produces names/visibility from the wrong document.
-        const fallback = self.mainFrame() orelse return error.FrameNotLoaded;
-        const frame = root.dom.ownerFrame(fallback) orelse fallback;
+        const main_frame = self.mainFrame() orelse return error.FrameNotLoaded;
+        const frame = root.dom.ownerFrame(main_frame) orelse return error.InvalidNodeId;
         const label_index = try frame.call_arena.create(Label.LabelByForIndex);
         label_index.* = .{};
         return .{
