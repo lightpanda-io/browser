@@ -128,14 +128,15 @@ pub fn build(b: *Build) !void {
     // With an orderfile, the prebuilt V8 archive is rewritten so its hot
     // functions' sections can be addressed by the linker script.
     const v8_archive: ?Build.LazyPath = if (prebuilt_v8_path) |path| .{ .cwd_relative = path } else null;
-    const v8_for_link = if (orderfile_path != null and v8_archive != null and !shared_v8) orderfile.markHotSections(b, v8_archive.?) else v8_archive;
+    const sectioned = orderfile_path != null;
+    const v8_for_link = if (sectioned and v8_archive != null and !shared_v8) orderfile.markHotSections(b, v8_archive.?) else v8_archive;
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, v8_for_link, shared_v8);
-    linkCurl(b, lightpanda_module, deps, enable_tsan, orderfile_path != null);
+    linkCurl(b, lightpanda_module, deps, enable_tsan, sectioned);
     linkRust(b, lightpanda_module, deps);
     linkZenai(b, lightpanda_module);
-    linkIsocline(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
-    linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
-    linkPcre2(b, lightpanda_module, deps, enable_csan, enable_tsan, orderfile_path != null);
+    linkIsocline(b, lightpanda_module, deps, enable_csan, enable_tsan, sectioned);
+    linkSqlite(b, lightpanda_module, deps, enable_csan, enable_tsan, sectioned);
+    linkPcre2(b, lightpanda_module, deps, enable_csan, enable_tsan, sectioned);
 
     // Check compilation
     const check = b.step("check", "Check if lightpanda compiles");
@@ -154,21 +155,19 @@ pub fn build(b: *Build) !void {
     const exe_config: ExeConfig = .{
         .check = check,
         .lightpanda_module = lightpanda_module,
-        .link = .{
-            .target = target,
-            .optimize = optimize,
-            .use_llvm = use_llvm,
-            .sanitize_c = enable_csan,
-            .sanitize_thread = enable_tsan,
-        },
+        .target = target,
+        .optimize = optimize,
+        .use_llvm = use_llvm,
         .orderfile = orderfile_path,
+        .sanitize_c = enable_csan,
+        .sanitize_thread = enable_tsan,
     };
 
     {
         // browser
         const exe = addExe(b, exe_config, "lightpanda", "lightpanda_exe_check", "src/main.zig");
         b.installArtifact(exe);
-        orderfile.addStep(b, exe_config.link, exe.root_module, v8_for_link, orderfile_path);
+        orderfile.addStep(b, exe.root_module, use_llvm, v8_for_link, sectioned);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -232,36 +231,40 @@ const Deps = struct {
 const ExeConfig = struct {
     check: *Build.Step,
     lightpanda_module: *Build.Module,
-    link: orderfile.Link,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    use_llvm: bool,
     orderfile: ?[]const u8,
+    sanitize_c: ?std.zig.SanitizeC,
+    sanitize_thread: bool,
 };
 
 fn addExe(b: *Build, config: ExeConfig, name: []const u8, check_name: []const u8, root_source_file: []const u8) *Build.Step.Compile {
-    const root_module = b.createModule(.{
-        .root_source_file = b.path(root_source_file),
-        .target = config.link.target,
-        .optimize = config.link.optimize,
-        .sanitize_c = config.link.sanitize_c,
-        .sanitize_thread = config.link.sanitize_thread,
-        .imports = &.{
-            .{ .name = "lightpanda", .module = config.lightpanda_module },
-        },
-    });
+    const exe = orderfile.sectionize(b.addExecutable(.{
+        .name = name,
+        .use_llvm = config.use_llvm,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(root_source_file),
+            .target = config.target,
+            .optimize = config.optimize,
+            .sanitize_c = config.sanitize_c,
+            .sanitize_thread = config.sanitize_thread,
+            .imports = &.{
+                .{ .name = "lightpanda", .module = config.lightpanda_module },
+            },
+        }),
+    }), config.orderfile != null);
+    if (config.orderfile) |path| {
+        exe.setLinkerScript(.{ .cwd_relative = path });
+    }
 
     const exe_check = b.addLibrary(.{
         .name = check_name,
-        .root_module = root_module,
+        .root_module = exe.root_module,
     });
     config.check.dependOn(&exe_check.step);
 
-    if (config.orderfile) |path| {
-        return orderfile.addExe(b, config.link, name, root_module, .{ .cwd_relative = path });
-    }
-    return b.addExecutable(.{
-        .name = name,
-        .use_llvm = config.link.use_llvm,
-        .root_module = root_module,
-    });
+    return exe;
 }
 
 fn devFastGlibcVersion(b: *Build) std.SemanticVersion {
@@ -329,18 +332,6 @@ fn actionDefault(action: []const u8, key: []const u8) ?[]const u8 {
     }
     std.debug.print("Can't parse the `{s} default:` value from .github/actions/install/action.yml; prebuilt V8 discovery skipped.\n", .{key});
     return null;
-}
-
-/// Per-function/per-datum sections let the -Dorderfile linker script place
-/// individual hot functions. Only enabled for orderfile (release/LLVM) builds:
-/// the self-hosted backend used by Debug builds fails to link the C libraries
-/// with them.
-fn sectionize(lib: *Build.Step.Compile, enabled: bool) *Build.Step.Compile {
-    if (enabled) {
-        lib.link_function_sections = true;
-        lib.link_data_sections = true;
-    }
-    return lib;
 }
 
 fn linkV8(
@@ -421,7 +412,7 @@ fn linkSqlite(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.S
         .optimize = deps.optimize,
     });
 
-    const lib = sectionize(dep.artifact("sqlite3"), section);
+    const lib = orderfile.sectionize(dep.artifact("sqlite3"), section);
     lib.root_module.sanitize_c = enable_csan;
     lib.root_module.sanitize_thread = is_tsan;
 
@@ -480,7 +471,7 @@ fn linkPcre2(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.Sa
         .linkage = .static,
     });
 
-    const lib = sectionize(dep.artifact("pcre2-8"), section);
+    const lib = orderfile.sectionize(dep.artifact("pcre2-8"), section);
     lib.root_module.sanitize_c = enable_csan;
     lib.root_module.sanitize_thread = is_tsan;
     mod.linkLibrary(lib);
@@ -546,7 +537,7 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     const dep = b.dependency("zlib", .{});
 
     const mod = cLibModule(b, target, optimize, is_tsan);
-    const lib = sectionize(b.addLibrary(.{ .name = "z", .root_module = mod }), section);
+    const lib = orderfile.sectionize(b.addLibrary(.{ .name = "z", .root_module = mod }), section);
     lib.installHeadersDirectory(dep.path(""), "", .{});
     mod.addCSourceFiles(.{
         .root = dep.path(""),
@@ -574,9 +565,9 @@ fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Op
     const mod = cLibModule(b, target, optimize, is_tsan);
     mod.addIncludePath(dep.path("c/include"));
 
-    const brotlicmn = sectionize(b.addLibrary(.{ .name = "brotlicommon", .root_module = mod }), section);
-    const brotlidec = sectionize(b.addLibrary(.{ .name = "brotlidec", .root_module = mod }), section);
-    const brotlienc = sectionize(b.addLibrary(.{ .name = "brotlienc", .root_module = mod }), section);
+    const brotlicmn = orderfile.sectionize(b.addLibrary(.{ .name = "brotlicommon", .root_module = mod }), section);
+    const brotlidec = orderfile.sectionize(b.addLibrary(.{ .name = "brotlidec", .root_module = mod }), section);
+    const brotlienc = orderfile.sectionize(b.addLibrary(.{ .name = "brotlienc", .root_module = mod }), section);
 
     brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     mod.addCSourceFiles(.{
@@ -617,10 +608,10 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
         .force_pic = true,
     });
 
-    const ssl = sectionize(dep.artifact("ssl"), section);
+    const ssl = orderfile.sectionize(dep.artifact("ssl"), section);
     ssl.bundle_ubsan_rt = false;
 
-    const crypto = sectionize(dep.artifact("crypto"), section);
+    const crypto = orderfile.sectionize(dep.artifact("crypto"), section);
     crypto.bundle_ubsan_rt = false;
 
     return .{ ssl, crypto };
@@ -641,7 +632,7 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     });
     mod.addConfigHeader(config);
 
-    const lib = sectionize(b.addLibrary(.{ .name = "nghttp2", .root_module = mod }), section);
+    const lib = orderfile.sectionize(b.addLibrary(.{ .name = "nghttp2", .root_module = mod }), section);
 
     lib.installConfigHeader(config);
     lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
@@ -917,7 +908,7 @@ fn buildCurl(
     });
     curl_config.addValues(config);
 
-    const lib = sectionize(b.addLibrary(.{ .name = "curl", .root_module = mod }), section);
+    const lib = orderfile.sectionize(b.addLibrary(.{ .name = "curl", .root_module = mod }), section);
     mod.addConfigHeader(curl_config);
     lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
     mod.addCSourceFiles(.{
@@ -994,13 +985,15 @@ fn linkZenai(b: *Build, mod: *Build.Module) void {
 fn linkIsocline(b: *Build, mod: *Build.Module, deps: Deps, enable_csan: ?std.zig.SanitizeC, is_tsan: bool, section: bool) void {
     const dep = b.dependency("isocline", .{});
 
+    // A library rather than a C source of the exe module, so its object is
+    // a build artifact `zig build orderfile` can read.
     const lib_mod = cLibModule(b, deps.target, deps.optimize, is_tsan);
     lib_mod.sanitize_c = enable_csan;
     lib_mod.addIncludePath(dep.path("include"));
     lib_mod.addCSourceFile(.{
         .file = dep.path("src/isocline.c"),
     });
-    const lib = sectionize(b.addLibrary(.{ .name = "isocline", .root_module = lib_mod }), section);
+    const lib = orderfile.sectionize(b.addLibrary(.{ .name = "isocline", .root_module = lib_mod }), section);
     mod.linkLibrary(lib);
 
     const translate_c = b.addTranslateC(.{

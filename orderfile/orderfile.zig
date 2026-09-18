@@ -22,28 +22,26 @@
 const std = @import("std");
 const Build = std.Build;
 
-/// How the executables of this build are compiled and linked.
-pub const Link = struct {
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    use_llvm: bool,
-    sanitize_c: ?std.zig.SanitizeC,
-    sanitize_thread: bool,
-};
+/// Per-function/per-datum sections let the linker script place individual
+/// hot functions. Only enabled for orderfile (release/LLVM) builds: the
+/// self-hosted backend used by Debug builds fails to link the C libraries
+/// with them.
+pub fn sectionize(compile: *Build.Step.Compile, enabled: bool) *Build.Step.Compile {
+    if (enabled) {
+        compile.link_function_sections = true;
+        compile.link_data_sections = true;
+    }
+    return compile;
+}
 
-/// An executable with per-function/per-datum sections, laid out by `script`
-/// (none: the input-order layout the profile is taken from). The sections
-/// exist only so the script can place individual hot functions; the
-/// self-hosted backend used by Debug builds does not support them on the C
-/// libraries, so this is release/LLVM only.
-pub fn addExe(b: *Build, link: Link, name: []const u8, root_module: *Build.Module, script: ?Build.LazyPath) *Build.Step.Compile {
-    const exe = b.addExecutable(.{
+/// A sectioned executable laid out by `script`, or in input order without
+/// one (the profile is taken from that layout).
+fn addExe(b: *Build, name: []const u8, root_module: *Build.Module, use_llvm: bool, script: ?Build.LazyPath) *Build.Step.Compile {
+    const exe = sectionize(b.addExecutable(.{
         .name = name,
-        .use_llvm = link.use_llvm,
+        .use_llvm = use_llvm,
         .root_module = root_module,
-    });
-    exe.link_function_sections = true;
-    exe.link_data_sections = true;
+    }), true);
     if (script) |s| exe.setLinkerScript(s);
     return exe;
 }
@@ -73,18 +71,18 @@ pub fn markHotSections(b: *Build, archive: Build.LazyPath) Build.LazyPath {
 /// a profile of the CDP bench, see orderfile/README.md. The bench needs root,
 /// a ../demo checkout, node and go; the build args are those of the release
 /// build, -Dorderfile included (it sections the C libraries).
-pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?Build.LazyPath, orderfile_path: ?[]const u8) void {
+pub fn addStep(b: *Build, root_module: *Build.Module, use_llvm: bool, v8_archive: ?Build.LazyPath, sectioned: bool) void {
     const step = b.step("orderfile", "Regenerate orderfile/lightpanda.ld and v8.txt from a profile of the CDP bench (Linux release build with -Dorderfile; needs root, ../demo and node)");
-    if (orderfile_path == null) {
-        step.dependOn(&b.addFail("zig build orderfile needs the release build args, -Dorderfile=orderfile/lightpanda.ld included").step);
-        return;
-    }
-    const v8 = v8_archive orelse {
-        step.dependOn(&b.addFail("zig build orderfile needs the prebuilt V8 archive (make download-v8)").step);
-        return;
-    };
-    if (link.target.result.os.tag != .linux) {
-        step.dependOn(&b.addFail("zig build orderfile is Linux-only (the profile is of a Linux ELF)").step);
+    const unmet: ?[]const u8 = if (!sectioned)
+        "zig build orderfile needs the release build args, -Dorderfile=orderfile/lightpanda.ld included"
+    else if (v8_archive == null)
+        "zig build orderfile needs the prebuilt V8 archive (make download-v8)"
+    else if (root_module.resolved_target.?.result.os.tag != .linux)
+        "zig build orderfile is Linux-only (the profile is of a Linux ELF)"
+    else
+        null;
+    if (unmet) |message| {
+        step.dependOn(&b.addFail(message).step);
         return;
     }
 
@@ -92,7 +90,7 @@ pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?B
     // would keep every stale entry hot by neighbourhood (orderfile/README.md).
     // Named like the release exe: the patterns are scoped to its object's
     // file name.
-    const unordered = addExe(b, link, "lightpanda", root_module, null);
+    const unordered = addExe(b, "lightpanda", root_module, use_llvm, null);
     // Zig leaves the compilation's object next to the exe in its cache
     // directory; the linker script scopes the Zig patterns to it.
     const zcu = unordered.getEmittedBin().dirname().path(b, "lightpanda_zcu.o");
@@ -103,26 +101,37 @@ pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?B
     profile.addFileArg(tool(b, "hotlist").getEmittedBin());
     const hot = profile.addOutputDirectoryArg("profile");
     profile.has_side_effects = true;
+    profile.setCwd(b.path("."));
 
     const gen = b.addRunArtifact(tool(b, "gen_order"));
     gen.addFileArg(hot.path(b, "hot.text"));
     gen.addFileArg(hot.path(b, "hot.rodata"));
     const ld = gen.addOutputFileArg("lightpanda.ld");
     gen.addArg("--v8");
-    gen.addFileArg(v8);
+    gen.addFileArg(v8_archive.?);
     const v8_txt = gen.addOutputFileArg("v8.txt");
-    gen.addArg("--stats");
-    const stats = gen.addOutputFileArg("gen_order.stats");
+    const stats = gen.captureStdOut(.{ .basename = "gen_order.stats" });
     // libc++, libunwind and compiler_rt come from Zig's global cache; the
     // generator only needs their members' names, which every copy shares.
     gen.addArg("--zig-cache");
     gen.addArg(b.pathJoin(&.{ b.graph.global_cache_root.path.?, "o" }));
     gen.addFileArg(zcu);
-    for (linkInputs(b, root_module)) |input| gen.addFileArg(input);
+    // The link inputs: every library the exe's module graph links and every
+    // object file added to it (the Rust staticlib, the V8 archive). getGraph
+    // caches, so this runs after the graph is complete.
+    for (unordered.getCompileDependencies(false)) |compile| {
+        if (compile != unordered) gen.addFileArg(compile.getEmittedBin());
+        for (compile.root_module.getGraph().modules) |mod| {
+            for (mod.link_objects.items) |link_object| switch (link_object) {
+                .static_path => |path| gen.addFileArg(path),
+                else => {},
+            };
+        }
+    }
 
     // Does it link? The script is an input of the whole compilation, so this
     // is a second compile of the Zig code (the dependencies are cached).
-    const ordered = addExe(b, link, "lightpanda", root_module, ld);
+    const ordered = addExe(b, "lightpanda", root_module, use_llvm, ld);
     const smoke = b.addRunArtifact(ordered);
     smoke.addArg("version");
 
@@ -145,27 +154,4 @@ pub fn addStep(b: *Build, link: Link, root_module: *Build.Module, v8_archive: ?B
         .install_subdir = "orderfile",
     }).step);
     step.dependOn(&b.addInstallFile(stats, "orderfile/gen_order.stats").step);
-}
-
-/// The objects and archives an executable rooted at `root` links,
-/// transitively: what its link line lists apart from what Zig supplies itself.
-fn linkInputs(b: *Build, root: *Build.Module) []const Build.LazyPath {
-    var inputs: std.ArrayList(Build.LazyPath) = .empty;
-    var seen: std.AutoHashMapUnmanaged(*Build.Module, void) = .empty;
-    collectLinkInputs(b, root, &inputs, &seen);
-    return inputs.items;
-}
-
-fn collectLinkInputs(b: *Build, mod: *Build.Module, inputs: *std.ArrayList(Build.LazyPath), seen: *std.AutoHashMapUnmanaged(*Build.Module, void)) void {
-    if (seen.contains(mod)) return;
-    seen.put(b.allocator, mod, {}) catch @panic("OOM");
-    for (mod.link_objects.items) |link_object| switch (link_object) {
-        .static_path => |path| inputs.append(b.allocator, path) catch @panic("OOM"),
-        .other_step => |other| {
-            inputs.append(b.allocator, other.getEmittedBin()) catch @panic("OOM");
-            collectLinkInputs(b, other.root_module, inputs, seen);
-        },
-        else => {},
-    };
-    for (mod.import_table.values()) |import| collectLinkInputs(b, import, inputs, seen);
 }

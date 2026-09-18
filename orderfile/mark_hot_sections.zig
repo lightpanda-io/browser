@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
     const out_path = args.next() orelse return error.Usage;
 
     const cwd = std.Io.Dir.cwd();
-    const archive = try cwd.readFileAlloc(io, in_path, gpa, .unlimited);
+    const archive = try elf.mapFile(io, in_path);
     const hot_list = try cwd.readFileAlloc(io, hot_path, gpa, .unlimited);
 
     var hot: HotSet = .empty;
@@ -101,13 +101,13 @@ fn rewriteArchive(gpa: Allocator, archive: []const elf.Member, hot: *const HotSe
     out.appendSliceAssumeCapacity("!<arch>\n");
     for (members) |m| {
         var header = m.member.header.*;
-        _ = try std.fmt.bufPrint(header[48..58], "{d:<10}", .{m.body.len});
-        out.appendSliceAssumeCapacity(&header);
+        _ = try std.fmt.bufPrint(&header.ar_size, "{d:<10}", .{m.body.len});
+        out.appendSliceAssumeCapacity(std.mem.asBytes(&header));
         const start = out.items.len;
         out.appendSliceAssumeCapacity(m.body);
-        if (std.mem.eql(u8, m.member.name, "/")) {
+        if (header.isSymtab()) {
             try remapIndex(u32, out.items[start..], &offsets);
-        } else if (std.mem.eql(u8, m.member.name, "/SYM64/")) {
+        } else if (header.isSymtab64()) {
             try remapIndex(u64, out.items[start..], &offsets);
         }
         if (m.body.len & 1 == 1) {
@@ -148,7 +148,7 @@ fn markMember(gpa: Allocator, bytes: []const u8, hot: *const HotSet, renamed: *u
         if (!sym.definedIn(obj)) {
             continue;
         }
-        if (sym.type != elf.STT_OBJECT and sym.type != elf.STT_FUNC) {
+        if (sym.type != .OBJECT and sym.type != .FUNC) {
             continue;
         }
         if (hot_sym[sym.shndx] != null) {
@@ -160,12 +160,12 @@ fn markMember(gpa: Allocator, bytes: []const u8, hot: *const HotSet, renamed: *u
     }
 
     var new_shstrtab: std.ArrayList(u8) = .empty;
-    try new_shstrtab.appendSlice(gpa, try obj.bytesOf(obj.sections[obj.shstrndx]));
+    try new_shstrtab.appendSlice(gpa, try obj.bytesOf(obj.sections[obj.header.shstrndx]));
     const new_name = try gpa.alloc(?u32, shnum);
     @memset(new_name, null);
     var count: usize = 0;
     for (obj.sections, 0..) |sh, idx| {
-        if (sh.type != elf.SHT_PROGBITS) {
+        if (sh.type != std.elf.SHT_PROGBITS) {
             continue;
         }
         const sym = hot_sym[idx] orelse continue;
@@ -203,7 +203,7 @@ fn markMember(gpa: Allocator, bytes: []const u8, hot: *const HotSet, renamed: *u
     const strtab_offset = buf.items.len;
     buf.appendSliceAssumeCapacity(new_shstrtab.items);
 
-    const shstr_hdr = obj.headerOffset(obj.shstrndx);
+    const shstr_hdr = obj.headerOffset(obj.header.shstrndx);
     std.mem.writeInt(u64, buf.items[shstr_hdr + 24 ..][0..8], strtab_offset, .little);
     std.mem.writeInt(u64, buf.items[shstr_hdr + 32 ..][0..8], new_shstrtab.items.len, .little);
     for (new_name, 0..) |maybe, idx| {

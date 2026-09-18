@@ -23,20 +23,8 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 
-pub const SHT_PROGBITS = 1;
-pub const SHT_SYMTAB = 2;
-pub const SHF_ALLOC = 0x2;
-
-pub const STT_NOTYPE = 0;
-pub const STT_OBJECT = 1;
-pub const STT_FUNC = 2;
-pub const STT_SECTION = 3;
-pub const STT_FILE = 4;
-
 pub const Section = struct {
     name: []const u8,
-    /// Into .shstrtab; header fields are 64 bytes at `Object.headerOffset`.
-    name_offset: u32,
     type: u32,
     flags: u64,
     addr: u64,
@@ -49,7 +37,7 @@ pub const Symbol = struct {
     name: []const u8,
     value: u64,
     size: u64,
-    type: u4,
+    type: std.elf.STT,
     shndx: u16,
 
     /// Defined in one of the object's sections (not undefined, absolute or common).
@@ -60,47 +48,36 @@ pub const Symbol = struct {
 
 pub const Object = struct {
     bytes: []const u8,
-    shoff: usize,
-    shstrndx: u16,
+    header: std.elf.Header,
     sections: []const Section,
 
     /// Null for anything but a little-endian ELF64 with section headers:
     /// other targets' objects in Zig's cache, non-ELF archive members.
     pub fn parse(gpa: Allocator, bytes: []const u8) !?Object {
-        if (bytes.len < 64 or !std.mem.startsWith(u8, bytes, "\x7fELF") or bytes[4] != 2 or bytes[5] != 1) {
+        var reader: std.Io.Reader = .fixed(bytes);
+        const header = std.elf.Header.read(&reader) catch return null;
+        if (!header.is_64 or header.endian != .little or header.shnum == 0 or header.shstrndx >= header.shnum) {
             return null;
         }
-        const shoff: usize = @intCast(std.mem.readInt(u64, bytes[0x28..][0..8], .little));
-        const shentsize = std.mem.readInt(u16, bytes[0x3A..][0..2], .little);
-        const shnum = std.mem.readInt(u16, bytes[0x3C..][0..2], .little);
-        const shstrndx = std.mem.readInt(u16, bytes[0x3E..][0..2], .little);
-        if (shentsize != 64 or shnum == 0 or shstrndx >= shnum) {
-            return null;
+        const shdrs = try gpa.alloc(std.elf.Elf64_Shdr, header.shnum);
+        var it = header.iterateSectionHeadersBuffer(bytes);
+        for (shdrs) |*shdr| {
+            shdr.* = try it.next() orelse return error.BadElf;
         }
-        if (shoff + @as(usize, shnum) * 64 > bytes.len) {
-            return error.BadElf;
-        }
-
-        const sections = try gpa.alloc(Section, shnum);
-        for (sections, 0..) |*s, i| {
-            const at = shoff + i * 64;
+        const shstrtab = try sectionBytes(bytes, shdrs[header.shstrndx]);
+        const sections = try gpa.alloc(Section, header.shnum);
+        for (sections, shdrs) |*s, shdr| {
             s.* = .{
-                .name = "",
-                .name_offset = std.mem.readInt(u32, bytes[at..][0..4], .little),
-                .type = std.mem.readInt(u32, bytes[at + 4 ..][0..4], .little),
-                .flags = std.mem.readInt(u64, bytes[at + 8 ..][0..8], .little),
-                .addr = std.mem.readInt(u64, bytes[at + 16 ..][0..8], .little),
-                .offset = @intCast(std.mem.readInt(u64, bytes[at + 24 ..][0..8], .little)),
-                .size = @intCast(std.mem.readInt(u64, bytes[at + 32 ..][0..8], .little)),
-                .link = std.mem.readInt(u32, bytes[at + 40 ..][0..4], .little),
+                .name = try cstr(shstrtab, shdr.sh_name),
+                .type = shdr.sh_type,
+                .flags = shdr.sh_flags,
+                .addr = shdr.sh_addr,
+                .offset = @intCast(shdr.sh_offset),
+                .size = @intCast(shdr.sh_size),
+                .link = shdr.sh_link,
             };
         }
-        const obj: Object = .{ .bytes = bytes, .shoff = shoff, .shstrndx = shstrndx, .sections = sections };
-        const shstrtab = try obj.bytesOf(sections[shstrndx]);
-        for (sections) |*s| {
-            s.name = try cstr(shstrtab, s.name_offset);
-        }
-        return obj;
+        return .{ .bytes = bytes, .header = header, .sections = sections };
     }
 
     pub fn bytesOf(obj: Object, section: Section) ![]const u8 {
@@ -112,7 +89,7 @@ pub const Object = struct {
 
     /// Offset of section `index`'s header in `bytes`.
     pub fn headerOffset(obj: Object, index: usize) usize {
-        return obj.shoff + index * 64;
+        return @intCast(obj.header.shoff + index * obj.header.shentsize);
     }
 
     /// The symbols of every symbol table, in table order, without the null
@@ -120,22 +97,21 @@ pub const Object = struct {
     pub fn symbols(obj: Object, gpa: Allocator) ![]const Symbol {
         var list: std.ArrayList(Symbol) = .empty;
         for (obj.sections) |sh| {
-            if (sh.type != SHT_SYMTAB) {
+            if (sh.type != std.elf.SHT_SYMTAB) {
                 continue;
             }
             if (sh.link >= obj.sections.len) {
                 return error.BadElf;
             }
             const strtab = try obj.bytesOf(obj.sections[sh.link]);
-            const symtab = try obj.bytesOf(sh);
-            var i: usize = 24;
-            while (i + 24 <= symtab.len) : (i += 24) {
+            const symtab = std.mem.bytesAsSlice(std.elf.Elf64.Sym, try obj.bytesOf(sh));
+            for (symtab[@min(1, symtab.len)..]) |sym| {
                 try list.append(gpa, .{
-                    .name = try cstr(strtab, std.mem.readInt(u32, symtab[i..][0..4], .little)),
-                    .type = @truncate(symtab[i + 4] & 0xf),
-                    .shndx = std.mem.readInt(u16, symtab[i + 6 ..][0..2], .little),
-                    .value = std.mem.readInt(u64, symtab[i + 8 ..][0..8], .little),
-                    .size = std.mem.readInt(u64, symtab[i + 16 ..][0..8], .little),
+                    .name = try cstr(strtab, sym.name),
+                    .type = sym.info.type,
+                    .shndx = sym.shndx,
+                    .value = sym.value,
+                    .size = sym.size,
                 });
             }
         }
@@ -143,62 +119,81 @@ pub const Object = struct {
     }
 };
 
+fn sectionBytes(bytes: []const u8, shdr: std.elf.Elf64_Shdr) ![]const u8 {
+    if (shdr.sh_offset + shdr.sh_size > bytes.len) {
+        return error.BadElf;
+    }
+    return bytes[@intCast(shdr.sh_offset)..][0..@intCast(shdr.sh_size)];
+}
+
 pub const Member = struct {
-    /// As in the header: `url.o/`, `/123` (long name), `/`, `//`, `/SYM64/`.
-    name: []const u8,
-    /// The member's file name, long names resolved and the trailing `/` gone.
+    header: *align(1) const std.elf.ar_hdr,
+    /// The member's file name; empty for the symbol index and the long
+    /// names table.
     file_name: []const u8,
-    header: *const [60]u8,
     body: []const u8,
     offset: usize,
 };
 
 /// The members of a GNU `ar` archive, or null when `archive` is not one.
 pub fn archiveMembers(gpa: Allocator, archive: []const u8) !?[]Member {
-    if (!std.mem.startsWith(u8, archive, "!<arch>\n")) {
+    if (!std.mem.startsWith(u8, archive, std.elf.ARMAG)) {
         return null;
     }
     var members: std.ArrayList(Member) = .empty;
     var long_names: []const u8 = "";
-    var pos: usize = 8;
-    while (pos + 60 <= archive.len) {
-        const header = archive[pos..][0..60];
-        const size = try std.fmt.parseInt(usize, std.mem.trimEnd(u8, header[48..58], " "), 10);
-        if (pos + 60 + size > archive.len) {
+    var pos: usize = std.elf.ARMAG.len;
+    while (pos + @sizeOf(std.elf.ar_hdr) <= archive.len) {
+        const header = std.mem.bytesAsValue(std.elf.ar_hdr, archive[pos..][0..@sizeOf(std.elf.ar_hdr)]);
+        const size = try header.size();
+        const body_pos = pos + @sizeOf(std.elf.ar_hdr);
+        if (body_pos + size > archive.len) {
             return error.TruncatedArchive;
         }
-        const name = std.mem.trimEnd(u8, header[0..16], " ");
-        const body = archive[pos + 60 ..][0..size];
-        if (std.mem.eql(u8, name, "//")) {
+        const body = archive[body_pos..][0..size];
+        // The long names table precedes every member that refers into it.
+        if (header.isStrtab()) {
             long_names = body;
         }
         try members.append(gpa, .{
-            .name = name,
-            .file_name = "",
             .header = header,
+            .file_name = try fileName(header, long_names),
             .body = body,
             .offset = pos,
         });
-        pos += 60 + size + (size & 1);
-    }
-    for (members.items) |*m| {
-        m.file_name = try fileName(m.name, long_names);
+        pos = body_pos + size + (size & 1);
     }
     return members.items;
 }
 
-fn fileName(name: []const u8, long_names: []const u8) ![]const u8 {
-    if (name.len > 1 and name[0] == '/' and std.ascii.isDigit(name[1])) {
-        const offset = try std.fmt.parseInt(usize, name[1..], 10);
-        if (offset >= long_names.len) {
-            return error.BadArchive;
-        }
-        return std.mem.trimEnd(u8, std.mem.sliceTo(long_names[offset..], '\n'), "/");
+fn fileName(header: *align(1) const std.elf.ar_hdr, long_names: []const u8) ![]const u8 {
+    if (header.isSymtab() or header.isSymtab64() or header.isStrtab()) {
+        return "";
     }
-    return std.mem.trimEnd(u8, name, "/");
+    if (header.name()) |name| {
+        return name;
+    }
+    const offset = try header.nameOffset() orelse return "";
+    if (offset >= long_names.len) {
+        return error.BadArchive;
+    }
+    return std.mem.trimEnd(u8, std.mem.sliceTo(long_names[offset..], '\n'), "/");
 }
 
-pub fn cstr(table: []const u8, offset: usize) ![]const u8 {
+/// Maps a file read-only. Nothing is copied, and under ReleaseSafe nothing
+/// is filled with 0xAA: the tools read a few percent of the hundreds of
+/// megabytes of objects they open.
+pub fn mapFile(io: std.Io, path: []const u8) ![]const u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const len: usize = @intCast(try file.length(io));
+    if (len == 0) {
+        return "";
+    }
+    return std.posix.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0);
+}
+
+fn cstr(table: []const u8, offset: usize) ![]const u8 {
     if (offset >= table.len) {
         return error.BadStringOffset;
     }

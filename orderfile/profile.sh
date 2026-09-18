@@ -12,7 +12,8 @@
 # lightpanda-io/demo (DEMO_DIR, npm install done), node and go.
 #
 # Environment:
-#   DEMO_DIR  demo checkout (default ../demo, next to the repository)
+#   DEMO_DIR  demo checkout (default ../demo; the build runs this from the
+#             repository root)
 #   RUNS      bench iterations (default 100)
 #   RAMDIR    tmpfs the binary is benched from (default /dev/shm)
 set -euo pipefail
@@ -20,7 +21,7 @@ set -euo pipefail
 BIN=$1
 HOTLIST=$2
 OUT=$3
-DEMO_DIR=${DEMO_DIR:-$(dirname "$0")/../../demo}
+DEMO_DIR=${DEMO_DIR:-../demo}
 RUNS=${RUNS:-100}
 RAMDIR=${RAMDIR:-/dev/shm}
 FAULT_AROUND=/sys/kernel/debug/fault_around_bytes
@@ -54,8 +55,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log() { echo "== $*" >&2; }
-
 # The demo web server the bench navigates to (port 1234).
 if ! curl -sf -o /dev/null http://127.0.0.1:1234/campfire-commerce/; then
     (cd "$DEMO_DIR" && go run runner/main.go -serve > "$OUT/runner.log" 2>&1) &
@@ -66,11 +65,12 @@ if ! curl -sf -o /dev/null http://127.0.0.1:1234/campfire-commerce/; then
     done
 fi
 
-log "profiling $BIN (RUNS=$RUNS)"
+echo "== profiling $BIN (RUNS=$RUNS)" >&2
 cp "$BIN" "$RAM"
 set_fault_around 4096
 "$RAM" serve --insecure-disable-tls-host-verification > /dev/null 2>&1 &
 PID=$!
+PIDS+=($PID)
 sleep 1
 (cd "$DEMO_DIR" && RUNS=$RUNS node puppeteer/cdp.js > "$OUT/bench.out")
 sleep 2
