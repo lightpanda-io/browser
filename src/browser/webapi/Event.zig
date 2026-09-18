@@ -194,6 +194,18 @@ pub fn relatedTargetPtr(self: *Event) ?*?*EventTarget {
     }
 }
 
+// Storage of a TouchEvent's Touch.target, for dispatch's shadow-tree
+// retargeting and resets. Mirrors relatedTargetPtr.
+pub fn touchTargetPtr(self: *Event) ?*?*EventTarget {
+    switch (self._type) {
+        .ui_event => |ui| switch (ui._type) {
+            .touch_event => |te| return te.touchTargetPtr(),
+            else => return null,
+        },
+        else => return null,
+    }
+}
+
 pub fn is(self: *Event, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == Event) self else null,

@@ -22,12 +22,21 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 
 const Event = @import("../Event.zig");
+const Element = @import("../Element.zig");
+const EventTarget = @import("../EventTarget.zig");
 const UIEvent = @import("UIEvent.zig");
+const Touch = @import("Touch.zig");
+const TouchList = @import("TouchList.zig");
 
 const String = lp.String;
 
 // https://w3c.github.io/touch-events/#touchevent-interface
-// There is no touch input source: the touch lists are always empty.
+//
+// Single-touch: at most one contact. touchend/touchcancel drop it from
+// touches/targetTouches and keep it in changedTouches (_touch_active). The
+// Touch lives as a value field (no separate allocation), and its two
+// TouchLists are cached on first read, so repeated property access doesn't
+// grow the event's arena.
 const TouchEvent = @This();
 
 pub const Proto = UIEvent;
@@ -37,8 +46,13 @@ _alt_key: bool = false,
 _meta_key: bool = false,
 _ctrl_key: bool = false,
 _shift_key: bool = false,
+_touch: ?Touch = null,
+_touch_active: bool = false,
+_touch_slot: [1]*Touch = undefined,
+_active_list: ?*TouchList = null,
+_changed_list: ?*TouchList = null,
 
-const TouchEventOptions = struct {
+pub const TouchEventOptions = struct {
     altKey: bool = false,
     ctrlKey: bool = false,
     metaKey: bool = false,
@@ -50,12 +64,37 @@ pub const Options = Event.inheritOptions(
     TouchEventOptions,
 );
 
+pub const TouchInit = struct {
+    identifier: i32 = 0,
+    target: *Element,
+    clientX: f64,
+    clientY: f64,
+};
+
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
     return initWithTrusted(typ, _opts, false, frame);
 }
 
 pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
     return initWithTrusted(typ, _opts, true, frame);
+}
+
+// Shared by WebDriver's dispatchTouch and CDP's Input.dispatchTouchEvent.
+// `active` is false for touchend/touchcancel: the contact stays in
+// changedTouches but drops out of touches/targetTouches. Setting the touch
+// is a plain value assignment (no arena allocation), so there's no failure
+// window between a successful event creation and returning it to the caller.
+pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, touch_init: TouchInit, active: bool, frame: *Frame) !*TouchEvent {
+    const event = try initWithTrusted(typ, _opts, true, frame);
+    event._touch = .{
+        ._event = event,
+        ._identifier = touch_init.identifier,
+        ._target = touch_init.target.asEventTarget(),
+        ._client_x = touch_init.clientX,
+        ._client_y = touch_init.clientY,
+    };
+    event._touch_active = active;
+    return event;
 }
 
 fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, frame: *Frame) !*TouchEvent {
@@ -84,16 +123,47 @@ pub fn asEvent(self: *TouchEvent) *Event {
     return self._proto.asEvent();
 }
 
-fn getTouches(_: *const TouchEvent) []const bool {
-    return &.{};
+// The live Touch's target, for EventManager's shadow-retargeting swap
+// (mirrors Event.relatedTargetPtr). null when the event carries no touch.
+pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
+    if (self._touch == null) return null;
+    return &self._touch.?._target;
 }
 
-fn getTargetTouches(_: *const TouchEvent) []const bool {
-    return &.{};
+// touches/targetTouches share one cache slot (`active_only`): both always
+// hold the same zero-or-one-element set in single-touch scope, and the spec
+// doesn't require them to be distinct (SameObject) objects.
+fn touchList(self: *TouchEvent, active_only: bool) !*TouchList {
+    const cache = if (active_only) &self._active_list else &self._changed_list;
+    if (cache.*) |list| {
+        return list;
+    }
+
+    const arena = self.asEvent()._arena;
+    var touches: []const *Touch = &.{};
+    if (self._touch) |*t| {
+        if (!active_only or self._touch_active) {
+            self._touch_slot[0] = t;
+            touches = self._touch_slot[0..1];
+        }
+    }
+
+    const list = try arena.create(TouchList);
+    list.* = .{ ._event = self, ._touches = touches };
+    cache.* = list;
+    return list;
 }
 
-fn getChangedTouches(_: *const TouchEvent) []const bool {
-    return &.{};
+pub fn getTouches(self: *TouchEvent) !*TouchList {
+    return self.touchList(true);
+}
+
+pub fn getTargetTouches(self: *TouchEvent) !*TouchList {
+    return self.touchList(true);
+}
+
+pub fn getChangedTouches(self: *TouchEvent) !*TouchList {
+    return self.touchList(false);
 }
 
 pub fn getAltKey(self: *const TouchEvent) bool {
