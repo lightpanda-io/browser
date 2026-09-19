@@ -306,7 +306,7 @@ fn getContentSignal(cmd: anytype) !void {
         return cmd.sendResult(.{ .available = false, .contentSignals = empty }, .{});
     };
 
-    const signals = network.robot_store.getContentSignals(robots_url);
+    const signals = try network.robot_store.getContentSignals(cmd.arena, robots_url);
     return cmd.sendResult(.{
         .available = signals != null,
         .contentSignals = signals orelse empty,
