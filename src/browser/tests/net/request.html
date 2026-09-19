@@ -453,3 +453,10 @@
   testing.expectEqual(1024, requests.length);
   testing.expectEqual('https://example.com/1023', requests[1023].url);
 </script>
+
+<script id=method_errors>
+  // Forbidden methods and invalid tokens throw a TypeError.
+  for (const method of ['CONNECT', 'trace', 'TRACK', 'IN VALID']) {
+    testing.expectError('TypeError', () => new Request('https://example.com/api', { method }));
+  }
+</script>
