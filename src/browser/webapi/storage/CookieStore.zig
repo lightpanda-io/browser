@@ -259,11 +259,11 @@ pub fn get(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Promis
 
     if (name == null and url == null) {
         // Unlike getAll(), get() requires a name or url
-        return local.rejectPromise(.{ .type_error = "get requires a name or url" });
+        return local.typeError("get requires a name or url");
     }
 
     const items = matchCookies(exec, name, url, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     if (items.len == 0) {
@@ -281,7 +281,7 @@ pub fn getAll(_: *CookieStore, input: ?GetInput, exec: *const Execution) !js.Pro
     } else .{ null, null };
 
     const items = matchCookies(exec, name, url, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
     return local.resolvePromise(items);
 }
@@ -293,12 +293,12 @@ pub fn set(_: *CookieStore, input: SetInput, value: ?[]const u8, exec: *const Ex
         .options => |o| o,
         .name => |n| .{
             .name = n,
-            .value = value orelse return local.rejectPromise(.{ .type_error = "value is required" }),
+            .value = value orelse return local.typeError("value is required"),
         },
     };
 
     storeCookie(exec, init, false) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});
@@ -324,7 +324,7 @@ pub fn delete(_: *CookieStore, input: DeleteInput, exec: *const Execution) !js.P
         .sameSite = .strict,
         .partitioned = opts.partitioned,
     }, true) catch |err| {
-        return local.rejectPromise(.{ .type_error = @errorName(err) });
+        return local.typeError(@errorName(err));
     };
 
     return local.resolvePromise({});

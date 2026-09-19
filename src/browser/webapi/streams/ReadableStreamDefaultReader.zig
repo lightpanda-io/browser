@@ -97,7 +97,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
 
 pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, exec: *const Execution) !js.Promise {
     const stream = self._stream orelse {
-        return exec.js.local.?.rejectPromise(.{ .type_error = "Reader has been released" });
+        return exec.js.typeError("Reader has been released");
     };
 
     self.releaseLock();

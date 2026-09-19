@@ -397,3 +397,56 @@
     testing.expectEqual('function', typeof stream.getReader);
   }
 </script>
+
+<script id=promise_rejections type=module>
+  // Each call returns a promise that rejects with a TypeError; none throws.
+  async function rejection(fn) {
+    const promise = fn();
+    if (!(promise instanceof Promise)) {
+      return 'not a promise';
+    }
+    try {
+      await promise;
+      return 'resolved';
+    } catch (e) {
+      return `${e.name}: ${e.message}`;
+    }
+  }
+
+  const state = await testing.async();
+
+  const released = new WritableStream().getWriter();
+  released.releaseLock();
+
+  const closed = new WritableStream().getWriter();
+  await closed.close();
+
+  const reader = new ReadableStream().getReader();
+  reader.releaseLock();
+
+  const locked = new ReadableStream();
+  locked.getReader();
+
+  const results = [
+    await rejection(() => released.write('x')),
+    await rejection(() => released.close()),
+    await rejection(() => released.closed),
+    await rejection(() => closed.write('x')),
+    await rejection(() => closed.close()),
+    await rejection(() => reader.cancel()),
+    await rejection(() => locked.pipeTo(new WritableStream())),
+  ];
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual([
+      'TypeError: Writer has been released',
+      'TypeError: Writer has been released',
+      'TypeError: Writer has been released',
+      'TypeError: Stream is not writable',
+      'TypeError: Stream is not writable',
+      'TypeError: Reader has been released',
+      'TypeError: ReadableStream is locked',
+    ], results);
+  });
+</script>
