@@ -659,10 +659,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         // Functional
         .lang => |expected| {
             if (expected.len == 0) return false;
-            // The element's language is the nearest ancestor-or-self lang
-            // attribute. Elements in a document with no declared language
-            // fall back to the UA default (en); detached subtrees have no
-            // language at all.
+            // The element's language is the nearest ancestor-or-self lang attribute.
             const lang = blk: {
                 var current: ?*Node = node;
                 while (current) |cur| : (current = cur.parentNode()) {
@@ -671,9 +668,6 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
                             if (cur.subtype(Node.Element).getAttributeInterned("lang")) |value| {
                                 break :blk value;
                             }
-                        },
-                        .document => {
-                            break :blk "en";
                         },
                         else => {},
                     }
