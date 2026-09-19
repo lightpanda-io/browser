@@ -120,7 +120,7 @@ pub fn init(exec: *const Execution) !*XMLHttpRequest {
         ._exec = exec,
         ._arena = arena,
         ._proto = undefined,
-        ._request_headers = try Headers.init(null, exec),
+        ._request_headers = try Headers.initGuarded(null, .request, exec),
     });
     return self;
 }
@@ -861,7 +861,7 @@ test "parseMethod: accepts known methods case-insensitively" {
 }
 
 test "WebApi: XHR" {
-    testing.expectLog(&.{ .http, .http, .http });
+    testing.expectLog(&.{ .http, .http });
     try testing.htmlRunner("net/xhr.html", .{});
 }
 
