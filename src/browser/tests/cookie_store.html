@@ -362,3 +362,28 @@
     testing.expectEqual('ev-onchange', capturedName);
   });
 </script>
+
+<script id=rejections type=module>
+  // Invalid calls reject with a TypeError rather than throwing.
+  async function rejection(fn) {
+    const promise = fn();
+    try {
+      await promise;
+      return 'resolved';
+    } catch (e) {
+      return `${e.name}: ${e.message}`;
+    }
+  }
+
+  const state = await testing.async();
+  const results = [
+    await rejection(() => cookieStore.get()),
+    await rejection(() => cookieStore.set('no-value')),
+  ];
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual('TypeError: get requires a name or url', results[0]);
+    testing.expectEqual('TypeError: value is required', results[1]);
+  });
+</script>

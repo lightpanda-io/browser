@@ -315,7 +315,7 @@ fn pipeThrough(self: *ReadableStream, transform: PipeTransform, exec: *const Exe
 /// Returns a promise that resolves when piping is complete.
 pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, exec: *const Execution) !js.Promise {
     if (self.getLocked()) {
-        return exec.js.local.?.rejectPromise(.{ .type_error = "ReadableStream is locked" });
+        return exec.js.typeError("ReadableStream is locked");
     }
 
     const local = exec.js.local.?;
