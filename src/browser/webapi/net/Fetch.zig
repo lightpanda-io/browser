@@ -45,6 +45,7 @@ _owns_response: bool,
 _signal: ?*AbortSignal,
 _manual_redirect: bool,
 _no_cors: bool,
+_null_body: bool,
 _sink: Sink,
 
 pub const Input = Request.Input;
@@ -129,6 +130,7 @@ fn submit(request: *Request, body: ?[]const u8, sink: Sink, exec: *const Executi
         ._signal = request._signal,
         ._manual_redirect = request._redirect == .manual,
         ._no_cors = request._mode == .@"no-cors",
+        ._null_body = request._method == .HEAD,
     };
 
     if (comptime lp.IS_DEBUG) {
@@ -211,8 +213,13 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         }
     }
 
+    const status = transfer.responseStatus().?;
+    if (is_opaque or Response.isNullBodyStatus(status) or (self._manual_redirect and HttpClient.isRedirectStatus(status))) {
+        self._null_body = true;
+    }
+
     const arena = self._response._arena;
-    if (!is_opaque) {
+    if (self._null_body == false) {
         try self._buf.ensureTotalCapacityPrecise(arena.allocator(), transfer.bodyLen());
     }
 
@@ -226,8 +233,8 @@ fn httpHeaderDoneCallback(transfer: *Transfer) !Transfer.HeaderResult {
         });
     }
 
-    res._status = transfer.responseStatus().?;
-    res._status_text = std.http.Status.phrase(@enumFromInt(transfer.responseStatus().?)) orelse "";
+    res._status = status;
+    res._status_text = std.http.Status.phrase(@enumFromInt(status)) orelse "";
     res._url = try arena.dupeZ(u8, transfer.req.url);
     res._is_redirected = transfer.redirectCount().? > 0;
 
@@ -290,7 +297,7 @@ fn httpDataCallback(transfer: *Transfer, data: []const u8) !void {
         }
     }
 
-    if (self._no_cors and transfer.client.obey_cors and transfer._cors_cross_origin) {
+    if (self._null_body) {
         return;
     }
 
@@ -301,7 +308,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     var response = self._response;
     response._http_transfer = null;
-    response._body = .{ .bytes = self._buf.items };
+    response._body = if (self._null_body) .empty else .{ .bytes = self._buf.items };
 
     log.info(.http, "request complete", .{
         .source = "fetch",
