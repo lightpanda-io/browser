@@ -564,3 +564,30 @@
     });
   }
 </script>
+
+<script id=fetch_null_body type=module>
+  {
+    const state = await testing.async();
+    const results = [];
+    for (const [url, method] of [
+      ['http://127.0.0.1:9582/status/204', 'GET'],
+      ['http://127.0.0.1:9582/status/205', 'POST'],
+      ['http://127.0.0.1:9582/status/304', 'GET'],
+      ['http://127.0.0.1:9582/xhr', 'HEAD'],
+    ]) {
+      const response = await fetch(url, { method });
+      results.push([response.body, response.bodyUsed, await response.text()]);
+    }
+    const ok = await fetch('http://127.0.0.1:9582/xhr');
+    state.resolve();
+
+    await state.done(() => {
+      for (const [body, bodyUsed, text] of results) {
+        testing.expectEqual(null, body);
+        testing.expectEqual(false, bodyUsed);
+        testing.expectEqual('', text);
+      }
+      testing.expectEqual(true, ok.body !== null);
+    });
+  }
+</script>
