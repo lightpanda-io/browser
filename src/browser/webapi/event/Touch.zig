@@ -23,9 +23,8 @@ const TouchEvent = @import("TouchEvent.zig");
 
 // https://w3c.github.io/touch-events/#idl-def-touch
 //
-// Lives as a value field on the owning TouchEvent (single-touch scope: at
-// most one Touch per event), so acquireRef/releaseRef delegate to it and
-// its address stays stable for the event's lifetime.
+// Stored by value inside its TouchEvent, so its address is stable for the
+// event's lifetime and refcounting delegates to the event.
 const Touch = @This();
 
 _event: *TouchEvent,

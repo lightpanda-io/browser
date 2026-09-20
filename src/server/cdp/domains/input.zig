@@ -158,14 +158,13 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
 //
-// Single-touch scope: exactly one touchPoint on TouchStart/TouchMove. TouchEnd
-// accepts zero or one: Playwright sends an empty list, Puppeteer sends the
-// point being released. Chrome requires an empty list for touchCancel.
-// A client sending more than one point is rejected outright.
+// Only one contact is tracked, so more than one point is rejected rather than
+// silently dropping the rest. touchEnd takes zero or one point because
+// Playwright sends an empty list and Puppeteer sends the point being
+// released; touchCancel must be empty, as in Chrome.
 //
-// The contact's id is whatever the client picked on the touchStart that
-// opened it (0 when omitted, matching CDP's default); touchMove/touchEnd/
-// touchCancel must reference that same id when they carry a point at all.
+// Puppeteer's ids start at 1, so the contact keeps the id from touchStart
+// instead of assuming 0.
 fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     const params = (cmd.params(struct {
         type: Type,

@@ -24,10 +24,9 @@ const TouchEvent = @import("TouchEvent.zig");
 
 // https://w3c.github.io/touch-events/#idl-def-touchlist
 //
-// Length 0 or 1 (single-touch scope): holds the event's single Touch
-// directly rather than a slice, so there's no backing array to alias between
-// the (up to) three TouchLists a TouchEvent caches. Indexed binding follows
-// NodeList; RC delegates to the event.
+// Holds the event's single Touch directly instead of a slice, so the (up to)
+// three lists a TouchEvent caches never alias a backing array. Refcounting
+// delegates to the event.
 const TouchList = @This();
 
 _event: *TouchEvent,
