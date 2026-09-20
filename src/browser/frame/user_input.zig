@@ -535,12 +535,16 @@ pub const TouchType = enum {
 /// The caller supplies the target (no hit-test), so touchmove/touchend/
 /// touchcancel can stay pinned to the touchstart element instead of
 /// re-resolving at the current point.
-pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, x: f64, y: f64, identifier: i32) !void {
+pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, x: f64, y: f64, identifier: i32, modifiers: Modifiers) !void {
     const active = !typ.isLift();
 
     const event: *TouchEvent = try .initTrustedWithTouch(typ.name(), .{
         .bubbles = true,
         .composed = true,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
     }, .{
         .identifier = identifier,
         .target = target,
@@ -565,7 +569,7 @@ pub fn hasActiveTouch(frame: *Frame) bool {
 /// When the point misses every element (e.g. past the end of a short faux
 /// layout), fall back to the document element rather than dropping the
 /// contact silently, the same fallback WebDriver's pointerMove uses.
-pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i32) !void {
+pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i32, modifiers: Modifiers) !void {
     const page = frame.page;
     const is_start = typ == .touchstart;
     const target = if (!is_start)
@@ -584,7 +588,7 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i
             .type = frame._type,
         });
     }
-    try dispatchTouchEventOn(frame, resolved, typ, x, y, identifier);
+    try dispatchTouchEventOn(frame, resolved, typ, x, y, identifier, modifiers);
     page.input_touch_contact = .{ .target = resolved, .x = x, .y = y, .identifier = identifier };
 }
 
@@ -597,7 +601,7 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i
 /// a re-hit-test, and CDP has already checked the id matches.
 pub const TouchPoint = struct { x: f64, y: f64 };
 
-pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint) !void {
+pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers) !void {
     const contact = frame.page.input_touch_contact orelse return;
     // Consume the state before the fallible dispatch, so a dispatch that
     // fails partway through (e.g. a listener throws) can't leave a stale
@@ -605,7 +609,7 @@ pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint) !void
     frame.page.input_touch_contact = null;
     const x = if (point) |p| p.x else contact.x;
     const y = if (point) |p| p.y else contact.y;
-    try dispatchTouchEventOn(frame, contact.target, typ, x, y, contact.identifier);
+    try dispatchTouchEventOn(frame, contact.target, typ, x, y, contact.identifier, modifiers);
 }
 
 /// Whether the element has a click activation behavior that handleClick

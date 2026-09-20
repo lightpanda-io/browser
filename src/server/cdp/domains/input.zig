@@ -169,6 +169,7 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     const params = (cmd.params(struct {
         type: Type,
+        modifiers: u4 = 0,
         touchPoints: []const struct {
             x: f64,
             y: f64,
@@ -233,11 +234,18 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     else
         null;
 
+    const modifiers: Frame.user_input.Modifiers = .{
+        .alt = params.modifiers & 1 != 0,
+        .ctrl = params.modifiers & 2 != 0,
+        .meta = params.modifiers & 4 != 0,
+        .shift = params.modifiers & 8 != 0,
+    };
+
     switch (params.type) {
-        .touchStart => try Frame.user_input.triggerTouch(frame, .touchstart, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?),
-        .touchMove => try Frame.user_input.triggerTouch(frame, .touchmove, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?),
-        .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, lift_point),
-        .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, lift_point),
+        .touchStart => try Frame.user_input.triggerTouch(frame, .touchstart, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?, modifiers),
+        .touchMove => try Frame.user_input.triggerTouch(frame, .touchmove, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?, modifiers),
+        .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, lift_point, modifiers),
+        .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, lift_point, modifiers),
     }
 }
 
@@ -1163,6 +1171,63 @@ test "cdp.input: dispatchTouchEvent touchStart populates touches/targetTouches/c
     try testing.expect(result.isTrue());
 }
 
+test "cdp.input: dispatchTouchEvent preserves each event's modifier keys" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+    try frame.navigate("http://localhost:9582/src/browser/tests/mcp_actions.html", .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.touchModifiers = [];
+        \\for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+        \\  document.addEventListener(type, e => {
+        \\    touchModifiers.push([e.type, e.altKey, e.ctrlKey, e.metaKey, e.shiftKey]);
+        \\  });
+        \\}
+    , null);
+
+    const steps = .{
+        .{ "touchStart", 1 },
+        .{ "touchMove", 2 },
+        .{ "touchEnd", 4 },
+        .{ "touchStart", 15 },
+        .{ "touchCancel", 8 },
+    };
+    inline for (steps, 1..) |step, id| {
+        const is_lift = comptime std.mem.eql(u8, step[0], "touchEnd") or std.mem.eql(u8, step[0], "touchCancel");
+        try ctx.processMessage(.{
+            .id = id,
+            .method = "Input.dispatchTouchEvent",
+            .params = .{ .type = step[0], .modifiers = step[1], .touchPoints = if (is_lift) &.{} else &.{.{ .x = 0, .y = 0 }} },
+        });
+    }
+    // Omitted modifiers reset to false, even after a modified gesture.
+    try ctx.processMessage(.{
+        .id = 6,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = 0, .y = 0 }} },
+    });
+
+    try testing.expect((try ls.local.compileAndRun(
+        \\JSON.stringify(touchModifiers) === JSON.stringify([
+        \\  ['touchstart', true, false, false, false],
+        \\  ['touchmove', false, true, false, false],
+        \\  ['touchend', false, false, true, false],
+        \\  ['touchstart', true, true, true, true],
+        \\  ['touchcancel', false, false, false, true],
+        \\  ['touchstart', false, false, false, false]
+        \\])
+    , null)).isTrue());
+}
+
 test "cdp.input: dispatchTouchEvent touchEnd empties touches but keeps changedTouches" {
     var ctx = try testing.context();
     defer ctx.deinit();
@@ -1688,7 +1753,7 @@ test "cdp.input: dispatchTouchEvent touchcancel is never cancelable" {
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchcancel, 10, 20, 0);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchcancel, 10, 20, 0, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -1709,7 +1774,7 @@ test "cdp.input: dispatchTouchEvent a passive-only touchstart listener is not ca
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -1730,7 +1795,7 @@ test "cdp.input: dispatchTouchEvent a non-passive listener makes touchstart canc
         \\t;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0, .{});
     try testing.expect((try ls.local.compileAndRun("window.result === true", null)).isTrue());
 }
 
@@ -1758,7 +1823,7 @@ test "cdp.input: dispatchTouchEvent a closed-shadow touch target retargets to th
         \\inner;
     , null);
     const target = try ls.local.jsValueToZig(*Element, value);
-    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0);
+    try Frame.user_input.dispatchTouchEventOn(frame, target, .touchstart, 10, 20, 0, .{});
     const result = try ls.local.compileAndRun("window.eventTargetOK === true && window.touchTargetOK === true", null);
     try testing.expect(result.isTrue());
 }

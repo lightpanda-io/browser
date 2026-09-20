@@ -267,10 +267,10 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 // to the down target, not wherever this move landed.
                 if (pressed) {
                     const captured = down_target orelse continue;
-                    dispatchPointer(captured, "pointermove", 0, pressed_mask, frame);
+                    dispatchPointer(captured, "pointermove", 0, pressed_mask, "touch", frame);
                     dispatchTouch(captured, .touchmove, frame);
                 } else {
-                    dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                    dispatchPointer(el, "pointermove", 0, pressed_mask, "touch", frame);
                 }
             } else {
                 Frame.user_input.updateHoverTarget(frame, el, .{
@@ -278,7 +278,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                     .modifiers = frame.page.input_modifiers,
                     .with_pointer = true,
                 });
-                dispatchPointer(el, "pointermove", 0, pressed_mask, frame);
+                dispatchPointer(el, "pointermove", 0, pressed_mask, "mouse", frame);
                 _ = dispatchMouse(el, "mousemove", 0, pressed_mask, 0, frame);
             }
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
@@ -292,7 +292,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             } else {
                 click_count = 1;
             }
-            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), frame);
+            dispatchPointer(el, "pointerdown", button, Frame.user_input.buttonsBitmask(button), if (is_touch) "touch" else "mouse", frame);
             if (is_touch) {
                 dispatchTouch(el, .touchstart, frame);
             } else {
@@ -319,7 +319,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             // Touch pointers stay captured to the down target for the
             // release too, same as the move above.
             const pointer_target = if (is_touch) down_target.? else el;
-            dispatchPointer(pointer_target, "pointerup", button, 0, frame);
+            dispatchPointer(pointer_target, "pointerup", button, 0, if (is_touch) "touch" else "mouse", frame);
             if (is_touch) {
                 dispatchTouch(down_target.?, .touchend, frame);
             } else {
@@ -547,7 +547,7 @@ fn readI32(obj: js.Object, key: []const u8, default: i32) i32 {
     return val.toI32() catch default;
 }
 
-fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, frame: *Frame) void {
+fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons: u16, pointer_type: []const u8, frame: *Frame) void {
     const modifiers = frame.page.input_modifiers;
     const event = PointerEvent.initTrusted(typ, .{
         .bubbles = true,
@@ -556,7 +556,7 @@ fn dispatchPointer(el: *Element, comptime typ: []const u8, button: i32, buttons:
         .button = button,
         .buttons = buttons,
         .pointerId = 1,
-        .pointerType = "mouse",
+        .pointerType = pointer_type,
         .isPrimary = true,
         .ctrlKey = modifiers.ctrl,
         .shiftKey = modifiers.shift,
@@ -612,7 +612,7 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
 // client-chosen id, so this source's single contact is always identifier 0.
 fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
-    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0, 0) catch |err| {
+    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0, 0, frame.page.input_modifiers) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
     };
 }
@@ -641,6 +641,7 @@ test "WebApi: WebDriver touch actionSequence populates touches" {
     const page = try testing.pageTest("mcp_actions.html", .{});
     defer page.close();
     const frame = page.frame().?;
+    frame.page.input_modifiers = .{ .alt = true, .ctrl = true, .meta = true, .shift = true };
 
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
@@ -652,17 +653,21 @@ test "WebApi: WebDriver touch actionSequence populates touches" {
 
     _ = try ls.local.compileAndRun(
         \\const t = document.getElementById('hoverTarget');
+        \\window.pointerTypes = [];
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { pointerTypes.push(e.pointerType); });
+        \\}
         \\t.addEventListener('touchstart', (e) => {
         \\  window.start = e.touches.length === 1 &&
         \\    e.targetTouches.length === 1 &&
         \\    e.changedTouches.length === 1 &&
-        \\    e.touches[0].target === t;
+        \\    e.touches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
         \\});
         \\t.addEventListener('touchend', (e) => {
         \\  window.end = e.touches.length === 0 &&
         \\    e.targetTouches.length === 0 &&
         \\    e.changedTouches.length === 1 &&
-        \\    e.changedTouches[0].target === t;
+        \\    e.changedTouches[0].target === t && e.altKey && e.ctrlKey && e.metaKey && e.shiftKey;
         \\});
         \\window.webdriver.actionSequence([{
         \\  type: 'pointer',
@@ -677,7 +682,10 @@ test "WebApi: WebDriver touch actionSequence populates touches" {
 
     try testing.waitForFrame();
 
-    const result = try ls.local.compileAndRun("window.start === true && window.end === true", null);
+    const result = try ls.local.compileAndRun(
+        "window.start === true && window.end === true && JSON.stringify(pointerTypes) === '[\"touch\",\"touch\",\"touch\"]'",
+        null,
+    );
     try testing.expect(result.isTrue());
 }
 
@@ -718,9 +726,9 @@ test "WebApi: WebDriver touchmove/touchend stay on the touchstart target" {
         \\// The initial unpressed pointerMove(origin: a) also lands on `a`,
         \\// so the count (not just "did it fire on a") is what discriminates
         \\// the captured second move from an uncaptured one landing on `b`.
-        \\a.addEventListener('pointermove', () => { window.pointerMoveOnACount++; });
+        \\a.addEventListener('pointermove', e => { if (e.pointerType === 'touch') window.pointerMoveOnACount++; });
         \\b.addEventListener('pointermove', () => { window.pointerMoveOnBCount++; });
-        \\a.addEventListener('pointerup', () => { window.pointerUpOnA = true; });
+        \\a.addEventListener('pointerup', e => { window.pointerUpOnA = e.pointerType === 'touch'; });
         \\b.addEventListener('pointerup', () => { window.pointerUpOnB = true; });
         \\window.webdriver.actionSequence([{
         \\  type: 'pointer',
@@ -888,7 +896,11 @@ test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
     _ = try ls.local.compileAndRun(
         \\window.clickCount = 0;
         \\window.dblclickCount = 0;
+        \\window.mousePointerTypes = [];
         \\const t = document.getElementById('hoverTarget');
+        \\for (const type of ['pointermove', 'pointerdown', 'pointerup']) {
+        \\  t.addEventListener(type, e => { mousePointerTypes.push(e.pointerType); });
+        \\}
         \\t.addEventListener('click', () => { window.clickCount++; });
         \\t.addEventListener('dblclick', () => { window.dblclickCount++; });
         \\window.webdriver.actionSequence([{
@@ -905,6 +917,9 @@ test "WebApi: WebDriver a second mouse pointerUp dispatches no second click" {
 
     try testing.waitForFrame();
 
-    const result = try ls.local.compileAndRun("window.clickCount === 1 && window.dblclickCount === 0", null);
+    const result = try ls.local.compileAndRun(
+        "window.clickCount === 1 && window.dblclickCount === 0 && JSON.stringify(mousePointerTypes) === '[\"mouse\",\"mouse\",\"mouse\"]'",
+        null,
+    );
     try testing.expect(result.isTrue());
 }
