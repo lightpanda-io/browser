@@ -156,15 +156,15 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
     // result already sent
 }
 
-// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
-//
-// Only one contact is tracked, so more than one point is rejected rather than
-// silently dropping the rest. touchEnd takes zero or one point because
-// Playwright sends an empty list and Puppeteer sends the point being
-// released; touchCancel must be empty, as in Chrome.
-//
-// Puppeteer's ids start at 1, so the contact keeps the id from touchStart
-// instead of assuming 0.
+/// https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
+///
+/// Only one contact is tracked, so more than one point is rejected rather than
+/// silently dropping the rest. touchEnd takes zero or one point because
+/// Playwright sends an empty list and Puppeteer sends the point being
+/// released; touchCancel must be empty, as in Chrome.
+///
+/// Puppeteer's ids start at 1, so the contact keeps the id from touchStart
+/// instead of assuming 0.
 fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     const params = (cmd.params(struct {
         type: Type,
@@ -248,10 +248,10 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     }
 }
 
-// CDP's id is a wire f64; Touch.identifier is the DOM's i32. Reject anything
-// that isn't a plain, in-range integer rather than truncating silently
-// (@intFromFloat is illegal behavior on NaN/out-of-range in Zig, and this
-// value comes straight off the wire).
+/// CDP's id is a wire f64; Touch.identifier is the DOM's i32. Reject anything
+/// that isn't a plain, in-range integer rather than truncating silently
+/// (@intFromFloat is illegal behavior on NaN/out-of-range in Zig, and this
+/// value comes straight off the wire).
 fn touchPointId(id: f64) ?i32 {
     if (!std.math.isFinite(id) or id != @round(id)) return null;
     if (id < std.math.minInt(i32) or id > std.math.maxInt(i32)) return null;

@@ -60,9 +60,9 @@ fn getClientY(self: *const Touch) f64 {
     return self._client_y;
 }
 
-// This engine has no layout, so screenX/screenY and pageX/pageY alias
-// clientX/clientY, the same simplification MouseEvent.compatCoordinate
-// makes (there, scrollX/scrollY are tracked but not yet folded in either).
+/// This engine has no layout, so screenX/screenY and pageX/pageY alias
+/// clientX/clientY, the same simplification MouseEvent.compatCoordinate
+/// makes (there, scrollX/scrollY are tracked but not yet folded in either).
 fn getPageX(self: *const Touch) f64 {
     return self._client_x;
 }
@@ -79,8 +79,8 @@ fn getScreenY(self: *const Touch) f64 {
     return self._client_y;
 }
 
-// No hit-testing geometry in this engine: default to Chrome's synthetic
-// values for a single-point contact (a 1x1 circle, no rotation, full force).
+/// No hit-testing geometry in this engine: default to Chrome's synthetic
+/// values for a single-point contact (a 1x1 circle, no rotation, full force).
 fn getRadiusX(_: *const Touch) f64 {
     return 1;
 }
