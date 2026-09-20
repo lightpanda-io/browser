@@ -607,9 +607,9 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
     };
 }
 
-// Action sequences do not track viewport coordinates (same as dispatchMouse
-// / dispatchPointer), so clientX/clientY are 0 here. WebDriver has no CDP-style
-// client-chosen id, so this source's single contact is always identifier 0.
+/// Action sequences do not track viewport coordinates (same as dispatchMouse
+/// / dispatchPointer), so clientX/clientY are 0 here. WebDriver has no CDP-style
+/// client-chosen id, so this source's single contact is always identifier 0.
 fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
     Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0, 0, frame.page.input_modifiers) catch |err| {

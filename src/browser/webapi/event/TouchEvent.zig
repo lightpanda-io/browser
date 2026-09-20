@@ -76,8 +76,8 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
     return initWithTrusted(typ, _opts, true, frame);
 }
 
-// Assigning the touch is a plain value write (no arena allocation), so
-// nothing can fail between creating the event and returning it.
+/// Assigning the touch is a plain value write (no arena allocation), so
+/// nothing can fail between creating the event and returning it.
 pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, touch_init: TouchInit, active: bool, frame: *Frame) !*TouchEvent {
     const event = try initWithTrusted(typ, _opts, true, frame);
     event._touch = .{
@@ -117,16 +117,16 @@ pub fn asEvent(self: *TouchEvent) *Event {
     return self._proto.asEvent();
 }
 
-// The live Touch's target, for EventManager's shadow-retargeting swap
-// (mirrors Event.relatedTargetPtr). null when the event carries no touch.
+/// The live Touch's target, for EventManager's shadow-retargeting swap
+/// (mirrors Event.relatedTargetPtr). null when the event carries no touch.
 pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
     if (self._touch == null) return null;
     return &self._touch.?._target;
 }
 
-// touches and targetTouches hold the same set here but keep separate cached
-// lists: they are distinct objects in real browsers ([SameObject] only ties
-// identity to repeated reads of one attribute).
+/// touches and targetTouches hold the same set here but keep separate cached
+/// lists: they are distinct objects in real browsers ([SameObject] only ties
+/// identity to repeated reads of one attribute).
 fn touchList(self: *TouchEvent, active_only: bool, cache: *?*TouchList) !*TouchList {
     if (cache.*) |list| {
         return list;

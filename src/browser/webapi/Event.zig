@@ -194,8 +194,8 @@ pub fn relatedTargetPtr(self: *Event) ?*?*EventTarget {
     }
 }
 
-// Storage of a TouchEvent's Touch.target, for dispatch's shadow-tree
-// retargeting and resets. Mirrors relatedTargetPtr.
+/// Storage of a TouchEvent's Touch.target, for dispatch's shadow-tree
+/// retargeting and resets. Mirrors relatedTargetPtr.
 pub fn touchTargetPtr(self: *Event) ?*?*EventTarget {
     switch (self._type) {
         .ui_event => |ui| switch (ui._type) {
