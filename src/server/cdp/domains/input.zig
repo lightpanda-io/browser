@@ -159,10 +159,9 @@ fn dispatchMouseEvent(cmd: *CDP.Command) !void {
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchTouchEvent
 //
 // Single-touch scope: exactly one touchPoint on TouchStart/TouchMove. TouchEnd
-// /TouchCancel accept zero or one: Playwright sends an empty list, Puppeteer
-// sends the point being released, and Chrome accepts either since touch state
-// is tracked server-side either way. A client sending more than one point is
-// rejected outright rather than silently dropping every point past the first.
+// accepts zero or one: Playwright sends an empty list, Puppeteer sends the
+// point being released. Chrome requires an empty list for touchCancel.
+// A client sending more than one point is rejected outright.
 //
 // The contact's id is whatever the client picked on the touchStart that
 // opened it (0 when omitted, matching CDP's default); touchMove/touchEnd/
@@ -188,7 +187,8 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
 
     switch (params.type) {
         .touchStart, .touchMove => if (params.touchPoints.len != 1) return error.InvalidParams,
-        .touchEnd, .touchCancel => if (params.touchPoints.len > 1) return error.InvalidParams,
+        .touchEnd => if (params.touchPoints.len > 1) return error.InvalidParams,
+        .touchCancel => if (params.touchPoints.len != 0) return error.InvalidParams,
     }
 
     // Shape-validate the one point's id, if any, before touching frame state.
@@ -225,9 +225,9 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
 
     try cmd.sendResult(null, .{});
 
-    // Puppeteer's touchEnd/touchCancel carry the point being released, and
-    // Chrome dispatches there rather than at the last touchmove; Playwright's
-    // empty list falls back to the stored contact inside triggerTouchLift.
+    // Puppeteer's touchEnd carries the point being released, and Chrome
+    // dispatches there rather than at the last touchmove; Playwright's empty
+    // list and touchCancel fall back to the stored contact.
     const lift_point: ?Frame.user_input.TouchPoint = if (params.touchPoints.len == 1)
         .{ .x = params.touchPoints[0].x, .y = params.touchPoints[0].y }
     else
@@ -1573,9 +1573,7 @@ test "cdp.input: dispatchTouchEvent an empty touchEnd uses the stored position" 
     try testing.expect(result.isTrue());
 }
 
-// touchCancel takes the same lift_point path as touchEnd; cover it
-// separately since it also stays non-cancelable with a populated point.
-test "cdp.input: dispatchTouchEvent a touchCancel carrying a point uses the wire coordinates" {
+test "cdp.input: dispatchTouchEvent rejects populated touchCancel without lifting contact" {
     var ctx = try testing.context();
     defer ctx.deinit();
 
@@ -1616,11 +1614,19 @@ test "cdp.input: dispatchTouchEvent a touchCancel carrying a point uses the wire
         .method = "Input.dispatchTouchEvent",
         .params = .{ .type = "touchCancel", .touchPoints = &.{.{ .x = cancel_x, .y = cancel_y }} },
     });
+    try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 2 });
+    try testing.expect(Frame.user_input.hasActiveTouch(frame));
+
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "Input.dispatchTouchEvent",
+        .params = .{ .type = "touchCancel", .touchPoints = &.{} },
+    });
     try testing.expect(!Frame.user_input.hasActiveTouch(frame));
 
     const result = try ls.local.compileAndRun(
-        "window.cancelable === false && window.cancelX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x + 3" ++
-            " && window.cancelY === document.getElementById('hoverTarget').getBoundingClientRect().y + 4",
+        "window.cancelable === false && window.cancelX === " ++ "document.getElementById('hoverTarget').getBoundingClientRect().x" ++
+            " && window.cancelY === document.getElementById('hoverTarget').getBoundingClientRect().y",
         null,
     );
     try testing.expect(result.isTrue());
