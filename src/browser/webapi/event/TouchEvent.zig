@@ -32,11 +32,8 @@ const String = lp.String;
 
 // https://w3c.github.io/touch-events/#touchevent-interface
 //
-// Single-touch: at most one contact. touchend/touchcancel drop it from
-// touches/targetTouches and keep it in changedTouches (_touch_active). The
-// Touch lives as a value field (no separate allocation), and its two
-// TouchLists are cached on first read, so repeated property access doesn't
-// grow the event's arena.
+// The Touch is stored by value and the lists are cached on first read, so
+// repeated property reads don't grow the event's arena.
 const TouchEvent = @This();
 
 pub const Proto = UIEvent;
@@ -79,11 +76,8 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent
     return initWithTrusted(typ, _opts, true, frame);
 }
 
-// Shared by WebDriver's dispatchTouch and CDP's Input.dispatchTouchEvent.
-// `active` is false for touchend/touchcancel: the contact stays in
-// changedTouches but drops out of touches/targetTouches. Setting the touch
-// is a plain value assignment (no arena allocation), so there's no failure
-// window between a successful event creation and returning it to the caller.
+// Assigning the touch is a plain value write (no arena allocation), so
+// nothing can fail between creating the event and returning it.
 pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, touch_init: TouchInit, active: bool, frame: *Frame) !*TouchEvent {
     const event = try initWithTrusted(typ, _opts, true, frame);
     event._touch = .{
@@ -130,11 +124,9 @@ pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
     return &self._touch.?._target;
 }
 
-// touches and targetTouches hold the same zero-or-one-element set in
-// single-touch scope, but each still gets its own cached TouchList: `e.touches
-// !== e.targetTouches` in a real browser, since [SameObject] only guarantees
-// identity across repeated reads of one attribute, not equality between two
-// different attributes.
+// touches and targetTouches hold the same set here but keep separate cached
+// lists: they are distinct objects in real browsers ([SameObject] only ties
+// identity to repeated reads of one attribute).
 fn touchList(self: *TouchEvent, active_only: bool, cache: *?*TouchList) !*TouchList {
     if (cache.*) |list| {
         return list;
