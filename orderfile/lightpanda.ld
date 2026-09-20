@@ -5804,6 +5804,8 @@ SECTIONS {
     *libcompiler_rt_zcu.o(
       ".rodata.cst16"
       ".rodata.cst8"
+      ".rodata.__anon_8114"
+      ".rodata.__anon_8759"
       ".rodata.__anon_10640"
     )
     *decode.o(
