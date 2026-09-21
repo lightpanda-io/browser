@@ -66,6 +66,10 @@ pub const TouchInit = struct {
     target: *Element,
     clientX: f64,
     clientY: f64,
+    radiusX: f64 = 1,
+    radiusY: f64 = 1,
+    rotationAngle: f64 = 0,
+    force: f64 = 1,
 };
 
 pub fn init(typ: []const u8, _opts: ?Options, frame: *Frame) !*TouchEvent {
@@ -86,6 +90,10 @@ pub fn initTrustedWithTouch(typ: []const u8, _opts: ?Options, touch_init: TouchI
         ._target = touch_init.target.asEventTarget(),
         ._client_x = touch_init.clientX,
         ._client_y = touch_init.clientY,
+        ._radius_x = touch_init.radiusX,
+        ._radius_y = touch_init.radiusY,
+        ._rotation_angle = touch_init.rotationAngle,
+        ._force = touch_init.force,
     };
     event._touch_active = active;
     return event;
