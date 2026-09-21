@@ -405,8 +405,7 @@ const Commands = cli.Builder(.{
             .{ .name = "cdp_max_connections", .type = u16, .default = 16 },
             .{ .name = "cdp_max_pending_connections", .type = u16, .default = 128 },
             .{ .name = "cdp_max_message_size", .type = u32, .default = 1024 * 1024 },
-            // Don't widen this without growing the reader buffer in the HTTP path.
-            .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
+            .{ .name = "cdp_max_http_message_size", .type = u32, .default = 1024 * 1024 },
             .{ .name = "http_session_timeout", .type = u32, .default = 60 },
             .{ .name = "disable_metrics", .type = bool },
         },
@@ -919,7 +918,7 @@ pub fn dumpMetricsOnExit(self: *const Config) bool {
     };
 }
 
-pub fn cdpMaxHTTPMessageSize(self: *const Config) u14 {
+pub fn cdpMaxHTTPMessageSize(self: *const Config) u32 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_http_message_size,
         else => unreachable,

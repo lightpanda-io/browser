@@ -109,7 +109,8 @@ fn parseBody(comptime T: type, arena: Allocator, body: []const u8) ParseError!T 
     }
     return std.json.parseFromSliceLeaky(T, arena, body, .{
         .ignore_unknown_fields = true,
-        // body is the connection's read buffer, reused once the request is parked
+        // body is the connection's read buffer, if we park the connection, that
+        // buffer will be re-used. Our result cannot point into it.
         .allocate = .alloc_always,
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
