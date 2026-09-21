@@ -844,8 +844,9 @@ fn fdBudget(config: *const Config) usize {
         };
         break :blk limit.cur;
     };
-    // put some limit incase of a unlimited or very large rlimit
-    const ceiling = (64 * 1024 * 1024) / @max(@as(u64, config.cdpMaxHTTPMessageSize()), 1);
+    // put some limit incase of a unlimited or very large rlimit. A connection
+    // only commits INITIAL_BUFFER_SIZE up front
+    const ceiling = (64 * 1024 * 1024) / http.INITIAL_BUFFER_SIZE;
     const budget = @min(soft, ceiling) -| reserve;
     return @intCast(@max(budget, 8));
 }
@@ -1441,13 +1442,30 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
 }
 
-test "Client: http invalid request" {
-    testing.silenceLog(&.{.cdp});
-
+test "Client: http header past the initial buffer" {
     var c = try createTestClient();
     defer c.deinit();
 
+    // A header this size doesn't fit the buffer a connection starts with; it
+    // grows to take it rather than rejecting the request.
     const res = try c.httpRequest("GET /over/9000 HTTP/1.1\r\n" ++ "Header: " ++ ("a" ** 4100) ++ "\r\n\r\n");
+    try testing.expectEqual("HTTP/1.1 404 \r\n" ++
+        "Connection: Close\r\n" ++
+        "Content-Length: 9\r\n\r\n" ++
+        "Not found", res);
+}
+
+test "Client: http request past the limit" {
+    var c = try createTestClient();
+    defer c.deinit();
+
+    // The body never arrives: Content-Length alone is enough to turn it down,
+    // so we never read (or make room for) any of it.
+    var buf: [128]u8 = undefined;
+    const request = try std.fmt.bufPrint(&buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{
+        @as(u64, testing.test_app.config.cdpMaxHTTPMessageSize()) + 1,
+    });
+    const res = try c.httpRequest(request);
     try testing.expectEqual("HTTP/1.1 413 \r\n" ++
         "Connection: Close\r\n" ++
         "Content-Length: 17\r\n\r\n" ++
@@ -2891,19 +2909,14 @@ test "server: releasing past the pool's retain destroys the connection" {
 }
 
 test "server: the connection budget is bounded by buffer memory" {
-    const opts = &testing.test_config.mode.serve;
-    const original = opts.cdp_max_http_message_size;
-    defer opts.cdp_max_http_message_size = original;
-
     // whatever NOFILE happens to be, we never sign up for more read buffers
-    // than fdBudget's ceiling pays for (kept in step with it by hand)
+    // than fdBudget's ceiling pays for (kept in step with it by hand). Only
+    // the initial size is committed; --cdp-max-http-message-size caps what a
+    // request in flight may grow one to, and doesn't enter into the budget.
     const ceiling = 64 * 1024 * 1024;
-    for ([_]u14{ 1024, 4096, 16383 }) |size| {
-        opts.cdp_max_http_message_size = size;
-        const budget = fdBudget(testing.test_app.config);
-        try testing.expect(budget * size <= ceiling);
-        try testing.expect(budget >= 8);
-    }
+    const budget = fdBudget(testing.test_app.config);
+    try testing.expect(budget * http.INITIAL_BUFFER_SIZE <= ceiling);
+    try testing.expect(budget >= 8);
 }
 
 test "server: accepted sockets get TCP keepalive" {
@@ -2924,12 +2937,12 @@ test "server: accepted sockets get TCP keepalive" {
     http.disconnect(lt.server, conn);
 }
 
-test "server: the http read buffer is sized by --cdp-max-http-message-size" {
+test "server: --cdp-max-http-message-size is a limit, not an allocation" {
     // the pool is built in Server.init, so this has to move first
     const opts = &testing.test_config.mode.serve;
     const original = opts.cdp_max_http_message_size;
     defer opts.cdp_max_http_message_size = original;
-    opts.cdp_max_http_message_size = 8192;
+    opts.cdp_max_http_message_size = 512 * 1024;
 
     var lt = try LoopTest.init();
     defer lt.deinit();
@@ -2937,7 +2950,10 @@ test "server: the http read buffer is sized by --cdp-max-http-message-size" {
     const client, const conn = try lt.accept();
     defer sys_net.close(client);
 
-    try testing.expectEqual(8192, conn.buffer.buf.len);
+    // a connection costs the initial buffer whatever the limit is; only a
+    // request that needs the room grows it
+    try testing.expectEqual(http.INITIAL_BUFFER_SIZE, conn.buffer.buf.len);
+    try testing.expectEqual(512 * 1024, conn.buffer.max);
 
     http.disconnect(lt.server, conn);
 }

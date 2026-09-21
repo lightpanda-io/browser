@@ -131,9 +131,15 @@ pub const Connection = struct {
         header: void, // still parsing the header
         request: Request,
 
-        fn parseHeader(self: *State, arena: Allocator, data: []u8) !bool {
+        // What the connection still needs before the request can be served.
+        const Parsed = union(enum) {
+            complete,
+            need: usize, // bytes the buffer needs will hold, 0 while parsing the header
+        };
+
+        fn parseHeader(self: *State, arena: Allocator, data: []u8) !Parsed {
             const header_index = std.mem.indexOf(u8, data, "\r\n\r\n") orelse {
-                return false;
+                return .{ .need = 0 };
             };
 
             // include the last line's \r\n so every line, including the request
@@ -143,10 +149,11 @@ pub const Connection = struct {
 
             _ = line_1_end;
             const body_start = header_index + 4;
-            const total = body_start + try contentLength(header);
+            // large content lenghts will saturate to max(usize) -> 413
+            const total = body_start +| try contentLength(header);
             if (data.len < total) {
                 // the body is still arriving
-                return false;
+                return .{ .need = total };
             }
             // A WebSocket upgrade may be pipelined with its first frames, but every
             // client we care about waits for the 101 first. Anything past the
@@ -164,11 +171,9 @@ pub const Connection = struct {
                 .arena = arena,
             } };
 
-            return true;
+            return .complete;
         }
 
-        // The HTTP WebDriver bootstrap (POST /session) is the only thing
-        // that sends a body; everything else is 0.
         fn contentLength(header: []const u8) !usize {
             const key = "\r\ncontent-length:";
             const at = std.ascii.indexOfIgnoreCase(header, key) orelse return 0;
@@ -207,16 +212,17 @@ pub const Connection = struct {
 
     const Buffer = struct {
         buf: []u8,
-
         // position in buf up until where we have valid data
         len: usize,
-
+        max: usize,
         allocator: Allocator,
 
-        fn init(allocator: Allocator, size: usize) !Buffer {
+        fn init(allocator: Allocator, max: usize) !Buffer {
+            const real_max = @max(max, INITIAL_BUFFER_SIZE);
             return .{
                 .len = 0,
-                .buf = try allocator.alloc(u8, size),
+                .max = real_max,
+                .buf = try allocator.alloc(u8, INITIAL_BUFFER_SIZE),
                 .allocator = allocator,
             };
         }
@@ -225,10 +231,34 @@ pub const Connection = struct {
             self.allocator.free(self.buf);
         }
 
+        fn reset(self: *Buffer) void {
+            self.len = 0;
+            if (self.buf.len == INITIAL_BUFFER_SIZE) {
+                return;
+            }
+            // keeping the larger buffer is only wasteful, so failure is fine
+            self.buf = self.allocator.realloc(self.buf, INITIAL_BUFFER_SIZE) catch self.buf;
+        }
+
+        fn ensureCapacity(self: *Buffer, needed: usize) !void {
+            if (needed <= self.buf.len) {
+                return;
+            }
+            if (needed > self.max) {
+                return error.RequestTooLarge;
+            }
+            self.buf = try self.allocator.realloc(self.buf, needed);
+        }
+
         pub fn read(self: *Buffer, socket: posix.socket_t) ![]u8 {
             const len = self.len;
             if (len == self.buf.len) {
-                return error.RequestTooLarge;
+                if (self.buf.len == self.max) {
+                    return error.RequestTooLarge;
+                }
+                // Only the header gets here: its length isn't declared, so we
+                // double until it fits. A body is sized from Content-Length.
+                try self.ensureCapacity(@min(self.buf.len * 2, self.max));
             }
 
             const n = try posix.read(socket, self.buf[len..]);
@@ -247,7 +277,7 @@ pub const Connection = struct {
         live: usize, // acquired and not yet released
         retain: usize, // min # to keep
         free_count: usize, // # of connections available in free
-        buffer_size: usize, // --cdp-max-http-message-size
+        max_buffer_size: usize, // --cdp-max-http-message-size
 
         pub fn init(app: *App) !Pool {
             const retain = app.config.maxConnections();
@@ -257,7 +287,7 @@ pub const Connection = struct {
                 .free_count = 0,
                 .retain = retain,
                 .allocator = app.allocator,
-                .buffer_size = app.config.cdpMaxHTTPMessageSize(),
+                .max_buffer_size = app.config.cdpMaxHTTPMessageSize(),
             };
             errdefer self.deinit();
 
@@ -302,7 +332,7 @@ pub const Connection = struct {
             conn.address = .{ .ip4 = .unspecified(0) };
             conn.deadline = 0;
             conn.pending = null;
-            conn.buffer.len = 0;
+            conn.buffer.reset();
             conn.state = .header;
 
             self.free.prepend(&conn.node);
@@ -320,7 +350,7 @@ pub const Connection = struct {
                 .deadline = 0,
                 .pending = null,
                 .state = .header,
-                .buffer = try .init(allocator, self.buffer_size),
+                .buffer = try .init(allocator, self.max_buffer_size),
             };
             return conn;
         }
@@ -334,6 +364,11 @@ pub const Connection = struct {
 
 // How long a connection may sit without completing a request before we close it.
 pub const IDLE_TIMEOUT_MS = 10_000;
+
+// Default buffer size of a new connection. For CDP connections, this should be
+// enough for the few HTTP requests that it makes. WebDriver can send larger
+// bodies and the buffer will grow up to --cdp-max-http-message-size as needed
+pub const INITIAL_BUFFER_SIZE = 4096;
 
 const REQUEST_ARENA_RETAIN = 8192;
 
@@ -399,9 +434,12 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
         switch (http.*) {
             .header => {
                 const data = try conn.buffer.read(conn.socket);
-                if (try http.parseHeader(arena, data) == false) {
-                    // don't have a complete header yet
-                    return true;
+                switch (try http.parseHeader(arena, data)) {
+                    .need => |needed| {
+                        try conn.buffer.ensureCapacity(needed);
+                        return true;
+                    },
+                    .complete => {},
                 }
                 if (comptime lp.IS_DEBUG) {
                     // we do have a complete header, the state must have transitioned
@@ -423,7 +461,9 @@ fn processHTTP(server: *Server, conn: *Connection, now: u64) !bool {
                 // req lives in http.*; read what we need before resetting it
                 const keepalive = req.keepalive;
                 http.* = .header;
-                conn.buffer.len = 0;
+                // safe to free the buffer, a parked command wil have copied
+                // what it needed from it.
+                conn.buffer.reset();
 
                 if (served == .parked) {
                     // off the loop until its worker answers (resumeParked)
@@ -1118,4 +1158,69 @@ fn webSocketAccept(head: []const u8, out: *[28]u8) ![]const u8 {
     hasher.final(&sha);
     _ = std.base64.standard.Encoder.encode(out, &sha);
     return out;
+}
+
+const testing = @import("../testing.zig");
+
+test "http: the read buffer grows with the request and gives the space back" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    const max = INITIAL_BUFFER_SIZE * 2;
+    var buffer = try Connection.Buffer.init(testing.allocator, max);
+    defer buffer.deinit();
+
+    // a connection commits the initial size, never the limit
+    try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
+
+    // a header declares no length, so the buffer doubles to take it
+    const filler = "a" ** max;
+    try sys_net.writeAll(pair[1], filler);
+    while (buffer.len < filler.len) {
+        _ = try buffer.read(pair[0]);
+    }
+    try testing.expectEqual(max, buffer.buf.len);
+
+    // and stops doubling at the limit
+    try sys_net.writeAll(pair[1], "a");
+    try testing.expectError(error.RequestTooLarge, buffer.read(pair[0]));
+
+    // the next request on this connection starts small again
+    buffer.reset();
+    try testing.expectEqual(0, buffer.len);
+    try testing.expectEqual(INITIAL_BUFFER_SIZE, buffer.buf.len);
+}
+
+test "http: a declared body is sized upfront" {
+    var pair: [2]posix.socket_t = undefined;
+    if (std.c.socketpair(posix.AF.LOCAL, posix.SOCK.STREAM, 0, &pair) != 0) {
+        return error.SocketPairFailed;
+    }
+    defer sys_net.close(pair[0]);
+    defer sys_net.close(pair[1]);
+
+    var buffer = try Connection.Buffer.init(testing.allocator, 1024 * 1024);
+    defer buffer.deinit();
+
+    var state: Connection.State = .header;
+    const body_len = INITIAL_BUFFER_SIZE * 4;
+    var head_buf: [64]u8 = undefined;
+    const head = try std.fmt.bufPrint(&head_buf, "POST /session HTTP/1.1\r\nContent-Length: {d}\r\n\r\n", .{body_len});
+    try sys_net.writeAll(pair[1], head);
+
+    // the header alone is enough to know how much room the body needs
+    const needed = switch (try state.parseHeader(testing.allocator, try buffer.read(pair[0]))) {
+        .complete => return error.UnexpectedlyComplete,
+        .need => |n| n,
+    };
+    try testing.expectEqual(head.len + body_len, needed);
+    try buffer.ensureCapacity(needed);
+    try testing.expectEqual(needed, buffer.buf.len);
+
+    // a body that can't fit is rejected without reading any of it
+    try testing.expectError(error.RequestTooLarge, buffer.ensureCapacity(buffer.max + 1));
 }

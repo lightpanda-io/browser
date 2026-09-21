@@ -28,8 +28,9 @@
     \\          Maximum number of simultaneous CDP connections.
     \\          Defaults to 16.
     \\  --cdp-max-http-message-size <INT>
-    \\          Maximum allowed HTTP request size
-    \\          Defaults to 4096 (maximum allowed: 16383)
+    \\          Maximum allowed HTTP request size. Connections start with a small
+    \\          read buffer and only grow as needed.
+    \\          Defaults to 1048576 (1MB)
     \\  --cdp-max-message-size <INT>
     \\          Maximum allowed incoming websocket message size.
     \\          Defaults to 1048576 (1MB)
