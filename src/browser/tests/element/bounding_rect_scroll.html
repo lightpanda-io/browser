@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<!-- A tall body so the window can actually scroll. -->
+<body style=height:4000px;width:4000px></body>
+
+<script id="rect_is_viewport_relative">
+{
+  // getBoundingClientRect is viewport-relative (CSSOM-View): the rect must move
+  // with the window scroll. The faux layout computes document positions that
+  // never move, so this guards the scroll subtraction (CDP drivers rely on it:
+  // Playwright times out with "element is outside of the viewport" otherwise).
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+
+  const before = el.getBoundingClientRect();
+  window.scrollTo(0, 200);
+  const after = el.getBoundingClientRect();
+
+  testing.expectEqual(before.y - 200, after.y);
+  testing.expectEqual(before.x, after.x);
+
+  // The hit test takes a viewport-relative point, so it must agree with the
+  // (also viewport-relative) rect after scrolling.
+  testing.expectEqual(document.elementFromPoint(after.x + 1, after.y + 1), el);
+
+  window.scrollTo(0, 0);
+}
+</script>

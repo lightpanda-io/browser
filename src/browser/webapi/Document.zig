@@ -889,7 +889,15 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
     var topmost: ?*Element = null;
 
     const root = self.asNode();
-    const style_manager = &(root.ownerFrame(frame) orelse return null)._style_manager;
+    const owner = root.ownerFrame(frame) orelse return null;
+    const style_manager = &owner._style_manager;
+
+    // The point is viewport-relative (CSSOM-View), while faux-layout positions
+    // are document-absolute. Shift the query by the window scroll so the two
+    // spaces agree; otherwise a click on a scrolled element misses the target.
+    const qx = x + @as(f64, @floatFromInt(owner.window.getScrollX()));
+    const qy = y + @as(f64, @floatFromInt(owner.window.getScrollY()));
+
     const Entry = struct { node: *Node, hidden: bool };
     var stack: std.ArrayList(Entry) = .empty;
     try stack.append(frame.local_arena, .{ .node = root, .hidden = false });
@@ -902,8 +910,8 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         var hidden = entry.hidden;
         const pos = preorder_index * 5.0;
 
-        if (pos > y) {
-            // Monotonic: no later element has top <= y, so none can contain (x, y).
+        if (pos > qy) {
+            // Monotonic: no later element has top <= qy, so none can contain (qx, qy).
             return topmost;
         }
 
@@ -911,14 +919,14 @@ fn elementFromPointImpl(self: *Document, x: f64, y: f64, ignore_x: bool, frame: 
         if (node.is(Element)) |element| {
             hidden = hidden or style_manager.hasDisplayNone(element);
             if (!hidden) {
-                if (y >= pos and y <= pos + element.boxAxis(frame, .height)) {
+                if (qy >= pos and qy <= pos + element.boxAxis(frame, .height)) {
                     if (ignore_x) {
                         topmost = element;
                     } else {
                         // only bother calculating the horiziontal position for
                         // elements contained by the vertical band
                         const left = element.horizontalPosition(frame);
-                        if (x >= left and x <= left + element.boxAxis(frame, .width)) {
+                        if (qx >= left and qx <= left + element.boxAxis(frame, .width)) {
                             topmost = element;
                         }
                     }

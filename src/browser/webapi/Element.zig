@@ -1576,9 +1576,17 @@ pub fn boundingClientRectValues(self: *Element, frame: *Frame) DOMRect.Data {
 
 // Some cases need the bounding rect but have already done the visibility check.
 pub fn boundingClientRectValuesForVisible(self: *Element, frame: *Frame) DOMRect.Data {
+    // getBoundingClientRect is viewport-relative (CSSOM-View): subtract the
+    // window scroll offset so the rect tracks scrolling. The faux layout
+    // computes document positions, which never move with scroll; without this
+    // the rect stays out of the viewport and CDP-driven clicks (Playwright)
+    // time out on "element is outside of the viewport".
+    const owner = self.ownerFrame(frame) orelse frame;
+    const scroll_x: f64 = @floatFromInt(owner.window.getScrollX());
+    const scroll_y: f64 = @floatFromInt(owner.window.getScrollY());
     return .{
-        .x = self.horizontalPosition(frame),
-        .y = calculateDocumentPosition(self.asNode()),
+        .x = self.horizontalPosition(frame) - scroll_x,
+        .y = calculateDocumentPosition(self.asNode()) - scroll_y,
         .width = self.boxAxis(frame, .width),
         .height = self.boxAxis(frame, .height),
     };
