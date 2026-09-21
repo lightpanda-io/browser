@@ -852,7 +852,6 @@ fn serveSessionCommand(server: *Server, conn: *Connection, req: *Connection.Requ
         switch (err) {
             error.OutOfMemory => return err,
             error.UnknownCommand => return serveWebDriverError(server, conn, req, "unknown command", "unknown command"),
-            error.UnknownMethod => return serveWebDriverError(server, conn, req, "unknown method", "unknown method"),
             error.InvalidArgument => return serveWebDriverError(server, conn, req, "invalid argument", "invalid body"),
         }
     };

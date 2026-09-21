@@ -2094,6 +2094,162 @@ test "server: HTTP page commands" {
     try testing.expectEqual("{\"value\":\"" ++ url ++ "\"}", responseBody(try sessionCommand(&c, "GET", &session_id, "/url", "")));
 }
 
+test "server: HTTP element commands" {
+    const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
+    defer deleteHTTPSession(&session_id, true) catch |err| @panic(@errorName(err));
+
+    var c = try createTestClient();
+    defer c.deinit();
+
+    const url = "http://127.0.0.1:9582/src/browser/tests/webdriver/elements.html";
+    try testing.expectEqual("{\"value\":null}", responseBody(try sessionCommand(&c, "POST", &session_id, "/url", "{\"url\":\"" ++ url ++ "\"}")));
+
+    // a reference nothing ever handed out
+    {
+        const res = try sessionCommand(&c, "GET", &session_id, "/element/99/text", "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"no such element\"") != null);
+    }
+
+    {
+        const res = try findElements(&c, &session_id, "css selector", "[");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 400 Bad Request\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"invalid selector\"") != null);
+    }
+
+    const msg = try findElement(&c, &session_id, "css selector", "#msg");
+    try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, msg, "/text"));
+    try testing.expectEqual("{\"value\":\"p\"}", try elementCommand(&c, &session_id, msg, "/name"));
+    try testing.expectEqual("{\"value\":\"msg\"}", try elementCommand(&c, &session_id, msg, "/property/id"));
+    try testing.expectEqual("{\"value\":\"P\"}", try elementCommand(&c, &session_id, msg, "/property/tagName"));
+    try testing.expectEqual("{\"value\":\"rgb(1, 2, 3)\"}", try elementCommand(&c, &session_id, msg, "/css/color"));
+    try testing.expectEqual("{\"value\":null}", try elementCommand(&c, &session_id, msg, "/attribute/nope"));
+
+    // the same node keeps its reference
+    try testing.expectEqual(msg, try findElement(&c, &session_id, "css selector", "#msg"));
+
+    const box = try findElement(&c, &session_id, "css selector", "#box");
+    try testing.expectEqual("{\"value\":\"1\"}", try elementCommand(&c, &session_id, box, "/attribute/data-x"));
+    {
+        const body = try elementCommand(&c, &session_id, box, "/rect");
+        try testing.expect(std.mem.startsWith(u8, body, "{\"value\":{\"x\":"));
+        try testing.expect(std.mem.indexOf(u8, body, "\"width\":40") != null);
+        try testing.expect(std.mem.indexOf(u8, body, "\"height\":20") != null);
+    }
+
+    // a boolean attribute is "true", never its value
+    const check = try findElement(&c, &session_id, "css selector", "#check");
+    try testing.expectEqual("{\"value\":\"true\"}", try elementCommand(&c, &session_id, check, "/attribute/checked"));
+    try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, check, "/selected"));
+    try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, check, "/enabled"));
+    try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, msg, "/selected"));
+
+    const off = try findElement(&c, &session_id, "css selector", "#off");
+    try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, off, "/enabled"));
+
+    {
+        const selected = try findElement(&c, &session_id, "css selector", "#opt_a");
+        try testing.expectEqual("{\"value\":true}", try elementCommand(&c, &session_id, selected, "/selected"));
+        const other = try findElement(&c, &session_id, "css selector", "#opt_b");
+        try testing.expectEqual("{\"value\":false}", try elementCommand(&c, &session_id, other, "/selected"));
+    }
+
+    // the strategies no selector engine covers
+    {
+        const link = try findElement(&c, &session_id, "link text", "first link");
+        try testing.expectEqual("{\"value\":\"first link\"}", try elementCommand(&c, &session_id, link, "/text"));
+
+        const partial = try findElement(&c, &session_id, "partial link text", "second");
+        try testing.expectEqual("{\"value\":\"second link\"}", try elementCommand(&c, &session_id, partial, "/text"));
+
+        // tag names match whatever case they're asked in
+        const res = try findElements(&c, &session_id, "tag name", "A");
+        try testing.expectEqual(2, (try elementReferences(responseBody(res))).len);
+
+        // a tag the Tag enum doesn't know takes the string-compare path
+        const custom = try findElement(&c, &session_id, "tag name", "my-widget");
+        try testing.expectEqual("{\"value\":\"custom\"}", try elementCommand(&c, &session_id, custom, "/text"));
+    }
+    {
+        const first = try findElement(&c, &session_id, "xpath", "//p[@class='item']");
+        try testing.expectEqual("{\"value\":\"hello\"}", try elementCommand(&c, &session_id, first, "/text"));
+    }
+
+    // scoped to an element: the two <p> inside #box, not the rest of the page
+    {
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/elements", .{box});
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"css selector\",\"value\":\".item\"}"));
+        const references = try elementReferences(res);
+        try testing.expectEqual(2, references.len);
+        try testing.expectEqual(msg, references[0]);
+    }
+    {
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/element", .{box});
+        const res = responseBody(try sessionCommand(&c, "POST", &session_id, path, "{\"using\":\"tag name\",\"value\":\"p\"}"));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+        try testing.expectEqual(msg, parsed.object.get("value").?.object.get(http_command.element_key).?.string);
+    }
+
+    // nothing is focused, so the active element is the body
+    {
+        const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/element/active", ""));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+        const active = parsed.object.get("value").?.object.get(http_command.element_key).?.string;
+        try testing.expectEqual("{\"value\":\"body\"}", try elementCommand(&c, &session_id, active, "/name"));
+    }
+
+    // a reference to a node that's been taken out of the document
+    {
+        const handle = blk: {
+            const body = responseBody(try sessionCommand(&c, "GET", &session_id, "/window", ""));
+            break :blk try testing.arena_allocator.dupe(u8, body[10..46]);
+        };
+
+        var ws = try createTestClient();
+        defer ws.deinit();
+        var path_buf: [64]u8 = undefined;
+        try ws.handshake(try std.fmt.bufPrint(&path_buf, "/session/{s}", .{&session_id}));
+        try ws.bidiCommand(try std.fmt.allocPrint(testing.arena_allocator,
+            \\{{"id":1,"method":"script.evaluate","params":{{"expression":"document.getElementById('msg').remove()","awaitPromise":false,"target":{{"context":"{s}"}}}}}}
+        , .{handle}));
+        try expectWebsocketContains(&ws, "\"type\":\"success\"");
+
+        const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}/text", .{msg});
+        const res = try sessionCommand(&c, "GET", &session_id, path, "");
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.indexOf(u8, res, "\"error\":\"stale element reference\"") != null);
+    }
+}
+
+fn findElement(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
+    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    const res = responseBody(try sessionCommand(c, "POST", session_id, "/element", body));
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, res, .{});
+    const reference = parsed.object.get("value").?.object;
+    return reference.get(http_command.element_key).?.string;
+}
+
+// The raw response, so a test can assert on an error too.
+fn findElements(c: *TestClient, session_id: *const [36]u8, using: []const u8, value: []const u8) ![]const u8 {
+    const body = try std.fmt.allocPrint(testing.arena_allocator, "{{\"using\":\"{s}\",\"value\":\"{s}\"}}", .{ using, value });
+    return sessionCommand(c, "POST", session_id, "/elements", body);
+}
+
+fn elementReferences(body: []const u8) ![]const []const u8 {
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, body, .{});
+    const values = parsed.object.get("value").?.array;
+    const references = try testing.arena_allocator.alloc([]const u8, values.items.len);
+    for (values.items, references) |value, *reference| {
+        reference.* = value.object.get(http_command.element_key).?.string;
+    }
+    return references;
+}
+
+fn elementCommand(c: *TestClient, session_id: *const [36]u8, id: []const u8, suffix: []const u8) ![]const u8 {
+    const path = try std.fmt.allocPrint(testing.arena_allocator, "/element/{s}{s}", .{ id, suffix });
+    return responseBody(try sessionCommand(c, "GET", session_id, path, ""));
+}
+
 fn responseBody(res: []const u8) []const u8 {
     return res[std.mem.indexOf(u8, res, "\r\n\r\n").? + 4 ..];
 }
@@ -2118,14 +2274,15 @@ test "server: HTTP command errors" {
 
     const session_id = try createHTTPSession("{\"capabilities\":{}}", false);
 
-    // routing errors are the loop's, in W3C form
+    // routing errors are the loop's, in W3C form. A known path with the wrong
+    // method is an unknown command like any other.
     {
         var c = try createTestClient();
         defer c.deinit();
         var request_buf: [128]u8 = undefined;
         const res = try c.httpRequest(try std.fmt.bufPrint(&request_buf, "DELETE /session/{s}/url HTTP/1.1\r\n\r\n", .{&session_id}));
-        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 405 Method Not Allowed\r\n"));
-        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown method\",\"message\":\"unknown method\",\"stacktrace\":\"\"}}"));
+        try testing.expect(std.mem.startsWith(u8, res, "HTTP/1.1 404 Not Found\r\n"));
+        try testing.expect(std.mem.endsWith(u8, res, "{\"value\":{\"error\":\"unknown command\",\"message\":\"unknown command\",\"stacktrace\":\"\"}}"));
     }
     {
         var c = try createTestClient();

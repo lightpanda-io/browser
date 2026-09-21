@@ -1438,7 +1438,7 @@ pub fn getElementsByTagName(self: *Node, tag_name: []const u8, frame: *Frame) !G
 
     const lower = std.ascii.lowerString(&frame.buf, tag_name);
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
-        // optimized for known tag names, comparis
+        // optimized for known tag names, comparison
         return .{
             .tag = collections.NodeLive(.tag).init(self, known, frame),
         };
