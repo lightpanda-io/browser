@@ -505,7 +505,9 @@ fn deltaToScroll(d: f64) i32 {
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
-/// The CDP-tracked touch contact: single-touch scope, one client-chosen id.
+/// The CDP-tracked touch contact. Single-touch scope: at most one, identified
+/// by whatever id the client picked on touchstart (Puppeteer counts up from 1;
+/// a bare CDP call with no id defaults to 0).
 pub const TouchContact = struct {
     target: *Element,
     x: f64,
@@ -513,9 +515,6 @@ pub const TouchContact = struct {
     identifier: i32,
 };
 
-/// Single-touch scope: at most one contact, identified by whatever id the
-/// client picked on touchstart (Puppeteer counts up from 1; a bare CDP call
-/// with no id defaults to 0).
 pub const TouchType = enum {
     touchstart,
     touchmove,
@@ -592,6 +591,8 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i
     page.input_touch_contact = .{ .target = resolved, .x = x, .y = y, .identifier = identifier };
 }
 
+pub const TouchPoint = struct { x: f64, y: f64 };
+
 /// CDP TouchEnd/TouchCancel. Playwright sends an empty touchPoints list, so
 /// there's nowhere to read a release position from but the stored contact.
 /// Puppeteer sends the point being released, and Chrome dispatches at that
@@ -599,8 +600,6 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i
 /// wins over the stored coordinates. Target and identifier always come from
 /// the stored contact: the lift still fires on the touchstart element, not
 /// a re-hit-test, and CDP has already checked the id matches.
-pub const TouchPoint = struct { x: f64, y: f64 };
-
 pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers) !void {
     const contact = frame.page.input_touch_contact orelse return;
     // Consume the state before the fallible dispatch, so a dispatch that
