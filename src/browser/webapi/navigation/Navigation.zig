@@ -313,45 +313,26 @@ pub fn replaceEntry(
 }
 
 fn fireNavigateSuccess(self: *Navigation, frame: *Frame) void {
-    if (self._on_navigatesuccess) |ons| {
-        const event = Event.initTrusted(
-            .wrap("navigatesuccess"),
-            null,
-            frame.page,
-        ) catch |err| {
-            log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
-            return;
-        };
-
-        self.dispatch(ons, event, frame) catch |err| {
-            log.warn(.event, "Navigation.fireNavigateSuccess dispatch", .{ .err = err });
-        };
+    if (!frame.hasDirectListeners(
+        self.asEventTarget(),
+        "navigatesuccess",
+        self._on_navigatesuccess,
+    )) {
+        return;
     }
-}
 
-fn fireNavigateError(self: *Navigation, reason: js.Value, frame: *Frame) void {
-    if (self._on_navigateerror) |one| {
-        const message = std.fmt.allocPrint(frame.call_arena, "{f}", .{reason}) catch "navigate error";
+    const event = Event.initTrusted(
+        .wrap("navigatesuccess"),
+        null,
+        frame.page,
+    ) catch |err| {
+        log.warn(.event, "Navigation.fireNavigateSuccess", .{ .err = err });
+        return;
+    };
 
-        const err_event = ErrorEvent.initTrusted(
-            .wrap("navigateerror"),
-            .{
-                .message = message,
-                .filename = frame.url,
-                .lineno = 0,
-                .colno = 0,
-                .@"error" = reason.persist() catch null,
-            },
-            frame.page,
-        ) catch |err| {
-            log.warn(.event, "Navigation.fireNavigateError", .{ .err = err });
-            return;
-        };
-
-        self.dispatch(one, err_event.asEvent(), frame) catch |err| {
-            log.warn(.event, "Navigation.fireNavigateError dispatch", .{ .err = err });
-        };
-    }
+    self.dispatch(self._on_navigatesuccess, event, frame) catch |err| {
+        log.warn(.event, "Navigation.fireNavigateSuccess dispatch", .{ .err = err });
+    };
 }
 
 fn fireCurrentEntryChangeEvent(
