@@ -304,16 +304,12 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
             if (down_target == null) {
-                // No matching pointerDown in this source (a bare pointerUp,
-                // or a second pointerUp after the first already consumed the
-                // contact): nothing is pressed to release. Dispatching
-                // pointerup/mouseup/touchend/click here would fabricate
+                // A bare pointerUp, or a second one after the first already
+                // consumed the contact: dispatching here would fabricate
                 // events for a press that never happened.
                 continue;
             }
             pressed_mask = 0;
-            // Touch pointers stay captured to the down target for the
-            // release too, same as the move above.
             const pointer_target = if (is_touch) down_target.? else el;
             dispatchPointer(pointer_target, "pointerup", button, 0, if (is_touch) "touch" else "mouse", frame);
             if (is_touch) {

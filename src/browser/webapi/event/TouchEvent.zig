@@ -32,8 +32,8 @@ const String = lp.String;
 
 // https://w3c.github.io/touch-events/#touchevent-interface
 //
-// The Touch is stored by value and the lists are cached on first read, so
-// repeated property reads don't grow the event's arena.
+// The lists are cached on first read, so repeated property reads don't grow
+// the event's arena.
 const TouchEvent = @This();
 
 pub const Proto = UIEvent;
@@ -118,7 +118,7 @@ pub fn asEvent(self: *TouchEvent) *Event {
 }
 
 /// The live Touch's target, for EventManager's shadow-retargeting swap
-/// (mirrors Event.relatedTargetPtr). null when the event carries no touch.
+/// (mirrors Event.relatedTargetPtr).
 pub fn touchTargetPtr(self: *TouchEvent) ?*?*EventTarget {
     if (self._touch == null) return null;
     return &self._touch.?._target;
