@@ -505,14 +505,24 @@ fn deltaToScroll(d: f64) i32 {
     return @trunc(std.math.clamp(d, std.math.minInt(i32), std.math.maxInt(i32)));
 }
 
-/// The CDP-tracked touch contact. Single-touch scope: at most one, identified
-/// by whatever id the client picked on touchstart (Puppeteer counts up from 1;
-/// a bare CDP call with no id defaults to 0).
-pub const TouchContact = struct {
-    target: *Element,
+/// One contact as the client described it. The id is whatever the client
+/// picked on touchstart (Puppeteer counts up from 1; a bare CDP call with no
+/// id defaults to 0). The radius, angle and force defaults are Chrome's for a
+/// point that leaves them out, and Puppeteer overrides all three per tap.
+pub const TouchPoint = struct {
     x: f64,
     y: f64,
-    identifier: i32,
+    identifier: i32 = 0,
+    radius_x: f64 = 1,
+    radius_y: f64 = 1,
+    rotation_angle: f64 = 0,
+    force: f64 = 1,
+};
+
+/// The CDP-tracked touch contact. Single-touch scope: at most one.
+pub const TouchContact = struct {
+    target: *Element,
+    point: TouchPoint,
 };
 
 pub const TouchType = enum {
@@ -533,7 +543,7 @@ pub const TouchType = enum {
 /// The caller supplies the target (no hit-test), so touchmove/touchend/
 /// touchcancel can stay pinned to the touchstart element instead of
 /// re-resolving at the current point.
-pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, x: f64, y: f64, identifier: i32, modifiers: Modifiers) !void {
+pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
     const active = !typ.isLift();
 
     const event: *TouchEvent = try .initTrustedWithTouch(typ.name(), .{
@@ -544,10 +554,14 @@ pub fn dispatchTouchEventOn(frame: *Frame, target: *Element, typ: TouchType, x: 
         .metaKey = modifiers.meta,
         .shiftKey = modifiers.shift,
     }, .{
-        .identifier = identifier,
+        .identifier = point.identifier,
         .target = target,
-        .clientX = x,
-        .clientY = y,
+        .clientX = point.x,
+        .clientY = point.y,
+        .radiusX = point.radius_x,
+        .radiusY = point.radius_y,
+        .rotationAngle = point.rotation_angle,
+        .force = point.force,
     }, active, frame);
 
     // touchcancel is never cancelable per spec; the others follow the same
@@ -566,30 +580,24 @@ pub fn hasActiveTouch(frame: *Frame) bool {
 /// When the point misses every element (e.g. past the end of a short faux
 /// layout), fall back to the document element rather than dropping the
 /// contact silently, the same fallback WebDriver's pointerMove uses.
-pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i32, modifiers: Modifiers) !void {
+pub fn triggerTouch(frame: *Frame, typ: TouchType, point: TouchPoint, modifiers: Modifiers) !void {
     const page = frame.page;
-    const is_start = typ == .touchstart;
-    const target = if (!is_start)
-        (if (page.input_touch_contact) |c| c.target else null)
-    else
-        null;
-    const resolved = target orelse
-        (try frame.window._document.elementFromPoint(x, y, frame)) orelse
+    const pinned = if (typ == .touchstart) null else if (page.input_touch_contact) |c| c.target else null;
+    const resolved = pinned orelse
+        (try frame.window._document.elementFromPoint(point.x, point.y, frame)) orelse
         frame.window._document.getDocumentElement() orelse return;
     if (comptime lp.IS_DEBUG) {
         log.debug(.frame, "frame touch", .{
             .url = frame.url,
             .node = resolved,
-            .x = x,
-            .y = y,
+            .x = point.x,
+            .y = point.y,
             .type = frame._type,
         });
     }
-    try dispatchTouchEventOn(frame, resolved, typ, x, y, identifier, modifiers);
-    page.input_touch_contact = .{ .target = resolved, .x = x, .y = y, .identifier = identifier };
+    try dispatchTouchEventOn(frame, resolved, typ, point, modifiers);
+    page.input_touch_contact = .{ .target = resolved, .point = point };
 }
-
-pub const TouchPoint = struct { x: f64, y: f64 };
 
 /// Playwright sends an empty touchPoints list, so there's nowhere to read a
 /// release position from but the stored contact. Puppeteer sends the point
@@ -602,9 +610,11 @@ pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modif
     // fails partway through (e.g. a listener throws) can't leave a stale
     // contact that locks out every future touchStart for this page.
     frame.page.input_touch_contact = null;
-    const x = if (point) |p| p.x else contact.x;
-    const y = if (point) |p| p.y else contact.y;
-    try dispatchTouchEventOn(frame, contact.target, typ, x, y, contact.identifier, modifiers);
+    // The lift keeps the contact's id whatever the client re-sent, so a
+    // released point can move the position but not rename the contact.
+    var lift = point orelse contact.point;
+    lift.identifier = contact.point.identifier;
+    try dispatchTouchEventOn(frame, contact.target, typ, lift, modifiers);
 }
 
 /// Whether the element has a click activation behavior that handleClick

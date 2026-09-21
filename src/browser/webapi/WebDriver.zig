@@ -604,7 +604,7 @@ fn dispatch(target: *EventTarget, event: *Event, frame: *Frame, typ: []const u8)
 /// client-chosen id, so this source's single contact is always identifier 0.
 fn dispatchTouch(el: *Element, typ: Frame.user_input.TouchType, frame: *Frame) void {
     const owner = el.ownerFrame(frame) orelse return;
-    Frame.user_input.dispatchTouchEventOn(owner, el, typ, 0, 0, 0, frame.page.input_modifiers) catch |err| {
+    Frame.user_input.dispatchTouchEventOn(owner, el, typ, .{ .x = 0, .y = 0 }, frame.page.input_modifiers) catch |err| {
         log.warn(.app, "webdriver touch event", .{ .err = err });
     };
 }
