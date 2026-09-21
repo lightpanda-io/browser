@@ -487,16 +487,48 @@ pub fn wheel(frame: *Frame, target: *Element, x: f64, y: f64, delta_x: f64, delt
     }
 
     // Deltas come from the wire, so guard NaN and saturate the addition.
-    try wheelScroll(target, deltaToScroll(delta_x), deltaToScroll(delta_y), owner);
+    try scrollAxis(target, .width, deltaToScroll(delta_x), owner);
+    try scrollAxis(target, .height, deltaToScroll(delta_y), owner);
 }
 
-/// Each axis scrolls the nearest ancestor-or-self scroll container along it,
-/// else the viewport. Relative deltas may land on different scrollers per
+/// One axis' delta goes to the nearest ancestor-or-self scroll container that
+/// can still move along it, and to that one alone: a wheel latches to a single
+/// scroller and a delta is never split across two, matching Chrome's
+/// FindNodeToLatch (cc/input/input_handler.cc). A container whose
+/// overscroll-behavior doesn't propagate takes the latch even when it can't
+/// move, which ends the walk. The viewport terminates it otherwise.
+///
+/// Each axis walks on its own, so a wheel may latch to a different scroller per
 /// axis, unlike an absolute position.
-fn wheelScroll(target: *Element, delta_x: i32, delta_y: i32, frame: *Frame) !void {
-    // A zero delta resolves to .viewport and scrolls it by nothing.
-    try target.scrollContainer(.{ .x = delta_x != 0 }, frame).scrollBy(delta_x, 0, frame);
-    try target.scrollContainer(.{ .y = delta_y != 0 }, frame).scrollBy(0, delta_y, frame);
+fn scrollAxis(target: *Element, comptime axis: Element.Axis, delta: i32, frame: *Frame) !void {
+    if (delta == 0) {
+        return;
+    }
+    const axes: Element.ScrollAxes = switch (axis) {
+        .width => .{ .x = true },
+        .height => .{ .y = true },
+    };
+
+    var current: ?*Element = target;
+    while (current) |el| {
+        const container = switch (el.scrollContainer(axes, frame)) {
+            .container => |c| c,
+            .viewport => break,
+        };
+        if (container.canScrollAxis(axis, delta, frame)) {
+            return container.scrollByAxis(axis, delta, frame);
+        }
+        if (container.containsOverscroll(axes, frame)) {
+            return;
+        }
+        current = container.parentElement();
+    }
+
+    const opts: Element.ScrollToOpts = switch (axis) {
+        .width => .{ .opts = .{ .left = delta } },
+        .height => .{ .opts = .{ .top = delta } },
+    };
+    return frame.window.scrollBy(opts, null, frame);
 }
 
 fn deltaToScroll(d: f64) i32 {
