@@ -139,6 +139,7 @@ pub const ResponseDirectives = struct {
     private: bool = false,
     public: bool = false,
     max_age: ?u64 = null,
+    s_maxage: ?u64 = null,
 
     pub fn parse(value: []const u8) ResponseDirectives {
         var directives: ResponseDirectives = .{};
@@ -147,7 +148,7 @@ pub const ResponseDirectives = struct {
         while (iter.next()) |part| {
             const directive = std.mem.trim(u8, part, &std.ascii.whitespace);
 
-            // We only care about argument for max-age. For something like
+            // We only care about argument for max-age/s-maxage. For something like
             // `no-cache="set-cookie"` we ignore it and just treat it as "no-cache"
             // which is on the safe side.
             const name, const argument = if (std.mem.indexOfScalar(u8, directive, '=')) |i|
@@ -165,6 +166,8 @@ pub const ResponseDirectives = struct {
                 directives.public = true;
             } else if (std.ascii.eqlIgnoreCase(name, "max-age")) {
                 directives.max_age = parseDeltaSeconds(argument);
+            } else if (std.ascii.eqlIgnoreCase(name, "s-maxage")) {
+                directives.s_maxage = parseDeltaSeconds(argument);
             }
         }
 
@@ -370,23 +373,26 @@ fn explicitFreshness(timestamp: u64, directives: ResponseDirectives, expires_: ?
         return .{ .max_age = directives.max_age orelse 0, .must_revalidate = true };
     }
 
-    if (directives.max_age) |max_age| {
-        return .{ .max_age = max_age };
-    }
+    // The value Chrome/Firefox would use...
+    const lifetime = directives.max_age orelse expiresLifetime(timestamp, expires_, date);
 
+    // ... but our store is shared across session, so we also behave like a
+    // shared cache, a shared cache that the user can't purge (like their own CDN)
+    // So, we'll consider s-maxage, but it can only shorten the value
+    const max_age = lifetime orelse directives.s_maxage orelse return null;
+    return .{ .max_age = @min(max_age, directives.s_maxage orelse max_age) };
+}
+
+fn expiresLifetime(timestamp: u64, expires_: ?[]const u8, date: ?[]const u8) ?u64 {
     const expires = expires_ orelse return null;
 
-    return .{
-        .max_age = blk: {
-            // an unparsable value is considered expired
-            const expires_at = parseHttpDate(expires) orelse break :blk 0;
-            const sent_at = if (date) |d| parseHttpDate(d) orelse @as(i64, @intCast(timestamp)) else @as(i64, @intCast(timestamp));
-            if (expires_at <= sent_at) {
-                break :blk 0;
-            }
-            break :blk @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
-        },
-    };
+    // an unparsable value is considered expired
+    const expires_at = parseHttpDate(expires) orelse return 0;
+    const sent_at = if (date) |d| parseHttpDate(d) orelse @as(i64, @intCast(timestamp)) else @as(i64, @intCast(timestamp));
+    if (expires_at <= sent_at) {
+        return 0;
+    }
+    return @min(@as(u64, @intCast(expires_at - sent_at)), max_delta_seconds);
 }
 
 pub fn tryCache(arena: std.mem.Allocator, candidate: CacheCandidate) !?CachePutRequest {
@@ -523,9 +529,13 @@ test "Cache: ResponseDirectives.parse" {
     try testing.expectEqual(300, ResponseDirectives.parse("public, max-age=300").max_age);
     try testing.expectEqual(300, ResponseDirectives.parse("  max-age=300  ").max_age);
 
-    // we are a private cache: s-maxage is for shared caches only
-    try testing.expectEqual(300, ResponseDirectives.parse("max-age=300, s-maxage=600").max_age);
-    try testing.expectEqual(null, ResponseDirectives.parse("s-maxage=600").max_age);
+    // kept apart, explicitFreshness decides how they combine
+    try testing.expectEqual(
+        ResponseDirectives{ .max_age = 300, .s_maxage = 600 },
+        ResponseDirectives.parse("max-age=300, S-MaxAge=600"),
+    );
+    try testing.expectEqual(ResponseDirectives{ .s_maxage = 600 }, ResponseDirectives.parse("s-maxage=600"));
+    try testing.expectEqual(null, ResponseDirectives.parse("s-maxage=abc").s_maxage);
 
     try testing.expectEqual(true, ResponseDirectives.parse("no-store").no_store);
     try testing.expectEqual(true, ResponseDirectives.parse("max-age=300, no-store").no_store);
@@ -621,6 +631,26 @@ test "Cache: tryCache freshness" {
         .{ .max_age = 300, .response = .{
             .cache_control = "max-age=300",
             .expires = "Mon, 21 Sep 2026 06:00:00 GMT",
+        } },
+
+        // s-maxage can shorten the browser lifetime, never extend it
+        .{ .max_age = 300, .response = .{ .cache_control = "max-age=300, s-maxage=600" } },
+        .{ .max_age = 60, .response = .{ .cache_control = "max-age=300, s-maxage=60" } },
+        .{ .max_age = null, .response = .{ .cache_control = "max-age=300, s-maxage=0" } },
+        .{ .max_age = 60, .response = .{
+            .cache_control = "s-maxage=60",
+            .expires = "Mon, 21 Sep 2026 08:00:00 GMT",
+        } },
+        .{ .max_age = null, .response = .{
+            .cache_control = "s-maxage=600",
+            .expires = "Mon, 21 Sep 2026 06:00:00 GMT",
+        } },
+
+        // on its own, s-maxage beats the Last-Modified heuristic
+        .{ .max_age = 600, .response = .{ .cache_control = "s-maxage=600" } },
+        .{ .max_age = 600, .response = .{
+            .cache_control = "s-maxage=600",
+            .last_modified = "Mon, 21 Sep 2026 04:13:20 GMT",
         } },
     };
 
