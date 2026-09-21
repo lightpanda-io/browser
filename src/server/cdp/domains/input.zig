@@ -1422,7 +1422,6 @@ test "cdp.input: dispatchTouchEvent tracks the client's chosen id and rejects mi
     try testing.expectEqual(x, frame.page.input_touch_contact.?.x);
     try testing.expectEqual(y, frame.page.input_touch_contact.?.y);
 
-    // The matching id moves the contact.
     try ctx.processMessage(.{
         .id = 4,
         .method = "Input.dispatchTouchEvent",
@@ -1488,7 +1487,6 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
         .params = .{ .type = "touchStart", .touchPoints = &.{.{ .x = first_x, .y = first_y }} },
     });
 
-    // A second touchStart at a different point is rejected outright.
     try ctx.processMessage(.{
         .id = 2,
         .method = "Input.dispatchTouchEvent",
@@ -1514,10 +1512,6 @@ test "cdp.input: dispatchTouchEvent a second touchStart while a contact is activ
     try testing.expect(result.isTrue());
 }
 
-// Puppeteer's touchEnd always carries the point being released (unlike
-// Playwright's empty list); rejecting it broke page.tap()/touchscreen.tap()
-// outright. A single point matching the open contact's id is accepted, and
-// it lifts the contact like an empty touchEnd does.
 // Puppeteer's touchEnd always carries the point being released, and Chrome
 // dispatches at that wire position (not the last touchmove/touchstart one)
 // when it's given. A client releasing without an intervening touchMove must

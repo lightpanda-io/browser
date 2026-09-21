@@ -530,7 +530,6 @@ pub const TouchType = enum {
     }
 };
 
-/// Shared by WebDriver's touch actions and CDP's Input.dispatchTouchEvent.
 /// The caller supplies the target (no hit-test), so touchmove/touchend/
 /// touchcancel can stay pinned to the touchstart element instead of
 /// re-resolving at the current point.
@@ -564,7 +563,6 @@ pub fn hasActiveTouch(frame: *Frame) bool {
     return frame.page.input_touch_contact != null;
 }
 
-/// CDP path: hit-test on touchstart, then keep that target for move/end/cancel.
 /// When the point misses every element (e.g. past the end of a short faux
 /// layout), fall back to the document element rather than dropping the
 /// contact silently, the same fallback WebDriver's pointerMove uses.
@@ -593,13 +591,11 @@ pub fn triggerTouch(frame: *Frame, typ: TouchType, x: f64, y: f64, identifier: i
 
 pub const TouchPoint = struct { x: f64, y: f64 };
 
-/// CDP TouchEnd/TouchCancel. Playwright sends an empty touchPoints list, so
-/// there's nowhere to read a release position from but the stored contact.
-/// Puppeteer sends the point being released, and Chrome dispatches at that
-/// wire position rather than the last-seen one, so `point` (when given)
-/// wins over the stored coordinates. Target and identifier always come from
-/// the stored contact: the lift still fires on the touchstart element, not
-/// a re-hit-test, and CDP has already checked the id matches.
+/// Playwright sends an empty touchPoints list, so there's nowhere to read a
+/// release position from but the stored contact. Puppeteer sends the point
+/// being released, and Chrome dispatches at that wire position rather than
+/// the last-seen one, so `point` (when given) wins over the stored
+/// coordinates.
 pub fn triggerTouchLift(frame: *Frame, typ: TouchType, point: ?TouchPoint, modifiers: Modifiers) !void {
     const contact = frame.page.input_touch_contact orelse return;
     // Consume the state before the fallible dispatch, so a dispatch that

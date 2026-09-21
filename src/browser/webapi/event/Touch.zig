@@ -24,7 +24,7 @@ const TouchEvent = @import("TouchEvent.zig");
 // https://w3c.github.io/touch-events/#idl-def-touch
 //
 // Stored by value inside its TouchEvent, so its address is stable for the
-// event's lifetime and refcounting delegates to the event.
+// event's lifetime.
 const Touch = @This();
 
 _event: *TouchEvent,
@@ -61,8 +61,7 @@ fn getClientY(self: *const Touch) f64 {
 }
 
 /// This engine has no layout, so screenX/screenY and pageX/pageY alias
-/// clientX/clientY, the same simplification MouseEvent.compatCoordinate
-/// makes (there, scrollX/scrollY are tracked but not yet folded in either).
+/// clientX/clientY, the same simplification MouseEvent.compatCoordinate makes.
 fn getPageX(self: *const Touch) f64 {
     return self._client_x;
 }
