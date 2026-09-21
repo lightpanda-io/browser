@@ -25,11 +25,12 @@ pub const Declaration = struct {
     important: bool,
 };
 
-pub const OverflowValues = struct { x: []const u8, y: []const u8 };
+pub const AxisPair = struct { x: []const u8, y: []const u8 };
 
-/// `overflow: <x> [<y>]`; a single value applies to both axes. More than two
-/// values is invalid and null, as is an empty declaration.
-pub fn splitOverflow(value: []const u8) ?OverflowValues {
+/// An `<x> [<y>]` axis shorthand such as `overflow` or `overscroll-behavior`;
+/// a single value applies to both axes. More than two values is invalid and
+/// null, as is an empty declaration.
+pub fn splitAxisPair(value: []const u8) ?AxisPair {
     var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
     const x = it.next() orelse return null;
     const y = it.next() orelse x;

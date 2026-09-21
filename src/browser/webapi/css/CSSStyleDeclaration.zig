@@ -241,7 +241,7 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 fn applyParsedDeclaration(self: *CSSStyleDeclaration, declaration: CssParser.Declaration, frame: *Frame) !void {
     const normalized = normalizePropertyName(declaration.name, &frame.buf);
     if (overflow_shorthand.eqlSlice(normalized)) {
-        const values = CssParser.splitOverflow(declaration.value) orelse return;
+        const values = CssParser.splitAxisPair(declaration.value) orelse return;
         try self.applyParsedDeclaration(.{ .name = "overflow-x", .value = values.x, .important = declaration.important }, frame);
         try self.applyParsedDeclaration(.{ .name = "overflow-y", .value = values.y, .important = declaration.important }, frame);
         return;
@@ -267,7 +267,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     const normalized = normalizePropertyName(property_name, &frame.buf);
     if (overflow_shorthand.eqlSlice(normalized)) {
-        const values = CssParser.splitOverflow(value) orelse return false;
+        const values = CssParser.splitAxisPair(value) orelse return false;
         const x = try self.setPropertyImpl("overflow-x", values.x, important, frame);
         const y = try self.setPropertyImpl("overflow-y", values.y, important, frame);
         return x or y;
