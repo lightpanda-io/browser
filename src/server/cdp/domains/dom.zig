@@ -486,6 +486,16 @@ fn scrollIntoViewIfNeeded(cmd: *CDP.Command) !void {
         else => return error.NodeDoesNotHaveGeometry,
     }
 
+    // Chrome's DOM.scrollIntoViewIfNeeded actually scrolls the element into
+    // the viewport. Drivers (Playwright) call it before reading the quads and
+    // then verify the element is in view; a no-op leaves the element outside
+    // and makes the click retry until it times out.
+    if (node.dom.is(DOMNode.Element)) |element| {
+        if (bc.mainFrame()) |frame| {
+            element.scrollIntoViewIfNeeded(null, frame);
+        }
+    }
+
     return cmd.sendResult(null, .{});
 }
 
