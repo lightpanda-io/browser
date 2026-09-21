@@ -240,7 +240,7 @@ pub fn acquireRef(self: *Request) void {
 
 fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
     if (method.len > "propfind".len) {
-        return error.InvalidMethod;
+        return error.TypeError;
     }
 
     const lower = std.ascii.lowerString(exec.buf, method);
@@ -255,7 +255,7 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
         .{ "options", .OPTIONS },
         .{ "propfind", .PROPFIND },
     });
-    return method_lookup.get(lower) orelse return error.InvalidMethod;
+    return method_lookup.get(lower) orelse return error.TypeError;
 }
 
 pub fn getUrl(self: *const Request) []const u8 {
