@@ -336,6 +336,7 @@ fn locateNodes(cmd: *BiDi.Command) !void {
             return cmd.sendError("unsupported operation", "locator type is not supported");
         },
     };
+    const locator: Locator = if (p.locator.type == .css) .{ .css = selector } else .{ .xpath = selector };
 
     const bidi = cmd.bidi;
     const frame = bidi.user_context.session.currentFrame() orelse {
@@ -367,43 +368,17 @@ fn locateNodes(cmd: *BiDi.Command) !void {
     defer ls.deinit();
     var serializer = remote_value.Serializer.init(bidi, arena, frame, &ls.local, p.serializationOptions.options(false));
 
-    const xpath_expr = if (p.locator.type == .xpath) XPathParser.parse(arena, selector) catch |err| {
-        return invalidSelector(cmd, "xpath", selector, err);
-    } else undefined;
-
     // Serialized straight from each root's result, stopping at maxNodeCount.
     const max = p.maxNodeCount orelse std.math.maxInt(u32);
     var remotes: std.ArrayList(remote_value.Remote) = .empty;
     for (roots) |root| {
-        switch (p.locator.type) {
-            .css => {
-                if (max == 1) {
-                    const element = Selector.querySelector(root, selector, frame) catch |err| {
-                        return invalidSelector(cmd, "css", selector, err);
-                    };
-                    if (element) |el| {
-                        try remotes.append(arena, try serializer.domNode(el.asNode()));
-                    }
-                } else {
-                    const list = Selector.querySelectorAll(root, selector, frame) catch |err| {
-                        return invalidSelector(cmd, "css", selector, err);
-                    };
-                    defer list.deinit(frame.page);
-                    try appendNodes(&remotes, arena, &serializer, list._nodes, max);
-                }
-            },
-            .xpath => {
-                // TODO: maxNodeCount == 1 could stop at the first match like css
-                const result = xpath.evaluate(arena, xpath_expr, root, frame) catch |err| {
-                    return invalidSelector(cmd, "xpath", selector, err);
-                };
-                switch (result) {
-                    .node_set => |nodes| try appendNodes(&remotes, arena, &serializer, nodes, max),
-                    else => return cmd.sendError("invalid selector", "xpath expression must select nodes"),
-                }
-            },
-            else => unreachable, // other types aren't currently supported (TODO) and were already rejected
-        }
+        const remaining = max - @as(u32, @intCast(remotes.items.len));
+        const nodes = locator.locate(arena, root, remaining, frame) catch |err| switch (err) {
+            error.InvalidSelector => return cmd.sendError("invalid selector", "invalid selector"),
+            error.NodeSetExpected => return cmd.sendError("invalid selector", "xpath expression must select nodes"),
+            else => return err,
+        };
+        try appendNodes(&remotes, arena, &serializer, nodes, max);
 
         if (remotes.items.len >= max) {
             break;
@@ -413,6 +388,94 @@ fn locateNodes(cmd: *BiDi.Command) !void {
     return cmd.sendResult(.{ .nodes = remotes.items });
 }
 
+// What a locator selects, shared by browsingContext.locateNodes and the HTTP
+// session's element finders. The last three are WebDriver-only strategies.
+pub const Locator = union(enum) {
+    css: []const u8,
+    xpath: []const u8,
+    tag_name: []const u8, // webdriver-only
+    link_text: []const u8, // webdriver-only
+    partial_link_text: []const u8, // webdriver-only
+
+    pub fn locate(self: Locator, arena: std.mem.Allocator, root: *Node, max: u32, frame: *Frame) ![]const *Node {
+        if (max == 0) {
+            return &.{};
+        }
+
+        switch (self) {
+            .css => |selector| {
+                if (max == 1) {
+                    const element = Selector.querySelector(root, selector, frame) catch |err| return badSelector("css", selector, err);
+                    const found = element orelse return &.{};
+                    const nodes = try arena.alloc(*Node, 1);
+                    nodes[0] = found.asNode();
+                    return nodes;
+                }
+                const list = Selector.querySelectorAll(root, selector, frame) catch |err| return badSelector("css", selector, err);
+                defer list.deinit(frame.page);
+                return arena.dupe(*Node, list._nodes[0..@min(list._nodes.len, max)]);
+            },
+            .xpath => |expression| {
+                // TODO: max == 1 could stop at the first match like css
+                const parsed = XPathParser.parse(arena, expression) catch |err| return badSelector("xpath", expression, err);
+                const result = xpath.evaluate(arena, parsed, root, frame) catch |err| return badSelector("xpath", expression, err);
+                const nodes = switch (result) {
+                    .node_set => |nodes| nodes,
+                    else => return error.NodeSetExpected,
+                };
+                return nodes[0..@min(nodes.len, max)];
+            },
+            .tag_name, .link_text, .partial_link_text => {},
+        }
+
+        const tag_name = switch (self) {
+            .tag_name => |name| name,
+            else => "a", // link_text or partial_link_test all sub-filter from <a>
+        };
+        var elements = root.getElementsByTagName(tag_name, frame) catch |err| switch (err) {
+            error.InvalidTagName => return badSelector("tag name", tag_name, err),
+            else => return err,
+        };
+
+        var text: std.Io.Writer.Allocating = .init(arena);
+        var found: std.ArrayList(*Node) = .empty;
+        switch (elements) {
+            inline else => |*list| while (list.next()) |element| {
+                const matches = switch (self) {
+                    .tag_name => true,
+                    .link_text, .partial_link_text => |needle| blk: {
+                        // an <a> outside HTML has no rendered text
+                        if (element.getTag() != .anchor) {
+                            break :blk false;
+                        }
+                        text.clearRetainingCapacity();
+                        try element.getInnerText(&text.writer, frame);
+                        const rendered = std.mem.trim(u8, text.written(), &std.ascii.whitespace);
+                        break :blk switch (self) {
+                            .link_text => std.mem.eql(u8, rendered, needle),
+                            else => std.mem.indexOf(u8, rendered, needle) != null,
+                        };
+                    },
+                    else => unreachable, // css and xpath returned above
+                };
+
+                if (matches) {
+                    try found.append(arena, element.asNode());
+                    if (found.items.len == max) {
+                        break;
+                    }
+                }
+            },
+        }
+        return found.items;
+    }
+};
+
+fn badSelector(kind: []const u8, selector: []const u8, err: anyerror) error{InvalidSelector} {
+    log.debug(.bidi, "locate", .{ .kind = kind, .selector = selector, .err = err });
+    return error.InvalidSelector;
+}
+
 fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allocator, serializer: *remote_value.Serializer, nodes: []const *Node, max: u32) !void {
     // Try to optimize this a little for the inherit inefficiency of ArrayList with Arena.
     const take = @min(nodes.len, max - remotes.items.len);
@@ -420,11 +483,6 @@ fn appendNodes(remotes: *std.ArrayList(remote_value.Remote), arena: std.mem.Allo
     for (nodes[0..take]) |node| {
         remotes.appendAssumeCapacity(try serializer.domNode(node));
     }
-}
-
-fn invalidSelector(cmd: *BiDi.Command, kind: []const u8, selector: []const u8, err: anyerror) !void {
-    log.debug(.bidi, "locateNodes", .{ .kind = kind, .selector = selector, .err = err });
-    return cmd.sendError("invalid selector", "invalid selector");
 }
 
 pub fn requireContext(cmd: *BiDi.Command, context: []const u8) !?*Context {

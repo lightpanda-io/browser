@@ -676,7 +676,7 @@ pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQue
     return MediaQueryList.init(query, frame);
 }
 
-fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
+pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {
     // :before/:after get their own cache entry and no warning: our answer
     // (the element's own computed style) is a reasonable default for the
     // common probes
