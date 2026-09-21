@@ -79,24 +79,6 @@ fn getScreenY(self: *const Touch) f64 {
     return self._client_y;
 }
 
-/// No hit-testing geometry in this engine: default to Chrome's synthetic
-/// values for a single-point contact (a 1x1 circle, no rotation, full force).
-fn getRadiusX(_: *const Touch) f64 {
-    return 1;
-}
-
-fn getRadiusY(_: *const Touch) f64 {
-    return 1;
-}
-
-fn getRotationAngle(_: *const Touch) f64 {
-    return 0;
-}
-
-fn getForce(_: *const Touch) f64 {
-    return 1;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Touch);
 
@@ -114,8 +96,10 @@ pub const JsApi = struct {
     pub const pageY = bridge.accessor(Touch.getPageY, null, .{});
     pub const screenX = bridge.accessor(Touch.getScreenX, null, .{});
     pub const screenY = bridge.accessor(Touch.getScreenY, null, .{});
-    pub const radiusX = bridge.accessor(Touch.getRadiusX, null, .{});
-    pub const radiusY = bridge.accessor(Touch.getRadiusY, null, .{});
-    pub const rotationAngle = bridge.accessor(Touch.getRotationAngle, null, .{});
-    pub const force = bridge.accessor(Touch.getForce, null, .{});
+    // No hit-testing geometry in this engine: Chrome's synthetic values for a
+    // single-point contact (a 1x1 circle, no rotation, full force).
+    pub const radiusX = bridge.property(1.0, .{ .template = false });
+    pub const radiusY = bridge.property(1.0, .{ .template = false });
+    pub const rotationAngle = bridge.property(0.0, .{ .template = false });
+    pub const force = bridge.property(1.0, .{ .template = false });
 };

@@ -69,13 +69,14 @@ fn dispatchKeyEvent(cmd: *CDP.Command) !void {
     // (Puppeteer, Playwright) or a `char` (chromedp, after a text-less keyDown).
     const text: ?[]const u8 = if (params.text.len == 0) null else params.text;
     const KeyboardEvent = @import("../../../browser/webapi/event/KeyboardEvent.zig");
+    const modifiers = cdpModifiers(params.modifiers);
     const opts: KeyboardEvent.Options = .{
         .key = if (params.key.len > 0) params.key else params.text,
         .code = params.code,
-        .altKey = params.modifiers & 1 == 1,
-        .ctrlKey = params.modifiers & 2 == 2,
-        .metaKey = params.modifiers & 4 == 4,
-        .shiftKey = params.modifiers & 8 == 8,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
     };
 
     switch (params.type) {
@@ -172,7 +173,10 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         touchPoints: []const struct {
             x: f64,
             y: f64,
-            id: f64 = 0,
+            // Touch.identifier is a DOM i32, so a fractional or out-of-range
+            // id fails to parse and lands on the same InvalidParams a bad
+            // shape does.
+            id: i32 = 0,
             // radius/rotationAngle/force are accepted by CDP but not
             // implemented for this single-touch scope.
         },
@@ -189,14 +193,6 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         .touchStart, .touchMove => if (params.touchPoints.len != 1) return error.InvalidParams,
         .touchEnd => if (params.touchPoints.len > 1) return error.InvalidParams,
         .touchCancel => if (params.touchPoints.len != 0) return error.InvalidParams,
-    }
-
-    // Shape-validate the one point's id, if any, before touching frame state.
-    // Matching it against the active contact's id happens below, once the
-    // contact (if any) is in hand.
-    var point_id: ?i32 = null;
-    if (params.touchPoints.len == 1) {
-        point_id = touchPointId(params.touchPoints[0].id) orelse return error.InvalidParams;
     }
 
     const bc = cmd.browser_context orelse {
@@ -217,8 +213,8 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
         },
         .touchMove, .touchEnd, .touchCancel => {
             const contact = frame.page.input_touch_contact orelse return error.InvalidParams;
-            if (point_id) |id| {
-                if (id != contact.identifier) return error.InvalidParams;
+            if (params.touchPoints.len == 1 and params.touchPoints[0].id != contact.identifier) {
+                return error.InvalidParams;
             }
         },
     }
@@ -233,29 +229,24 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
     else
         null;
 
-    const modifiers: Frame.user_input.Modifiers = .{
-        .alt = params.modifiers & 1 != 0,
-        .ctrl = params.modifiers & 2 != 0,
-        .meta = params.modifiers & 4 != 0,
-        .shift = params.modifiers & 8 != 0,
-    };
+    const modifiers = cdpModifiers(params.modifiers);
 
     switch (params.type) {
-        .touchStart => try Frame.user_input.triggerTouch(frame, .touchstart, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?, modifiers),
-        .touchMove => try Frame.user_input.triggerTouch(frame, .touchmove, params.touchPoints[0].x, params.touchPoints[0].y, point_id.?, modifiers),
+        .touchStart => try Frame.user_input.triggerTouch(frame, .touchstart, params.touchPoints[0].x, params.touchPoints[0].y, params.touchPoints[0].id, modifiers),
+        .touchMove => try Frame.user_input.triggerTouch(frame, .touchmove, params.touchPoints[0].x, params.touchPoints[0].y, params.touchPoints[0].id, modifiers),
         .touchEnd => try Frame.user_input.triggerTouchLift(frame, .touchend, lift_point, modifiers),
         .touchCancel => try Frame.user_input.triggerTouchLift(frame, .touchcancel, lift_point, modifiers),
     }
 }
 
-/// CDP's id is a wire f64; Touch.identifier is the DOM's i32. Reject anything
-/// that isn't a plain, in-range integer rather than truncating silently
-/// (the float-to-int conversion is illegal behavior on NaN/out-of-range in Zig,
-/// and this value comes straight off the wire).
-fn touchPointId(id: f64) ?i32 {
-    if (!std.math.isFinite(id) or id != @round(id)) return null;
-    if (id < std.math.minInt(i32) or id > std.math.maxInt(i32)) return null;
-    return @round(id);
+/// CDP's wire bitmask: Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
+fn cdpModifiers(bits: u4) Frame.user_input.Modifiers {
+    return .{
+        .alt = bits & 1 != 0,
+        .ctrl = bits & 2 != 0,
+        .meta = bits & 4 != 0,
+        .shift = bits & 8 != 0,
+    };
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-insertText

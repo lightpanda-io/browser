@@ -229,7 +229,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
     // The element the pointer is currently over, set by the last pointerMove
     // whose origin resolved to an element.
     var target: ?*Element = null;
-    var pressed = false;
     // The buttons bitmask of the currently depressed button, carried on move
     // and boundary events while dragging.
     var pressed_mask: u16 = 0;
@@ -265,8 +264,7 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 // Touch pointers implicitly capture on pointerdown: while
                 // pressed, both the Pointer Event and the Touch stay pinned
                 // to the down target, not wherever this move landed.
-                if (pressed) {
-                    const captured = down_target orelse continue;
+                if (down_target) |captured| {
                     dispatchPointer(captured, "pointermove", 0, pressed_mask, "touch", frame);
                     dispatchTouch(captured, .touchmove, frame);
                 } else {
@@ -284,7 +282,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
         } else if (action_type.eql(comptime .wrap("pointerDown"))) {
             const el = target orelse continue;
             const button = readI32(action, "button", 0);
-            pressed = true;
             pressed_mask = Frame.user_input.buttonsBitmask(button);
             down_target = el;
             if (last_click_target == el and last_click_button == button) {
@@ -314,7 +311,6 @@ fn performPointerSource(source: js.Object, frame: *Frame) !void {
                 // events for a press that never happened.
                 continue;
             }
-            pressed = false;
             pressed_mask = 0;
             // Touch pointers stay captured to the down target for the
             // release too, same as the move above.
