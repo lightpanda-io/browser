@@ -95,18 +95,14 @@ pub const RobotStore = struct {
         disallowed,
     };
 
-    const RobotsMap = @import("Network.zig").HostHashMap(RobotsEntry);
-
     allocator: std.mem.Allocator,
-    map: RobotsMap,
-    evictions: ClockCache([]const u8),
+    map: ClockCache(RobotsEntry),
     mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32) RobotStore {
         return .{
             .allocator = allocator,
-            .map = .empty,
-            .evictions = .init(allocator, capacity),
+            .map = .init(allocator, capacity),
         };
     }
 
@@ -114,15 +110,10 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        var iter = self.map.iterator();
-
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.freeEntry(entry.value_ptr);
+        for (self.map.entries()) |*entry| {
+            self.freeEntry(&entry.value);
         }
-
-        self.map.deinit(self.allocator);
-        self.evictions.deinit();
+        self.map.deinit();
     }
 
     fn freeEntry(self: *RobotStore, entry: *RobotsEntry) void {
@@ -138,10 +129,8 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        const kv = self.map.getEntry(url) orelse return null;
-        self.evictions.touch(kv.key_ptr.*);
-
-        return switch (kv.value_ptr.*) {
+        const entry = self.map.get(url) orelse return null;
+        return switch (entry.*) {
             .allowed => .allowed,
             .disallowed => .blocked,
             .present => |robots| if (robots.isAllowed(path)) .allowed else .blocked,
@@ -156,15 +145,10 @@ pub const RobotStore = struct {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
 
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .{ .present = robots };
-            return;
-        }
+        if (try self.insert(url, .{ .present = robots })) return;
 
         // cannot overwrite an existing value, if it was `present`, we'd have
         // to free the value but it might be being used.
-
         var discarded = robots;
         discarded.deinit(self.allocator);
     }
@@ -178,7 +162,7 @@ pub const RobotStore = struct {
         defer self.mutex.unlock(lp.io);
 
         const entry = self.map.get(url) orelse return null;
-        const signals = switch (entry) {
+        const signals = switch (entry.*) {
             .present => |robots| robots.content_signals,
             .allowed, .disallowed => return null,
         };
@@ -197,50 +181,28 @@ pub const RobotStore = struct {
     pub fn putAllowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .allowed;
-        }
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
+        _ = try self.insert(url, .allowed);
     }
 
     /// This URL is fully restricted from crawling.
     pub fn putDisallowed(self: *RobotStore, url: []const u8) !void {
         self.mutex.lockUncancelable(lp.io);
         defer self.mutex.unlock(lp.io);
-
-        if (try self.putKey(url)) |value_ptr| {
-            // first time seeing this url, store the value
-            value_ptr.* = .disallowed;
-        }
-        // cannot overwrite an existing value, if it was `present`, we'd have
-        // to free the value but it might be being used.
+        _ = try self.insert(url, .disallowed);
     }
 
-    // The RobotStore is shared across Browsers. Two rowsers can request the
-    // same robots URL at the same time, and they'll race here. First one wins.
-    // Caller holds the mutex.
-    fn putKey(self: *RobotStore, url: []const u8) !?*RobotsEntry {
-        const gop = try self.map.getOrPut(self.allocator, url);
-        if (gop.found_existing) {
-            // already have a value, caller should not overwrite
-            return null;
+    fn insert(self: *RobotStore, url: []const u8, entry: RobotsEntry) !bool {
+        switch (try self.map.insert(url, entry)) {
+            .exists => return false,
+            .inserted => |evicted| {
+                if (evicted) |value| {
+                    lp.metrics.robots_evictions.incr();
+                    var e = value;
+                    self.freeEntry(&e);
+                }
+                return true;
+            },
         }
-        errdefer _ = self.map.remove(url);
-        gop.key_ptr.* = try self.allocator.dupe(u8, url);
-
-        if (try self.evictions.insert(gop.key_ptr.*)) |evict_key| {
-            if (self.map.fetchRemove(evict_key)) |kv| {
-                lp.metrics.robots_evictions.incr();
-                self.allocator.free(kv.key);
-                var entry = kv.value;
-                self.freeEntry(&entry);
-            }
-        }
-
-        return gop.value_ptr;
     }
 };
 

@@ -19,14 +19,23 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub fn ClockCache(comptime K: type) type {
+pub fn Entry(comptime V: type) type {
+    return struct {
+        value: V,
+        referenced: bool,
+    };
+}
+
+pub fn ClockCache(comptime V: type) type {
     return struct {
         const Self = @This();
 
-        const Map = if (K == []const u8)
-            std.array_hash_map.String(bool)
-        else
-            std.array_hash_map.Auto(K, bool);
+        const Map = std.array_hash_map.String(Entry(V));
+
+        pub const InsertResult = union(enum) {
+            exists,
+            inserted: ?V,
+        };
 
         allocator: Allocator,
         capacity: usize,
@@ -39,34 +48,50 @@ pub fn ClockCache(comptime K: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            for (self.map.keys()) |key| {
+                self.allocator.free(key);
+            }
             self.map.deinit(self.allocator);
         }
 
-        pub fn insert(self: *Self, key: K) !?K {
-            try self.map.put(self.allocator, key, true);
-
-            if (self.map.count() <= self.capacity) return null;
-            return self.evictOne();
+        pub fn entries(self: *Self) []Entry(V) {
+            return self.map.values();
         }
 
-        pub fn touch(self: *Self, key: K) void {
-            if (self.map.getPtr(key)) |referenced| referenced.* = true;
+        pub fn get(self: *Self, key: []const u8) ?*V {
+            const entry = self.map.getPtr(key) orelse return null;
+            entry.referenced = true;
+            return &entry.value;
         }
 
-        fn evictOne(self: *Self) ?K {
-            const referenced = self.map.values();
+        pub fn insert(self: *Self, key: []const u8, value: V) !InsertResult {
+            const gop = try self.map.getOrPut(self.allocator, key);
+            if (gop.found_existing) return .exists;
+
+            errdefer self.map.swapRemoveAt(gop.index);
+            gop.key_ptr.* = try self.allocator.dupe(u8, key);
+            gop.value_ptr.* = .{ .value = value, .referenced = true };
+
+            if (self.map.count() <= self.capacity) return .{ .inserted = null };
+            return .{ .inserted = self.evictOne() };
+        }
+
+        fn evictOne(self: *Self) V {
+            const items = self.map.values();
             while (true) {
-                if (self.hand >= referenced.len) self.hand = 0;
+                if (self.hand >= items.len) self.hand = 0;
 
-                if (referenced[self.hand]) {
-                    referenced[self.hand] = false;
+                if (items[self.hand].referenced) {
+                    items[self.hand].referenced = false;
                     self.hand += 1;
                     continue;
                 }
 
                 const key = self.map.keys()[self.hand];
+                const value = items[self.hand].value;
                 self.map.swapRemoveAt(self.hand);
-                return key;
+                self.allocator.free(key);
+                return value;
             }
         }
     };
@@ -74,46 +99,60 @@ pub fn ClockCache(comptime K: type) type {
 
 const testing = @import("../testing.zig");
 
+fn evictedOf(comptime V: type, r: ClockCache(V).InsertResult) ?V {
+    return switch (r) {
+        .exists => unreachable,
+        .inserted => |v| v,
+    };
+}
+
 test "ClockCache: no eviction under capacity" {
-    var q = ClockCache([]const u8).init(testing.allocator, 3);
+    var q = ClockCache(u32).init(testing.allocator, 3);
     defer q.deinit();
 
-    try testing.expectEqual(null, try q.insert("a"));
-    try testing.expectEqual(null, try q.insert("b"));
-    try testing.expectEqual(null, try q.insert("c"));
+    try testing.expectEqual(null, evictedOf(u32, try q.insert("a", 1)));
+    try testing.expectEqual(null, evictedOf(u32, try q.insert("b", 2)));
+    try testing.expectEqual(null, evictedOf(u32, try q.insert("c", 3)));
     try testing.expectEqual(3, q.map.count());
 }
 
 test "ClockCache: evicts once over capacity" {
-    var q = ClockCache([]const u8).init(testing.allocator, 2);
+    var q = ClockCache(u32).init(testing.allocator, 2);
     defer q.deinit();
 
-    try testing.expectEqual(null, try q.insert("a"));
-    try testing.expectEqual(null, try q.insert("b"));
+    try testing.expectEqual(null, evictedOf(u32, try q.insert("a", 1)));
+    try testing.expectEqual(null, evictedOf(u32, try q.insert("b", 2)));
 
-    const evicted = try q.insert("c");
-    try testing.expect(evicted != null);
-    try testing.expectString("a", evicted.?);
+    const evicted = evictedOf(u32, try q.insert("c", 3));
+    try testing.expectEqual(1, evicted.?);
+    try testing.expect(q.get("a") == null);
     try testing.expectEqual(2, q.map.count());
 }
 
 test "ClockCache: touch protects a key from eviction" {
-    var q = ClockCache([]const u8).init(testing.allocator, 2);
+    var q = ClockCache(u32).init(testing.allocator, 2);
     defer q.deinit();
 
-    try testing.expectEqual(null, try q.insert("a"));
-    try testing.expectEqual(null, try q.insert("b"));
+    _ = try q.insert("a", 1);
+    _ = try q.insert("b", 2);
 
-    const evicted1 = try q.insert("c");
-    try testing.expect(evicted1 != null);
-    try testing.expectString("a", evicted1.?);
-    try testing.expect(q.map.contains("b"));
-    try testing.expect(q.map.contains("c"));
+    const evicted1 = evictedOf(u32, try q.insert("c", 3));
+    try testing.expectEqual(1, evicted1.?);
+    try testing.expect(q.get("b") != null);
+    try testing.expect(q.get("c") != null);
 
-    q.touch("b");
-    const evicted2 = try q.insert("d");
-    try testing.expect(evicted2 != null);
-    try testing.expectString("c", evicted2.?);
-    try testing.expect(q.map.contains("b"));
+    _ = q.get("b");
+    const evicted2 = evictedOf(u32, try q.insert("d", 4));
+    try testing.expectEqual(3, evicted2.?);
+    try testing.expect(q.get("b") != null);
     try testing.expectEqual(2, q.map.count());
+}
+
+test "ClockCache: insert does not overwrite" {
+    var q = ClockCache(u32).init(testing.allocator, 2);
+    defer q.deinit();
+
+    _ = try q.insert("a", 1);
+    try testing.expect((try q.insert("a", 99)) == .exists);
+    try testing.expectEqual(1, q.get("a").?.*);
 }
