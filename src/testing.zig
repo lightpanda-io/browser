@@ -744,6 +744,19 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    // Bounces to the same path on the other loopback host, e.g. for an iframe
+    // whose origin must change between its request and its response.
+    if (std.mem.startsWith(u8, path, "/redirect-cross-origin/")) {
+        var location_buf: [1024]u8 = undefined;
+        const location = try std.fmt.bufPrint(&location_buf, "http://localhost:9582/{s}", .{path["/redirect-cross-origin/".len..]});
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = location },
+            },
+        });
+    }
+
     if (std.mem.eql(u8, path, "/echo-x-hop")) {
         var it = req.iterateHeaders();
         var value: []const u8 = "NONE";
