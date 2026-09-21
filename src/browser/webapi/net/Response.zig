@@ -73,6 +73,7 @@ const InitOpts = struct {
 pub const BodyInit = body_init.BodyInit;
 
 pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    try validateInit(opts_ orelse .{}, body_ != null);
     const session = exec.session;
 
     const bucket: lp.ArenaPool.BucketSize = blk: {
@@ -88,6 +89,33 @@ pub fn init(body_: ?BodyInit, opts_: ?InitOpts, exec: *const Execution) !*Respon
     const arena = try session.getPinnedArena(bucket, "Response");
     errdefer arena.release();
     return initWithArena(arena, body_, opts_, exec);
+}
+
+fn validateInit(opts: InitOpts, has_body: bool) !void {
+    if (opts.status < 200 or opts.status > 599) {
+        return error.RangeError;
+    }
+
+    if (opts.statusText) |status_text| {
+        // reason-phrase: HTAB, SP, VCHAR and obs-text, all within a ByteString
+        var it = (std.unicode.Utf8View.init(status_text) catch return error.TypeError).iterator();
+        while (it.nextCodepoint()) |cp| switch (cp) {
+            '\t', ' '...'~', 0x80...0xFF => {},
+            else => return error.TypeError,
+        };
+    }
+
+    if (has_body and isNullBodyStatus(opts.status)) {
+        return error.TypeError;
+    }
+}
+
+// https://fetch.spec.whatwg.org/#null-body-status
+pub fn isNullBodyStatus(status: u16) bool {
+    return switch (status) {
+        101, 103, 204, 205, 304 => true,
+        else => false,
+    };
 }
 
 // fetch()'s response shell.
@@ -190,6 +218,7 @@ fn createRedirect(url_: []const u8, status_: ?u16, exec: *const Execution) !*Res
 }
 
 fn createJson(data: js.Value, opts_: ?InitOpts, exec: *const Execution) !*Response {
+    try validateInit(opts_ orelse .{}, true);
     const session = exec.session;
     const arena = try session.getPinnedArena(.medium, "Response.json");
     errdefer arena.release();

@@ -866,6 +866,11 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.startsWith(u8, path, "/status/")) {
+        const code = try std.fmt.parseInt(u16, path["/status/".len..], 10);
+        return req.respond("", .{ .status = @enumFromInt(code) });
+    }
+
     if (std.mem.eql(u8, path, "/xhr/500")) {
         return req.respond("Internal Server Error", .{
             .status = .internal_server_error,

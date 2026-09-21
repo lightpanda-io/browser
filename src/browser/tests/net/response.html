@@ -429,3 +429,26 @@
     testing.expectTrue(threw);
   }
 </script>
+
+<script id=init_validation>
+  for (const status of [0, 100, 199, 600, 1000]) {
+    testing.expectError('RangeError', () => new Response('', { status }));
+  }
+  testing.expectError('RangeError', () => Response.json({}, { status: 99 }));
+
+  for (const statusText of ['\n', 'Ā']) {
+    testing.expectError('TypeError', () => new Response('', { statusText }));
+  }
+  testing.expectEqual('Tab\tand ÿ', new Response('', { statusText: 'Tab\tand ÿ' }).statusText);
+
+  // a body is not allowed with a null body status, even an empty one
+  for (const status of [204, 205, 304]) {
+    testing.expectError('TypeError', () => new Response('body', { status }));
+    testing.expectError('TypeError', () => new Response('', { status }));
+    testing.expectError('TypeError', () => Response.json({}, { status }));
+    const r = new Response(null, { status });
+    testing.expectEqual(status, r.status);
+    testing.expectEqual(null, r.body);
+  }
+  testing.expectEqual(204, new Response(undefined, { status: 204 }).status);
+</script>
