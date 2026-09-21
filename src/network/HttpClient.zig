@@ -1249,15 +1249,10 @@ fn cacheLookup(self: *Client, transfer: *Transfer) !bool {
         req.url;
     transfer._cache_key = key;
 
-    const req_headers = try arena.alloc(http.Header, transfer.req_headers.items.len);
-    for (transfer.req_headers.items, req_headers) |hdr, *out| {
-        out.* = .{ .name = hdr.name, .value = hdr.value };
-    }
-
     const cache_result = cache.get(arena.allocator(), .{
         .url = key,
         .timestamp = lp.datetime.timestamp(.real),
-        .request_headers = req_headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
     }) catch |e| blk: {
         log.err(.cache, "failed to get", .{ .url = req.url, .err = e });
         break :blk .miss;
@@ -1327,6 +1322,19 @@ fn cacheRevalidated(self: *Client, transfer: *Transfer) !bool {
     return true;
 }
 
+// Everything the cache needs about this response. Names and values are
+// borrowed from the transfer arena, which outlives the put.
+fn cachePutRequest(transfer: *Transfer, rh: *http.ResponseHead) !?Cache.CachePutRequest {
+    return Cache.tryCache(transfer.arena.allocator(), .{
+        .timestamp = lp.datetime.timestamp(.real),
+        .url = transfer._cache_key,
+        .status = rh.status,
+        .content_type = rh.contentType(),
+        .headers = transfer.res.headers,
+        .request_headers = try transfer.cacheRequestHeaders(),
+    });
+}
+
 // Store a cacheable response at completion, from the materialized response
 // headers and the buffered body. Failures are logged, never fatal — the
 // consumer gets its response either way.
@@ -1347,49 +1355,13 @@ fn cacheStore(self: *Client, transfer: *Transfer) void {
     // could have been disabled while waiting of the response
     const cache = self.cache.active() orelse return;
 
-    const arena = transfer.arena;
     const rh = &(transfer.res.header orelse return);
-    const headers = transfer.res.headers;
 
-    const vary = findHeader(headers, "vary");
-    const maybe_req = Cache.tryCache(
-        arena.allocator(),
-        lp.datetime.timestamp(.real),
-        transfer._cache_key,
-        rh.status,
-        rh.contentType(),
-        findHeader(headers, "cache-control"),
-        vary,
-        findHeader(headers, "age"),
-        findHeader(headers, "etag"),
-        findHeader(headers, "last-modified"),
-        findHeader(headers, "set-cookie") != null,
-        findHeader(headers, "authorization") != null,
-    ) catch |err| {
+    const maybe_req = cachePutRequest(transfer, rh) catch |err| {
         log.warn(.http, "cache eligibility", .{ .err = err });
         return;
     };
-    var req = maybe_req orelse return;
-
-    var vary_headers: std.ArrayList(http.Header) = .empty;
-    if (vary) |vary_str| {
-        for (transfer.req_headers.items) |hdr| {
-            var vary_iter = std.mem.splitScalar(u8, vary_str, ',');
-            while (vary_iter.next()) |part| {
-                const name = std.mem.trim(u8, part, &std.ascii.whitespace);
-                if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-                    // name/value already live in transfer.arena
-                    vary_headers.append(arena.allocator(), .{
-                        .name = hdr.name,
-                        .value = hdr.value,
-                    }) catch return;
-                }
-            }
-        }
-    }
-
-    req.headers = headers;
-    req.vary_headers = vary_headers.items;
+    const req = maybe_req orelse return;
 
     if (comptime lp.IS_DEBUG) {
         log.debug(.browser, "http cache", .{ .key = transfer._cache_key, .put = req });
@@ -3644,6 +3616,16 @@ pub const Transfer = struct {
             }
         }
         return null;
+    }
+
+    // The cache works in plain headers; req_headers carry a `source` alongside
+    // them that it has no use for.
+    fn cacheRequestHeaders(self: *const Transfer) ![]http.Header {
+        const headers = try self.arena.alloc(http.Header, self.req_headers.items.len);
+        for (self.req_headers.items, headers) |hdr, *out| {
+            out.* = .{ .name = hdr.name, .value = hdr.value };
+        }
+        return headers;
     }
 
     fn removeHeader(self: *Transfer, name: []const u8) void {
