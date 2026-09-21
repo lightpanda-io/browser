@@ -245,7 +245,7 @@ pub fn deinit(self: *Env) void {
     const allocator = app.allocator;
 
     if (self.inspector) |i| {
-        i.deinit(allocator);
+        i.deinit();
     }
 
     allocator.free(self.templates);

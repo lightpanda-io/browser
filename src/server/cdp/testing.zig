@@ -95,12 +95,12 @@ pub const TestContext = struct {
         }
 
         if (opts.session_id) |sid| {
-            bc.session_id = sid;
+            _ = try bc.attachPrimarySession(sid);
         }
 
         if (opts.url) |url| {
             if (bc.session_id == null) {
-                bc.session_id = "SID-X";
+                _ = try bc.attachPrimarySession("SID-X");
             }
             if (bc.target_id == null) {
                 bc.target_id = "TID-000000000Z".*;

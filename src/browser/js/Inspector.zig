@@ -37,24 +37,29 @@ const CLIENT_TRUST_LEVEL = 1;
 // (not much at all)
 const Inspector = @This();
 
+allocator: Allocator,
 unique_id: i64,
 isolate: *v8.Isolate,
 handle: *v8.Inspector,
 client: *v8.InspectorClientImpl,
 default_context: ?v8.Global,
-session: ?Session,
+/// One per CDP session attached to the page target; all connect to the same
+/// `CONTEXT_GROUP_ID`, so every session sees every context. Heap allocated
+/// because the V8 channel keeps the session's address (SET_DATA).
+sessions: std.ArrayListUnmanaged(*Session),
 
 pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     const self = try allocator.create(Inspector);
     errdefer allocator.destroy(self);
 
     self.* = .{
+        .allocator = allocator,
         .unique_id = 1,
-        .session = null,
         .isolate = isolate,
         .client = undefined,
         .handle = undefined,
         .default_context = null,
+        .sessions = .empty,
     };
 
     self.client = v8.v8_inspector__Client__IMPL__CREATE();
@@ -67,32 +72,39 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     return self;
 }
 
-pub fn deinit(self: *const Inspector, allocator: Allocator) void {
+pub fn deinit(self: *Inspector) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    if (self.session) |*s| {
-        s.deinit();
+    for (self.sessions.items) |session| {
+        session.deinit();
+        self.allocator.destroy(session);
     }
+    self.sessions.deinit(self.allocator);
+
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
-    allocator.destroy(self);
+    self.allocator.destroy(self);
 }
 
-pub fn startSession(self: *Inspector, ctx: anytype) *Session {
-    if (comptime lp.IS_DEBUG) {
-        std.debug.assert(self.session == null);
-    }
+pub fn startSession(self: *Inspector, ctx: anytype) !*Session {
+    const session = try self.allocator.create(Session);
+    errdefer self.allocator.destroy(session);
 
-    self.session = @as(Session, undefined);
-    Session.init(&self.session.?, self, ctx);
-    return &self.session.?;
+    Session.init(session, self, ctx);
+    errdefer session.deinit();
+
+    try self.sessions.append(self.allocator, session);
+    return session;
 }
 
-pub fn stopSession(self: *Inspector) void {
-    self.session.?.deinit();
-    self.session = null;
+pub fn stopSession(self: *Inspector, session: *Session) void {
+    const index = std.mem.findScalar(*Session, self.sessions.items, session);
+    lp.assert(index != null, "Inspector.stopSession unknown session", .{});
+    _ = self.sessions.swapRemove(index.?);
+    session.deinit();
+    self.allocator.destroy(session);
 }
 
 // From CDP docs
