@@ -495,9 +495,12 @@ fn getElementProperty(cmd: *BiDi.Command, p: ElementName) !void {
     };
 
     // A node is an element reference; anything else is JSON as V8 writes it.
-    if (value.taggedOpaque()) |tagged| {
-        if (tagged.as(Node)) |node| {
-            return cmd.sendResult(try reference(cmd, node));
+    // taggedOpaque reads an internal field, so the value has to be an object.
+    if (value.isObject()) {
+        if (value.taggedOpaque()) |tagged| {
+            if (tagged.as(Node)) |node| {
+                return cmd.sendResult(try reference(cmd, node));
+            }
         }
     }
     return cmd.sendResult(value);
