@@ -45,10 +45,7 @@ fn length(self: *const TouchList) u32 {
 }
 
 pub fn indexedGet(self: *TouchList, index: usize, _: *Frame) !*Touch {
-    if (index != 0) {
-        return error.NotHandled;
-    }
-    return self._touch orelse error.NotHandled;
+    return self.item(index) orelse error.NotHandled;
 }
 
 pub fn item(self: *TouchList, index: usize) ?*Touch {
@@ -72,7 +69,7 @@ pub const JsApi = struct {
     pub const item = bridge.function(TouchList.item, .{});
 
     fn getIndexes(self: *TouchList, frame: *Frame) !js.Array {
-        const len: u32 = if (self._touch != null) 1 else 0;
+        const len = self.length();
         var arr = frame.js.local.?.newArray(len);
         for (0..len) |i| {
             _ = try arr.set(@intCast(i), i, .{});
