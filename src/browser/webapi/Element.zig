@@ -1578,16 +1578,7 @@ pub fn getScrollTop(self: *Element, frame: *Frame) u32 {
 }
 
 pub fn setScrollTop(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const new_y: u32 = @intCast(@max(0, value));
-    if (gop.value_ptr.y != new_y) {
-        gop.value_ptr.y = new_y;
-        try self.scheduleScrollEvents(owner);
-    }
+    return self.writeScroll(.{ .to = .{ .left = null, .top = value } }, frame);
 }
 
 pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
@@ -1597,16 +1588,7 @@ pub fn getScrollLeft(self: *Element, frame: *Frame) u32 {
 }
 
 pub fn setScrollLeft(self: *Element, value: i32, frame: *Frame) !void {
-    const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const new_x: u32 = @intCast(@max(0, value));
-    if (gop.value_ptr.x != new_x) {
-        gop.value_ptr.x = new_x;
-        try self.scheduleScrollEvents(owner);
-    }
+    return self.writeScroll(.{ .to = .{ .left = value, .top = null } }, frame);
 }
 
 pub const ScrollAxes = struct { x: bool = false, y: bool = false };
@@ -1616,14 +1598,6 @@ pub const ScrollAxes = struct { x: bool = false, y: bool = false };
 const ScrollTarget = union(enum) {
     viewport,
     container: *Element,
-
-    pub fn scrollBy(self: ScrollTarget, left: i32, top: i32, frame: *Frame) !void {
-        const opts: ScrollToOpts = .{ .opts = .{ .left = left, .top = top } };
-        return switch (self) {
-            .container => |el| el.scrollBy(opts, null, frame),
-            .viewport => frame.window.scrollBy(opts, null, frame),
-        };
-    }
 };
 
 /// Nearest ancestor-or-self scroll container along any of `axes`. The walk
@@ -1641,6 +1615,14 @@ pub fn scrollContainer(self: *Element, axes: ScrollAxes, frame: *Frame) ScrollTa
         }
     }
     return .viewport;
+}
+
+/// Whether the element's own overscroll-behavior keeps a scroll from chaining
+/// out of it along any of `axes`.
+pub fn containsOverscroll(self: *Element, axes: ScrollAxes, frame: *Frame) bool {
+    const owner = self.ownerFrame(frame) orelse return false;
+    const contains = owner._style_manager.overscrollContainAxes(self);
+    return (axes.x and contains.x) or (axes.y and contains.y);
 }
 
 fn scrollsViewport(self: *const Element) bool {
@@ -1683,6 +1665,29 @@ pub fn getScrollWidth(self: *Element, frame: *Frame) f64 {
     }
 
     return @max(width, self.contentAxis(frame, .width));
+}
+
+/// The furthest offset a scroll along `axis` may reach, or null when there is
+/// no box to measure against. Without an explicit size the client and the
+/// content measurements collapse onto the same sum, so nothing can overflow:
+/// an element sized by a stylesheet or holding only text stays unbounded, as
+/// every scroll write was before there was an extent at all. Refusing a scroll
+/// we can't prove impossible is worse than allowing one too many. html and
+/// body are out too: their artificial giant defaults would fabricate an extent
+/// against the real viewport.
+fn scrollExtent(self: *Element, frame: *Frame, comptime axis: Axis) ?f64 {
+    if (self.scrollsViewport() or !self.getElementAxis(frame, axis).explicit) {
+        return null;
+    }
+    const client = self.clientAxis(frame, axis);
+    const content = switch (axis) {
+        .width => self.getScrollWidth(frame),
+        .height => self.getScrollHeight(frame),
+    };
+    if (content <= client) {
+        return null;
+    }
+    return content - client;
 }
 
 // One axis of the direct child elements' size: laid end to end on a single
@@ -2014,23 +2019,64 @@ pub const ScrollToOpts = union(enum) {
 
 pub fn scrollTo(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = (opts orelse return).offsets(y);
-    const owner = self.ownerFrame(frame) orelse return;
-    const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const old_x = gop.value_ptr.x;
-    const old_y = gop.value_ptr.y;
-    if (o.left) |left| gop.value_ptr.x = @intCast(@max(0, left));
-    if (o.top) |top| gop.value_ptr.y = @intCast(@max(0, top));
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
-    }
+    return self.writeScroll(.{ .to = o }, frame);
 }
 
 // scrollBy(): like scrollTo() but relative to the current position.
 pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = (opts orelse return).offsets(y);
+    return self.writeScroll(.{ .by = o }, frame);
+}
+
+/// Scrolls one axis by `delta`.
+pub fn scrollByAxis(self: *Element, comptime axis: Axis, delta: i32, frame: *Frame) !void {
+    return self.writeScroll(.{ .by = switch (axis) {
+        .width => .{ .left = delta, .top = null },
+        .height => .{ .left = null, .top = delta },
+    } }, frame);
+}
+
+/// Whether `delta` can move this container along `axis` at all. A wheel latches
+/// to the nearest container for which this holds; an unmeasurable box has no
+/// end to be at, so it always takes the delta.
+pub fn canScrollAxis(self: *Element, comptime axis: Axis, delta: i32, frame: *Frame) bool {
+    const offset: i64 = switch (axis) {
+        .width => self.getScrollLeft(frame),
+        .height => self.getScrollTop(frame),
+    };
+    if (delta < 0) {
+        return offset > 0;
+    }
+    const extent = self.scrollExtent(frame, axis) orelse return true;
+    const max: i64 = @floor(extent);
+    return offset < max;
+}
+
+// Where a write puts the offsets: at an absolute position, or that much from
+// wherever they are.
+const ScrollWrite = union(enum) {
+    to: ScrollToOpts.Offsets,
+    by: ScrollToOpts.Offsets,
+
+    // The absolute target for one axis, null when the write leaves it alone.
+    fn target(self: ScrollWrite, comptime axis: Axis, current: u32) ?i64 {
+        const offsets = switch (self) {
+            inline else => |o| o,
+        };
+        const value = switch (axis) {
+            .width => offsets.left,
+            .height => offsets.top,
+        } orelse return null;
+        return switch (self) {
+            .to => value,
+            .by => @as(i64, current) + value,
+        };
+    }
+};
+
+/// The single scroll write: clamps both axes, stores, and schedules the events
+/// once for the pair.
+fn writeScroll(self: *Element, write: ScrollWrite, frame: *Frame) !void {
     const owner = self.ownerFrame(frame) orelse return;
     const gop = try owner.page.element_scroll_positions.getOrPut(owner.page.frame_arena, self);
     if (!gop.found_existing) {
@@ -2038,31 +2084,46 @@ pub fn scrollBy(self: *Element, opts: ?ScrollToOpts, y: ?i32, frame: *Frame) !vo
     }
     const old_x = gop.value_ptr.x;
     const old_y = gop.value_ptr.y;
-    gop.value_ptr.x = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.x)) +| (o.left orelse 0)));
-    gop.value_ptr.y = @intCast(@max(0, @as(i32, @intCast(gop.value_ptr.y)) +| (o.top orelse 0)));
-    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
-        try self.scheduleScrollEvents(owner);
+
+    if (write.target(.width, old_x)) |target| {
+        gop.value_ptr.x = self.clampScroll(frame, .width, target);
     }
+    if (write.target(.height, old_y)) |target| {
+        gop.value_ptr.y = self.clampScroll(frame, .height, target);
+    }
+
+    if (gop.value_ptr.x != old_x or gop.value_ptr.y != old_y) {
+        try self.scheduleScrollEvents(gop.value_ptr, owner);
+    }
+}
+
+/// `target` brought into [0, scrollExtent].
+fn clampScroll(self: *Element, frame: *Frame, comptime axis: Axis, target: i64) u32 {
+    var clamped = target;
+    if (clamped < 0) {
+        clamped = 0;
+    } else if (self.scrollExtent(frame, axis)) |extent| {
+        const max: i64 = @floor(extent);
+        clamped = @min(clamped, max);
+    }
+    return @intCast(@min(clamped, std.math.maxInt(u32)));
 }
 
 // Scrolling an element fires a scroll event and then a scrollend event,
 // asynchronously and throttled, mirroring Window.scrollTo. Scrolls of the
 // scrolling element (the root) are fired at the document instead.
-// `frame` is the element's owner frame (resolved by the public accessors).
-fn scheduleScrollEvents(self: *Element, frame: *Frame) !void {
-    const gop = try frame.page.element_scroll_positions.getOrPut(frame.page.frame_arena, self);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
-    const task_pending = gop.value_ptr.state != .done;
-    gop.value_ptr.state = .scroll;
+// `frame` is the element's owner frame, `pos` its entry in that frame's
+// positions (both resolved by writeScroll).
+fn scheduleScrollEvents(self: *Element, pos: *ScrollPosition, frame: *Frame) !void {
+    const task_pending = pos.state != .done;
+    pos.state = .scroll;
     if (task_pending) {
         return;
     }
 
     const task = try frame._factory.create(ScrollEventTask{ .frame = frame, .element = self });
     errdefer {
-        gop.value_ptr.state = .done;
+        pos.state = .done;
         frame._factory.destroy(task);
     }
     try frame.js.scheduler.add(task, ScrollEventTask.run, 10, .{
@@ -2720,6 +2781,30 @@ pub const Build = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
+}
+
+test "Element: scroll extent" {
+    const frame = try testing.createFrame();
+    defer testing.test_session.closeAllPages();
+
+    const root = try frame.window._document.createElement("div", null, frame);
+    try Frame.parse.htmlAsChildren(frame, root.asNode(),
+        \\<div style="height: 100px; overflow: auto"><div style="height: 500px"></div></div>
+        \\<div style="height: 100px; overflow: auto">text, and no element child to measure</div>
+    );
+    const box = root.asNode().firstChild().?.as(Element);
+    const text = box.nextElementSibling().?;
+
+    try box.setScrollTop(9999, frame);
+    try testing.expectEqual(400, box.getScrollTop(frame));
+    try box.setScrollTop(-1, frame);
+    try testing.expectEqual(0, box.getScrollTop(frame));
+
+    // A real browser clamps this one too, to the height of its text. contentAxis
+    // sums element children only, so we have no extent to clamp against and the
+    // offset stays unbounded.
+    try text.setScrollTop(9999, frame);
+    try testing.expectEqual(9999, text.getScrollTop(frame));
 }
 
 test "Element: div chain slot size" {

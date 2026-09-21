@@ -1016,8 +1016,10 @@ pub fn scrollTo(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Fram
 
 pub fn scrollBy(self: *Window, opts: Element.ScrollToOpts, y: ?i32, frame: *Frame) !void {
     const o = opts.offsets(y);
-    const absx = @as(i32, @intCast(self._scroll_pos.x)) +| (o.left orelse 0);
-    const absy = @as(i32, @intCast(self._scroll_pos.y)) +| (o.top orelse 0);
+    // The viewport has no honest extent, so a stored offset can sit above
+    // maxInt(i32): widen before saturating back down.
+    const absx: i32 = @intCast(@min(@as(i64, self._scroll_pos.x) + (o.left orelse 0), std.math.maxInt(i32)));
+    const absy: i32 = @intCast(@min(@as(i64, self._scroll_pos.y) + (o.top orelse 0), std.math.maxInt(i32)));
     return self.scrollTo(.{ .x = absx }, absy, frame);
 }
 
