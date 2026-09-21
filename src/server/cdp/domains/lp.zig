@@ -159,16 +159,24 @@ fn getSemanticTree(cmd: anytype) !void {
 
 fn dump(cmd: anytype) !void {
     const Params = struct {
-        format: enum { html, markdown, png, pdf },
+        format: enum { html, markdown, png, pdf, extract },
         strip: lp.dump.Opts.Strip = .{},
         selector: ?[]const u8 = null,
         backendNodeId: ?NodeRegistry.Id = null,
         maxBytes: ?u32 = null,
+        timeout: ?u32 = null,
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+
+    if (params.format == .extract) {
+        return dumpExtract(cmd, params.timeout orelse lp.tools.defaultWaitTimeout(frame));
+    }
+    if (params.timeout != null) {
+        return error.InvalidParams;
+    }
 
     const target = blk: {
         if (params.backendNodeId) |id| {
@@ -209,7 +217,25 @@ fn dump(cmd: anytype) !void {
             const prepared = try lp.pdf.prepare(cmd.arena, state, .{}, frame);
             return cmd.sendResult(.{ .format = params.format, .content = prepared }, .{});
         },
+        .extract => unreachable,
     }
+}
+
+fn dumpExtract(cmd: anytype, timeout_ms: u32) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const rule = cmd.cdp.app.config.extractRule() orelse return error.NoExtractRule;
+
+    const frame_id = (bc.mainFrame() orelse return error.FrameNotLoaded)._frame_id;
+    try lp.actions.waitForExtractRule(rule, timeout_ms, frame_id, bc.session);
+
+    // The wait ticks, and a tick can navigate.
+    const frame = bc.mainFrame() orelse return error.FrameNotLoaded;
+    const result = try lp.extract_rule.extract(cmd.arena, rule, frame);
+    return cmd.sendResult(.{
+        .format = "extract",
+        .content = result.json,
+        .validation = result.failures,
+    }, .{});
 }
 
 // Deprecated: LP.dump with format "markdown". Kept for existing callers.
@@ -611,6 +637,84 @@ test "cdp.lp: dump formats, strip and scoping" {
     try testing.expect((try dumpReply(&ctx, 8)).get("error") != null);
     try ctx.processMessage(.{ .id = 9, .method = "LP.dump", .params = .{ .strip = .{ .shell = true } } });
     try testing.expect((try dumpReply(&ctx, 9)).get("error") != null);
+}
+
+test "cdp.lp: dump extract runs the --ler rule" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S", .url = "cdp/strip.html", .target_id = "FID-000000000S".* });
+
+    // No rule configured.
+    try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "extract" } });
+    try ctx.expectSentError(-31998, "NoExtractRule", .{ .id = 1 });
+
+    const serve = &testing.base.test_config.mode.serve;
+    defer serve.ler = null;
+
+    serve.ler =
+        \\let polls = 0;
+        \\export default {
+        \\  runAt: "domcontentloaded",
+        \\  wait: () => ++polls > 1,
+        \\  extract: () => ({ body: document.querySelector("article p").textContent, polls }),
+        \\  validate: (out, t) => t.check(out, { body: t.string, polls: t.int }),
+        \\};
+    ;
+    try ctx.processMessage(.{ .id = 2, .method = "LP.dump", .params = .{ .format = "extract", .timeout = 2000 } });
+    var result = (try dumpReply(&ctx, 2)).get("result").?.object;
+    try testing.expectEqual("extract", result.get("format").?.string);
+    try testing.expectEqual("Article body", result.get("content").?.object.get("body").?.string);
+    try testing.expectEqual(2, result.get("content").?.object.get("polls").?.integer);
+    try testing.expectEqual(0, result.get("validation").?.array.items.len);
+
+    // Same page, another command: the module is already evaluated.
+    try ctx.processMessage(.{ .id = 3, .method = "LP.dump", .params = .{ .format = "extract" } });
+    result = (try dumpReply(&ctx, 3)).get("result").?.object;
+    try testing.expectEqual(3, result.get("content").?.object.get("polls").?.integer);
+
+    // timeout is an extract-only option.
+    try ctx.processMessage(.{ .id = 4, .method = "LP.dump", .params = .{ .format = "html", .timeout = 10 } });
+    try testing.expect((try dumpReply(&ctx, 4)).get("error") != null);
+}
+
+test "cdp.lp: dump extract reports invalid data" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S", .url = "cdp/strip.html", .target_id = "FID-000000000S".* });
+
+    const serve = &testing.base.test_config.mode.serve;
+    defer serve.ler = null;
+
+    serve.ler =
+        \\export default {
+        \\  extract: () => ({ id: parseInt("x") }),
+        \\  validate: (out, t) => t.check(out, { id: t.int }),
+        \\};
+    ;
+    testing.expectLog(&.{.app});
+    try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "extract" } });
+    const result = (try dumpReply(&ctx, 1)).get("result").?.object;
+    try testing.expect(result.get("content").?.object.get("id").? == .null);
+    const failure = result.get("validation").?.array.items[0].object;
+    try testing.expectEqual("$.id", failure.get("path").?.string);
+    try testing.expectEqual("int", failure.get("expected").?.string);
+    try testing.expectEqual("NaN", failure.get("got").?.string);
+}
+
+test "cdp.lp: dump extract fails when the rule's wait times out" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-S", .url = "cdp/strip.html", .target_id = "FID-000000000S".* });
+
+    const serve = &testing.base.test_config.mode.serve;
+    defer serve.ler = null;
+
+    serve.ler = "export default { wait: () => false, extract: () => 1 };";
+    try ctx.processMessage(.{ .id = 1, .method = "LP.dump", .params = .{ .format = "extract", .timeout = 50 } });
+    try testing.expect((try dumpReply(&ctx, 1)).get("error") != null);
 }
 
 // A backendNodeId can name a node in a child frame while the handler only
