@@ -144,10 +144,20 @@ pub fn updateEntries(
 ) !void {
     switch (kind) {
         .replace => |state| {
-            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, frame, should_dispatch);
+            _ = try self.replaceEntry(
+                url,
+                .{ .source = .navigation, .value = state },
+                frame,
+                should_dispatch,
+            );
         },
         .push => |state| {
-            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, frame, should_dispatch);
+            _ = try self.pushEntry(
+                url,
+                .{ .source = .navigation, .value = state },
+                frame,
+                should_dispatch,
+            );
         },
         .traverse => |index| {
             self._index = index;
@@ -299,21 +309,30 @@ fn fireCurrentEntryChangeEvent(
     kind: ?NavigationKind,
     frame: *Frame,
 ) void {
-    if (self._on_currententrychange) |cec| {
-        const event =
-            NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = previous, .navigationType = if (kind) |k| @tagName(k) else null },
-                frame,
-            ) catch |err| {
-                log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
-                return;
-            };
-
-        self.dispatch(cec, event.asEvent(), frame) catch |err| {
-            log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
-        };
+    if (!frame.hasDirectListeners(
+        self.asEventTarget(),
+        "currententrychange",
+        self._on_currententrychange,
+    )) {
+        return;
     }
+
+    const event =
+        NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{
+                .from = previous,
+                .navigationType = if (kind) |k| @tagName(k) else null,
+            },
+            frame,
+        ) catch |err| {
+            log.warn(.event, "Navigation.fireCurrentEntryChange", .{ .err = err });
+            return;
+        };
+
+    self.dispatch(self._on_currententrychange, event.asEvent(), frame) catch |err| {
+        log.warn(.event, "Navigation.fireCurrentEntryChange dispatch", .{ .err = err });
+    };
 }
 
 const NavigateOptions = struct {
@@ -483,8 +502,8 @@ fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, fra
     self.fireCurrentEntryChangeEvent(previous, null, frame);
 }
 
-pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, frame: *Frame) !void {
-    return frame._event_manager.dispatchDirect(
+pub fn dispatch(self: *Navigation, func: ?js.Function.Global, event: *Event, frame: *Frame) !void {
+    return frame.dispatch(
         self.asEventTarget(),
         event,
         func,
