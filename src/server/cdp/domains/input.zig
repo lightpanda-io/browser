@@ -250,12 +250,12 @@ fn dispatchTouchEvent(cmd: *CDP.Command) !void {
 
 /// CDP's id is a wire f64; Touch.identifier is the DOM's i32. Reject anything
 /// that isn't a plain, in-range integer rather than truncating silently
-/// (@intFromFloat is illegal behavior on NaN/out-of-range in Zig, and this
-/// value comes straight off the wire).
+/// (the float-to-int conversion is illegal behavior on NaN/out-of-range in Zig,
+/// and this value comes straight off the wire).
 fn touchPointId(id: f64) ?i32 {
     if (!std.math.isFinite(id) or id != @round(id)) return null;
     if (id < std.math.minInt(i32) or id > std.math.maxInt(i32)) return null;
-    return @intFromFloat(id);
+    return @round(id);
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-insertText
