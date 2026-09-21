@@ -374,6 +374,18 @@ fn waitScriptFileValidator(allocator: Allocator, args: *std.process.Args.Iterato
     };
 }
 
+fn lerValidator(allocator: Allocator, args: *std.process.Args.Iterator, target: *?[]const u8) !void {
+    const path = args.next() orelse {
+        log.fatal(.app, "missing argument value", .{ .arg = "--ler" });
+        return error.InvalidArgument;
+    };
+
+    target.* = std.Io.Dir.cwd().readFileAllocOptions(lp.io, path, allocator, .limited(1024 * 1024), .of(u8), null) catch |err| {
+        log.fatal(.app, "failed to read file", .{ .arg = "--ler", .path = path, .err = err });
+        return error.InvalidArgument;
+    };
+}
+
 fn injectScriptFileValidator(
     allocator: Allocator,
     args: *std.process.Args.Iterator,
@@ -408,6 +420,7 @@ const Commands = cli.Builder(.{
             // Don't widen this without growing the reader buffer in the HTTP path.
             .{ .name = "cdp_max_http_message_size", .type = u14, .default = 4096 },
             .{ .name = "http_session_timeout", .type = u32, .default = 60 },
+            .{ .name = "ler", .type = ?[]const u8, .validator = lerValidator },
             .{ .name = "disable_metrics", .type = bool },
         },
         .shared_options = CommonOptions,
@@ -423,6 +436,7 @@ const Commands = cli.Builder(.{
             .{ .name = "strip_mode", .type = dump.Opts.Strip, .default = dump.Opts.Strip{} },
             .{ .name = "dump_selector", .type = ?[:0]const u8 },
             .{ .name = "dump_max_bytes", .type = ?u32 },
+            .{ .name = "ler", .type = ?[]const u8, .validator = lerValidator },
             .{ .name = "fail_on_http_error", .type = bool },
             .{ .name = "wait_ms", .type = u32, .default = 5_000 },
             .{ .name = "wait_until", .type = ?WaitUntil },
@@ -766,6 +780,13 @@ pub fn cookieFile(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn extractRule(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch => |opts| opts.ler,
+        else => null,
+    };
+}
+
 pub fn cookieJarFile(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .fetch, .mcp, .agent => |opts| opts.cookie_jar,
@@ -948,6 +969,7 @@ pub const DumpFormat = enum {
     wpt,
     semantic_tree,
     semantic_tree_text,
+    extract,
 };
 
 pub const WaitUntil = enum {

@@ -50,6 +50,8 @@
     \\          when connecting using the WebDriver protocol.
     \\          Defaults to 60, disable by setting to 0 (a session then lives
     \\          until the driver deletes it).
+    \\  --ler <PATH>
+    \\          Lightpanda extraction rule for LP.dump's extract format.
     \\  --port <INT>
     \\          Port of the CDP server.
     \\          Defaults to 9222.
@@ -79,6 +81,7 @@
     \\          Dumps the document to stdout.
     \\          Defaults to no dump.
     \\          Allowed values:
+    \\              extract            JSON value of the --ler extraction rule.
     \\              html               Serialized HTML of the DOM.
     \\              markdown           Converts content to Markdown.
     \\              pdf                Text-only rendering of the page as a
@@ -114,6 +117,8 @@
     \\          "error" field: null, or the name of the navigation, wait or
     \\          dump failure for that URL. One failed URL does not stop the
     \\          others; the process exits 1 if any URL failed.
+    \\  --ler <PATH>
+    \\          Lightpanda extraction rule for --dump extrac
     \\  --metrics
     \\          Write metrics (Prometheus text format) to stdout on exit, after
     \\          any --dump output.

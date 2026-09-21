@@ -62,6 +62,7 @@ pub const GlobalScope = @import("browser/global_scope.zig").GlobalScope;
 pub const js = @import("browser/js/js.zig");
 const Node = @import("browser/webapi/Node.zig");
 const Selector = @import("browser/webapi/selector/Selector.zig");
+pub const extract_rule = @import("browser/extract_rule.zig");
 
 pub const Agent = @import("agent/Agent.zig");
 pub const skill = @import("script/skill.zig");
@@ -195,6 +196,7 @@ pub const FetchOpts = struct {
     dump_mode: ?Config.DumpFormat = null,
     /// Dump only the first match instead of the document.
     selector: ?[:0]const u8 = null,
+    extract_script: ?[]const u8 = null,
     /// Any page with an HTTP status >= 400 fails the fetch with `error.HttpError`.
     fail_on_http_error: bool = false,
     writer: ?*std.Io.Writer = null,
@@ -207,6 +209,7 @@ pub const FetchOpts = struct {
 /// unless given explicitly.
 fn resolveWaitUntil(opts: FetchOpts) ?Config.WaitUntil {
     if (opts.wait_until) |wu| return wu;
+    if (opts.extract_script != null) return .domcontentloaded;
     if (opts.wait_selector == null and opts.wait_script == null) return .load;
     return null;
 }
@@ -338,6 +341,20 @@ pub fn fetch(app: *App, browser: *Browser, urls: []const [:0]const u8, opts: Fet
         }
     }
 
+    if (opts.extract_script) |extract_script| {
+        for (pages.items, errors) |page, *err| {
+            if (err.* != null) continue;
+            const frame = page.frame() orelse {
+                err.* = error.FrameClosed;
+                continue;
+            };
+            const remaining = opts.wait_ms -| @as(u32, @intCast(timer.untilNow(io, .boot).toMilliseconds()));
+            runner.waitForExtractRule(frame._frame_id, extract_script, remaining) catch |e| {
+                err.* = e;
+            };
+        }
+    }
+
     var http_error = false;
     for (pages.items, errors) |page, *err| {
         const frame = page.frame() orelse {
@@ -408,11 +425,29 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
                 defer arena.release();
 
                 if (prepareBinary(arena.allocator(), frame.?, opts)) |prepared| {
-                    try writeJsonEnvelope(writer, frame, opts.dump_mode, prepared, err.*);
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, prepared, &.{}, err.*);
                 } else |e| {
                     if (err.* == null) err.* = e;
-                    try writeJsonEnvelope(writer, frame, opts.dump_mode, "", err.*);
+                    try writeJsonEnvelope(writer, frame, opts.dump_mode, "", &.{}, err.*);
                 }
+                continue;
+            }
+
+            if (opts.dump_mode == .extract) {
+                var arena: std.heap.ArenaAllocator = .init(app.allocator);
+                defer arena.deinit();
+
+                // Invalid data is still reported, next to what is wrong with it.
+                var result: extract_rule.Result = .{};
+                if (frame) |f| {
+                    if (extract_rule.extract(arena.allocator(), opts.extract_script.?, f)) |r| {
+                        result = r;
+                        if (r.failures.len > 0 and err.* == null) err.* = error.ValidationFailed;
+                    } else |e| {
+                        if (err.* == null) err.* = e;
+                    }
+                }
+                try writeJsonEnvelope(writer, frame, opts.dump_mode, result.json, result.failures, err.*);
                 continue;
             }
 
@@ -425,7 +460,7 @@ fn writeResults(app: *App, opts: FetchOpts, pages: []const Session.PageHandle, e
                     if (err.* == null) err.* = e;
                 };
             }
-            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written(), err.*);
+            try writeJsonEnvelope(writer, frame, opts.dump_mode, aw.written(), &.{}, err.*);
         }
         if (wrap) {
             try writer.writeAll("]}");
@@ -506,6 +541,13 @@ fn dumpContent(app: *App, mode: Config.DumpFormat, opts: FetchOpts, frame: *Fram
             }
         },
         .wpt => try dumpWPT(frame, writer),
+        .extract => {
+            const result = try extract_rule.extract(arena.allocator(), opts.extract_script.?, frame);
+            if (result.failures.len > 0) {
+                return error.ValidationFailed;
+            }
+            try writer.writeAll(result.json.text);
+        },
     }
 }
 
@@ -518,16 +560,36 @@ pub fn checkVersion(allocator: std.mem.Allocator, config: *const Config) !void {
 
 // Writes a single page's result object. Framing (the enclosing array and any
 // separators / trailing newline) is the caller's responsibility.
-fn writeJsonEnvelope(writer: *std.Io.Writer, frame: ?*Frame, dump_mode: ?Config.DumpFormat, content: anytype, err: ?anyerror) !void {
+fn writeJsonEnvelope(
+    writer: *std.Io.Writer,
+    frame: ?*Frame,
+    dump_mode: ?Config.DumpFormat,
+    content: anytype,
+    /// Written as `validation`, and only when there are any.
+    failures: []const extract_rule.Failure,
+    err: ?anyerror,
+) !void {
     const meta: ?Frame.HttpMetadata = if (frame) |f| f.httpMetadata() else null;
-    try std.json.Stringify.value(.{
-        .url = if (meta) |m| m.url else "",
-        .http_status = if (meta) |m| m.status orelse 0 else 0,
-        .headers = if (meta) |m| m.headers else &.{},
-        .dump = if (dump_mode) |mode| @tagName(mode) else "",
-        .content = content,
-        .@"error" = if (err) |e| @errorName(e) else null,
-    }, .{}, writer);
+
+    var jws: std.json.Stringify = .{ .writer = writer };
+    try jws.beginObject();
+    try jws.objectField("url");
+    try jws.write(if (meta) |m| m.url else "");
+    try jws.objectField("http_status");
+    try jws.write(if (meta) |m| m.status orelse 0 else 0);
+    try jws.objectField("headers");
+    try jws.write(if (meta) |m| m.headers else &.{});
+    try jws.objectField("dump");
+    try jws.write(if (dump_mode) |mode| @tagName(mode) else "");
+    try jws.objectField("content");
+    try jws.write(content);
+    if (failures.len > 0) {
+        try jws.objectField("validation");
+        try jws.write(failures);
+    }
+    try jws.objectField("error");
+    try jws.write(if (err) |e| @errorName(e) else null);
+    try jws.endObject();
 }
 
 fn dumpWPT(frame: *Frame, writer: *std.Io.Writer) !void {
@@ -649,7 +711,7 @@ test "writeJsonEnvelope: null frame" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, null, "", null);
+    try writeJsonEnvelope(&aw.writer, null, null, "", &.{}, null);
     try testing.expectJson(.{
         .url = "",
         .http_status = 0,
@@ -663,7 +725,7 @@ test "writeJsonEnvelope: page error" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, .markdown, "", error.Timeout);
+    try writeJsonEnvelope(&aw.writer, null, .markdown, "", &.{}, error.Timeout);
     try testing.expectJson(.{
         .dump = "markdown",
         .content = "",
@@ -675,10 +737,36 @@ test "writeJsonEnvelope: null frame with dump mode and content" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>", null);
+    try writeJsonEnvelope(&aw.writer, null, .html, "<html><body>hello</body></html>", &.{}, null);
     try testing.expectJson(.{
         .dump = "html",
         .content = "<html><body>hello</body></html>",
+    }, aw.written());
+}
+
+test "writeJsonEnvelope: extract content is a JSON value" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try writeJsonEnvelope(&aw.writer, null, .extract, extract_rule.Json{ .text = "[{\"a\":1}]" }, &.{}, null);
+    try testing.expectJson(.{
+        .dump = "extract",
+        .content = .{.{ .a = 1 }},
+    }, aw.written());
+
+    aw.clearRetainingCapacity();
+    try writeJsonEnvelope(&aw.writer, null, .extract, extract_rule.Json{ .text = "" }, &.{}, error.ScriptError);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "\"content\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, aw.written(), "validation") == null);
+
+    aw.clearRetainingCapacity();
+    try writeJsonEnvelope(&aw.writer, null, .extract, extract_rule.Json{ .text = "[{\"a\":null}]" }, &.{
+        .{ .path = "$[*].a", .expected = "int", .got = "null", .count = 1, .of = 1 },
+    }, error.ValidationFailed);
+    try testing.expectJson(.{
+        .content = .{.{ .a = null }},
+        .validation = .{.{ .path = "$[*].a", .expected = "int", .got = "null", .count = 1, .of = 1 }},
+        .@"error" = "ValidationFailed",
     }, aw.written());
 }
 
@@ -691,6 +779,8 @@ test "fetch: resolveWaitUntil" {
         .networkidle,
         resolveWaitUntil(.{ .dump = .{}, .wait_until = .networkidle, .wait_selector = "#main" }),
     );
+    try testing.expectEqual(.domcontentloaded, resolveWaitUntil(.{ .dump = .{}, .extract_script = "" }));
+    try testing.expectEqual(.done, resolveWaitUntil(.{ .dump = .{}, .extract_script = "", .wait_until = .done }));
 }
 
 test {

@@ -23,6 +23,7 @@ const js = @import("js/js.zig");
 const Frame = @import("Frame.zig");
 const Browser = @import("Browser.zig");
 const Session = @import("Session.zig");
+const extract_rule = @import("extract_rule.zig");
 const HttpClient = @import("../network/HttpClient.zig");
 
 const Node = @import("webapi/Node.zig");
@@ -367,19 +368,7 @@ pub fn waitForSelector(self: *Runner, frame_id: u32, input: [:0]const u8, timeou
             return el;
         }
 
-        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed >= timeout_ms) {
-            return error.Timeout;
-        }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
-        }
+        try self.pollTick(frame_id, timer, timeout_ms);
     }
 }
 
@@ -444,19 +433,69 @@ pub fn waitForScript(self: *Runner, frame_id: u32, src: [:0]const u8, timeout_ms
             return;
         }
 
-        const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
-        if (elapsed >= timeout_ms) {
-            return error.Timeout;
+        try self.pollTick(frame_id, timer, timeout_ms);
+    }
+}
+
+/// Waits for the extraction rule's `runAt`, then for its `wait` (see
+/// extract_rule.zig).
+pub fn waitForExtractRule(self: *Runner, frame_id: u32, src: []const u8, timeout_ms: u32) !void {
+    const session = self.session;
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
+
+    const until = while (true) {
+        if (session.isCancelled()) {
+            return error.Cancelled;
         }
-        switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
-            // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
-            .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
-            .ok => |recommended_sleep_ms| {
-                if (recommended_sleep_ms > 0) {
-                    lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
-                }
-            },
+
+        const page = session.pendingOrLivePage(frame_id) orelse {
+            return error.FrameNotFound;
+        };
+
+        if (try extract_rule.runAt(src, &page.frame)) |rule_run_at| {
+            break rule_run_at;
         }
+
+        // extract module can still be loading
+        try self.pollTick(frame_id, timer, timeout_ms);
+    };
+
+    // Like fetch's --wait-until: running out of time here isn't an error, the
+    // rule's `wait` gets to decide.
+    const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+    try self.waitForFrame(frame_id, timeout_ms -| elapsed, .{ .until = until });
+
+    while (true) {
+        if (session.isCancelled()) {
+            return error.Cancelled;
+        }
+
+        const page = session.pendingOrLivePage(frame_id) orelse {
+            return error.FrameNotFound;
+        };
+
+        if (try extract_rule.ready(src, &page.frame)) {
+            return;
+        }
+
+        try self.pollTick(frame_id, timer, timeout_ms);
+    }
+}
+
+// What a wait does between two checks of its condition.
+fn pollTick(self: *Runner, frame_id: u32, timer: std.Io.Timestamp, timeout_ms: u32) !void {
+    const elapsed: u32 = @intCast(timer.untilNow(lp.io, .boot).toMilliseconds());
+    if (elapsed >= timeout_ms) {
+        return error.Timeout;
+    }
+    switch (try self.tickForFrame(frame_id, timeout_ms - elapsed, .{ .until = .done })) {
+        // Idle: poll so `timeout_ms` means "wait up to N ms", not "fail now".
+        .done => lp.io.sleep(.fromMilliseconds(@intCast(@min(timeout_ms - elapsed, 50))), .awake) catch {},
+        .ok => |recommended_sleep_ms| {
+            if (recommended_sleep_ms > 0) {
+                lp.io.sleep(.fromMilliseconds(@intCast(recommended_sleep_ms)), .awake) catch {};
+            }
+        },
     }
 }
 

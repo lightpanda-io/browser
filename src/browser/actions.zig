@@ -270,6 +270,16 @@ pub fn waitForScript(script: [:0]const u8, timeout_ms: u32, frame_id: u32, sessi
     return runner.waitForScript(frame_id, script, remainingMs(timeout_ms, timer));
 }
 
+/// An extraction rule's `runAt` then `wait` (see extract_rule.zig).
+pub fn waitForExtractRule(src: []const u8, timeout_ms: u32, frame_id: u32, session: *Session) !void {
+    const timer: std.Io.Timestamp = .now(lp.io, .boot);
+    var runner = session.runner(.{});
+    // The rule is evaluated in the document's context to read its `runAt`.
+    try runner.waitForFrame(frame_id, timeout_ms, .{ .until = .domcontentloaded });
+
+    return runner.waitForExtractRule(frame_id, src, remainingMs(timeout_ms, timer));
+}
+
 pub fn waitForState(state: lp.Config.WaitUntil, timeout_ms: u32, frame_id: u32, session: *Session) !void {
     var runner = session.runner(.{});
     try runner.waitForFrame(frame_id, timeout_ms, .{ .until = state });

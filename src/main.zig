@@ -172,6 +172,15 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 return error.InvalidArgument;
             }
 
+            if (opts.dump == .extract and opts.ler == null) {
+                log.fatal(.app, "--dump extract needs --ler", .{});
+                return error.InvalidArgument;
+            }
+            if (opts.ler != null and opts.dump != .extract) {
+                log.fatal(.app, "--ler needs --dump extract", .{});
+                return error.InvalidArgument;
+            }
+
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = opts.wait_ms,
                 .wait_until = opts.wait_until,
@@ -180,6 +189,7 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
                 .wait_selector = opts.wait_selector,
                 .dump_mode = opts.dump,
                 .selector = opts.dump_selector,
+                .extract_script = opts.ler,
                 .fail_on_http_error = opts.fail_on_http_error,
                 .dump = .{
                     .strip = opts.strip_mode,
